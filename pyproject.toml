@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "layer1-bylaw-ingest"
+version = "0.1.0"
+description = "Layer 1 source normalization for municipal land-use bylaws"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "alembic>=1.13",
+  "pydantic>=2.6",
+  "pydantic-settings>=2.2",
+  "python-dotenv>=1.0",
+  "sqlalchemy>=2.0",
+  "typer>=0.12",
+  "rich>=13.7",
+  "pymupdf>=1.23",
+  "pdfplumber>=0.10",
+  "psycopg[binary]>=3.1",
+]
+
+[project.optional-dependencies]
+parsers = [
+  "docling>=2.0",
+  "camelot-py[cv]>=0.11",
+  "paddleocr>=2.7",
+]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+layer1 = "layer1.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

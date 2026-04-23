@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import typer
+from rich.console import Console
+from sqlalchemy.orm import Session
+
+from layer1.db.base import CrossReference, Document, PageBlock, SourceFragment, SourceTable, SourceTableCell
+from layer1.db.init_db import create_all
+from layer1.db.session import session_scope
+from layer1.models.enums import IngestionStatus
+from layer1.pipeline.export import export_document_json
+from layer1.pipeline.ingest import ingest_file
+from layer1.validators.structural import validate_document_objects
+
+app = typer.Typer(help="Layer 1 bylaw source normalization CLI")
+console = Console()
+
+
+@app.callback()
+def main() -> None:
+    """Normalize official bylaw sources into an addressable source model."""
+
+
+@app.command()
+def init_db(db_url: str | None = typer.Option(None, "--db-url", help="Database URL override")) -> None:
+    create_all(db_url)
+    console.print("[green]Database schema created.[/green]")
+
+
+@app.command()
+def ingest(
+    file: Path = typer.Argument(..., exists=True, readable=True),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+    municipality: str | None = typer.Option(None, "--municipality"),
+    bylaw_name: str | None = typer.Option(None, "--bylaw-name"),
+    source_url: str | None = typer.Option(None, "--source-url"),
+    ocr: bool = typer.Option(False, "--ocr", help="Enable OCR where parser support is installed"),
+    debug: bool = typer.Option(False, "--debug", help="Persist extra parser/debug metadata where available"),
+    create_schema: bool = typer.Option(False, "--create-schema", help="Create tables before ingesting"),
+) -> None:
+    if create_schema:
+        create_all(db_url)
+    with session_scope(db_url) as session:
+        document, run = ingest_file(
+            session,
+            file,
+            municipality=municipality,
+            bylaw_name=bylaw_name,
+            source_url=source_url,
+            ocr=ocr,
+            debug=debug,
+        )
+        _print_ingest_result(document.id, run.status.value, run.warnings_json, run.errors_json)
+        if run.status == IngestionStatus.FAILED:
+            raise typer.Exit(code=1)
+
+
+@app.command("ingest-dir")
+def ingest_dir(
+    directory: Path = typer.Argument(..., exists=True, file_okay=False, readable=True),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+    ocr: bool = typer.Option(False, "--ocr"),
+    debug: bool = typer.Option(False, "--debug"),
+    create_schema: bool = typer.Option(False, "--create-schema"),
+) -> None:
+    if create_schema:
+        create_all(db_url)
+    files = sorted(path for path in directory.iterdir() if path.suffix.lower() in {".pdf", ".txt", ".text", ".md"})
+    if not files:
+        console.print("[yellow]No ingestible files found.[/yellow]")
+        return
+    failed = 0
+    with session_scope(db_url) as session:
+        for file in files:
+            console.print(f"Ingesting {file}")
+            document, run = ingest_file(session, file, ocr=ocr, debug=debug)
+            _print_ingest_result(document.id, run.status.value, run.warnings_json, run.errors_json)
+            failed += int(run.status == IngestionStatus.FAILED)
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def validate(
+    document_id: int,
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    with session_scope(db_url) as session:
+        report = _validate_from_db(session, document_id)
+        console.print(report.model_dump_json(indent=2))
+        if not report.ok:
+            raise typer.Exit(code=1)
+
+
+@app.command("export-json")
+def export_json(
+    document_id: int,
+    out: Path = typer.Option(..., "--out", "-o"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    with session_scope(db_url) as session:
+        export_document_json(session, document_id, out)
+    console.print(f"[green]Exported document {document_id} to {out}[/green]")
+
+
+@app.command("show-summary")
+def show_summary(
+    document_id: int,
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    with session_scope(db_url) as session:
+        document = session.get(Document, document_id)
+        if not document:
+            console.print(f"[red]Document {document_id} not found[/red]")
+            raise typer.Exit(code=1)
+        counts = {
+            "page_blocks": session.query(PageBlock).filter_by(document_id=document_id).count(),
+            "fragments": session.query(SourceFragment).filter_by(document_id=document_id).count(),
+            "tables": session.query(SourceTable).filter_by(document_id=document_id).count(),
+            "cross_references": session.query(CrossReference).filter_by(document_id=document_id).count(),
+        }
+        console.print(
+            {
+                "id": document.id,
+                "municipality": document.municipality,
+                "bylaw_name": document.bylaw_name,
+                "page_count": document.page_count,
+                "parser_version": document.parser_version,
+                **counts,
+            }
+        )
+
+
+def _validate_from_db(session: Session, document_id: int):
+    document = session.get(Document, document_id)
+    if not document:
+        raise typer.BadParameter(f"Document {document_id} not found")
+    blocks = session.query(PageBlock).filter_by(document_id=document_id).all()
+    fragments = session.query(SourceFragment).filter_by(document_id=document_id).all()
+    tables = session.query(SourceTable).filter_by(document_id=document_id).all()
+    table_ids = [table.id for table in tables]
+    cells = session.query(SourceTableCell).filter(SourceTableCell.table_id.in_(table_ids)).all() if table_ids else []
+    refs = session.query(CrossReference).filter_by(document_id=document_id).all()
+    return validate_document_objects(
+        page_count=document.page_count,
+        blocks=blocks,
+        fragments=fragments,
+        tables=tables,
+        table_cells=cells,
+        cross_references=refs,
+    )
+
+
+def _print_ingest_result(document_id: int, status: str, warnings: list[str], errors: list[str]) -> None:
+    console.print(f"Document {document_id}: {status}")
+    for warning in warnings:
+        console.print(f"[yellow]warning:[/yellow] {warning}")
+    for error in errors:
+        console.print(f"[red]error:[/red] {error}")

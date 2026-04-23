@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: layer1-postgres
+    environment:
+      POSTGRES_DB: layer1
+      POSTGRES_USER: layer1
+      POSTGRES_PASSWORD: layer1
+    ports:
+      - "5432:5432"
+    volumes:
+      - layer1-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U layer1 -d layer1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  codex:
+    build:
+      context: .
+      dockerfile: Dockerfile.codex
+    image: agentic-bylaw-system-codex:latest
+    container_name: agentic-bylaw-system-codex
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CODEX_HOME: /home/codex/.codex
+      NPM_CONFIG_PREFIX: /home/codex/.npm-global
+      PIP_BREAK_SYSTEM_PACKAGES: "1"
+      DATABASE_URL: postgresql+psycopg://layer1:layer1@postgres:5432/layer1
+    volumes:
+      - .:/workspace
+      - codex-home:/home/codex/.codex
+      - codex-cache:/home/codex/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      bash -c 'codex --dangerously-bypass-approvals-and-sandbox'
+
+volumes:
+  layer1-postgres:
+  codex-home:
+  codex-cache:

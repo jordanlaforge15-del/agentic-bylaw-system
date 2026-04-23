@@ -1,0 +1,815 @@
+{
+  "document": {
+    "id": 1,
+    "municipality": "Sampleton",
+    "bylaw_name": "Synthetic Zoning Bylaw",
+    "source_path": "/workspace/tests/fixtures/synthetic_bylaw.txt",
+    "source_url": null,
+    "file_hash": "e8194edfd83755c752a05a532463ecb07da740504e6b62a925a94ce31ad1673a",
+    "version_label": null,
+    "consolidation_date": null,
+    "mime_type": "text/plain",
+    "page_count": 2,
+    "ingestion_timestamp": "2026-04-23 11:55:37.366823",
+    "parser_version": "text-fallback"
+  },
+  "page_blocks": [
+    {
+      "id": 1,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "footer",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 12.0,
+        "x1": 612.0,
+        "y1": 22.0
+      },
+      "reading_order": 0,
+      "raw_text": "Town of Sampleton Zoning Bylaw",
+      "normalized_text": "Town of Sampleton Zoning Bylaw",
+      "is_boilerplate": true,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 2,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "heading",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 24.0,
+        "x1": 612.0,
+        "y1": 34.0
+      },
+      "reading_order": 1,
+      "raw_text": "Part 1 Administration",
+      "normalized_text": "Part 1 Administration",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 3,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "heading",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 36.0,
+        "x1": 612.0,
+        "y1": 46.0
+      },
+      "reading_order": 2,
+      "raw_text": "1.1 Purpose",
+      "normalized_text": "1.1 Purpose",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 4,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "paragraph",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 48.0,
+        "x1": 612.0,
+        "y1": 58.0
+      },
+      "reading_order": 3,
+      "raw_text": "The purpose of this bylaw is to regulate land use subject to section 2.1.",
+      "normalized_text": "The purpose of this bylaw is to regulate land use subject to section 2.1.",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 5,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "heading",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 60.0,
+        "x1": 612.0,
+        "y1": 70.0
+      },
+      "reading_order": 4,
+      "raw_text": "1.2 Application",
+      "normalized_text": "1.2 Application",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 6,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "paragraph",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 72.0,
+        "x1": 612.0,
+        "y1": 82.0
+      },
+      "reading_order": 5,
+      "raw_text": "This bylaw applies to all lands within the municipality.",
+      "normalized_text": "This bylaw applies to all lands within the municipality.",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 7,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "heading",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 84.0,
+        "x1": 612.0,
+        "y1": 94.0
+      },
+      "reading_order": 6,
+      "raw_text": "(a) No person shall use land except as provided in 6.1.4.",
+      "normalized_text": "(a) No person shall use land except as provided in 6.1.4.",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 8,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "heading",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 96.0,
+        "x1": 612.0,
+        "y1": 106.0
+      },
+      "reading_order": 7,
+      "raw_text": "(i) A temporary use may be permitted under subsection 1.2.",
+      "normalized_text": "(i) A temporary use may be permitted under subsection 1.2.",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 9,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "footnote",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 108.0,
+        "x1": 612.0,
+        "y1": 118.0
+      },
+      "reading_order": 8,
+      "raw_text": "1 This is a footnote preserved for citation audit.",
+      "normalized_text": "1 This is a footnote preserved for citation audit.",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 10,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "table_region",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 120.0,
+        "x1": 612.0,
+        "y1": 130.0
+      },
+      "reading_order": 9,
+      "raw_text": "Table 1 | Zone | Minimum Lot Area; Row 1 | R1 | 400 m2",
+      "normalized_text": "Table 1 | Zone | Minimum Lot Area; Row 1 | R1 | 400 m2",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 11,
+      "document_id": 1,
+      "page_number": 1,
+      "block_type": "footer",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 132.0,
+        "x1": 612.0,
+        "y1": 142.0
+      },
+      "reading_order": 10,
+      "raw_text": "Town of Sampleton Zoning Bylaw",
+      "normalized_text": "Town of Sampleton Zoning Bylaw",
+      "is_boilerplate": true,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 12,
+      "document_id": 1,
+      "page_number": 2,
+      "block_type": "footer",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 12.0,
+        "x1": 612.0,
+        "y1": 22.0
+      },
+      "reading_order": 11,
+      "raw_text": "Town of Sampleton Zoning Bylaw",
+      "normalized_text": "Town of Sampleton Zoning Bylaw",
+      "is_boilerplate": true,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 13,
+      "document_id": 1,
+      "page_number": 2,
+      "block_type": "heading",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 24.0,
+        "x1": 612.0,
+        "y1": 34.0
+      },
+      "reading_order": 12,
+      "raw_text": "Part 2 Zones",
+      "normalized_text": "Part 2 Zones",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 14,
+      "document_id": 1,
+      "page_number": 2,
+      "block_type": "heading",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 36.0,
+        "x1": 612.0,
+        "y1": 46.0
+      },
+      "reading_order": 13,
+      "raw_text": "2.1 Residential Zones",
+      "normalized_text": "2.1 Residential Zones",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 15,
+      "document_id": 1,
+      "page_number": 2,
+      "block_type": "paragraph",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 48.0,
+        "x1": 612.0,
+        "y1": 58.0
+      },
+      "reading_order": 14,
+      "raw_text": "Residential zones are listed in Schedule B.",
+      "normalized_text": "Residential zones are listed in Schedule B.",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 16,
+      "document_id": 1,
+      "page_number": 2,
+      "block_type": "heading",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 60.0,
+        "x1": 612.0,
+        "y1": 70.0
+      },
+      "reading_order": 15,
+      "raw_text": "Schedule B",
+      "normalized_text": "Schedule B",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 17,
+      "document_id": 1,
+      "page_number": 2,
+      "block_type": "paragraph",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 72.0,
+        "x1": 612.0,
+        "y1": 82.0
+      },
+      "reading_order": 16,
+      "raw_text": "Additional residential provisions.",
+      "normalized_text": "Additional residential provisions.",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 18,
+      "document_id": 1,
+      "page_number": 2,
+      "block_type": "paragraph",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 84.0,
+        "x1": 612.0,
+        "y1": 94.0
+      },
+      "reading_order": 17,
+      "raw_text": "Unnumbered policy-like sentence without a clear parent on a new page.",
+      "normalized_text": "Unnumbered policy-like sentence without a clear parent on a new page.",
+      "is_boilerplate": false,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    },
+    {
+      "id": 19,
+      "document_id": 1,
+      "page_number": 2,
+      "block_type": "footer",
+      "bbox_json": {
+        "x0": 0.0,
+        "y0": 96.0,
+        "x1": 612.0,
+        "y1": 106.0
+      },
+      "reading_order": 18,
+      "raw_text": "Town of Sampleton Zoning Bylaw",
+      "normalized_text": "Town of Sampleton Zoning Bylaw",
+      "is_boilerplate": true,
+      "parser_source": "text-fallback",
+      "confidence": 0.7,
+      "metadata_json": {}
+    }
+  ],
+  "source_fragments": [
+    {
+      "id": 1,
+      "document_id": 1,
+      "fragment_type": "part",
+      "citation_label": "Part 1",
+      "citation_path": "Part 1",
+      "parent_fragment_id": null,
+      "page_start": 1,
+      "page_end": 1,
+      "reading_order_start": 1,
+      "reading_order_end": 1,
+      "text": "Part 1 Administration",
+      "parse_status": "parsed",
+      "confidence": 0.95,
+      "source_block_ids_json": [
+        2
+      ],
+      "metadata_json": {
+        "block_type": "heading"
+      }
+    },
+    {
+      "id": 2,
+      "document_id": 1,
+      "fragment_type": "subsection",
+      "citation_label": "1.1",
+      "citation_path": "Part 1 > 1.1",
+      "parent_fragment_id": 1,
+      "page_start": 1,
+      "page_end": 1,
+      "reading_order_start": 2,
+      "reading_order_end": 2,
+      "text": "1.1 Purpose",
+      "parse_status": "parsed",
+      "confidence": 0.9,
+      "source_block_ids_json": [
+        3
+      ],
+      "metadata_json": {
+        "block_type": "heading"
+      }
+    },
+    {
+      "id": 3,
+      "document_id": 1,
+      "fragment_type": "prose",
+      "citation_label": null,
+      "citation_path": null,
+      "parent_fragment_id": 2,
+      "page_start": 1,
+      "page_end": 1,
+      "reading_order_start": 3,
+      "reading_order_end": 3,
+      "text": "The purpose of this bylaw is to regulate land use subject to section 2.1.",
+      "parse_status": "parsed",
+      "confidence": 0.8,
+      "source_block_ids_json": [
+        4
+      ],
+      "metadata_json": {
+        "block_type": "paragraph"
+      }
+    },
+    {
+      "id": 4,
+      "document_id": 1,
+      "fragment_type": "subsection",
+      "citation_label": "1.2",
+      "citation_path": "Part 1 > 1.2",
+      "parent_fragment_id": 1,
+      "page_start": 1,
+      "page_end": 1,
+      "reading_order_start": 4,
+      "reading_order_end": 4,
+      "text": "1.2 Application",
+      "parse_status": "parsed",
+      "confidence": 0.9,
+      "source_block_ids_json": [
+        5
+      ],
+      "metadata_json": {
+        "block_type": "heading"
+      }
+    },
+    {
+      "id": 5,
+      "document_id": 1,
+      "fragment_type": "prose",
+      "citation_label": null,
+      "citation_path": null,
+      "parent_fragment_id": 4,
+      "page_start": 1,
+      "page_end": 1,
+      "reading_order_start": 5,
+      "reading_order_end": 5,
+      "text": "This bylaw applies to all lands within the municipality.",
+      "parse_status": "parsed",
+      "confidence": 0.8,
+      "source_block_ids_json": [
+        6
+      ],
+      "metadata_json": {
+        "block_type": "paragraph"
+      }
+    },
+    {
+      "id": 6,
+      "document_id": 1,
+      "fragment_type": "clause",
+      "citation_label": "(a)",
+      "citation_path": "Part 1 > 1.2 > (a)",
+      "parent_fragment_id": 4,
+      "page_start": 1,
+      "page_end": 1,
+      "reading_order_start": 6,
+      "reading_order_end": 6,
+      "text": "(a) No person shall use land except as provided in 6.1.4.",
+      "parse_status": "parsed",
+      "confidence": 0.85,
+      "source_block_ids_json": [
+        7
+      ],
+      "metadata_json": {
+        "block_type": "heading"
+      }
+    },
+    {
+      "id": 7,
+      "document_id": 1,
+      "fragment_type": "clause",
+      "citation_label": "(i)",
+      "citation_path": "Part 1 > 1.2 > (i)",
+      "parent_fragment_id": 4,
+      "page_start": 1,
+      "page_end": 1,
+      "reading_order_start": 7,
+      "reading_order_end": 7,
+      "text": "(i) A temporary use may be permitted under subsection 1.2.",
+      "parse_status": "parsed",
+      "confidence": 0.85,
+      "source_block_ids_json": [
+        8
+      ],
+      "metadata_json": {
+        "block_type": "heading"
+      }
+    },
+    {
+      "id": 8,
+      "document_id": 1,
+      "fragment_type": "section",
+      "citation_label": "1",
+      "citation_path": "Part 1 > 1",
+      "parent_fragment_id": 1,
+      "page_start": 1,
+      "page_end": 1,
+      "reading_order_start": 8,
+      "reading_order_end": 8,
+      "text": "1 This is a footnote preserved for citation audit.",
+      "parse_status": "parsed",
+      "confidence": 0.9,
+      "source_block_ids_json": [
+        9
+      ],
+      "metadata_json": {
+        "block_type": "footnote"
+      }
+    },
+    {
+      "id": 9,
+      "document_id": 1,
+      "fragment_type": "part",
+      "citation_label": "Part 2",
+      "citation_path": "Part 2",
+      "parent_fragment_id": null,
+      "page_start": 2,
+      "page_end": 2,
+      "reading_order_start": 12,
+      "reading_order_end": 12,
+      "text": "Part 2 Zones",
+      "parse_status": "parsed",
+      "confidence": 0.95,
+      "source_block_ids_json": [
+        13
+      ],
+      "metadata_json": {
+        "block_type": "heading"
+      }
+    },
+    {
+      "id": 10,
+      "document_id": 1,
+      "fragment_type": "subsection",
+      "citation_label": "2.1",
+      "citation_path": "Part 2 > 2.1",
+      "parent_fragment_id": 9,
+      "page_start": 2,
+      "page_end": 2,
+      "reading_order_start": 13,
+      "reading_order_end": 13,
+      "text": "2.1 Residential Zones",
+      "parse_status": "parsed",
+      "confidence": 0.9,
+      "source_block_ids_json": [
+        14
+      ],
+      "metadata_json": {
+        "block_type": "heading"
+      }
+    },
+    {
+      "id": 11,
+      "document_id": 1,
+      "fragment_type": "prose",
+      "citation_label": null,
+      "citation_path": null,
+      "parent_fragment_id": 10,
+      "page_start": 2,
+      "page_end": 2,
+      "reading_order_start": 14,
+      "reading_order_end": 14,
+      "text": "Residential zones are listed in Schedule B.",
+      "parse_status": "parsed",
+      "confidence": 0.8,
+      "source_block_ids_json": [
+        15
+      ],
+      "metadata_json": {
+        "block_type": "paragraph"
+      }
+    },
+    {
+      "id": 12,
+      "document_id": 1,
+      "fragment_type": "schedule",
+      "citation_label": "Schedule B",
+      "citation_path": "Schedule B",
+      "parent_fragment_id": null,
+      "page_start": 2,
+      "page_end": 2,
+      "reading_order_start": 15,
+      "reading_order_end": 15,
+      "text": "Schedule B",
+      "parse_status": "parsed",
+      "confidence": 0.95,
+      "source_block_ids_json": [
+        16
+      ],
+      "metadata_json": {
+        "block_type": "heading"
+      }
+    },
+    {
+      "id": 13,
+      "document_id": 1,
+      "fragment_type": "prose",
+      "citation_label": null,
+      "citation_path": null,
+      "parent_fragment_id": 12,
+      "page_start": 2,
+      "page_end": 2,
+      "reading_order_start": 16,
+      "reading_order_end": 16,
+      "text": "Additional residential provisions.",
+      "parse_status": "parsed",
+      "confidence": 0.8,
+      "source_block_ids_json": [
+        17
+      ],
+      "metadata_json": {
+        "block_type": "paragraph"
+      }
+    },
+    {
+      "id": 14,
+      "document_id": 1,
+      "fragment_type": "prose",
+      "citation_label": null,
+      "citation_path": null,
+      "parent_fragment_id": 12,
+      "page_start": 2,
+      "page_end": 2,
+      "reading_order_start": 17,
+      "reading_order_end": 17,
+      "text": "Unnumbered policy-like sentence without a clear parent on a new page.",
+      "parse_status": "parsed",
+      "confidence": 0.8,
+      "source_block_ids_json": [
+        18
+      ],
+      "metadata_json": {
+        "block_type": "paragraph"
+      }
+    }
+  ],
+  "source_tables": [
+    {
+      "id": 1,
+      "document_id": 1,
+      "parent_fragment_id": null,
+      "caption": null,
+      "page_start": 1,
+      "page_end": 1,
+      "parse_status": "fallback",
+      "metadata_json": {
+        "parser": "pipe_table_fallback",
+        "source_block_id": 10
+      }
+    }
+  ],
+  "source_table_cells": [
+    {
+      "id": 1,
+      "table_id": 1,
+      "row_index": 0,
+      "col_index": 0,
+      "row_header_path": null,
+      "col_header_path": null,
+      "text": "Table 1",
+      "bbox_json": null,
+      "metadata_json": {}
+    },
+    {
+      "id": 2,
+      "table_id": 1,
+      "row_index": 0,
+      "col_index": 1,
+      "row_header_path": null,
+      "col_header_path": null,
+      "text": "Zone",
+      "bbox_json": null,
+      "metadata_json": {}
+    },
+    {
+      "id": 3,
+      "table_id": 1,
+      "row_index": 0,
+      "col_index": 2,
+      "row_header_path": null,
+      "col_header_path": null,
+      "text": "Minimum Lot Area",
+      "bbox_json": null,
+      "metadata_json": {}
+    },
+    {
+      "id": 4,
+      "table_id": 1,
+      "row_index": 1,
+      "col_index": 0,
+      "row_header_path": null,
+      "col_header_path": null,
+      "text": "Row 1",
+      "bbox_json": null,
+      "metadata_json": {}
+    },
+    {
+      "id": 5,
+      "table_id": 1,
+      "row_index": 1,
+      "col_index": 1,
+      "row_header_path": null,
+      "col_header_path": null,
+      "text": "R1",
+      "bbox_json": null,
+      "metadata_json": {}
+    },
+    {
+      "id": 6,
+      "table_id": 1,
+      "row_index": 1,
+      "col_index": 2,
+      "row_header_path": null,
+      "col_header_path": null,
+      "text": "400 m2",
+      "bbox_json": null,
+      "metadata_json": {}
+    }
+  ],
+  "cross_references": [
+    {
+      "id": 1,
+      "document_id": 1,
+      "source_fragment_id": 3,
+      "raw_reference_text": "section 2.1",
+      "target_citation_guess": "2.1",
+      "target_fragment_id": 10,
+      "resolution_status": "resolved",
+      "confidence": 0.85,
+      "metadata_json": {}
+    },
+    {
+      "id": 2,
+      "document_id": 1,
+      "source_fragment_id": 6,
+      "raw_reference_text": "except as provided in 6.1.4",
+      "target_citation_guess": "6.1.4",
+      "target_fragment_id": null,
+      "resolution_status": "unresolved",
+      "confidence": 0.65,
+      "metadata_json": {}
+    },
+    {
+      "id": 3,
+      "document_id": 1,
+      "source_fragment_id": 7,
+      "raw_reference_text": "subsection 1.2",
+      "target_citation_guess": "1.2",
+      "target_fragment_id": 4,
+      "resolution_status": "resolved",
+      "confidence": 0.85,
+      "metadata_json": {}
+    },
+    {
+      "id": 4,
+      "document_id": 1,
+      "source_fragment_id": 11,
+      "raw_reference_text": "Schedule B",
+      "target_citation_guess": "Schedule B",
+      "target_fragment_id": 12,
+      "resolution_status": "resolved",
+      "confidence": 0.85,
+      "metadata_json": {}
+    },
+    {
+      "id": 5,
+      "document_id": 1,
+      "source_fragment_id": 12,
+      "raw_reference_text": "Schedule B",
+      "target_citation_guess": "Schedule B",
+      "target_fragment_id": 12,
+      "resolution_status": "resolved",
+      "confidence": 0.85,
+      "metadata_json": {}
+    }
+  ]
+}

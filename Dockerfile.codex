@@ -1,0 +1,57 @@
+FROM node:22-bookworm
+
+ARG USERNAME=codex
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew
+ENV HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar
+ENV HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew
+ENV NPM_CONFIG_PREFIX=/home/codex/.npm-global
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+ENV PATH=/home/codex/.npm-global/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/codex/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash \
+    build-essential \
+    ca-certificates \
+    curl \
+    file \
+    git \
+    gnupg \
+    locales \
+    procps \
+    python3 \
+    python3-pip \
+    python3-venv \
+    ripgrep \
+    sudo \
+    unzip \
+    zsh \
+  && locale-gen en_US.UTF-8 \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+RUN usermod --login "${USERNAME}" --home "/home/${USERNAME}" --move-home node \
+  && groupmod --new-name "${USERNAME}" node \
+  && usermod --shell /bin/bash "${USERNAME}" \
+  && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${USERNAME}" \
+  && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
+  && printf '%s\n' 'export PATH=/home/codex/.npm-global/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/codex/.local/bin:$PATH' > /etc/profile.d/codex-path.sh \
+  && mkdir -p /workspace /home/codex/.npm-global /home/codex/.cache /home/codex/.codex /home/linuxbrew/.linuxbrew \
+  && chown -R "${USERNAME}:${USERNAME}" /workspace /home/codex /home/linuxbrew
+
+USER ${USERNAME}
+WORKDIR /workspace
+
+RUN git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew \
+  && mkdir -p /home/linuxbrew/.linuxbrew/bin /home/linuxbrew/.linuxbrew/sbin /home/linuxbrew/.linuxbrew/Cellar \
+  && ln -s /home/linuxbrew/.linuxbrew/Homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew \
+  && brew update --force --quiet \
+  && npm install -g @openai/codex
+
+CMD ["bash"]
