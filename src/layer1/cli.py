@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
@@ -9,9 +10,12 @@ from sqlalchemy.orm import Session
 from layer1.db.base import CrossReference, Document, PageBlock, SourceFragment, SourceTable, SourceTableCell
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
+from layer1.config import get_settings
 from layer1.models.enums import IngestionStatus
+from layer1.pipeline.audit import audit_document_pages
 from layer1.pipeline.export import export_document_json
 from layer1.pipeline.ingest import ingest_file
+from layer1.profiles import available_profile_names, get_parsing_profile
 from layer1.validators.structural import validate_document_objects
 
 app = typer.Typer(help="Layer 1 bylaw source normalization CLI")
@@ -36,10 +40,12 @@ def ingest(
     municipality: str | None = typer.Option(None, "--municipality"),
     bylaw_name: str | None = typer.Option(None, "--bylaw-name"),
     source_url: str | None = typer.Option(None, "--source-url"),
+    profile: str = typer.Option(get_settings().parsing_profile, "--profile", help=f"Parsing profile ({', '.join(available_profile_names())})"),
     ocr: bool = typer.Option(False, "--ocr", help="Enable OCR where parser support is installed"),
     debug: bool = typer.Option(False, "--debug", help="Persist extra parser/debug metadata where available"),
     create_schema: bool = typer.Option(False, "--create-schema", help="Create tables before ingesting"),
 ) -> None:
+    selected_profile = _parse_profile(profile)
     if create_schema:
         create_all(db_url)
     with session_scope(db_url) as session:
@@ -51,6 +57,7 @@ def ingest(
             source_url=source_url,
             ocr=ocr,
             debug=debug,
+            profile=selected_profile,
         )
         _print_ingest_result(document.id, run.status.value, run.warnings_json, run.errors_json)
         if run.status == IngestionStatus.FAILED:
@@ -61,10 +68,12 @@ def ingest(
 def ingest_dir(
     directory: Path = typer.Argument(..., exists=True, file_okay=False, readable=True),
     db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+    profile: str = typer.Option(get_settings().parsing_profile, "--profile", help=f"Parsing profile ({', '.join(available_profile_names())})"),
     ocr: bool = typer.Option(False, "--ocr"),
     debug: bool = typer.Option(False, "--debug"),
     create_schema: bool = typer.Option(False, "--create-schema"),
 ) -> None:
+    selected_profile = _parse_profile(profile)
     if create_schema:
         create_all(db_url)
     files = sorted(path for path in directory.iterdir() if path.suffix.lower() in {".pdf", ".txt", ".text", ".md"})
@@ -75,7 +84,7 @@ def ingest_dir(
     with session_scope(db_url) as session:
         for file in files:
             console.print(f"Ingesting {file}")
-            document, run = ingest_file(session, file, ocr=ocr, debug=debug)
+            document, run = ingest_file(session, file, ocr=ocr, debug=debug, profile=selected_profile)
             _print_ingest_result(document.id, run.status.value, run.warnings_json, run.errors_json)
             failed += int(run.status == IngestionStatus.FAILED)
     if failed:
@@ -133,6 +142,50 @@ def show_summary(
         )
 
 
+@app.command("audit-pages")
+def audit_pages(
+    document_id: int,
+    sample: int = typer.Option(5, "--sample", min=1, help="Number of high-risk pages to audit"),
+    pages: str | None = typer.Option(None, "--pages", help="Comma-separated explicit pages, e.g. 5,12,26"),
+    llm: bool = typer.Option(False, "--llm", help="Run structured LLM review on each selected page"),
+    model: str | None = typer.Option(None, "--model", help="LLM model override for --llm mode"),
+    out: Path | None = typer.Option(None, "--out", help="Write JSON audit report to a file"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    explicit_pages = _parse_pages_option(pages)
+    with session_scope(db_url) as session:
+        report = audit_document_pages(
+            session,
+            document_id,
+            page_numbers=explicit_pages,
+            sample_size=sample,
+            use_llm=llm,
+            llm_model=model,
+        )
+    _emit_json_report(report.model_dump(mode="json"), out)
+
+
+@app.command("audit-page")
+def audit_page(
+    document_id: int,
+    page: int = typer.Argument(..., min=1),
+    llm: bool = typer.Option(False, "--llm", help="Run structured LLM review for the page"),
+    model: str | None = typer.Option(None, "--model", help="LLM model override for --llm mode"),
+    out: Path | None = typer.Option(None, "--out", help="Write JSON audit report to a file"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    with session_scope(db_url) as session:
+        report = audit_document_pages(
+            session,
+            document_id,
+            page_numbers=[page],
+            sample_size=1,
+            use_llm=llm,
+            llm_model=model,
+        )
+    _emit_json_report(report.model_dump(mode="json"), out)
+
+
 def _validate_from_db(session: Session, document_id: int):
     document = session.get(Document, document_id)
     if not document:
@@ -159,3 +212,34 @@ def _print_ingest_result(document_id: int, status: str, warnings: list[str], err
         console.print(f"[yellow]warning:[/yellow] {warning}")
     for error in errors:
         console.print(f"[red]error:[/red] {error}")
+
+
+def _parse_pages_option(pages: str | None) -> list[int] | None:
+    if not pages:
+        return None
+    parsed = []
+    for raw in pages.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            parsed.append(int(raw))
+        except ValueError as exc:
+            raise typer.BadParameter(f"Invalid page number: {raw}") from exc
+    return parsed or None
+
+
+def _emit_json_report(payload: dict, out: Path | None) -> None:
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        console.print(f"[green]Wrote audit report to {out}[/green]")
+        return
+    console.print_json(data=payload)
+
+
+def _parse_profile(name: str):
+    try:
+        return get_parsing_profile(name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc

@@ -8,6 +8,7 @@ from layer1.models.schemas import ValidationReport
 
 
 VALID_ROOT_TYPES = {"part", "schedule", "appendix", "section", "heading", "prose"}
+NON_FRAGMENT_BLOCK_TYPES = {BlockType.TABLE_REGION, BlockType.HEADER, BlockType.FOOTER}
 
 
 def validate_document_objects(
@@ -27,9 +28,12 @@ def validate_document_objects(
         source_idx = (table.metadata_json or {}).get("source_block_id")
         if source_idx:
             accounted.add(source_idx)
+        source_ids = (table.metadata_json or {}).get("source_block_ids")
+        if isinstance(source_ids, list):
+            accounted.update(source_id for source_id in source_ids if source_id)
 
     for block in blocks:
-        if block.is_boilerplate or block.block_type == BlockType.TABLE_REGION:
+        if block.is_boilerplate or block.block_type in NON_FRAGMENT_BLOCK_TYPES:
             continue
         if block.id not in accounted:
             report.errors.append(f"Page block {block.id} is not accounted for by a fragment or table")

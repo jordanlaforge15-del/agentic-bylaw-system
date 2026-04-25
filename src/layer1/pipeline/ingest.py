@@ -14,10 +14,12 @@ from layer1.db.base import (
     SourceTable,
     SourceTableCell,
 )
-from layer1.models.enums import IngestionStatus
+from layer1.models.enums import BlockType, FragmentType, IngestionStatus, ParseStatus
+from layer1.models.schemas import FragmentData, PageBlockData, TableData
 from layer1.parsers.factory import parse_source
 from layer1.pipeline.crossrefs import detect_cross_references
 from layer1.pipeline.hierarchy import reconstruct_hierarchy
+from layer1.profiles import ParsingProfile, get_parsing_profile
 from layer1.utils.files import detect_mime_type, sha256_file
 from layer1.validators.structural import validate_document_objects
 
@@ -32,7 +34,9 @@ def ingest_file(
     ocr: bool = False,
     debug: bool = False,
     camelot: bool = False,
+    profile: ParsingProfile | str | None = None,
 ) -> tuple[Document, IngestionRun]:
+    profile = get_parsing_profile(profile)
     path = path.resolve()
     if not path.exists():
         raise FileNotFoundError(path)
@@ -54,12 +58,13 @@ def ingest_file(
     session.flush()
 
     try:
-        parsed = parse_source(path, ocr=ocr, debug=debug, camelot=camelot)
+        parsed = parse_source(path, ocr=ocr, debug=debug, camelot=camelot, profile=profile)
         document.page_count = parsed.page_count
-        document.parser_version = parsed.parser_version
+        document.parser_version = f"{parsed.parser_version}:{profile.name}" if parsed.parser_version else profile.name
 
         db_blocks = _persist_blocks(session, document.id, parsed.page_blocks)
-        fragments_data = reconstruct_hierarchy(parsed.page_blocks)
+        fragments_data = reconstruct_hierarchy(parsed.page_blocks, profile=profile)
+        fragments_data = _ensure_fragment_coverage(parsed.page_blocks, fragments_data, parsed.tables)
         db_fragments = _persist_fragments(session, document.id, fragments_data, db_blocks)
         db_tables = _persist_tables(session, document.id, parsed.tables, db_fragments, db_blocks)
         refs_data = detect_cross_references(fragments_data)
@@ -150,6 +155,11 @@ def _persist_tables(session: Session, document_id: int, tables_data, fragments: 
         source_idx = metadata.pop("source_block_index", None)
         if source_idx is not None and source_idx < len(blocks):
             metadata["source_block_id"] = blocks[source_idx].id
+        source_indices = metadata.pop("source_block_indices", None)
+        if isinstance(source_indices, list):
+            metadata["source_block_ids"] = [
+                blocks[idx].id for idx in source_indices if isinstance(idx, int) and idx < len(blocks)
+            ]
         db_table = SourceTable(
             document_id=document_id,
             parent_fragment_id=fragments[table_data.parent_fragment_index].id if table_data.parent_fragment_index is not None and table_data.parent_fragment_index < len(fragments) else None,
@@ -196,3 +206,60 @@ def _persist_crossrefs(session: Session, document_id: int, refs_data, fragments:
         refs.append(db_ref)
     session.flush()
     return refs
+
+
+def _ensure_fragment_coverage(
+    blocks: list[PageBlockData],
+    fragments: list[FragmentData],
+    tables: list[TableData],
+) -> list[FragmentData]:
+    accounted_block_indices = set()
+    for fragment in fragments:
+        accounted_block_indices.update(fragment.source_block_indices)
+    for table in tables:
+        source_idx = table.metadata.get("source_block_index")
+        if isinstance(source_idx, int):
+            accounted_block_indices.add(source_idx)
+        source_indices = table.metadata.get("source_block_indices")
+        if isinstance(source_indices, list):
+            accounted_block_indices.update(idx for idx in source_indices if isinstance(idx, int))
+
+    for block_index, block in enumerate(blocks):
+        if block_index in accounted_block_indices:
+            continue
+        if block.is_boilerplate or block.block_type in {BlockType.HEADER, BlockType.FOOTER}:
+            continue
+        text = block.normalized_text or " ".join(block.raw_text.split())
+        if not text:
+            continue
+        fragments.append(
+            FragmentData(
+                fragment_type=_fallback_fragment_type(block.block_type),
+                citation_label=None,
+                citation_path=None,
+                parent_index=None,
+                page_start=block.page_number,
+                page_end=block.page_number,
+                reading_order_start=block.reading_order,
+                reading_order_end=block.reading_order,
+                text=text,
+                parse_status=ParseStatus.UNCERTAIN,
+                confidence=0.4,
+                source_block_indices=[block_index],
+                metadata={
+                    "block_type": block.block_type.value,
+                    "fallback_unaccounted_block": True,
+                },
+            )
+        )
+    return fragments
+
+
+def _fallback_fragment_type(block_type: BlockType) -> FragmentType:
+    if block_type == BlockType.HEADING:
+        return FragmentType.HEADING
+    if block_type == BlockType.LIST_ITEM:
+        return FragmentType.LIST_ITEM
+    if block_type == BlockType.FOOTNOTE:
+        return FragmentType.FOOTNOTE
+    return FragmentType.PROSE

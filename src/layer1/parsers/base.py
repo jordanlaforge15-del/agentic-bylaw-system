@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from layer1.models.schemas import PageBlockData, TableData
+from layer1.profiles import ParsingProfile
 
 
 @dataclass
@@ -19,5 +20,5 @@ class ParseResult:
 class ParserAdapter:
     name = "base"
 
-    def parse(self, path: Path, *, ocr: bool = False, debug: bool = False) -> ParseResult:
+    def parse(self, path: Path, *, ocr: bool = False, debug: bool = False, profile: ParsingProfile | None = None) -> ParseResult:
         raise NotImplementedError

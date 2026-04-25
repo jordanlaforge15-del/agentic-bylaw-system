@@ -3,14 +3,14 @@
     "id": 1,
     "municipality": "Sampleton",
     "bylaw_name": "Synthetic Zoning Bylaw",
-    "source_path": "/workspace/tests/fixtures/synthetic_bylaw.txt",
+    "source_path": "/Users/christopherrafuse/dev/agentic-bylaw-system/tests/fixtures/synthetic_bylaw.txt",
     "source_url": null,
     "file_hash": "e8194edfd83755c752a05a532463ecb07da740504e6b62a925a94ce31ad1673a",
     "version_label": null,
     "consolidation_date": null,
     "mime_type": "text/plain",
     "page_count": 2,
-    "ingestion_timestamp": "2026-04-23 11:55:37.366823",
+    "ingestion_timestamp": "2026-04-23 23:25:56.018064+00:00",
     "parser_version": "text-fallback"
   },
   "page_blocks": [
@@ -21,8 +21,8 @@
       "block_type": "footer",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 12.0,
         "x1": 612.0,
+        "y0": 12.0,
         "y1": 22.0
       },
       "reading_order": 0,
@@ -40,8 +40,8 @@
       "block_type": "heading",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 24.0,
         "x1": 612.0,
+        "y0": 24.0,
         "y1": 34.0
       },
       "reading_order": 1,
@@ -59,8 +59,8 @@
       "block_type": "heading",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 36.0,
         "x1": 612.0,
+        "y0": 36.0,
         "y1": 46.0
       },
       "reading_order": 2,
@@ -78,8 +78,8 @@
       "block_type": "paragraph",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 48.0,
         "x1": 612.0,
+        "y0": 48.0,
         "y1": 58.0
       },
       "reading_order": 3,
@@ -97,8 +97,8 @@
       "block_type": "heading",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 60.0,
         "x1": 612.0,
+        "y0": 60.0,
         "y1": 70.0
       },
       "reading_order": 4,
@@ -116,8 +116,8 @@
       "block_type": "paragraph",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 72.0,
         "x1": 612.0,
+        "y0": 72.0,
         "y1": 82.0
       },
       "reading_order": 5,
@@ -135,8 +135,8 @@
       "block_type": "heading",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 84.0,
         "x1": 612.0,
+        "y0": 84.0,
         "y1": 94.0
       },
       "reading_order": 6,
@@ -154,8 +154,8 @@
       "block_type": "heading",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 96.0,
         "x1": 612.0,
+        "y0": 96.0,
         "y1": 106.0
       },
       "reading_order": 7,
@@ -173,8 +173,8 @@
       "block_type": "footnote",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 108.0,
         "x1": 612.0,
+        "y0": 108.0,
         "y1": 118.0
       },
       "reading_order": 8,
@@ -192,8 +192,8 @@
       "block_type": "table_region",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 120.0,
         "x1": 612.0,
+        "y0": 120.0,
         "y1": 130.0
       },
       "reading_order": 9,
@@ -211,8 +211,8 @@
       "block_type": "footer",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 132.0,
         "x1": 612.0,
+        "y0": 132.0,
         "y1": 142.0
       },
       "reading_order": 10,
@@ -230,8 +230,8 @@
       "block_type": "footer",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 12.0,
         "x1": 612.0,
+        "y0": 12.0,
         "y1": 22.0
       },
       "reading_order": 11,
@@ -249,8 +249,8 @@
       "block_type": "heading",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 24.0,
         "x1": 612.0,
+        "y0": 24.0,
         "y1": 34.0
       },
       "reading_order": 12,
@@ -268,8 +268,8 @@
       "block_type": "heading",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 36.0,
         "x1": 612.0,
+        "y0": 36.0,
         "y1": 46.0
       },
       "reading_order": 13,
@@ -287,8 +287,8 @@
       "block_type": "paragraph",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 48.0,
         "x1": 612.0,
+        "y0": 48.0,
         "y1": 58.0
       },
       "reading_order": 14,
@@ -306,8 +306,8 @@
       "block_type": "heading",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 60.0,
         "x1": 612.0,
+        "y0": 60.0,
         "y1": 70.0
       },
       "reading_order": 15,
@@ -325,8 +325,8 @@
       "block_type": "paragraph",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 72.0,
         "x1": 612.0,
+        "y0": 72.0,
         "y1": 82.0
       },
       "reading_order": 16,
@@ -344,8 +344,8 @@
       "block_type": "paragraph",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 84.0,
         "x1": 612.0,
+        "y0": 84.0,
         "y1": 94.0
       },
       "reading_order": 17,
@@ -363,8 +363,8 @@
       "block_type": "footer",
       "bbox_json": {
         "x0": 0.0,
-        "y0": 96.0,
         "x1": 612.0,
+        "y0": 96.0,
         "y1": 106.0
       },
       "reading_order": 18,

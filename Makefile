@@ -1,4 +1,4 @@
-.PHONY: install test lint db-up db-down migrate init-db sample-ingest sample-export
+.PHONY: install test lint db-up db-down migrate init-db sample-ingest sample-export sample-audit
 
 DB_URL ?= postgresql+psycopg://layer1:layer1@localhost:5432/layer1
 
@@ -28,3 +28,6 @@ sample-ingest:
 
 sample-export:
 	layer1 export-json 1 --db-url "$(DB_URL)" --out examples/synthetic_bylaw_export.json
+
+sample-audit:
+	layer1 audit-pages 1 --db-url "$(DB_URL)" --sample 2

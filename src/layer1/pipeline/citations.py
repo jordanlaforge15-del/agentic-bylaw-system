@@ -4,11 +4,15 @@ import re
 from dataclasses import dataclass
 
 from layer1.models.enums import FragmentType
+from layer1.profiles import ParsingProfile, get_parsing_profile
 
 
 PART_RE = re.compile(r"^\s*part\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 SCHEDULE_RE = re.compile(r"^\s*schedule\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 APPENDIX_RE = re.compile(r"^\s*appendix\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
+COMPOUND_SECTION_RE = re.compile(
+    r"^\s*((?:\d+[A-Z]*)(?:\([0-9A-Za-z]+\))*[A-Z]?)(?=\s|$)\s*(.*)$"
+)
 NUMERIC_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,5})\b(?:[.)])?\s*(.*)$")
 CLAUSE_RE = re.compile(r"^\s*\(([a-z])\)\s+(.*)$")
 SUBCLAUSE_RE = re.compile(r"^\s*\(([ivxlcdm]+)\)\s+(.*)$", re.IGNORECASE)
@@ -24,7 +28,8 @@ class CitationMatch:
     confidence: float
 
 
-def parse_citation_label(text: str) -> CitationMatch | None:
+def parse_citation_label(text: str, profile: ParsingProfile | None = None) -> CitationMatch | None:
+    profile = get_parsing_profile(profile)
     stripped = " ".join(text.strip().split())
     if not stripped:
         return None
@@ -38,6 +43,15 @@ def parse_citation_label(text: str) -> CitationMatch | None:
         if match:
             token = match.group(1).upper()
             return CitationMatch(fragment_type, f"{prefix} {token}", 1, match.group(2).strip(), 0.95)
+
+    if profile.allow_compound_section_labels:
+        compound = COMPOUND_SECTION_RE.match(stripped)
+        if compound:
+            label = compound.group(1)
+            title = compound.group(2).strip()
+            parsed = _parse_compound_section_label(label, title)
+            if parsed:
+                return parsed
 
     match = NUMERIC_RE.match(stripped)
     if match:
@@ -69,3 +83,29 @@ def citation_path(parent_path: str | None, label: str | None) -> str | None:
     if not label:
         return parent_path
     return f"{parent_path} > {label}" if parent_path else label
+
+
+def _parse_compound_section_label(label: str, title: str) -> CitationMatch | None:
+    if "." in label:
+        return None
+
+    base_match = re.match(r"^(\d+[A-Z]*)(.*?)([A-Z]?)$", label)
+    if not base_match:
+        return None
+
+    paren_tokens = re.findall(r"\(([0-9A-Za-z]+)\)", label)
+    trailing_suffix = base_match.group(3) if base_match.group(2) else ""
+    level = 2 + len(paren_tokens) + (1 if trailing_suffix else 0)
+
+    if not paren_tokens and not trailing_suffix and re.fullmatch(r"\d+", label):
+        return None
+
+    fragment_type = FragmentType.SECTION if level == 2 else FragmentType.SUBSECTION
+    if paren_tokens:
+        last = paren_tokens[-1]
+        if re.fullmatch(r"[a-z]", last):
+            fragment_type = FragmentType.CLAUSE
+        elif re.fullmatch(r"[ivxlcdm]+", last, re.IGNORECASE):
+            fragment_type = FragmentType.SUBCLAUSE
+
+    return CitationMatch(fragment_type, label, level, title, 0.9)

@@ -96,3 +96,49 @@ class ValidationReport(BaseModel):
     @property
     def ok(self) -> bool:
         return not self.errors
+
+
+class DeterministicPageCheck(BaseModel):
+    name: str
+    severity: str
+    detail: str
+
+
+class PageAuditSnapshot(BaseModel):
+    page_number: int
+    source_page_text: str | None = None
+    page_block_count: int
+    fragment_count: int
+    table_count: int
+    cross_reference_count: int
+    risk_score: int
+    risk_reasons: list[str] = Field(default_factory=list)
+    deterministic_checks: list[DeterministicPageCheck] = Field(default_factory=list)
+    page_blocks: list[dict[str, Any]] = Field(default_factory=list)
+    fragments: list[dict[str, Any]] = Field(default_factory=list)
+    tables: list[dict[str, Any]] = Field(default_factory=list)
+    cross_references: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class LlmAuditReview(BaseModel):
+    verdict: str
+    confidence: float | None = None
+    summary: str
+    suspected_issues: list[str] = Field(default_factory=list)
+    recommended_human_review: bool = False
+
+
+class PageAuditResult(BaseModel):
+    page_number: int
+    risk_score: int
+    risk_reasons: list[str] = Field(default_factory=list)
+    deterministic_checks: list[DeterministicPageCheck] = Field(default_factory=list)
+    llm_review: LlmAuditReview | None = None
+
+
+class DocumentAuditReport(BaseModel):
+    document_id: int
+    sampled_pages: list[int] = Field(default_factory=list)
+    audit_mode: str
+    llm_model: str | None = None
+    page_results: list[PageAuditResult] = Field(default_factory=list)

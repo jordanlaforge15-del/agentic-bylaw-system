@@ -5,13 +5,16 @@ from pathlib import Path
 from layer1.models.schemas import BBox, PageBlockData, TableCellData, TableData
 from layer1.models.enums import ParseStatus
 from layer1.parsers.base import ParseResult, ParserAdapter
+from layer1.parsers.table_fallback import extract_fallback_tables
 from layer1.pipeline.block_classifier import classify_text_block, mark_boilerplate, normalize_text
+from layer1.profiles import ParsingProfile, get_parsing_profile
 
 
 class TextParser(ParserAdapter):
     name = "text-fallback"
 
-    def parse(self, path: Path, *, ocr: bool = False, debug: bool = False) -> ParseResult:
+    def parse(self, path: Path, *, ocr: bool = False, debug: bool = False, profile: ParsingProfile | None = None) -> ParseResult:
+        profile = get_parsing_profile(profile)
         text = path.read_text(encoding="utf-8")
         pages = text.split("\f")
         blocks: list[PageBlockData] = []
@@ -21,7 +24,7 @@ class TextParser(ParserAdapter):
             for line_number, raw_line in enumerate(page.splitlines(), start=1):
                 if not raw_line.strip():
                     continue
-                block_type = classify_text_block(raw_line)
+                block_type = classify_text_block(raw_line, profile=profile)
                 block = PageBlockData(
                     page_number=page_number,
                     block_type=block_type,
@@ -34,8 +37,9 @@ class TextParser(ParserAdapter):
                 )
                 blocks.append(block)
                 order += 1
-        mark_boilerplate(blocks)
+        mark_boilerplate(blocks, profile=profile)
         tables.extend(_extract_pipe_tables(blocks))
+        tables.extend(extract_fallback_tables(blocks))
         return ParseResult(
             page_blocks=blocks,
             tables=tables,
