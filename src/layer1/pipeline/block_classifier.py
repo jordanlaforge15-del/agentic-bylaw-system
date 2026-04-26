@@ -17,6 +17,7 @@ PAGE_PREFIX_RE = re.compile(r"^\s*PAGE\s+(?=[A-Z\"(])")
 TOC_ENTRY_RE = re.compile(r"[.\u2026…]{2,}\s*\d+\s*$")
 TOC_CODE_LINE_RE = re.compile(r"^[A-Z]{1,4}(?:-\d{1,2}[A-Z]?)?$")
 PAGE_NUMBER_RE = re.compile(r"^(?:-?[ivxlcdm]+-?|\d+)$", re.IGNORECASE)
+VALUE_HEAD_RE = re.compile(r"^\(?\s*(\d[\d,./]*)\s*(.*)$", re.IGNORECASE)
 
 
 def normalize_text(text: str) -> str:
@@ -37,6 +38,8 @@ def classify_text_block(
         return BlockType.UNKNOWN
     if _looks_like_toc_entry(cleaned_text):
         return BlockType.HEADING
+    if looks_like_requirement_value(norm):
+        return BlockType.PARAGRAPH
     if page_height and PAGE_NUMBER_RE.fullmatch(norm):
         if y1 is not None and y1 < page_height * 0.10:
             return BlockType.HEADER
@@ -94,6 +97,47 @@ def looks_like_topic_heading(text: str) -> bool:
     if any(word[:1].islower() for word in words if word[:1].isalpha()):
         return False
     return sum(any(ch.isalpha() for ch in word) for word in words) >= 1
+
+
+def looks_like_requirement_value(text: str) -> bool:
+    compact = normalize_text(text)
+    if not compact:
+        return False
+    match = VALUE_HEAD_RE.match(compact)
+    if not match:
+        return False
+    remainder = match.group(2).strip().lower().rstrip(".")
+    if not remainder:
+        return False
+    allowed_starts = (
+        "%",
+        "percent",
+        "ft",
+        "foot",
+        "feet",
+        "m",
+        "m2",
+        "m²",
+        "metre",
+        "metres",
+        "sq ft",
+        "sq. ft",
+        "sq.ft",
+        "square foot",
+        "square feet",
+        "square metre",
+        "square metres",
+    )
+    if not remainder.startswith(allowed_starts):
+        return False
+    trailing = remainder
+    for prefix in sorted(allowed_starts, key=len, reverse=True):
+        if trailing.startswith(prefix):
+            trailing = trailing[len(prefix):].lstrip(" .;,:")
+            break
+    if not trailing:
+        return True
+    return trailing.startswith(("except", "central", "on-site", "onsite", "("))
 
 
 def strip_page_prefix(text: str) -> str:

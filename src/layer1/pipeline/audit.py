@@ -123,6 +123,7 @@ def collect_page_audit_snapshots(
     for fragment in fragments:
         for page_number in range(fragment.page_start, fragment.page_end + 1):
             fragments_by_page[page_number].append(fragment)
+    fragments_by_id = {fragment.id: fragment for fragment in fragments}
 
     tables_by_page = defaultdict(list)
     for table in tables:
@@ -163,7 +164,15 @@ def collect_page_audit_snapshots(
                 risk_reasons=risk_reasons,
                 deterministic_checks=deterministic_checks,
                 page_blocks=[_block_dict(block) for block in page_blocks[: settings.audit_max_blocks_per_page]],
-                fragments=[_fragment_dict(fragment) for fragment in page_fragments[: settings.audit_max_fragments_per_page]],
+                fragments=[
+                    _fragment_dict(
+                        fragment,
+                        parent_fragment=fragments_by_id.get(fragment.parent_fragment_id) if fragment.parent_fragment_id else None,
+                        fragments_by_id=fragments_by_id,
+                        page_number=page_number,
+                    )
+                    for fragment in page_fragments[: settings.audit_max_fragments_per_page]
+                ],
                 tables=[_table_dict(table, cells_by_table_id[table.id]) for table in page_tables],
                 cross_references=[_crossref_dict(ref) for ref in page_refs],
             )
@@ -384,7 +393,9 @@ def _build_audit_prompt(snapshot: PageAuditSnapshot) -> str:
         "You are reviewing Layer 1 land-use bylaw extraction fidelity for one page. "
         "Compare the source page text against extracted blocks, fragments, tables, and cross-references. "
         "Focus on missing text, bad ordering, bad hierarchy attachment, heading/list/footnote mistakes, "
-        "and table flattening risks. Return a strict JSON verdict.\n\n"
+        "and table flattening risks. Off-page parent or ancestor context can be legitimate when the current page "
+        "is a continuation of a definition list, clause sequence, or section started on a prior page; do not treat "
+        "continuation ancestry alone as a failure if the visible page text is otherwise faithful. Return a strict JSON verdict.\n\n"
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -400,8 +411,14 @@ def _block_dict(block: PageBlock) -> dict[str, Any]:
     }
 
 
-def _fragment_dict(fragment: SourceFragment) -> dict[str, Any]:
-    return {
+def _fragment_dict(
+    fragment: SourceFragment,
+    *,
+    parent_fragment: SourceFragment | None = None,
+    fragments_by_id: dict[int, SourceFragment] | None = None,
+    page_number: int | None = None,
+) -> dict[str, Any]:
+    payload = {
         "id": fragment.id,
         "fragment_type": fragment.fragment_type.value,
         "citation_label": fragment.citation_label,
@@ -411,6 +428,57 @@ def _fragment_dict(fragment: SourceFragment) -> dict[str, Any]:
         "text": fragment.text,
         "metadata_json": fragment.metadata_json,
     }
+    if parent_fragment is not None:
+        payload["parent_fragment_context"] = {
+            "id": parent_fragment.id,
+            "fragment_type": parent_fragment.fragment_type.value,
+            "citation_label": parent_fragment.citation_label,
+            "citation_path": parent_fragment.citation_path,
+            "page_start": parent_fragment.page_start,
+            "page_end": parent_fragment.page_end,
+            "text": parent_fragment.text,
+            "visible_on_current_page": (
+                page_number is not None and parent_fragment.page_start <= page_number <= parent_fragment.page_end
+            ),
+        }
+        if fragments_by_id:
+            payload["ancestor_chain"] = _ancestor_chain(parent_fragment, fragments_by_id, page_number=page_number)
+        payload["continuation_from_prior_page"] = bool(
+            page_number is not None and parent_fragment.page_end < page_number
+        )
+    return payload
+
+
+def _ancestor_chain(
+    fragment: SourceFragment,
+    fragments_by_id: dict[int, SourceFragment],
+    *,
+    page_number: int | None = None,
+    max_depth: int = 6,
+) -> list[dict[str, Any]]:
+    chain: list[dict[str, Any]] = []
+    current = fragment
+    depth = 0
+    while current is not None and depth < max_depth:
+        chain.append(
+            {
+                "id": current.id,
+                "fragment_type": current.fragment_type.value,
+                "citation_label": current.citation_label,
+                "citation_path": current.citation_path,
+                "page_start": current.page_start,
+                "page_end": current.page_end,
+                "text": current.text,
+                "visible_on_current_page": (
+                    page_number is not None and current.page_start <= page_number <= current.page_end
+                ),
+            }
+        )
+        if not current.parent_fragment_id:
+            break
+        current = fragments_by_id.get(current.parent_fragment_id)
+        depth += 1
+    return chain
 
 
 def _table_dict(table: SourceTable, cells: list[SourceTableCell]) -> dict[str, Any]:

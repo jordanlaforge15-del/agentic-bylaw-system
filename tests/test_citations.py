@@ -21,6 +21,11 @@ def test_parse_clause_label():
     assert match.fragment_type == FragmentType.CLAUSE
     assert match.label == "(a)"
 
+    match = parse_citation_label("(ba) a home occupation")
+    assert match is not None
+    assert match.fragment_type == FragmentType.CLAUSE
+    assert match.label == "(ba)"
+
 
 def test_parse_compound_bylaw_labels():
     match = parse_citation_label("43I Notwithstanding Sections 37 to 40")
@@ -38,6 +43,25 @@ def test_parse_compound_bylaw_labels():
     assert match.fragment_type == FragmentType.CLAUSE
     assert match.label == "16B(14)(c)"
 
+    match = parse_citation_label("43 AD Buildings altered or used for R-2A uses")
+    assert match is not None
+    assert match.fragment_type == FragmentType.SECTION
+    assert match.label == "43AD"
+
+    match = parse_citation_label("41 A building in existence may be converted")
+    assert match is not None
+    assert match.fragment_type == FragmentType.SECTION
+    assert match.label == "41"
+
 
 def test_default_profile_does_not_parse_compound_bylaw_labels():
     assert parse_citation_label("43I Notwithstanding Sections 37 to 40", profile=get_parsing_profile("default")) is None
+
+
+def test_address_heading_is_not_parsed_as_numeric_section():
+    assert parse_citation_label("5515/17/19 and 5523 Inglis Street") is None
+
+
+def test_measurement_value_is_not_a_citation_label():
+    assert parse_citation_label("16M TEMPORARY CONSTRUCTION USES PERMITTED") is not None
+    assert parse_citation_label("40 ANGLE") is not None

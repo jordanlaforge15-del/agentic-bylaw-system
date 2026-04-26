@@ -13,9 +13,10 @@ APPENDIX_RE = re.compile(r"^\s*appendix\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re
 COMPOUND_SECTION_RE = re.compile(
     r"^\s*((?:\d+[A-Z]*)(?:\([0-9A-Za-z]+\))*[A-Z]?)(?=\s|$)\s*(.*)$"
 )
+SPLIT_COMPOUND_SECTION_RE = re.compile(r"^\s*(\d+)\s+([A-Z]{1,3})\b\s+(.*)$")
 NUMERIC_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,5})\b(?:[.)])?\s*(.*)$")
-CLAUSE_RE = re.compile(r"^\s*\(([a-z])\)\s+(.*)$")
-SUBCLAUSE_RE = re.compile(r"^\s*\(([ivxlcdm]+)\)\s+(.*)$", re.IGNORECASE)
+CLAUSE_RE = re.compile(r"^\s*(\([a-z]{1,3}\))\s+(.*)$", re.IGNORECASE)
+SUBCLAUSE_RE = re.compile(r"^\s*\(([ivxlcdm]{2,})\)\s+(.*)$", re.IGNORECASE)
 FOOTNOTE_RE = re.compile(r"^\s*(?:\[\d+\]|\d+\s+)(.+)$")
 
 
@@ -45,6 +46,15 @@ def parse_citation_label(text: str, profile: ParsingProfile | None = None) -> Ci
             return CitationMatch(fragment_type, f"{prefix} {token}", 1, match.group(2).strip(), 0.95)
 
     if profile.allow_compound_section_labels:
+        split_compound = SPLIT_COMPOUND_SECTION_RE.match(stripped)
+        if split_compound:
+            suffix = split_compound.group(2)
+            title = split_compound.group(3).strip()
+            if len(suffix) >= 2 or (title and title[:1].isupper()):
+                joined_label = f"{split_compound.group(1)}{suffix}"
+                parsed = _parse_compound_section_label(joined_label, title)
+                if parsed:
+                    return parsed
         compound = COMPOUND_SECTION_RE.match(stripped)
         if compound:
             label = compound.group(1)
@@ -55,6 +65,8 @@ def parse_citation_label(text: str, profile: ParsingProfile | None = None) -> Ci
 
     match = NUMERIC_RE.match(stripped)
     if match:
+        if match.end(1) < len(stripped) and stripped[match.end(1)] == "/":
+            return None
         label = match.group(1)
         depth = label.count(".") + 1
         if depth == 1:
@@ -68,13 +80,13 @@ def parse_citation_label(text: str, profile: ParsingProfile | None = None) -> Ci
             level = 3 + min(depth - 2, 2)
         return CitationMatch(fragment_type, label, level, match.group(2).strip(), 0.9)
 
-    match = CLAUSE_RE.match(stripped)
-    if match:
-        return CitationMatch(FragmentType.CLAUSE, f"({match.group(1)})", 5, match.group(2).strip(), 0.85)
-
     match = SUBCLAUSE_RE.match(stripped)
     if match:
         return CitationMatch(FragmentType.SUBCLAUSE, f"({match.group(1).lower()})", 6, match.group(2).strip(), 0.85)
+
+    match = CLAUSE_RE.match(stripped)
+    if match:
+        return CitationMatch(FragmentType.CLAUSE, match.group(1).lower(), 5, match.group(2).strip(), 0.85)
 
     return None
 
