@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime, timezone
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from layer1.db.base import SourceFragment
+from layer1.db.base import SourceFragment, SourceTableCell
 from layer2.config import Layer2Settings
 from layer2.claims.parser import parse_answer_payload
 from layer2.db.models import (
@@ -127,6 +128,87 @@ def _persist_claims(
     return persisted
 
 
+def _parse_numeric_value(text: str) -> tuple[float | None, str | None]:
+    match = re.search(r"(\d[\d,]*(?:\.\d+)?)\s*([A-Za-z.%/]+)?", text)
+    if not match:
+        return None, None
+    raw_number = match.group(1).replace(",", "")
+    try:
+        value = float(raw_number)
+    except ValueError:
+        value = None
+    return value, match.group(2)
+
+
+def _topic_to_claim_type(topic: str) -> str:
+    if "parking" in topic:
+        return "parking_requirement"
+    if any(token in topic for token in ["height", "frontage", "area", "coverage", "setback"]):
+        return "dimensional_standard"
+    return "general_regulation"
+
+
+def _synthesize_claims_from_candidates(
+    session: Session,
+    *,
+    retrieval_bundle,
+    selected_fragments,
+) -> list[StructuredClaim]:
+    synthesized: list[StructuredClaim] = []
+    for candidate in selected_fragments:
+        if candidate.source_type != "table_cell":
+            continue
+        if candidate.reason.get("pattern") != "dimensional_pair":
+            continue
+        cell_ids = candidate.reason.get("cell_ids") or []
+        if len(cell_ids) < 2:
+            continue
+        value_cell = session.get(SourceTableCell, cell_ids[1])
+        if value_cell is None or not value_cell.text:
+            continue
+        topic_text = candidate.text.lower()
+        if "height" in topic_text:
+            topic = "maximum height"
+        elif "frontage" in topic_text:
+            topic = "minimum lot frontage"
+        elif "area" in topic_text:
+            topic = "minimum lot area"
+        elif "coverage" in topic_text:
+            topic = "maximum lot coverage"
+        elif "parking" in topic_text:
+            topic = "parking requirement"
+        else:
+            topic = candidate.text.splitlines()[0][:80]
+        numeric_value, unit = _parse_numeric_value(value_cell.text)
+        zone_code = retrieval_bundle.understanding.zone_keywords[0] if retrieval_bundle.understanding.zone_keywords else None
+        operator = None
+        normalized_topic = topic.lower()
+        if "maximum" in normalized_topic:
+            operator = "<="
+        elif "minimum" in normalized_topic:
+            operator = ">="
+        synthesized.append(
+            StructuredClaim(
+                claim_type=_topic_to_claim_type(topic),
+                topic=topic,
+                canonical_subject=f"{zone_code} zone" if zone_code else None,
+                canonical_predicate=topic,
+                canonical_object_text=value_cell.text,
+                numeric_value=numeric_value,
+                normalized_value_text=value_cell.text,
+                unit=unit,
+                operator=operator,
+                zone_code=zone_code,
+                source_fragment_ids=[],
+                source_table_cell_ids=cell_ids,
+                citation_text=candidate.citation_label,
+                confidence=0.7,
+            )
+        )
+        break
+    return synthesized
+
+
 def run_answer_pipeline(
     session: Session,
     *,
@@ -136,6 +218,7 @@ def run_answer_pipeline(
     settings: Layer2Settings,
     embedding_client: BaseEmbeddingClient,
     llm_client: BaseLLMClient,
+    planner_llm_client: BaseLLMClient | None = None,
     top_k: int | None = None,
     token_budget: int | None = None,
 ) -> dict[str, Any]:
@@ -157,6 +240,7 @@ def run_answer_pipeline(
         known_facts=known_facts,
         settings=settings,
         embedding_client=embedding_client,
+        planner_llm_client=planner_llm_client,
         top_k=top_k,
     )
     query_session.normalized_question_text = retrieval_bundle.understanding.normalized_question
@@ -216,6 +300,12 @@ def run_answer_pipeline(
     query_session.status = QuerySessionStatus.ANSWERING
     raw_output = llm_client.generate(system_prompt=system_prompt, user_prompt=user_prompt, temperature=0.0)
     payload = parse_answer_payload(raw_output)
+    if not payload.claims:
+        payload.claims = _synthesize_claims_from_candidates(
+            session,
+            retrieval_bundle=retrieval_bundle,
+            selected_fragments=selected_fragments,
+        )
     answer_status = AnswerStatus.INSUFFICIENT_SOURCE if payload.insufficient_source else AnswerStatus.COMPLETED
     answer_log = AnswerLog(
         query_session_id=query_session.id,
@@ -252,4 +342,3 @@ def run_answer_pipeline(
         "claims": claims,
         "selected_fragments": selected_fragments,
     }
-

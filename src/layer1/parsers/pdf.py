@@ -66,10 +66,27 @@ class DoclingParser(ParserAdapter):
     def parse(self, path: Path, *, ocr: bool = False, debug: bool = False) -> ParseResult:
         try:
             from docling.document_converter import DocumentConverter
+            from docling.datamodel.base_models import InputFormat
+            from docling.datamodel.pipeline_options import (
+                AcceleratorDevice,
+                AcceleratorOptions,
+                PdfPipelineOptions,
+            )
+            from docling.document_converter import PdfFormatOption
         except ImportError as exc:
             raise RuntimeError("Docling is not installed") from exc
 
-        converter = DocumentConverter()
+        pdf_options = PdfPipelineOptions()
+        pdf_options.do_ocr = ocr
+        pdf_options.do_table_structure = False
+        pdf_options.layout_batch_size = 1
+        pdf_options.table_batch_size = 1
+        pdf_options.ocr_batch_size = 1
+        pdf_options.accelerator_options = AcceleratorOptions(num_threads=2, device=AcceleratorDevice.CPU)
+        converter = DocumentConverter(
+            allowed_formats=[InputFormat.PDF],
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)},
+        )
         result = converter.convert(str(path))
         document = result.document
         text = document.export_to_markdown()
@@ -79,7 +96,9 @@ class DoclingParser(ParserAdapter):
         temp_parser = TextParser()
         parsed = _parse_docling_markdown(text, temp_parser, path)
         parsed.parser_version = self.name
-        parsed.warnings.append("Docling markdown export used; geometry supplied by PyMuPDF fallback where available")
+        parsed.warnings.append(
+            "Docling markdown export used with lean PDF options; geometry supplied by PyMuPDF fallback where available"
+        )
 
         if path.suffix.lower() == ".pdf":
             try:

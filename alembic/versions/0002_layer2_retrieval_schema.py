@@ -23,12 +23,31 @@ def upgrade() -> None:
     if is_postgres:
         op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
-    querysessionstatus = sa.Enum("PENDING", "RETRIEVING", "ANSWERING", "COMPLETED", "FAILED", name="querysessionstatus")
-    retrievalrunstatus = sa.Enum("RUNNING", "COMPLETED", "FAILED", name="retrievalrunstatus")
-    sourcetype = sa.Enum("FRAGMENT", "TABLE", "TABLE_CELL", "CLAIM", name="sourcetype")
-    retrievalchannel = sa.Enum("FULL_TEXT", "VECTOR", "HIERARCHY", "CROSS_REFERENCE", "CLAIM_REUSE", "TABLE", name="retrievalchannel")
-    answerstatus = sa.Enum("COMPLETED", "INSUFFICIENT_SOURCE", "FAILED", name="answerstatus")
-    claimtype = sa.Enum(
+    enum_type = postgresql.ENUM if is_postgres else sa.Enum
+    enum_options = {"create_type": False} if is_postgres else {}
+    querysessionstatus = enum_type(
+        "PENDING",
+        "RETRIEVING",
+        "ANSWERING",
+        "COMPLETED",
+        "FAILED",
+        name="querysessionstatus",
+        **enum_options,
+    )
+    retrievalrunstatus = enum_type("RUNNING", "COMPLETED", "FAILED", name="retrievalrunstatus", **enum_options)
+    sourcetype = enum_type("FRAGMENT", "TABLE", "TABLE_CELL", "CLAIM", name="sourcetype", **enum_options)
+    retrievalchannel = enum_type(
+        "FULL_TEXT",
+        "VECTOR",
+        "HIERARCHY",
+        "CROSS_REFERENCE",
+        "CLAIM_REUSE",
+        "TABLE",
+        name="retrievalchannel",
+        **enum_options,
+    )
+    answerstatus = enum_type("COMPLETED", "INSUFFICIENT_SOURCE", "FAILED", name="answerstatus", **enum_options)
+    claimtype = enum_type(
         "DEFINITION",
         "USE_PERMISSION",
         "DIMENSIONAL_STANDARD",
@@ -39,9 +58,10 @@ def upgrade() -> None:
         "GENERAL_REGULATION",
         "PROCEDURE_REQUIREMENT",
         name="claimtype",
+        **enum_options,
     )
-    claimstatus = sa.Enum("ACTIVE", "SUPERSEDED", "REJECTED", name="claimstatus")
-    verificationstatus = sa.Enum("UNVERIFIED", "VERIFIED", "DISPUTED", name="verificationstatus")
+    claimstatus = enum_type("ACTIVE", "SUPERSEDED", "REJECTED", name="claimstatus", **enum_options)
+    verificationstatus = enum_type("UNVERIFIED", "VERIFIED", "DISPUTED", name="verificationstatus", **enum_options)
 
     enums = [
         querysessionstatus,

@@ -10,6 +10,8 @@ PART_RE = re.compile(r"^\s*part\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNOREC
 SCHEDULE_RE = re.compile(r"^\s*schedule\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 APPENDIX_RE = re.compile(r"^\s*appendix\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 NUMERIC_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,5})\b(?:[.)])?\s*(.*)$")
+NUMERIC_PAREN_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,5}(?:\([A-Za-z0-9]+\))+)\s+(.*)$")
+PAREN_NUMERIC_RE = re.compile(r"^\s*\((\d+(?:\.\d+){0,5})\)\s+(.*)$")
 CLAUSE_RE = re.compile(r"^\s*\(([a-z])\)\s+(.*)$")
 SUBCLAUSE_RE = re.compile(r"^\s*\(([ivxlcdm]+)\)\s+(.*)$", re.IGNORECASE)
 FOOTNOTE_RE = re.compile(r"^\s*(?:\[\d+\]|\d+\s+)(.+)$")
@@ -38,6 +40,14 @@ def parse_citation_label(text: str) -> CitationMatch | None:
         if match:
             token = match.group(1).upper()
             return CitationMatch(fragment_type, f"{prefix} {token}", 1, match.group(2).strip(), 0.95)
+
+    match = NUMERIC_PAREN_RE.match(stripped)
+    if match:
+        return CitationMatch(FragmentType.SECTION, match.group(1), 2, match.group(2).strip(), 0.9)
+
+    match = PAREN_NUMERIC_RE.match(stripped)
+    if match:
+        return CitationMatch(FragmentType.SUBSECTION, f"({match.group(1)})", 3, match.group(2).strip(), 0.85)
 
     match = NUMERIC_RE.match(stripped)
     if match:

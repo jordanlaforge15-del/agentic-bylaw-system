@@ -12,6 +12,7 @@ def merge_and_dedupe_candidates(*candidate_groups: list[CandidateFragment]) -> l
                 candidate.source_table_id,
                 candidate.source_table_cell_id,
                 candidate.source_type,
+                candidate.metadata.get("page_block_id") if not any([candidate.source_fragment_id, candidate.source_table_id, candidate.source_table_cell_id]) else None,
             )
             existing = merged.get(key)
             if existing is None:
@@ -22,4 +23,3 @@ def merge_and_dedupe_candidates(*candidate_groups: list[CandidateFragment]) -> l
                 existing.reason.setdefault("channels", []).append(candidate.retrieval_channel)
             existing.reason.update(candidate.reason)
     return sorted(merged.values(), key=lambda item: item.base_score, reverse=True)
-

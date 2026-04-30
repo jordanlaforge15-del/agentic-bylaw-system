@@ -24,4 +24,3 @@ class EmbeddingVector(TypeDecorator[list[float]]):
         if dialect.name == "postgresql":
             return dialect.type_descriptor(JSONB())
         return dialect.type_descriptor(JSON())
-

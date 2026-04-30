@@ -29,5 +29,8 @@ def test_build_prompt_includes_fragments_and_claims():
     system_prompt, user_prompt, assembled = build_prompt(context)
     assert "strict JSON" in system_prompt
     assert "fragment_id: 7" in user_prompt
+    assert "source_type: fragment" in user_prompt
+    assert "table_id: n/a" in user_prompt
     assert "claim_id: 1" in assembled
-
+    assert "\"claims\"" in user_prompt
+    assert "Still emit claims for any directly relevant sourced facts" in user_prompt

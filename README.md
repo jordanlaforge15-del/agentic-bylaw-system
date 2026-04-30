@@ -13,6 +13,22 @@ Layer 1 integration paths used by Layer 2:
 
 ## Setup
 
+Fast path for a fresh shell:
+
+```bash
+./scripts/dev-setup.sh
+source .venv/bin/activate
+```
+
+Install heavier parser integrations such as Docling, Camelot, and PaddleOCR:
+
+```bash
+./scripts/dev-setup.sh --with-parsers
+source .venv/bin/activate
+```
+
+Manual setup:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -109,22 +125,44 @@ Layer 2 adds the following tables:
 
 These tables are append-oriented trace logs. They are meant to preserve what was retrieved, what was shown to the model, what the model answered, and what later reviewers said about that run.
 
-## Layer 2 Runtime Configuration
+## Runtime Environment
 
-Layer 2 reads `DATABASE_URL` through the shared Layer 1 settings path and supports additional environment variables for models and retrieval behavior:
+The app reads configuration from environment variables and from `.env` when running from the repo. The same `DATABASE_URL` is used by Layer 1, Layer 2, and Alembic.
 
-- `LAYER2_LLM_BASE_URL`
-- `LAYER2_LLM_API_KEY`
-- `LAYER2_LLM_MODEL`
-- `LAYER2_EMBEDDING_BASE_URL`
-- `LAYER2_EMBEDDING_API_KEY`
-- `LAYER2_EMBEDDING_MODEL`
-- `LAYER2_EMBEDDING_DIMENSIONS`
-- `LAYER2_PROMPT_VERSION`
-- `LAYER2_RETRIEVAL_VERSION`
-- `LAYER2_TOKEN_BUDGET`
-- `LAYER2_TOP_K`
-- `LAYER2_MAX_CACHED_CLAIMS`
+| Variable | Default | Used by | Purpose |
+| --- | --- | --- | --- |
+| `DATABASE_URL` | `postgresql+psycopg://layer1:layer1@localhost:5432/layer1` | Layer 1, Layer 2, Alembic | SQLAlchemy database URL. Use `postgres` as the hostname inside Docker Compose and `localhost` from the host. |
+| `OCR_ENABLED` | `false` | Layer 1 | Enables OCR-capable parsing paths when the installed parser stack supports them. |
+| `CAMELOT_ENABLED` | `false` | Layer 1 | Enables Camelot table extraction when parser dependencies are installed. |
+| `LOG_LEVEL` | `INFO` | Layer 1 | Logging verbosity. |
+| `BOILERPLATE_REPETITION_THRESHOLD` | `2` | Layer 1 | Repetition threshold used when detecting boilerplate headers/footers. |
+| `LAYER2_LLM_BASE_URL` | unset | Layer 2 | OpenAI-compatible chat completions base URL. For OpenAI, use `https://api.openai.com/v1`. If unset, Layer 2 uses the mock LLM. |
+| `LAYER2_LLM_API_KEY` | unset | Layer 2 | API key for the configured LLM endpoint. For OpenAI, this can be the same value as `OPENAI_API_KEY`. |
+| `LAYER2_LLM_MODEL` | `mock-layer2` | Layer 2 | LLM model name. For OpenAI-compatible endpoints, set this to the model you want Layer 2 to call. |
+| `LAYER2_EMBEDDING_BASE_URL` | unset | Layer 2 | OpenAI-compatible embeddings base URL. If unset, Layer 2 uses the local hashing embedder. |
+| `LAYER2_EMBEDDING_API_KEY` | unset | Layer 2 | API key for the configured embedding endpoint. |
+| `LAYER2_EMBEDDING_MODEL` | `hashing-bge-small-en-v1.5` | Layer 2 | Embedding model name. Values starting with `hashing` or `mock` use the local hashing client. Values starting with `sentence-transformers:` use the local sentence-transformers client. |
+| `LAYER2_EMBEDDING_DIMENSIONS` | `384` | Layer 2 | Embedding vector dimension used by the configured embedding client. |
+| `LAYER2_PROMPT_VERSION` | `v1` | Layer 2 | Prompt template/version label stored with prompt logs. |
+| `LAYER2_RETRIEVAL_VERSION` | `v1` | Layer 2 | Retrieval version label stored with retrieval runs. |
+| `LAYER2_TOKEN_BUDGET` | `3000` | Layer 2 | Approximate source-context token budget for prompt assembly. |
+| `LAYER2_TOP_K` | `8` | Layer 2 | Default number of retrieval candidates per retrieval channel. |
+| `LAYER2_MAX_CACHED_CLAIMS` | `4` | Layer 2 | Maximum verified claims to reuse in prompt context. |
+| `OPENAI_API_KEY` | unset | Docker Compose / optional local use | Passed into the Codex container and commonly reused as `LAYER2_LLM_API_KEY` or `LAYER2_EMBEDDING_API_KEY`. |
+| `POSTGRES_DB` | `layer1` in `docker-compose.yml` | PostgreSQL container | Database created by the local Postgres container. |
+| `POSTGRES_USER` | `layer1` in `docker-compose.yml` | PostgreSQL container | Database user created by the local Postgres container. |
+| `POSTGRES_PASSWORD` | `layer1` in `docker-compose.yml` | PostgreSQL container | Database password created by the local Postgres container. |
+| `CODEX_HOME` | `/home/codex/.codex` in `docker-compose.yml` | Codex container | Codex home directory inside the dev container. |
+| `NPM_CONFIG_PREFIX` | `/home/codex/.npm-global` in `docker-compose.yml` | Codex container | npm global install prefix inside the dev container. |
+| `PIP_BREAK_SYSTEM_PACKAGES` | `1` in `docker-compose.yml` | Codex container | Allows package installation in the container image/runtime. |
+
+Common local OpenAI configuration:
+
+```bash
+LAYER2_LLM_BASE_URL=https://api.openai.com/v1
+LAYER2_LLM_API_KEY=${OPENAI_API_KEY}
+LAYER2_LLM_MODEL=gpt-5.4
+```
 
 Behavior notes:
 

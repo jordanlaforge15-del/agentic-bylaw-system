@@ -51,6 +51,21 @@ class PromptContext(BaseModel):
     cached_claims: list[CachedClaimContext] = Field(default_factory=list)
 
 
+class RetrievalOperation(BaseModel):
+    tool: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    rationale: str | None = None
+
+
+class RetrievalPlan(BaseModel):
+    intent: str = "general_context_search"
+    entities: dict[str, Any] = Field(default_factory=dict)
+    aliases: dict[str, list[str]] = Field(default_factory=dict)
+    recommended_calls: list[RetrievalOperation] = Field(default_factory=list)
+    expected_answer_shape: str | None = None
+    confidence: float | None = None
+
+
 class StructuredClaim(BaseModel):
     claim_type: ClaimType
     topic: str
@@ -98,4 +113,3 @@ class RetrievalBundle:
     cached_claims: list[CachedClaimContext] = field(default_factory=list)
     metadata_filters: dict[str, Any] = field(default_factory=dict)
     query_terms: dict[str, Any] = field(default_factory=dict)
-

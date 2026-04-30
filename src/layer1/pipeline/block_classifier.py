@@ -8,7 +8,7 @@ from layer1.models.schemas import PageBlockData
 from layer1.pipeline.citations import parse_citation_label
 
 
-FOOTNOTE_RE = re.compile(r"^\s*(?:\[\d+\]|\d+\s+)[A-Z]?[a-z].{8,}$")
+FOOTNOTE_RE = re.compile(r"^\s*(?:\[\d+\]|\d+\s+)[a-z].{8,}$")
 LIST_RE = re.compile(r"^\s*(?:\([a-z]\)|\([ivxlcdm]+\)|[-*•])\s+", re.IGNORECASE)
 TABLE_HINT_RE = re.compile(r"\s{2,}|\t|\|")
 

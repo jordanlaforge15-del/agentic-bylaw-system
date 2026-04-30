@@ -156,6 +156,7 @@ def answer(
             settings=settings,
             embedding_client=embedding_client,
             llm_client=llm_client,
+            planner_llm_client=llm_client,
             top_k=top_k,
             token_budget=token_budget,
         )

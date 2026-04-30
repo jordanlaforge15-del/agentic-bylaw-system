@@ -16,8 +16,28 @@ def rerank_candidates(candidates: list[CandidateFragment], understanding: QueryU
             score += 0.15
         if any(use_keyword.lower() in text for use_keyword in understanding.use_keywords):
             score += 0.15
+        if "height" in understanding.topics and any(token in text for token in ["height", "storey", "storeys", "story", "stories"]):
+            score += 0.25
+        if any(
+            concept in understanding.legal_concepts
+            for concept in {"minimum lot area", "maximum height", "lot frontage", "lot coverage"}
+        ) and any(
+            marker in text
+            for marker in [
+                "minimum lot area",
+                "lot area minimum",
+                "maximum height",
+                "height maximum",
+                "minimum frontage",
+                "lot frontage minimum",
+                "maximum coverage",
+                "lot coverage maximum",
+            ]
+        ):
+            score += 0.3
+        if candidate.retrieval_channel == "table" and candidate.reason.get("pattern") == "dimensional_pair":
+            score += 0.35
         if candidate.retrieval_channel == "cross_reference":
             score += 0.1
         candidate.rerank_score = score
     return sorted(candidates, key=lambda item: item.rerank_score, reverse=True)
-

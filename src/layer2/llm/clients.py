@@ -20,17 +20,20 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
+        payload = {
+            "model": self.model_name,
+            "temperature": temperature,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        if "api.openai.com" in self._base_url:
+            payload["response_format"] = {"type": "json_object"}
         response = httpx.post(
             f"{self._base_url}/chat/completions",
             headers=headers,
-            json={
-                "model": self.model_name,
-                "temperature": temperature,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            },
+            json=payload,
             timeout=120.0,
         )
         response.raise_for_status()
