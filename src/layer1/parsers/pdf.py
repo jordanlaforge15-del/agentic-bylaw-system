@@ -3,15 +3,19 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from layer1.models.enums import BlockType, ParseStatus
 from layer1.models.schemas import BBox, PageBlockData, TableCellData, TableData
 from layer1.parsers.base import ParseResult, ParserAdapter
-from layer1.pipeline.block_classifier import classify_text_block, mark_boilerplate, normalize_text
+from layer1.parsers.table_fallback import extract_fallback_tables
+from layer1.pipeline.block_classifier import classify_text_block, mark_boilerplate, normalize_text, split_toc_lines, strip_page_prefix
+from layer1.profiles import ParsingProfile, get_parsing_profile
 
 
 class PdfParser(ParserAdapter):
     name = "pymupdf-fallback"
 
-    def parse(self, path: Path, *, ocr: bool = False, debug: bool = False) -> ParseResult:
+    def parse(self, path: Path, *, ocr: bool = False, debug: bool = False, profile: ParsingProfile | None = None) -> ParseResult:
+        profile = get_parsing_profile(profile)
         try:
             import fitz
         except ImportError as exc:
@@ -32,28 +36,33 @@ class PdfParser(ParserAdapter):
                     x0, y0, x1, y1, text, *_ = raw
                     if not text.strip():
                         continue
-                    block_type = classify_text_block(text, y0=y0, y1=y1, page_height=page_height)
-                    blocks.append(
-                        PageBlockData(
-                            page_number=page_idx,
-                            block_type=block_type,
-                            bbox=BBox(x0=float(x0), y0=float(y0), x1=float(x1), y1=float(y1)),
-                            reading_order=order,
-                            raw_text=text.strip(),
-                            normalized_text=normalize_text(text),
-                            parser_source=self.name,
-                            confidence=0.75,
-                        )
+                    cleaned_text = strip_page_prefix(text)
+                    if not cleaned_text:
+                        continue
+                    block_segments = _build_page_blocks_from_pdf_text(
+                        page_number=page_idx,
+                        text=cleaned_text,
+                        x0=float(x0),
+                        y0=float(y0),
+                        x1=float(x1),
+                        y1=float(y1),
+                        page_height=page_height,
+                        reading_order_start=order,
+                        parser_source=self.name,
+                        confidence=0.75,
+                        profile=profile,
                     )
-                    order += 1
+                    blocks.extend(block_segments)
+                    order += len(block_segments)
             page_count = doc.page_count
 
         if not blocks and ocr:
             warnings.append("OCR was requested, but PaddleOCR adapter is optional and not configured in this fallback parser")
-        mark_boilerplate(blocks)
+        mark_boilerplate(blocks, profile=profile)
+        tables = extract_fallback_tables(blocks)
         return ParseResult(
             page_blocks=blocks,
-            tables=[],
+            tables=tables,
             page_count=page_count,
             parser_version=self.name,
             warnings=warnings,
@@ -64,60 +73,136 @@ class PdfParser(ParserAdapter):
 class DoclingParser(ParserAdapter):
     name = "docling"
 
-    def __init__(self, *, extract_tables: bool = True) -> None:
-        self.extract_tables = extract_tables
-
-    def parse(self, path: Path, *, ocr: bool = False, debug: bool = False) -> ParseResult:
+    def parse(self, path: Path, *, ocr: bool = False, debug: bool = False, profile: ParsingProfile | None = None) -> ParseResult:
+        profile = get_parsing_profile(profile)
         try:
-            from docling.document_converter import DocumentConverter
+            from docling_core.types.doc.base import CoordOrigin
+            from docling_core.types.doc.document import GroupItem, ListItem, SectionHeaderItem, TableItem, TextItem, TitleItem
             from docling.datamodel.base_models import InputFormat
-            from docling.datamodel.pipeline_options import (
-                AcceleratorDevice,
-                AcceleratorOptions,
-                PdfPipelineOptions,
-            )
-            from docling.document_converter import PdfFormatOption
+            from docling.datamodel.pipeline_options import OcrAutoOptions, PdfPipelineOptions
+            from docling.document_converter import DocumentConverter, PdfFormatOption
         except ImportError as exc:
             raise RuntimeError("Docling is not installed") from exc
 
-        pdf_options = PdfPipelineOptions()
-        pdf_options.do_ocr = ocr
-        pdf_options.do_table_structure = False
-        pdf_options.layout_batch_size = 1
-        pdf_options.table_batch_size = 1
-        pdf_options.ocr_batch_size = 1
-        pdf_options.accelerator_options = AcceleratorOptions(num_threads=2, device=AcceleratorDevice.CPU)
         converter = DocumentConverter(
-            allowed_formats=[InputFormat.PDF],
-            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)},
+            format_options={
+                InputFormat.PDF: PdfFormatOption(
+                    pipeline_options=PdfPipelineOptions(
+                        do_ocr=ocr,
+                        ocr_options=OcrAutoOptions(),
+                    )
+                )
+            }
         )
         result = converter.convert(str(path))
         document = result.document
-        text = document.export_to_markdown()
+        blocks: list[PageBlockData] = []
+        tables: list[TableData] = []
+        warnings: list[str] = []
+        order = 0
+        page_numbers = sorted(document.pages.keys())
+        for page_number in page_numbers:
+            page = document.pages[page_number]
+            page_height = float(page.size.height)
+            page_candidates = []
+            for seq, (item, level) in enumerate(document.iterate_items(page_no=page_number, with_groups=True)):
+                if isinstance(item, GroupItem):
+                    continue
+                bbox = _docling_item_bbox(item, page_height, CoordOrigin)
+                raw_text = _docling_item_text(item)
+                if bbox is None and not isinstance(item, TableItem):
+                    if not raw_text:
+                        continue
+                    warnings.append(f"Docling item missing provenance on page {page_number}: {item.__class__.__name__}")
+                    continue
+                page_candidates.append((bbox.y0 if bbox else float("inf"), bbox.x0 if bbox else 0.0, seq, item, level, bbox, raw_text))
 
-        from layer1.parsers.text import TextParser
+            for _, _, _, item, level, bbox, raw_text in sorted(page_candidates, key=lambda entry: (entry[0], entry[1], entry[2])):
+                if isinstance(item, TableItem):
+                    table_text = _docling_table_text(item)
+                    table_block_index = len(blocks)
+                    blocks.append(
+                        PageBlockData(
+                            page_number=page_number,
+                            block_type=BlockType.TABLE_REGION,
+                            bbox=bbox,
+                            reading_order=order,
+                            raw_text=table_text,
+                            normalized_text=normalize_text(table_text),
+                            parser_source=self.name,
+                            confidence=0.9,
+                            metadata={
+                                "docling_ref": item.self_ref,
+                                "docling_label": getattr(item.label, "value", str(item.label)),
+                                "docling_level": level,
+                            },
+                        )
+                    )
+                    order += 1
+                    tables.append(
+                        _docling_table_data(
+                            item,
+                            page_number=page_number,
+                            page_height=page_height,
+                            coord_origin_cls=CoordOrigin,
+                            source_block_index=table_block_index,
+                        )
+                    )
+                    continue
 
-        temp_parser = TextParser()
-        parsed = _parse_docling_markdown(text, temp_parser, path)
-        parsed.parser_version = self.name
-        parsed.warnings.append(
-            "Docling markdown export used with lean PDF options; geometry supplied by PyMuPDF fallback where available"
+                if not raw_text:
+                    continue
+                blocks.append(
+                    PageBlockData(
+                        page_number=page_number,
+                        block_type=_docling_block_type(
+                            item,
+                            raw_text=raw_text,
+                            bbox=bbox,
+                            page_height=page_height,
+                            text_item_cls=TextItem,
+                            section_header_cls=SectionHeaderItem,
+                            title_item_cls=TitleItem,
+                            list_item_cls=ListItem,
+                            profile=profile,
+                        ),
+                        bbox=bbox,
+                        reading_order=order,
+                        raw_text=raw_text,
+                        normalized_text=normalize_text(raw_text),
+                        parser_source=self.name,
+                        confidence=0.9,
+                        metadata={
+                            "docling_ref": item.self_ref,
+                            "docling_label": getattr(getattr(item, "label", None), "value", None),
+                            "docling_level": level,
+                            "docling_parent_ref": getattr(getattr(item, "parent", None), "cref", None),
+                        },
+                    )
+                )
+                order += 1
+
+        mark_boilerplate(blocks, profile=profile)
+        parsed = ParseResult(
+            page_blocks=blocks,
+            tables=tables,
+            page_count=len(page_numbers) or None,
+            parser_version=self.name,
+            warnings=warnings,
+            raw={
+                "docling_pages": len(page_numbers),
+                "docling_items": len(blocks) + len(tables),
+                "docling_tables": len(tables),
+            }
+            if debug
+            else None,
         )
-        if self.extract_tables and path.suffix.lower() == ".pdf":
-            try:
-                parsed.tables.extend(_extract_docling_tables(path, ocr=ocr))
-            except Exception as exc:  # pragma: no cover - depends on local parser installs and model memory
-                parsed.warnings.append(f"Docling table extraction failed: {exc}")
 
-        if path.suffix.lower() == ".pdf":
-            try:
-                pdf = PdfParser().parse(path, ocr=ocr, debug=debug)
-                if pdf.page_blocks:
-                    parsed.page_blocks = pdf.page_blocks
-                    parsed.page_count = pdf.page_count
-                    parsed.raw = {"docling_markdown": text[:5000]} if debug else None
-            except Exception as exc:  # pragma: no cover - depends on local parser installs
-                parsed.warnings.append(f"PyMuPDF geometry fallback failed: {exc}")
+        if path.suffix.lower() == ".pdf" and not parsed.page_blocks:
+            warnings.append("Docling produced no page blocks; PyMuPDF fallback selected")
+            pdf = PdfParser().parse(path, ocr=ocr, debug=debug, profile=profile)
+            pdf.warnings = warnings + pdf.warnings
+            return pdf
         return parsed
 
 
@@ -310,6 +395,122 @@ def _parse_docling_markdown(text: str, parser: ParserAdapter, path: Path) -> Par
         return parser.parse(Path(tmp.name))
 
 
+def _docling_item_bbox(item, page_height: float, coord_origin_cls) -> BBox | None:
+    prov = getattr(item, "prov", None) or []
+    if not prov:
+        return None
+    x0 = min(float(p.bbox.l) for p in prov)
+    x1 = max(float(p.bbox.r) for p in prov)
+    first_bbox = prov[0].bbox
+    if first_bbox.coord_origin == coord_origin_cls.BOTTOMLEFT:
+        y0 = min(page_height - float(p.bbox.t) for p in prov)
+        y1 = max(page_height - float(p.bbox.b) for p in prov)
+    else:
+        y0 = min(float(p.bbox.t) for p in prov)
+        y1 = max(float(p.bbox.b) for p in prov)
+    return BBox(x0=x0, y0=y0, x1=x1, y1=y1)
+
+
+def _docling_block_type(
+    item,
+    *,
+    raw_text: str,
+    bbox: BBox | None,
+    page_height: float,
+    text_item_cls,
+    section_header_cls,
+    title_item_cls,
+    list_item_cls,
+    profile: ParsingProfile,
+) -> BlockType:
+    if profile.docling_definition_like_re.match(raw_text):
+        return BlockType.PARAGRAPH
+    if isinstance(item, (section_header_cls, title_item_cls)):
+        return BlockType.HEADING
+    if isinstance(item, list_item_cls):
+        return BlockType.LIST_ITEM
+    label = getattr(getattr(item, "label", None), "value", None)
+    if label == "footnote":
+        return BlockType.FOOTNOTE
+    if label == "page_header":
+        return BlockType.HEADER
+    if label == "page_footer":
+        return BlockType.FOOTER
+    if isinstance(item, text_item_cls):
+        if bbox is not None:
+            return classify_text_block(raw_text, y0=bbox.y0, y1=bbox.y1, page_height=page_height, profile=profile)
+        return classify_text_block(raw_text, profile=profile)
+    return BlockType.UNKNOWN
+
+
+def _docling_item_text(item) -> str:
+    text = getattr(item, "text", None)
+    if text:
+        return text.strip()
+    return ""
+
+
+def _docling_table_text(item) -> str:
+    rows: dict[int, dict[int, str]] = {}
+    for cell in item.data.table_cells:
+        row_index = int(cell.start_row_offset_idx)
+        col_index = int(cell.start_col_offset_idx)
+        rows.setdefault(row_index, {})[col_index] = cell.text.strip()
+    rendered_rows = []
+    for row_index in sorted(rows):
+        cols = rows[row_index]
+        rendered_rows.append(" | ".join(cols.get(col_index, "") for col_index in sorted(cols)))
+    return "\n".join(row for row in rendered_rows if row.strip())
+
+
+def _docling_table_data(item, *, page_number: int, page_height: float, coord_origin_cls, source_block_index: int) -> TableData:
+    cells: list[TableCellData] = []
+    for cell in item.data.table_cells:
+        bbox = None
+        if cell.bbox is not None:
+            if cell.bbox.coord_origin == coord_origin_cls.BOTTOMLEFT:
+                y0 = page_height - float(cell.bbox.t)
+                y1 = page_height - float(cell.bbox.b)
+            else:
+                y0 = float(cell.bbox.t)
+                y1 = float(cell.bbox.b)
+            bbox = BBox(
+                x0=float(cell.bbox.l),
+                y0=min(y0, y1),
+                x1=float(cell.bbox.r),
+                y1=max(y0, y1),
+            )
+        cells.append(
+            TableCellData(
+                row_index=int(cell.start_row_offset_idx),
+                col_index=int(cell.start_col_offset_idx),
+                row_header_path=str(cell.start_row_offset_idx) if cell.row_header else None,
+                col_header_path=str(cell.start_col_offset_idx) if cell.column_header else None,
+                text=cell.text.strip(),
+                bbox=bbox,
+                metadata={
+                    "row_span": int(cell.row_span),
+                    "col_span": int(cell.col_span),
+                    "row_header": bool(cell.row_header),
+                    "column_header": bool(cell.column_header),
+                    "row_section": bool(cell.row_section),
+                },
+            )
+        )
+    return TableData(
+        page_start=page_number,
+        page_end=page_number,
+        parse_status=ParseStatus.PARSED,
+        cells=cells,
+        metadata={
+            "source_block_index": source_block_index,
+            "parser": "docling",
+            "docling_ref": item.self_ref,
+            "docling_label": getattr(item.label, "value", str(item.label)),
+        },
+    )
+
+
 class PdfPlumberInspector:
     def inspect(self, path: Path) -> dict:
         try:
@@ -348,3 +549,63 @@ class CamelotTableFallback:
             page = int(table.page)
             tables.append(TableData(page_start=page, page_end=page, cells=cells, metadata={"parser": "camelot"}))
         return tables
+
+
+def _segment_bbox_y(y0: float, y1: float, segment_count: int, segment_index: int) -> tuple[float, float]:
+    if segment_count <= 1:
+        return y0, y1
+    height = max(y1 - y0, 1.0)
+    step = height / segment_count
+    segment_y0 = y0 + segment_index * step
+    segment_y1 = y0 + (segment_index + 1) * step
+    return segment_y0, segment_y1
+
+
+def _build_page_blocks_from_pdf_text(
+    *,
+    page_number: int,
+    text: str,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    page_height: float,
+    reading_order_start: int,
+    parser_source: str,
+    confidence: float,
+    profile: ParsingProfile | None = None,
+) -> list[PageBlockData]:
+    split_segments = split_toc_lines(text)
+    if split_segments:
+        blocks: list[PageBlockData] = []
+        for segment_index, segment_text in enumerate(split_segments):
+            segment_y0, segment_y1 = _segment_bbox_y(y0, y1, len(split_segments), segment_index)
+            block_type = classify_text_block(segment_text, y0=segment_y0, y1=segment_y1, page_height=page_height, profile=profile)
+            blocks.append(
+                PageBlockData(
+                    page_number=page_number,
+                    block_type=block_type,
+                    bbox=BBox(x0=x0, y0=segment_y0, x1=x1, y1=segment_y1),
+                    reading_order=reading_order_start + segment_index,
+                    raw_text=segment_text.strip(),
+                    normalized_text=normalize_text(segment_text),
+                    parser_source=parser_source,
+                    confidence=confidence,
+                    metadata={"split_pdf_toc_block": True},
+                )
+            )
+        return blocks
+
+    block_type = classify_text_block(text, y0=y0, y1=y1, page_height=page_height, profile=profile)
+    return [
+        PageBlockData(
+            page_number=page_number,
+            block_type=block_type,
+            bbox=BBox(x0=x0, y0=y0, x1=x1, y1=y1),
+            reading_order=reading_order_start,
+            raw_text=text.strip(),
+            normalized_text=normalize_text(text),
+            parser_source=parser_source,
+            confidence=confidence,
+        )
+    ]

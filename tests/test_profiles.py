@@ -1,8 +1,28 @@
 from layer1.models.enums import BlockType
 from layer1.models.schemas import PageBlockData
-from layer1.parsers.pdf import _find_table_page_ranges, _table_captions_by_page
 from layer1.parsers.base import ParseResult
-from layer1.profiles import RegionalCentreLandUseBylawProfile
+from layer1.parsers.pdf import _find_table_page_ranges, _table_captions_by_page
+from layer1.profiles import RegionalCentreLandUseBylawProfile, available_profile_names, get_parsing_profile
+
+
+def test_profile_registry_exposes_default_halifax_and_regional_centre():
+    assert available_profile_names() == ["default", "halifax", "halifax-regional-centre-lub"]
+
+
+def test_halifax_profile_enables_compound_sections():
+    default = get_parsing_profile("default")
+    halifax = get_parsing_profile("halifax")
+    assert default.allow_compound_section_labels is False
+    assert halifax.allow_compound_section_labels is True
+
+
+def test_unknown_profile_raises():
+    try:
+        get_parsing_profile("missing")
+    except ValueError as exc:
+        assert "Unknown parsing profile" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for unknown profile")
 
 
 def test_regional_centre_profile_marks_toc_as_boilerplate_and_normalizes_zone_spacing():

@@ -12,7 +12,10 @@ from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
 from layer1.models.enums import IngestionStatus, ParseStatus
 from layer1.pipeline.export import document_to_dict
+from layer1.pipeline.ingest import _ensure_fragment_coverage
 from layer1.pipeline.ingest import ingest_file
+from layer1.models.enums import BlockType, FragmentType
+from layer1.models.schemas import PageBlockData
 
 
 def test_ingests_synthetic_bylaw(tmp_path: Path):
@@ -57,3 +60,21 @@ def test_uncertain_fragments_are_persisted(tmp_path: Path):
         )
         assert len(uncertain) == 1
         assert uncertain[0].text == "Loose opening sentence without heading."
+
+
+def test_unaccounted_blocks_are_preserved_as_uncertain_fragments():
+    blocks = [
+        PageBlockData(
+            page_number=1,
+            block_type=BlockType.TABLE_REGION,
+            reading_order=0,
+            raw_text="Unstructured amendment history row",
+            normalized_text="Unstructured amendment history row",
+            parser_source="test",
+        )
+    ]
+    fragments = _ensure_fragment_coverage(blocks, [], [])
+    assert len(fragments) == 1
+    assert fragments[0].fragment_type == FragmentType.PROSE
+    assert fragments[0].parse_status == ParseStatus.UNCERTAIN
+    assert fragments[0].metadata["fallback_unaccounted_block"] is True

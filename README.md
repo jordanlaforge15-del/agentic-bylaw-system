@@ -2,7 +2,7 @@
 
 Local-only source normalization and retrieval-first answering for municipal land-use bylaws. Layer 1 ingests official source files into auditable source tables. Layer 2 retrieves from those Layer 1 artifacts, builds grounded prompts, generates answers plus reusable claims, and persists feedback and trace logs.
 
-Repo specifics: this is a Python 3.11+ package using SQLAlchemy, Alembic, Pydantic, Typer, PyMuPDF/pdfplumber fallbacks, and optional Docling/Camelot/PaddleOCR parser integrations.
+Repo specifics: this is a Python 3.11+ package using SQLAlchemy, Alembic, Pydantic, Typer, Docling as the primary PDF parser, and PyMuPDF/pdfplumber fallbacks with optional Camelot/PaddleOCR integrations.
 
 Layer 1 integration paths used by Layer 2:
 
@@ -40,13 +40,15 @@ alembic upgrade head
 
 `docker compose` now uses `pgvector/pgvector:pg16` so Layer 2 can use PostgreSQL full-text search and pgvector in the same database. SQLite remains useful for fast unit and smoke tests, but full Layer 2 behavior should be validated on PostgreSQL.
 
-Install heavier parser integrations when needed:
+Install the heavier optional parser integrations when needed:
 
 ```bash
 python -m pip install -e ".[parsers]"
 ```
 
-## Layer 1 CLI
+`docling` is part of the default Layer 1 install and is attempted first for PDF ingest. The `parsers` extra is now only for optional Camelot and PaddleOCR integrations.
+
+## CLI
 
 ```bash
 layer1 init-db
@@ -55,6 +57,8 @@ layer1 ingest-dir ./bylaws --ocr --debug
 layer1 validate 1
 layer1 show-summary 1
 layer1 export-json 1 --out examples/synthetic_bylaw_export.json
+layer1 audit-pages 1 --sample 5
+layer1 audit-page 1 26 --llm --model gpt-5.4-mini
 ```
 
 Every command accepts `--db-url`. For quick local tests, SQLite also works:
@@ -245,6 +249,19 @@ layer2 run-eval 1 --eval-set evals/sampleton_layer2_eval.json
 
 This is intended for regression checking and retrieval/prompt tuning, not for legal-grade scoring.
 
+Parsing profiles are supported for region/document-family specific rules:
+
+```bash
+layer1 ingest tests/fixtures/synthetic_bylaw.txt --profile default
+layer1 ingest "PEN 223_Effective_June 17 2017.pdf" --profile halifax
+```
+
+Available profiles:
+
+- `default`: conservative generic municipal-bylaw heuristics
+- `halifax`: enables the current Halifax-style compound numbering and definition/list heuristics
+- `halifax-regional-centre-lub`: adds Regional Centre Land Use By-law cleanup and table-range handling
+
 ## Data Model
 
 The initial migration creates:
@@ -310,14 +327,38 @@ pytest -q
 layer2 run-eval 1 --eval-set evals/sampleton_layer2_eval.json
 ```
 
+## Layer 1 Audit
+
+Layer 1 now includes a review-oriented audit workflow for spot checking extraction fidelity.
+
+Deterministic audit:
+
+```bash
+layer1 audit-pages 1 --sample 5
+layer1 audit-page 1 26
+```
+
+This ranks pages by structural risk signals such as uncertain fragments, unusual roots, duplicate citation downgrades, table presence, unresolved cross-references, and unaccounted blocks.
+
+Optional LLM-assisted audit:
+
+```bash
+export OPENAI_API_KEY=...
+layer1 audit-pages 1 --sample 5 --llm
+layer1 audit-page 1 26 --llm --out examples/page26_audit.json
+```
+
+The LLM audit does not replace deterministic checks or human review. It consumes source-page text plus Layer 1 blocks/fragments/tables/cross-references and returns a structured verdict to help prioritize manual inspection.
+
 ## Known Limitations
 
 - OCR is exposed as a flag, but production PaddleOCR image extraction needs tuning against scanned PDFs.
-- Docling output is used when installed; PyMuPDF supplies the reliable geometry fallback.
+- Docling is installed by default and used first for PDF ingest; PyMuPDF supplies the reliable geometry fallback when Docling fails or is unavailable at runtime.
 - Table extraction is intentionally sparse for text-heavy bylaws. Camelot can be enabled for PDF table fallback, but complex merged-cell semantics are not inferred.
 - Hierarchy reconstruction is conservative and marks uncertainty instead of making legal guesses.
 - Layer 2 mock mode is deterministic for tests, but real answer quality depends on a grounded local or OpenAI-compatible model endpoint and better municipal evaluation data.
 - SQLite can run Layer 2 tests and smoke loops, but PostgreSQL plus pgvector is the supported runtime for production retrieval quality.
+- LLM audit mode is optional and requires an API key plus the `openai` dependency; deterministic audit remains local and available without network access.
 
 ## Architecture
 
