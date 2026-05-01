@@ -524,10 +524,15 @@ def search_context(
         candidates.extend(_shipping_container_blocks(session, document_id=document_id))
     if "parking" in normalized_query and any(term in normalized_query for term in ["office use", "office"]):
         candidates.extend(_parking_table_blocks(session, document_id=document_id, use_name="Office use"))
+    query_zone = normalize_zone_code(query)
     if any(term in normalized_query for term in ["accessory structure or use", "accessory structures permitted", "accessory structure permitted"]):
-        candidates.extend(_permission_table_blocks(session, document_id=document_id, use_name="Accessory structure or use"))
+        candidates.extend(_permission_table_blocks(session, document_id=document_id, use_name="Accessory structure or use", zone=query_zone))
+    if "townhouse dwelling use" in normalized_query or "townhouse" in normalized_query:
+        candidates.extend(_permission_table_blocks(session, document_id=document_id, use_name="Townhouse dwelling use", zone=query_zone))
+    if "single-unit dwelling use" in normalized_query or "single unit dwelling use" in normalized_query:
+        candidates.extend(_permission_table_blocks(session, document_id=document_id, use_name="Single-unit dwelling use", zone=query_zone))
     if "daycare" in normalized_query or "day care" in normalized_query:
-        candidates.extend(_permission_table_blocks(session, document_id=document_id, use_name="Daycare use"))
+        candidates.extend(_permission_table_blocks(session, document_id=document_id, use_name="Daycare use", zone=query_zone))
         candidates.extend(_daycare_rule_blocks(session, document_id=document_id))
     if "backyard suite" in normalized_query:
         block_rows = (
@@ -758,7 +763,13 @@ def _parking_table_blocks(session: Session, *, document_id: int, use_name: str) 
     return candidates
 
 
-def _permission_table_blocks(session: Session, *, document_id: int, use_name: str) -> list[CandidateFragment]:
+def _permission_table_blocks(session: Session, *, document_id: int, use_name: str, zone: str | None = None) -> list[CandidateFragment]:
+    candidates: list[CandidateFragment] = _structured_permission_table_candidates(
+        session,
+        document_id=document_id,
+        use_name=use_name,
+        zone=zone,
+    )
     blocks = (
         session.query(PageBlock)
         .filter(PageBlock.document_id == document_id)
@@ -768,7 +779,6 @@ def _permission_table_blocks(session: Session, *, document_id: int, use_name: st
         .limit(8)
         .all()
     )
-    candidates: list[CandidateFragment] = []
     for block in blocks:
         text = block.normalized_text or block.raw_text or ""
         lower = text.lower()
@@ -790,6 +800,104 @@ def _permission_table_blocks(session: Session, *, document_id: int, use_name: st
             )
         )
     return candidates
+
+
+def _structured_permission_table_candidates(
+    session: Session,
+    *,
+    document_id: int,
+    use_name: str,
+    zone: str | None = None,
+) -> list[CandidateFragment]:
+    tables = (
+        session.query(SourceTable)
+        .filter(SourceTable.document_id == document_id)
+        .filter(SourceTable.caption.ilike("Table 1%Permitted uses by zone%"))
+        .order_by(SourceTable.page_start, SourceTable.id)
+        .all()
+    )
+    candidates: list[CandidateFragment] = []
+    use_lower = use_name.lower()
+    zone_forms = _zone_forms(zone)
+    for table in tables:
+        cells = (
+            session.query(SourceTableCell)
+            .filter(SourceTableCell.table_id == table.id)
+            .order_by(SourceTableCell.row_index, SourceTableCell.col_index)
+            .all()
+        )
+        by_row: dict[int, list[SourceTableCell]] = {}
+        headers: dict[int, str] = {}
+        for cell in cells:
+            by_row.setdefault(cell.row_index, []).append(cell)
+            if cell.row_index == 0:
+                headers[cell.col_index] = cell.text
+        for row_index, row_cells in by_row.items():
+            if row_index == 0:
+                continue
+            ordered = sorted(row_cells, key=lambda item: item.col_index)
+            row_label = ordered[0].text if ordered else ""
+            if not _row_matches_use_name(row_label, use_lower):
+                continue
+            values = []
+            matched_zone = False
+            for cell in ordered[1:]:
+                header = headers.get(cell.col_index, f"column {cell.col_index}")
+                if zone_forms and not _contains_any_zone(header, zone_forms):
+                    continue
+                matched_zone = matched_zone or bool(zone_forms)
+                marker = cell.text.strip()
+                if marker:
+                    values.append(f"{header}={marker}")
+            if zone_forms and not matched_zone:
+                continue
+            legend = "Filled circle markers indicate permitted uses; circled numbers indicate permission subject to the corresponding table footnote."
+            footnotes = _table_marker_footnotes(session, document_id=document_id, markers=" ".join(values))
+            footnote_text = f" Applicable footnotes: {' '.join(footnotes)}" if footnotes else ""
+            text = f"{table.caption}. {row_label}: {'; '.join(values)}. {legend}{footnote_text}"
+            candidates.append(
+                CandidateFragment(
+                    source_table_id=table.id,
+                    source_type=SourceType.TABLE.value,
+                    retrieval_channel=RetrievalChannel.TABLE.value,
+                    base_score=9.0,
+                    text=text,
+                    citation_label=table.caption,
+                    citation_path="Tables 1A-1D",
+                    reason={
+                        "operation": "search_context",
+                        "expansion": "structured_permission_table",
+                        "use_name": use_name,
+                        "row_index": row_index,
+                    },
+                    metadata={"page": table.page_start, "row_index": row_index},
+                )
+            )
+    return candidates
+
+
+def _table_marker_footnotes(session: Session, *, document_id: int, markers: str) -> list[str]:
+    footnotes: list[str] = []
+    for marker in sorted(set(re.findall(r"[①-㉟]", markers))):
+        row = (
+            session.query(SourceFragment)
+            .filter(SourceFragment.document_id == document_id)
+            .filter(SourceFragment.page_start.between(45, 56))
+            .filter(SourceFragment.text.ilike(f"%{marker} Use is permitted%"))
+            .order_by(SourceFragment.page_start, SourceFragment.id)
+            .first()
+        )
+        if row:
+            footnotes.append(row.text)
+    return footnotes
+
+
+def _row_matches_use_name(row_label: str, use_lower: str) -> bool:
+    normalized_row = re.sub(r"\s+", " ", row_label.lower()).strip()
+    normalized_use = re.sub(r"\s+", " ", use_lower).strip()
+    if not normalized_use:
+        return False
+    return normalized_row.startswith(normalized_use)
 
 
 def _daycare_rule_blocks(session: Session, *, document_id: int) -> list[CandidateFragment]:

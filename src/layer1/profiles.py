@@ -20,6 +20,7 @@ class BylawProfile(Protocol):
 class DefaultBylawProfile:
     name = "default"
     use_full_docling = True
+    use_docling_table_structure = True
 
     def applies_to(self, path: Path) -> bool:
         return True
@@ -31,6 +32,7 @@ class DefaultBylawProfile:
 class RegionalCentreLandUseBylawProfile(DefaultBylawProfile):
     name = "halifax-regional-centre-lub"
     use_full_docling = True
+    use_docling_table_structure = True
 
     _zone_hyphen_re = re.compile(r"\b([A-Z]{1,4})-\s+(\d[A-Z]?)\b")
     _split_rule_re = re.compile(

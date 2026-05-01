@@ -1,5 +1,6 @@
 from layer1.models.enums import BlockType
 from layer1.models.schemas import PageBlockData
+from layer1.parsers.pdf import _find_table_page_ranges, _table_captions_by_page
 from layer1.parsers.base import ParseResult
 from layer1.profiles import RegionalCentreLandUseBylawProfile
 
@@ -57,3 +58,19 @@ def test_regional_centre_profile_marks_toc_as_boilerplate_and_normalizes_zone_sp
     assert processed.page_blocks[2].block_type == BlockType.PARAGRAPH
     assert processed.page_blocks[3].block_type == BlockType.LIST_ITEM
     assert processed.parser_version.endswith("+profile:halifax-regional-centre-lub")
+
+
+def test_regional_centre_table_page_detection_finds_use_tables():
+    from pathlib import Path
+
+    pdf_path = Path("regionalcentrelub-eff-26april13-case24469toclinked.pdf")
+    if not pdf_path.exists():
+        return
+
+    ranges = _find_table_page_ranges(pdf_path)
+    captions = _table_captions_by_page(pdf_path)
+
+    assert (45, 47) in ranges
+    assert (48, 50) in ranges
+    assert (332, 334) in ranges
+    assert captions[45] == "Table 1A: Permitted uses by zone (DD, DH, CEN-2, CEN-1, COR, HR-2, and HR-1)"

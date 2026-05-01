@@ -185,6 +185,15 @@ def _fallback_plan(question_text: str, known_facts: dict[str, Any] | None) -> Re
     if "shipping container" in normalized:
         use_type = "shipping container"
         entities["use_name"] = use_type
+    permission_language = any(
+        token in normalized for token in ["permitted", "allowed", "can i", "can a", "can an", "operate", "have", "build"]
+    )
+    if "townhouse" in normalized and permission_language:
+        use_type = "townhouse dwelling use"
+        entities["use_name"] = use_type
+    if ("single-unit dwelling" in normalized or "single unit dwelling" in normalized) and permission_language:
+        use_type = "single-unit dwelling use"
+        entities["use_name"] = use_type
     office_match = re.search(r"\boffice\s+use\b", normalized)
     if office_match:
         use_type = "office use"
@@ -196,9 +205,7 @@ def _fallback_plan(question_text: str, known_facts: dict[str, Any] | None) -> Re
         area_context = "South End"
         entities["area_context"] = area_context
 
-    permission_question = bool(use_type) and any(
-        token in normalized for token in ["permitted", "allowed", "can i", "can a", "can an", "operate", "have"]
-    )
+    permission_question = bool(use_type) and permission_language
 
     if use_type == "backyard suite use":
         intent = "lookup_use_permission"
@@ -302,7 +309,7 @@ def _validate_and_repair_plan(
         calls.append(RetrievalOperation(tool="get_zone_context", args={"zone": zone}))
     normalized = question_text.lower()
     use_name = fallback.entities.get("use_name")
-    if use_name and any(token in normalized for token in ["permitted", "allowed", "can i", "can a", "can an", "operate", "have"]):
+    if use_name and any(token in normalized for token in ["permitted", "allowed", "can i", "can a", "can an", "operate", "have", "build"]):
         calls.insert(
             0,
             RetrievalOperation(

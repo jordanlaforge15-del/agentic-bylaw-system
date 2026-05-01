@@ -16,7 +16,9 @@ def parse_source(path: Path, *, ocr: bool = False, debug: bool = False, camelot:
     if mime_type == "application/pdf":
         if getattr(profile, "use_full_docling", True):
             try:
-                result = DoclingParser().parse(path, ocr=ocr, debug=debug)
+                result = DoclingParser(
+                    extract_tables=getattr(profile, "use_docling_table_structure", True)
+                ).parse(path, ocr=ocr, debug=debug)
             except Exception as exc:
                 warnings.append(f"Docling parse unavailable or failed: {exc}")
                 result = PdfParser().parse(path, ocr=ocr, debug=debug)
