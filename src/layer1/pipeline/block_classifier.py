@@ -9,7 +9,7 @@ from layer1.pipeline.citations import parse_citation_label
 from layer1.profiles import ParsingProfile, get_parsing_profile
 
 
-FOOTNOTE_RE = re.compile(r"^\s*(?:\[\d+\]|\d+\s+)[A-Z]?[a-z].{8,}$")
+FOOTNOTE_RE = re.compile(r"^\s*(?:\[\d+\]|\d+\s+)[a-z].{8,}$")
 LIST_RE = re.compile(r"^\s*(?:\([a-z]\)|\([ivxlcdm]+\)|[-*•])\s+", re.IGNORECASE)
 TABLE_HINT_RE = re.compile(r"(?:[ \t]{2,}|\t|\|)")
 NUMERIC_CELL_RE = re.compile(r"^(?:\d+(?:\.\d+)?%?|\d+\s*(?:m2|m²|ft2|ft²)|[ivxlcdm]+\)|[A-Za-z]-\d.*)$", re.IGNORECASE)

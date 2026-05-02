@@ -166,3 +166,123 @@ class CrossReference(Base):
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
 
     document: Mapped[Document] = relationship(back_populates="cross_references")
+
+
+class SemanticEntity(Base):
+    __tablename__ = "semantic_entity"
+    __table_args__ = (
+        UniqueConstraint("document_id", "entity_type", "canonical_name", name="uq_semantic_entity_document_type_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id", ondelete="CASCADE"), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    aliases_json: Mapped[list] = mapped_column(MutableList.as_mutable(json_type()), default=list)
+    source_text: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    review_status: Mapped[str] = mapped_column(String(64), default="unreviewed", nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SemanticFact(Base):
+    __tablename__ = "semantic_fact"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id", ondelete="CASCADE"), nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    primary_subject_entity_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_entity.id", ondelete="SET NULL"))
+    primary_object_entity_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_entity.id", ondelete="SET NULL"))
+    primary_scope_entity_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_entity.id", ondelete="SET NULL"))
+    value_text: Mapped[str | None] = mapped_column(Text)
+    normalized_value_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    assertion_type: Mapped[str] = mapped_column(String(64), default="explicit", nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    review_status: Mapped[str] = mapped_column(String(64), default="unreviewed", nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SemanticFactParticipant(Base):
+    __tablename__ = "semantic_fact_participant"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fact_id: Mapped[int] = mapped_column(ForeignKey("semantic_fact.id", ondelete="CASCADE"), nullable=False)
+    entity_id: Mapped[int] = mapped_column(ForeignKey("semantic_entity.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+
+class SemanticEdge(Base):
+    __tablename__ = "semantic_edge"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id", ondelete="CASCADE"), nullable=False)
+    source_entity_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_entity.id", ondelete="SET NULL"))
+    source_fact_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_fact.id", ondelete="CASCADE"))
+    edge_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_entity_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_entity.id", ondelete="SET NULL"))
+    target_fact_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_fact.id", ondelete="CASCADE"))
+    source_fragment_ids_json: Mapped[list] = mapped_column(MutableList.as_mutable(json_type()), default=list)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+
+class TableSemanticProfile(Base):
+    __tablename__ = "table_semantic_profile"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    table_id: Mapped[int] = mapped_column(ForeignKey("source_table.id", ondelete="CASCADE"), nullable=False)
+    profile_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    row_axis_type: Mapped[str | None] = mapped_column(String(64))
+    column_axis_type: Mapped[str | None] = mapped_column(String(64))
+    value_type: Mapped[str | None] = mapped_column(String(64))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    review_status: Mapped[str] = mapped_column(String(64), default="unreviewed", nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+
+class TableAxisBinding(Base):
+    __tablename__ = "table_axis_binding"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    table_id: Mapped[int] = mapped_column(ForeignKey("source_table.id", ondelete="CASCADE"), nullable=False)
+    axis: Mapped[str] = mapped_column(String(16), nullable=False)
+    index: Mapped[int] = mapped_column(Integer, nullable=False)
+    entity_id: Mapped[int] = mapped_column(ForeignKey("semantic_entity.id", ondelete="CASCADE"), nullable=False)
+    raw_label: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+
+class SemanticProvenance(Base):
+    __tablename__ = "semantic_provenance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id", ondelete="CASCADE"), nullable=False)
+    object_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_id: Mapped[int | None] = mapped_column(Integer)
+    extraction_method: Mapped[str] = mapped_column(String(128), nullable=False)
+    extractor_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+
+class SemanticReviewEvent(Base):
+    __tablename__ = "semantic_review_event"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id", ondelete="CASCADE"), nullable=False)
+    object_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    old_status: Mapped[str | None] = mapped_column(String(64))
+    new_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    reviewer: Mapped[str | None] = mapped_column(String(255))
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

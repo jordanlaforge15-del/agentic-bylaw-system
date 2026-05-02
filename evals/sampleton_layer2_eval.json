@@ -1,0 +1,73 @@
+[
+  {
+    "question": "What is the purpose of the bylaw?",
+    "expected_topics": ["applicability"],
+    "expected_fragment_ids": [2, 3],
+    "expected_citation_labels": ["1.1"],
+    "expected_answer_keywords": ["fragment", "1.1"],
+    "expected_claim_shapes": [{"topic": "retrieved source summary"}]
+  },
+  {
+    "question": "Who does the bylaw apply to?",
+    "expected_fragment_ids": [4, 5],
+    "expected_citation_labels": ["1.2"],
+    "expected_answer_keywords": ["fragment"],
+    "expected_claim_shapes": [{"claim_type": "general_regulation"}]
+  },
+  {
+    "question": "Is a temporary use permitted?",
+    "expected_topics": ["permitted_use"],
+    "expected_fragment_ids": [7],
+    "expected_citation_labels": ["(i)"],
+    "expected_answer_keywords": ["temporary use", "permitted"],
+    "expected_claim_shapes": [{"topic": "temporary use"}]
+  },
+  {
+    "question": "What subsection is temporary use tied to?",
+    "expected_fragment_ids": [4, 7],
+    "expected_citation_labels": ["1.2", "(i)"],
+    "expected_answer_keywords": ["temporary use", "1.2"],
+    "expected_claim_shapes": [{"canonical_subject": "temporary use"}]
+  },
+  {
+    "question": "What does section 2.1 say?",
+    "expected_fragment_ids": [10, 11],
+    "expected_citation_labels": ["2.1"],
+    "expected_answer_keywords": ["fragment", "2.1"],
+    "expected_claim_shapes": [{"claim_type": "general_regulation"}]
+  },
+  {
+    "question": "Is there a Schedule B cross-reference?",
+    "expected_topics": ["cross_reference"],
+    "expected_fragment_ids": [11, 12],
+    "expected_citation_labels": ["Schedule B"],
+    "expected_answer_keywords": ["fragment"],
+    "expected_claim_shapes": [{"topic": "retrieved source summary"}]
+  },
+  {
+    "question": "What is the minimum lot area for R1?",
+    "expected_fragment_ids": [10],
+    "expected_answer_keywords": ["400 m2", "R1"],
+    "expected_claim_shapes": [{"topic": "minimum lot area"}]
+  },
+  {
+    "question": "What value appears in Table 1 for minimum lot area?",
+    "expected_fragment_ids": [10],
+    "expected_answer_keywords": ["400 m2"],
+    "expected_claim_shapes": [{"normalized_value_text": "400 m2"}]
+  },
+  {
+    "question": "Is there an exception about land use?",
+    "expected_topics": ["exception"],
+    "expected_fragment_ids": [6],
+    "expected_citation_labels": ["(a)"],
+    "expected_answer_keywords": ["fragment"],
+    "expected_claim_shapes": [{"claim_type": "general_regulation"}]
+  },
+  {
+    "question": "What footnote was preserved for citation audit?",
+    "expected_fragment_ids": [8],
+    "expected_answer_keywords": ["fragment"],
+    "expected_claim_shapes": [{"claim_type": "general_regulation"}]
+  }
+]

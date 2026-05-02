@@ -15,6 +15,8 @@ COMPOUND_SECTION_RE = re.compile(
 )
 SPLIT_COMPOUND_SECTION_RE = re.compile(r"^\s*(\d+)\s+([A-Z]{1,3})\b\s+(.*)$")
 NUMERIC_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,5})\b(?:[.)])?\s*(.*)$")
+NUMERIC_PAREN_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,5}(?:\([A-Za-z0-9]+\))+)\s+(.*)$")
+PAREN_NUMERIC_RE = re.compile(r"^\s*\((\d+(?:\.\d+){0,5})\)\s+(.*)$")
 CLAUSE_RE = re.compile(r"^\s*(\([a-z]{1,3}\))\s+(.*)$", re.IGNORECASE)
 SUBCLAUSE_RE = re.compile(r"^\s*\(([ivxlcdm]{2,})\)\s+(.*)$", re.IGNORECASE)
 FOOTNOTE_RE = re.compile(r"^\s*(?:\[\d+\]|\d+\s+)(.+)$")
@@ -62,6 +64,14 @@ def parse_citation_label(text: str, profile: ParsingProfile | None = None) -> Ci
             parsed = _parse_compound_section_label(label, title)
             if parsed:
                 return parsed
+
+    match = NUMERIC_PAREN_RE.match(stripped)
+    if match:
+        return CitationMatch(FragmentType.SECTION, match.group(1), 2, match.group(2).strip(), 0.9)
+
+    match = PAREN_NUMERIC_RE.match(stripped)
+    if match:
+        return CitationMatch(FragmentType.SUBSECTION, f"({match.group(1)})", 3, match.group(2).strip(), 0.85)
 
     match = NUMERIC_RE.match(stripped)
     if match:

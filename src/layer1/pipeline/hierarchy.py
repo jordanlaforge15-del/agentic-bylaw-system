@@ -16,6 +16,8 @@ from layer1.pipeline.block_classifier import (
 from layer1.pipeline.citations import citation_path, parse_citation_label
 from layer1.profiles import ParsingProfile, get_parsing_profile
 
+LOW_LEVEL_FRAGMENT_TYPES = {FragmentType.CLAUSE, FragmentType.SUBCLAUSE}
+
 
 @dataclass
 class StackEntry:
@@ -29,8 +31,6 @@ class HierarchyBlock:
     source_block_index: int
     block: PageBlockData
 
-
-LOW_LEVEL_FRAGMENT_TYPES = {FragmentType.CLAUSE, FragmentType.SUBCLAUSE}
 ROMAN_SUBCLAUSE_TOKEN_RE = re.compile(r"^\((?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\)$", re.IGNORECASE)
 DEFINITION_HEADING_RE = re.compile(r"^\s*definitions?\b", re.IGNORECASE)
 DEFINITION_INTRO_RE = re.compile(r"^\s*in this by-?law\s*:\s*$", re.IGNORECASE)
@@ -113,6 +113,8 @@ def _should_use_citation_match(block: PageBlockData, text: str, profile: Parsing
         if block.block_type == BlockType.HEADING:
             return True
         if profile.allow_docling_section_labels_from_list_blocks and block.parser_source == "docling" and block.block_type in {BlockType.HEADING, BlockType.LIST_ITEM, BlockType.PARAGRAPH}:
+            return True
+        if title.lower().startswith(("minimum ", "maximum ")):
             return True
         return _looks_like_heading_title(title)
 
