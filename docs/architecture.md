@@ -35,3 +35,15 @@ Pages can then be sampled by risk or selected explicitly. Optional LLM review is
 ## Future Layers
 
 Layer 2 can consume `source_fragment`, `source_table`, and `cross_reference` records to classify legal concepts or extract zoning rules. It should treat Layer 1 citations and source block IDs as immutable lineage.
+
+## Retrieval Layer
+
+This repository also includes a read-only retrieval layer on top of the normalized Layer 1 storage model.
+
+- All MCP-facing code lives under top-level `mcp/`.
+- The retrieval core is transport-agnostic and lives in `mcp/bylaw_retrieval/retrieval`.
+- The MCP server is a thin wrapper over that core for tool-based LLM integrations.
+- The plain HTTP API mirrors the retrieval contract for local service use and future hosted deployment.
+- OpenAI-local adapter code lives in `mcp/bylaw_retrieval/openai_tools.py` so provider-specific tool schemas do not leak into the MCP transport.
+
+The retrieval layer is deliberately evidence-oriented rather than conclusion-oriented. It returns cited fragments, ancestor context, related tables, and cross-references, but it does not decide what built form is legally permitted. That reasoning remains with the calling agent or a later rule-classification layer.
