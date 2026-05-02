@@ -47,4 +47,3 @@ def prepared_document(db_url: str, clients):
         embed_document_fragments(session, document_id=document.id, embedding_client=embedding_client)
         document_id = document.id
     return {"db_url": db_url, "document_id": document_id}
-

@@ -82,4 +82,3 @@ class OpenAICompatibleEmbeddingClient(BaseEmbeddingClient):
 class MockEmbeddingClient(HashingEmbeddingClient):
     def __init__(self, dimensions: int = 384):
         super().__init__(model_name="mock-embedding", dimensions=dimensions)
-

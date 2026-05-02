@@ -363,3 +363,34 @@ The LLM audit does not replace deterministic checks or human review. It consumes
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md).
+
+## Retrieval, MCP, And Local OpenAI Integration
+
+The repo exposes the normalized source model through a read-only retrieval layer intended for downstream agents that answer bylaw questions using citation-grounded evidence.
+
+All MCP-facing code lives under the top-level [`mcp/`](mcp/) directory:
+
+- `mcp/bylaw_retrieval/retrieval`: model-agnostic retrieval service over documents, fragments, tables, and cross-references
+- `mcp/bylaw_retrieval/server.py`: MCP server exposing retrieval tools and resources
+- `mcp/bylaw_retrieval/api/app.py`: plain HTTP API exposing the same retrieval contract
+- `mcp/bylaw_retrieval/openai_tools.py`: OpenAI-local tool schemas and dispatcher
+
+Local service commands:
+
+```bash
+layer1-retrieval-api
+layer1-mcp
+python -m bylaw_retrieval.server --http
+```
+
+Optional extras:
+
+```bash
+python -m pip install -e ".[api,mcp,dev]"
+```
+
+OpenAI-specific note:
+
+- The local OpenAI adapter is separate from the MCP server because OpenAI API and ChatGPT integrations may require product-specific tool wiring.
+- The retrieval contract is shared, so upgrading from local adapter use to a hosted remote MCP server later should not require retrieval logic changes.
+- See `examples/openai_local_retrieval_agent.py` for a minimal local Responses API tool-calling loop against the shared retrieval core.

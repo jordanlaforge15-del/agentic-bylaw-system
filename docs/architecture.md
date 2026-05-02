@@ -65,3 +65,15 @@ Pages can then be sampled by risk or selected explicitly. Optional LLM review is
 - The deterministic mock LLM is suitable for tests, not for quality benchmarking.
 - Table retrieval is intentionally simple and should be extended with row/column-aware reranking on real zoning schedules.
 - Cross-reference and hierarchy expansion are conservative and may miss distant dependencies in larger bylaws.
+
+## MCP Retrieval Interface
+
+The top-level `mcp/` directory exposes a read-only retrieval interface on top of the normalized Layer 1 storage model. It is intended for external MCP clients and local tool-calling integrations, not for Layer 2's internal prompt, answer, claim, and feedback pipeline.
+
+- All MCP-facing code lives under top-level `mcp/`.
+- The MCP retrieval core is transport-agnostic and lives in `mcp/bylaw_retrieval/retrieval`.
+- The MCP server is a thin wrapper over that core for tool-based LLM integrations.
+- The plain HTTP API mirrors the MCP retrieval contract for local service use and future hosted deployment.
+- OpenAI-local adapter code lives in `mcp/bylaw_retrieval/openai_tools.py` so provider-specific tool schemas do not leak into the MCP transport.
+
+The MCP retrieval interface is deliberately evidence-oriented rather than conclusion-oriented. It returns cited fragments, ancestor context, related tables, and cross-references, but it does not decide what built form is legally permitted. That reasoning remains with the calling agent, Layer 2, or another downstream consumer.

@@ -96,4 +96,3 @@ def expand_cross_references(session: Session, candidates: list[CandidateFragment
         )
         seen_fragment_ids.add(target.id)
     return expanded
-

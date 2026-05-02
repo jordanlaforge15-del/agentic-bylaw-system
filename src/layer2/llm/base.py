@@ -9,4 +9,3 @@ class BaseLLMClient(ABC):
     @abstractmethod
     def generate(self, *, system_prompt: str, user_prompt: str, temperature: float = 0.0) -> str:
         raise NotImplementedError
-

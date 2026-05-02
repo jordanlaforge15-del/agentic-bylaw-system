@@ -34,4 +34,3 @@ def test_expand_cross_references_adds_resolved_target(prepared_document):
         expanded = expand_cross_references(session, candidates)
         fragment_ids = {candidate.source_fragment_id for candidate in expanded}
         assert 12 in fragment_ids
-

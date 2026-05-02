@@ -10,4 +10,3 @@ from layer2.db.models import (  # noqa: F401
     RetrievalResult,
     RetrievalRun,
 )
-

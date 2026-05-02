@@ -11,4 +11,3 @@ Return strict JSON with keys:
 - cited_citation_labels
 - claims
 Each claim must be atomic and citation-backed.
-

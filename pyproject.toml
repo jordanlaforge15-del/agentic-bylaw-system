@@ -28,6 +28,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+api = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+]
+mcp = [
+  "mcp[cli]>=1.27",
+]
 parsers = [
   "camelot-py[cv]>=0.11",
   "paddleocr>=2.7",
@@ -40,14 +47,16 @@ dev = [
 
 [project.scripts]
 layer1 = "layer1.cli:app"
+layer1-retrieval-api = "bylaw_retrieval.api.app:main"
+layer1-mcp = "bylaw_retrieval.server:main"
 layer2 = "layer2.cli:app"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "mcp"]
 
 [tool.ruff]
 line-length = 100

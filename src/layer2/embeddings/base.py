@@ -13,4 +13,3 @@ class BaseEmbeddingClient(ABC):
 
     def embed_text(self, text: str) -> list[float]:
         return self.embed_texts([text])[0]
-

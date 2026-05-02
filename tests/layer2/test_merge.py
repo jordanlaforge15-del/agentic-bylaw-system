@@ -22,4 +22,3 @@ def test_merge_and_dedupe_prefers_highest_score():
     assert len(merged) == 1
     assert merged[0].base_score == 0.7
     assert "vector" in merged[0].reason["channels"]
-

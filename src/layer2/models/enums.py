@@ -61,4 +61,3 @@ class VerificationStatus(StrEnum):
     UNVERIFIED = "unverified"
     VERIFIED = "verified"
     DISPUTED = "disputed"
-
