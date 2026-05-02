@@ -127,7 +127,7 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
 fi
 
 log "Installing Python package"
-"$VENV_PYTHON" -m pip install --upgrade pip setuptools wheel
+"$VENV_PYTHON" -m pip install --upgrade pip "setuptools<82" wheel
 if [[ "$WITH_PARSERS" -eq 1 ]]; then
   "$VENV_PYTHON" -m pip install -e ".[dev,parsers]"
   "$VENV_PYTHON" -m pip uninstall -y opencv-python opencv_python >/dev/null 2>&1 || true

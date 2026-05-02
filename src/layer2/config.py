@@ -25,6 +25,13 @@ class Layer2Settings(BaseSettings):
     token_budget: int = Field(default=3000, alias="LAYER2_TOKEN_BUDGET")
     top_k: int = Field(default=8, alias="LAYER2_TOP_K")
     max_cached_claims: int = Field(default=4, alias="LAYER2_MAX_CACHED_CLAIMS")
+    semantic_graph_max_depth: int = Field(default=5, alias="LAYER2_SEMANTIC_GRAPH_MAX_DEPTH")
+    semantic_graph_max_fragments: int = Field(default=25, alias="LAYER2_SEMANTIC_GRAPH_MAX_FRAGMENTS")
+    semantic_graph_max_nodes: int = Field(default=100, alias="LAYER2_SEMANTIC_GRAPH_MAX_NODES")
+    semantic_graph_allowed_edge_types: str = Field(
+        default="conditioned_by,references,defines,applies_to,excepts,modifies",
+        alias="LAYER2_SEMANTIC_GRAPH_ALLOWED_EDGE_TYPES",
+    )
 
 
 @lru_cache

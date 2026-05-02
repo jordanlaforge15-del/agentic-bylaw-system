@@ -525,6 +525,9 @@ def search_context(
     if "parking" in normalized_query and any(term in normalized_query for term in ["office use", "office"]):
         candidates.extend(_parking_table_blocks(session, document_id=document_id, use_name="Office use"))
     query_zone = normalize_zone_code(query)
+    inferred_permission_use = _permission_use_name_from_query(normalized_query)
+    if inferred_permission_use:
+        candidates.extend(_permission_table_blocks(session, document_id=document_id, use_name=inferred_permission_use, zone=query_zone))
     if any(term in normalized_query for term in ["accessory structure or use", "accessory structures permitted", "accessory structure permitted"]):
         candidates.extend(_permission_table_blocks(session, document_id=document_id, use_name="Accessory structure or use", zone=query_zone))
     if "townhouse dwelling use" in normalized_query or "townhouse" in normalized_query:
@@ -650,7 +653,7 @@ def _use_specific_parking_blocks(
             score += 1.0
         candidates.append(
             CandidateFragment(
-                source_type="page_block",
+                source_type=SourceType.FRAGMENT.value,
                 retrieval_channel=RetrievalChannel.HIERARCHY.value,
                 base_score=score,
                 text=text,
@@ -681,7 +684,7 @@ def _shipping_container_blocks(session: Session, *, document_id: int) -> list[Ca
         return []
     return [
         CandidateFragment(
-            source_type="page_block",
+            source_type=SourceType.FRAGMENT.value,
             retrieval_channel=RetrievalChannel.HIERARCHY.value,
             base_score=6.8,
             text=text,
@@ -727,7 +730,7 @@ def _parking_table_blocks(session: Session, *, document_id: int, use_name: str) 
             text = f"{table_heading.normalized_text or table_heading.raw_text} {text}"
     candidates = [
         CandidateFragment(
-            source_type="page_block",
+            source_type=SourceType.FRAGMENT.value,
             retrieval_channel=RetrievalChannel.TABLE.value,
             base_score=6.4,
             text=text,
@@ -741,7 +744,7 @@ def _parking_table_blocks(session: Session, *, document_id: int, use_name: str) 
         candidates.insert(
             0,
             CandidateFragment(
-                source_type="page_block",
+                source_type=SourceType.FRAGMENT.value,
                 retrieval_channel=RetrievalChannel.TABLE.value,
                 base_score=7.2,
                 text=(
@@ -789,7 +792,7 @@ def _permission_table_blocks(session: Session, *, document_id: int, use_name: st
             score += 0.8
         candidates.append(
             CandidateFragment(
-                source_type="page_block",
+                source_type=SourceType.FRAGMENT.value,
                 retrieval_channel=RetrievalChannel.TABLE.value,
                 base_score=score,
                 text=text,
@@ -900,6 +903,45 @@ def _row_matches_use_name(row_label: str, use_lower: str) -> bool:
     return normalized_row.startswith(normalized_use)
 
 
+def _permission_use_name_from_query(normalized_query: str) -> str | None:
+    cleaned = re.sub(r"[^a-z0-9 -]+", " ", normalized_query)
+    stop_prefixes = {
+        "a",
+        "an",
+        "the",
+        "my",
+        "this",
+        "that",
+        "any",
+        "use",
+        "uses",
+        "operate",
+        "have",
+        "build",
+        "permit",
+        "permitted",
+        "allowed",
+        "can",
+        "i",
+        "we",
+        "is",
+        "are",
+        "does",
+        "in",
+        "within",
+        "zone",
+    }
+    ignored = {"land use", "permitted use", "temporary use"}
+    for match in re.finditer(r"\b([a-z][a-z0-9-]*(?:\s+[a-z][a-z0-9-]*){0,5}\s+use)\b", cleaned):
+        words = match.group(1).split()
+        while words and words[0] in stop_prefixes:
+            words.pop(0)
+        candidate = " ".join(words)
+        if candidate and candidate not in ignored and len(candidate.split()) <= 5:
+            return candidate
+    return None
+
+
 def _daycare_rule_blocks(session: Session, *, document_id: int) -> list[CandidateFragment]:
     start = (
         session.query(PageBlock)
@@ -921,7 +963,7 @@ def _daycare_rule_blocks(session: Session, *, document_id: int) -> list[Candidat
     text = " ".join(block.normalized_text or block.raw_text or "" for block in blocks)
     return [
         CandidateFragment(
-            source_type="page_block",
+            source_type=SourceType.FRAGMENT.value,
             retrieval_channel=RetrievalChannel.HIERARCHY.value,
             base_score=6.7,
             text=text,
@@ -1150,7 +1192,7 @@ def _nearby_standard_blocks(
         score += 0.35
     return [
         CandidateFragment(
-            source_type="page_block",
+            source_type=SourceType.FRAGMENT.value,
             retrieval_channel=RetrievalChannel.HIERARCHY.value,
             base_score=score,
             text=combined,

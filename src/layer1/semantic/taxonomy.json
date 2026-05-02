@@ -1,0 +1,73 @@
+{
+  "entity_types": {
+    "zone": {
+      "patterns": ["zone_code"]
+    },
+    "use": {
+      "suffixes": ["use", "dwelling", "facility", "establishment", "suite", "unit"],
+      "aliases": {
+        "restaurant": {"canonical": "restaurant use"},
+        "single detached dwelling": {"canonical": "single-unit dwelling use"},
+        "single unit dwelling": {"canonical": "single-unit dwelling use"}
+      }
+    },
+    "standard": {
+      "terms": [
+        "minimum lot area",
+        "lot area",
+        "lot frontage",
+        "minimum lot frontage",
+        "minimum rear yard",
+        "front yard setback",
+        "side yard setback",
+        "minimum side yard",
+        "minimum side yard for additions",
+        "rear yard setback",
+        "building height",
+        "maximum height",
+        "maximum footprint of addition",
+        "additions and structural changes",
+        "dwelling units",
+        "lot coverage",
+        "parking spaces",
+        "open space"
+      ]
+    },
+    "condition_ref": {
+      "patterns": ["circled_number", "bracketed_number"]
+    },
+    "development_context": {
+      "terms": ["rear additions", "internal conversions", "additions", "conversions"]
+    },
+    "section_ref": {
+      "patterns": ["section_label"]
+    },
+    "table_ref": {
+      "patterns": ["table_label"]
+    }
+  },
+  "relation_types": [
+    "definition",
+    "permission",
+    "dimensional_standard",
+    "parking_standard",
+    "requirement",
+    "condition_definition",
+    "cross_reference",
+    "procedure_requirement",
+    "exception",
+    "applicability"
+  ],
+  "fragment_roles": [
+    "definition",
+    "permission_rule",
+    "standard_rule",
+    "procedure",
+    "condition",
+    "exception",
+    "cross_reference",
+    "table_caption",
+    "general_prose",
+    "unknown"
+  ]
+}

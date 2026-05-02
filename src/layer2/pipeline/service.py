@@ -21,7 +21,7 @@ from layer2.db.models import (
 )
 from layer2.embeddings.base import BaseEmbeddingClient
 from layer2.llm.base import BaseLLMClient
-from layer2.models.enums import AnswerStatus, ClaimStatus, QuerySessionStatus, RetrievalRunStatus
+from layer2.models.enums import AnswerStatus, ClaimStatus, QuerySessionStatus, RetrievalRunStatus, SourceType
 from layer2.models.schemas import PromptContext, StructuredClaim
 from layer2.prompts.builder import build_prompt
 from layer2.retrieval.service import retrieve_context
@@ -77,13 +77,29 @@ def _estimate_tokens(text: str) -> int:
 def _select_fragments_for_prompt(candidates, token_budget: int):
     selected = []
     consumed = 0
-    for rank, candidate in enumerate(candidates, start=1):
+    prioritized = sorted(
+        enumerate(candidates, start=1),
+        key=lambda item: (_prompt_selection_priority(item[1]), item[0]),
+    )
+    for rank, candidate in prioritized:
         cost = _estimate_tokens(candidate.text) + 30
         if selected and consumed + cost > token_budget:
             continue
         selected.append((rank, candidate))
         consumed += cost
-    return selected
+    return sorted(selected, key=lambda item: item[0])
+
+
+def _prompt_selection_priority(candidate) -> int:
+    if candidate.reason.get("operation") == "retrieve_semantic_facts":
+        return 0
+    if candidate.metadata.get("semantic_fact_id") or candidate.metadata.get("semantic_fact_ids"):
+        return 0
+    if candidate.reason.get("expansion") == "semantic_section_reference":
+        return 1
+    if candidate.reason.get("expansion") == "semantic_fact_source":
+        return 2
+    return 3
 
 
 def _persist_claims(
@@ -262,7 +278,7 @@ def run_answer_pipeline(
                 source_fragment_id=candidate.source_fragment_id,
                 source_table_id=candidate.source_table_id,
                 source_table_cell_id=candidate.source_table_cell_id,
-                source_type=candidate.source_type,
+                source_type=_coerce_source_type(candidate.source_type),
                 retrieval_channel=candidate.retrieval_channel,
                 base_score=candidate.base_score,
                 rerank_score=candidate.rerank_score,
@@ -342,3 +358,15 @@ def run_answer_pipeline(
         "claims": claims,
         "selected_fragments": selected_fragments,
     }
+
+
+def _coerce_source_type(source_type: str | SourceType) -> SourceType:
+    if isinstance(source_type, SourceType):
+        return source_type
+    normalized = str(source_type).lower()
+    if normalized == "page_block":
+        return SourceType.FRAGMENT
+    try:
+        return SourceType(normalized)
+    except ValueError:
+        return SourceType.FRAGMENT

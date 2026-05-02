@@ -1,0 +1,38 @@
+FROM python:3.11-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_NO_CACHE_DIR=1
+ARG INSTALL_EXTRAS=dev
+
+WORKDIR /workspace
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash \
+    build-essential \
+    ca-certificates \
+    curl \
+    file \
+    git \
+    libglib2.0-0 \
+    libgl1 \
+    libgomp1 \
+    libmagic1 \
+    poppler-utils \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md alembic.ini ./
+COPY alembic ./alembic
+COPY src ./src
+
+RUN python -m pip install --upgrade pip "setuptools<82" wheel \
+  && python -m pip install -e ".[${INSTALL_EXTRAS}]" \
+  && if printf '%s' "${INSTALL_EXTRAS}" | grep -q 'parsers'; then \
+    python -m pip uninstall -y opencv-python opencv_python >/dev/null 2>&1 || true; \
+    python -m pip install --force-reinstall opencv-python-headless; \
+  fi
+
+CMD ["bash"]

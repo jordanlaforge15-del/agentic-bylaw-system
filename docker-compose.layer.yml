@@ -1,0 +1,76 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: layer1
+      POSTGRES_USER: layer1
+      POSTGRES_PASSWORD: layer1
+    ports:
+      - "${LAYER_DB_PORT:-5432}:5432"
+    volumes:
+      - layer-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U layer1 -d layer1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.layer
+      args:
+        INSTALL_EXTRAS: "${INSTALL_EXTRAS:-dev}"
+    image: agentic-bylaw-system-layer:latest
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    environment:
+      DATABASE_URL: postgresql+psycopg://layer1:layer1@postgres:5432/layer1
+      OCR_ENABLED: "${OCR_ENABLED:-false}"
+      CAMELOT_ENABLED: "${CAMELOT_ENABLED:-false}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      PARSING_PROFILE: "${PARSING_PROFILE:-halifax}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      LAYER2_LLM_BASE_URL: "${LAYER2_LLM_BASE_URL:-}"
+      LAYER2_LLM_API_KEY: "${LAYER2_LLM_API_KEY:-}"
+      LAYER2_LLM_MODEL: "${LAYER2_LLM_MODEL:-mock-layer2}"
+      LAYER2_EMBEDDING_BASE_URL: "${LAYER2_EMBEDDING_BASE_URL:-}"
+      LAYER2_EMBEDDING_API_KEY: "${LAYER2_EMBEDDING_API_KEY:-}"
+      LAYER2_EMBEDDING_MODEL: "${LAYER2_EMBEDDING_MODEL:-hashing-bge-small-en-v1.5}"
+      LAYER2_EMBEDDING_DIMENSIONS: "${LAYER2_EMBEDDING_DIMENSIONS:-384}"
+      LAYER2_PROMPT_VERSION: "${LAYER2_PROMPT_VERSION:-v1}"
+      LAYER2_RETRIEVAL_VERSION: "${LAYER2_RETRIEVAL_VERSION:-v1}"
+      LAYER2_TOKEN_BUDGET: "${LAYER2_TOKEN_BUDGET:-3000}"
+      LAYER2_TOP_K: "${LAYER2_TOP_K:-8}"
+      LAYER2_MAX_CACHED_CLAIMS: "${LAYER2_MAX_CACHED_CLAIMS:-4}"
+    volumes:
+      - .:/workspace
+      - layer-pip-cache:/root/.cache/pip
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: bash
+
+  migrate:
+    image: agentic-bylaw-system-layer:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.layer
+      args:
+        INSTALL_EXTRAS: "${INSTALL_EXTRAS:-dev}"
+    working_dir: /workspace
+    environment:
+      DATABASE_URL: postgresql+psycopg://layer1:layer1@postgres:5432/layer1
+    volumes:
+      - .:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: alembic upgrade head
+    profiles:
+      - tools
+
+volumes:
+  layer-postgres:
+  layer-pip-cache:
