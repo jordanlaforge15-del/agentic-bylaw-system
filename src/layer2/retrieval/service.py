@@ -18,6 +18,8 @@ from layer2.retrieval.merge import merge_and_dedupe_candidates
 from layer2.retrieval.api import execute_retrieval_plan
 from layer2.retrieval.planner import create_retrieval_plan
 from layer2.retrieval.query_understanding import understand_question
+from layer2.retrieval.semantic_graph import allowed_edge_types_from_string, expand_semantic_graph
+from layer2.retrieval.semantic import retrieve_semantic_facts
 from layer2.rerank.heuristic import rerank_candidates
 
 SEARCH_STOPWORDS = {
@@ -405,6 +407,30 @@ def apply_feedback_adjustments(
     return sorted(candidates, key=lambda item: item.rerank_score, reverse=True)
 
 
+def _candidate_pool_limit(candidates: list[CandidateFragment], top_k: int) -> list[CandidateFragment]:
+    limit = max(top_k * 2, 6)
+    kept = list(candidates[:limit])
+    seen = {_candidate_identity(candidate) for candidate in kept}
+    for candidate in candidates[limit:]:
+        if candidate.reason.get("expansion") != "semantic_section_reference":
+            continue
+        identity = _candidate_identity(candidate)
+        if identity in seen:
+            continue
+        kept.append(candidate)
+        seen.add(identity)
+    return kept
+
+
+def _candidate_identity(candidate: CandidateFragment) -> tuple[int | None, int | None, int | None, str]:
+    return (
+        candidate.source_fragment_id,
+        candidate.source_table_id,
+        candidate.source_table_cell_id,
+        candidate.source_type,
+    )
+
+
 def retrieve_context(
     session: Session,
     *,
@@ -425,6 +451,7 @@ def retrieve_context(
         known_facts=known_facts,
     )
     plan = create_retrieval_plan(question_text, known_facts=known_facts, llm_client=planner_llm_client)
+    semantic = retrieve_semantic_facts(session, document_id=document_id, question_text=question_text, top_k=top_k)
     planned = execute_retrieval_plan(session, document_id=document_id, plan=plan, top_k=top_k)
     fts = full_text_candidates(session, document_id=document_id, understanding=understanding, top_k=top_k)
     vector = vector_candidates(
@@ -435,9 +462,18 @@ def retrieve_context(
         top_k=top_k,
     )
     tables = table_candidates(session, document_id=document_id, understanding=understanding, top_k=max(2, top_k // 2))
-    merged = merge_and_dedupe_candidates(planned, fts, vector, tables)
+    merged = merge_and_dedupe_candidates(semantic, planned, fts, vector, tables)
     expanded = expand_hierarchy(session, document_id, merged)
     expanded = expand_cross_references(session, expanded)
+    expanded = expand_semantic_graph(
+        session,
+        document_id=document_id,
+        candidates=expanded,
+        max_depth=settings.semantic_graph_max_depth,
+        max_fragments=settings.semantic_graph_max_fragments,
+        max_nodes=settings.semantic_graph_max_nodes,
+        allowed_edge_types=allowed_edge_types_from_string(settings.semantic_graph_allowed_edge_types),
+    )
     reranked = rerank_candidates(merge_and_dedupe_candidates(expanded), understanding)
     reranked = apply_feedback_adjustments(session, document_id=document_id, candidates=reranked)
     cached_claims = cached_claim_candidates(
@@ -448,8 +484,12 @@ def retrieve_context(
     )
     return RetrievalBundle(
         understanding=understanding,
-        candidates=reranked[: max(top_k * 2, 6)],
+        candidates=_candidate_pool_limit(reranked, top_k),
         cached_claims=cached_claims,
         metadata_filters=metadata_filters,
-        query_terms={**understanding.model_dump(), "retrieval_plan": plan.model_dump()},
+        query_terms={
+            **understanding.model_dump(),
+            "retrieval_plan": plan.model_dump(),
+            "semantic_retrieval": {"candidate_count": len(semantic)},
+        },
     )

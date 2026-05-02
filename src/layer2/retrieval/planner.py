@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from layer1.semantic.extractors import extract_zones as extract_semantic_zones
 from layer2.llm.base import BaseLLMClient
 from layer2.models.schemas import RetrievalOperation, RetrievalPlan
 
@@ -66,6 +67,9 @@ def normalize_zone_code(value: str | None) -> str | None:
             return zone_code
         if compact_zone in compact_value and re.search(rf"\b{re.escape(zone_code)}\s+ZONE\b", upper_value):
             return zone_code
+    semantic_zones = extract_semantic_zones(value)
+    if semantic_zones:
+        return semantic_zones[0]
     match = ZONE_RE.search(upper_value)
     if not match:
         return None
@@ -201,6 +205,10 @@ def _fallback_plan(question_text: str, known_facts: dict[str, Any] | None) -> Re
     if "accessory structure" in normalized and any(token in normalized for token in ["permit", "permitted", "allowed", "can "]):
         use_type = "accessory structure or use"
         entities["use_name"] = use_type
+    if not use_type and permission_language:
+        use_type = _permission_use_name_from_question(normalized)
+        if use_type:
+            entities["use_name"] = use_type
     if "south end" in normalized:
         area_context = "South End"
         entities["area_context"] = area_context
@@ -346,3 +354,42 @@ def _validate_and_repair_plan(
         expected_answer_shape=plan.expected_answer_shape or fallback.expected_answer_shape,
         confidence=plan.confidence or fallback.confidence,
     )
+
+
+def _permission_use_name_from_question(normalized_question: str) -> str | None:
+    cleaned = re.sub(r"[^a-z0-9 -]+", " ", normalized_question)
+    stop_prefixes = {
+        "a",
+        "an",
+        "the",
+        "my",
+        "this",
+        "that",
+        "any",
+        "use",
+        "uses",
+        "operate",
+        "have",
+        "build",
+        "permit",
+        "permitted",
+        "allowed",
+        "can",
+        "i",
+        "we",
+        "is",
+        "are",
+        "does",
+        "in",
+        "within",
+        "zone",
+    }
+    ignored = {"land use", "permitted use", "temporary use"}
+    for match in re.finditer(r"\b([a-z][a-z0-9-]*(?:\s+[a-z][a-z0-9-]*){0,5}\s+use)\b", cleaned):
+        words = match.group(1).split()
+        while words and words[0] in stop_prefixes:
+            words.pop(0)
+        candidate = " ".join(words)
+        if candidate and candidate not in ignored and len(candidate.split()) <= 5:
+            return candidate
+    return None

@@ -12,6 +12,7 @@ def merge_and_dedupe_candidates(*candidate_groups: list[CandidateFragment]) -> l
                 candidate.source_table_id,
                 candidate.source_table_cell_id,
                 candidate.source_type,
+                candidate.metadata.get("semantic_fact_id"),
                 candidate.metadata.get("page_block_id") if not any([candidate.source_fragment_id, candidate.source_table_id, candidate.source_table_cell_id]) else None,
             )
             existing = merged.get(key)

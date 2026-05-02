@@ -16,6 +16,7 @@ from layer1.pipeline.audit import audit_document_pages
 from layer1.pipeline.export import export_document_json
 from layer1.pipeline.ingest import ingest_file
 from layer1.profiles import available_profile_names, get_parsing_profile
+from layer1.semantic.enrichment import enrich_document_semantics, validate_document_semantics
 from layer1.validators.structural import validate_document_objects
 
 app = typer.Typer(help="Layer 1 bylaw source normalization CLI")
@@ -44,6 +45,7 @@ def ingest(
     ocr: bool = typer.Option(False, "--ocr", help="Enable OCR where parser support is installed"),
     debug: bool = typer.Option(False, "--debug", help="Persist extra parser/debug metadata where available"),
     create_schema: bool = typer.Option(False, "--create-schema", help="Create tables before ingesting"),
+    enrich: bool = typer.Option(False, "--enrich", help="Run semantic enrichment after successful ingest"),
 ) -> None:
     selected_profile = _parse_profile(profile)
     if create_schema:
@@ -59,6 +61,9 @@ def ingest(
             debug=debug,
             profile=selected_profile,
         )
+        if enrich and run.status != IngestionStatus.FAILED:
+            report = enrich_document_semantics(session, document_id=document.id)
+            console.print_json(data={"semantic_enrichment": report.model_dump()})
         _print_ingest_result(document.id, run.status.value, run.warnings_json, run.errors_json)
         if run.status == IngestionStatus.FAILED:
             raise typer.Exit(code=1)
@@ -100,6 +105,32 @@ def validate(
         report = _validate_from_db(session, document_id)
         console.print(report.model_dump_json(indent=2))
         if not report.ok:
+            raise typer.Exit(code=1)
+
+
+@app.command("enrich-semantics")
+def enrich_semantics(
+    document_id: int,
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    with session_scope(db_url) as session:
+        if not session.get(Document, document_id):
+            raise typer.BadParameter(f"Document {document_id} not found")
+        report = enrich_document_semantics(session, document_id=document_id)
+        console.print_json(data=report.model_dump())
+
+
+@app.command("validate-semantics")
+def validate_semantics(
+    document_id: int,
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    with session_scope(db_url) as session:
+        if not session.get(Document, document_id):
+            raise typer.BadParameter(f"Document {document_id} not found")
+        report = validate_document_semantics(session, document_id=document_id)
+        console.print_json(data=report)
+        if not report["ok"]:
             raise typer.Exit(code=1)
 
 
