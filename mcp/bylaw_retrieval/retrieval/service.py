@@ -76,10 +76,17 @@ class RetrievalService:
         stmt = select(SourceFragment).where(SourceFragment.citation_path == request.citation_path)
         if request.document_id is not None:
             stmt = stmt.where(SourceFragment.document_id == request.document_id)
-        fragment = self.session.execute(stmt.order_by(SourceFragment.id)).scalars().first()
-        if not fragment:
+        fragments = self.session.execute(stmt.order_by(SourceFragment.id).limit(2)).scalars().all()
+        if not fragments:
             scope = f" in document {request.document_id}" if request.document_id is not None else ""
             raise ValueError(f"Citation '{request.citation_path}' not found{scope}")
+        if request.document_id is None and len(fragments) > 1:
+            document_ids = ", ".join(str(fragment.document_id) for fragment in fragments)
+            raise ValueError(
+                f"Citation '{request.citation_path}' is ambiguous across documents; "
+                f"provide document_id. Matching document IDs include: {document_ids}"
+            )
+        fragment = fragments[0]
         return self._build_match(
             fragment,
             score=1000.0,
@@ -130,7 +137,7 @@ class RetrievalService:
             stmt = stmt.where(SourceFragment.page_end >= request.page_start)
         if request.page_end is not None:
             stmt = stmt.where(SourceFragment.page_start <= request.page_end)
-        return stmt.limit(500)
+        return stmt
 
     def _build_match(
         self,
@@ -325,4 +332,3 @@ def _truncate(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return f"{text[: max_chars - 1].rstrip()}..."
-
