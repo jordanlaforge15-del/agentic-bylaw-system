@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from layer1.datasets.config import DatasetConfig, load_dataset_config
+from layer1.datasets.linker import LinkResult, link_dataset_to_bylaw
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature
 from layer1.models.enums import ParseStatus
 from layer1.parsers.geo_dataset import GeoDatasetParseResult, parse_geojson
@@ -22,10 +23,12 @@ class DatasetIngestResult:
         dataset: ExternalDataset,
         warnings: list[str],
         feature_warnings: int,
+        link_result: LinkResult,
     ) -> None:
         self.dataset = dataset
         self.warnings = warnings
         self.feature_warnings = feature_warnings
+        self.link_result = link_result
 
 
 def ingest_geo_dataset(
@@ -97,10 +100,12 @@ def ingest_geo_dataset(
             )
         )
     session.flush()
+    link_result = link_dataset_to_bylaw(session, dataset.id)
     return DatasetIngestResult(
         dataset=dataset,
         warnings=parsed.warnings,
         feature_warnings=feature_warning_count,
+        link_result=link_result,
     )
 
 
