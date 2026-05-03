@@ -68,12 +68,23 @@ class LinksTo(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+DatasetRole = Literal["civic_address"]
+
+
 class DatasetConfig(BaseModel):
     """Per-dataset YAML configuration.
 
     Declarative description of a companion geo dataset: where to load it from,
     which bylaw fragment it implements, and how its raw attributes map into
     the canonical retrieval-API vocabulary.
+
+    ``role`` is an optional marker that lets other components find datasets
+    with a special semantic — e.g. ``civic_address`` datasets are queried by
+    the geocoder. Datasets without a role are treated as plain reference data
+    (height precincts, FAR precincts, zone overlays, etc.).
+
+    ``links_to`` is required for plain datasets but optional for role-bearing
+    datasets like civic_address that don't implement a specific bylaw clause.
     """
 
     name: str
@@ -82,7 +93,8 @@ class DatasetConfig(BaseModel):
     source_path: str | None = None
     source_url: str | None = None
     crs: str = "EPSG:4326"
-    links_to: LinksTo
+    role: DatasetRole | None = None
+    links_to: LinksTo | None = None
     attributes: AttributesConfig
 
     model_config = {"extra": "forbid"}
@@ -91,6 +103,10 @@ class DatasetConfig(BaseModel):
     def _validate_source(self) -> "DatasetConfig":
         if not self.source_path and not self.source_url:
             raise ValueError("dataset config must specify either 'source_path' or 'source_url'")
+        if self.role is None and self.links_to is None:
+            raise ValueError(
+                "non-role datasets must declare 'links_to' to bind them to a bylaw fragment"
+            )
         return self
 
 

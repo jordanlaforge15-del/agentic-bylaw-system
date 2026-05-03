@@ -71,14 +71,17 @@ def ingest_geo_dataset(
         crs=parsed.declared_crs,
         feature_count=parsed.feature_count,
         linked_document_id=None,
-        linked_fragment_citation=config.links_to.fragment_citation,
+        linked_fragment_citation=(
+            config.links_to.fragment_citation if config.links_to else None
+        ),
         linked_fragment_id=None,
         schema_mapping_json=config.attributes.model_dump(by_alias=True),
         parse_status=dataset_status,
         ingestion_timestamp=datetime.now(timezone.utc),
         metadata_json={
             "publisher": config.publisher,
-            "links_to": config.links_to.model_dump(),
+            "role": config.role,
+            "links_to": config.links_to.model_dump() if config.links_to else None,
             "warnings": parsed.warnings,
             "feature_warning_count": feature_warning_count,
         },
@@ -100,7 +103,16 @@ def ingest_geo_dataset(
             )
         )
     session.flush()
-    link_result = link_dataset_to_bylaw(session, dataset.id)
+    if config.links_to is not None:
+        link_result = link_dataset_to_bylaw(session, dataset.id)
+    else:
+        link_result = LinkResult(
+            dataset_id=dataset.id,
+            document_id=None,
+            fragment_id=None,
+            status="not_applicable",
+            detail=f"dataset role={config.role!r} does not bind to a bylaw fragment",
+        )
     return DatasetIngestResult(
         dataset=dataset,
         warnings=parsed.warnings,

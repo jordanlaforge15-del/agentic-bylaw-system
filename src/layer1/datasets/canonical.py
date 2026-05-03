@@ -13,6 +13,12 @@ CANONICAL_FIELDS: dict[str, str] = {
     "display_label": "string",
     "effective_date": "date",
     "source_case": "string",
+    # Civic-address fields — populated by datasets with role=civic_address
+    # so the geocoder (Phase E) can resolve a LocationReference to a point
+    # or parcel polygon.
+    "civic_number": "string",
+    "street_name": "string",
+    "parcel_id": "string",
 }
 
 

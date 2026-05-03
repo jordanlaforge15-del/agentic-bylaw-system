@@ -117,35 +117,29 @@ def link_dataset_to_bylaw(session: Session, dataset_id: int) -> LinkResult:
     return _record_link(session, dataset, document.id, fragments[0].id, "linked", detail)
 
 
-def relink_orphan_datasets(session: Session) -> list[LinkResult]:
-    """Try linking every dataset whose fragment FK is still null.
-
-    Useful when datasets were ingested before their bylaw was, or after a
-    bylaw is re-ingested with a different document_id.
-    """
-    orphan_ids = (
-        session.execute(
-            select(ExternalDataset.id).where(ExternalDataset.linked_fragment_id.is_(None))
-        )
-        .scalars()
-        .all()
-    )
-    return [link_dataset_to_bylaw(session, dataset_id) for dataset_id in orphan_ids]
-
-
 def find_orphan_datasets(session: Session) -> list[ExternalDataset]:
     """Return every persisted dataset that is not yet linked to a fragment.
 
-    Wraps a single query so callers (audit pages, CLI) don't have to know
-    the column name.
+    Excludes role-bearing datasets (e.g. ``civic_address``) that
+    intentionally don't bind to a bylaw fragment — those aren't orphans,
+    they just play a different role in the system.
     """
-    return list(
+    rows = list(
         session.execute(
             select(ExternalDataset).where(ExternalDataset.linked_fragment_id.is_(None))
         )
         .scalars()
         .all()
     )
+    return [row for row in rows if (row.metadata_json or {}).get("role") is None]
+
+
+def relink_orphan_datasets(session: Session) -> list[LinkResult]:
+    """Try linking every dataset that the orphan audit considers an orphan.
+
+    Role-bearing datasets are skipped — they have no link to relink.
+    """
+    return [link_dataset_to_bylaw(session, dataset.id) for dataset in find_orphan_datasets(session)]
 
 
 def _record_link(

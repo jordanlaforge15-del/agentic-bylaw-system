@@ -336,3 +336,35 @@ class ExternalDatasetFeature(Base):
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
 
     dataset: Mapped[ExternalDataset] = relationship(back_populates="features")
+
+
+class GeocodeCache(Base):
+    """Persistent cache of address-resolution results.
+
+    Layer 1 stays the source-of-truth layer; the cache lives here because the
+    civic-address dataset itself is a Layer 1 ``external_dataset``, and a
+    cache hit just shortcuts the Layer 2 lookup. TTL is enforced by the
+    geocoder, not by the schema, since validity depends on which resolver
+    served the answer.
+    """
+
+    __tablename__ = "geocode_cache"
+    __table_args__ = (UniqueConstraint("normalized_text", name="uq_geocode_cache_normalized_text"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    normalized_text: Mapped[str] = mapped_column(String(500), nullable=False)
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    resolver: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_dataset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("external_dataset.id", ondelete="SET NULL")
+    )
+    source_feature_id: Mapped[int | None] = mapped_column(
+        ForeignKey("external_dataset_feature.id", ondelete="SET NULL")
+    )
+    geometry_geojson: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(json_type()))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    detail: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
