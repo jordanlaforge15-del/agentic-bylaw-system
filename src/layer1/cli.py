@@ -15,6 +15,7 @@ from layer1.models.enums import IngestionStatus
 from layer1.pipeline.audit import audit_document_pages
 from layer1.pipeline.export import export_document_json
 from layer1.pipeline.ingest import ingest_file
+from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 from layer1.profiles import available_profile_names, get_parsing_profile
 from layer1.semantic.enrichment import enrich_document_semantics, validate_document_semantics
 from layer1.validators.structural import validate_document_objects
@@ -169,6 +170,28 @@ def show_summary(
                 "page_count": document.page_count,
                 "parser_version": document.parser_version,
                 **counts,
+            }
+        )
+
+
+@app.command("ingest-dataset")
+def ingest_dataset(
+    config: Path = typer.Argument(..., exists=True, readable=True, help="Path to dataset YAML config"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+    create_schema: bool = typer.Option(False, "--create-schema", help="Create tables before ingesting"),
+) -> None:
+    if create_schema:
+        create_all(db_url)
+    with session_scope(db_url) as session:
+        result = ingest_geo_dataset(session, config)
+        console.print(
+            {
+                "dataset_id": result.dataset.id,
+                "name": result.dataset.name,
+                "feature_count": result.dataset.feature_count,
+                "parse_status": result.dataset.parse_status.value,
+                "feature_warnings": result.feature_warnings,
+                "warnings": result.warnings[:10],
             }
         )
 

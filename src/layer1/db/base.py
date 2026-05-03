@@ -286,3 +286,53 @@ class SemanticReviewEvent(Base):
     reviewer: Mapped[str | None] = mapped_column(String(255))
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ExternalDataset(Base):
+    __tablename__ = "external_dataset"
+    __table_args__ = (UniqueConstraint("name", name="uq_external_dataset_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    publisher: Mapped[str | None] = mapped_column(String(255))
+    source_url: Mapped[str | None] = mapped_column(Text)
+    source_path: Mapped[str | None] = mapped_column(Text)
+    format: Mapped[str] = mapped_column(String(32), nullable=False)
+    version: Mapped[str | None] = mapped_column(String(255))
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    crs: Mapped[str] = mapped_column(String(64), nullable=False)
+    feature_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    linked_document_id: Mapped[int | None] = mapped_column(ForeignKey("document.id", ondelete="SET NULL"))
+    linked_fragment_citation: Mapped[str | None] = mapped_column(String(255))
+    linked_fragment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("source_fragment.id", ondelete="SET NULL"), index=True
+    )
+    schema_mapping_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
+    ingestion_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+    features: Mapped[list["ExternalDatasetFeature"]] = relationship(
+        back_populates="dataset", cascade="all, delete-orphan"
+    )
+
+
+class ExternalDatasetFeature(Base):
+    __tablename__ = "external_dataset_feature"
+    __table_args__ = (
+        UniqueConstraint("external_dataset_id", "feature_key", name="uq_external_dataset_feature_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    external_dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("external_dataset.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    feature_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    attributes_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    canonical_attributes_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    geometry_geojson: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    geometry_bbox_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+    dataset: Mapped[ExternalDataset] = relationship(back_populates="features")

@@ -1,0 +1,31 @@
+name: halifax_height_precincts
+publisher: Halifax Regional Municipality
+format: geojson
+source_path: data/geo-datasets/Height_Precincts_3210696484251958940.geojson
+crs: EPSG:4326
+
+links_to:
+  document_match:
+    municipality: Halifax Regional Municipality
+    bylaw_name: Regional Centre Land Use By-law
+  fragment_citation: Schedule 15
+
+attributes:
+  feature_key: GLOBALID
+  canonical:
+    max_height_m:
+      from: HEIGHT
+      type: float
+    display_label:
+      synthesize: "{HEIGHT}m precinct"
+    effective_date:
+      from: SDATE
+      type: rfc2822_date
+      optional: true
+    source_case:
+      from: SOURCE
+      type: string
+      optional: true
+  ignore:
+    - OBJECTID
+    - SACC
