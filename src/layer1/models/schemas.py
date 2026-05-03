@@ -64,6 +64,30 @@ class TableData(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ImageData(BaseModel):
+    """A figure extracted by the parser, ready for persistence as SourceImage.
+
+    ``image_bytes`` carries raw bytes the pipeline writes to disk; the
+    parser supplies bytes when available (Docling exposes ``image.pil_image``)
+    and leaves ``image_path`` for the persister to populate. For parsers that
+    can only point to a path that already exists on disk, set ``image_path``
+    and leave ``image_bytes`` as ``None``.
+    """
+
+    page_number: int
+    bbox: BBox | None = None
+    image_bytes: bytes | None = None
+    image_path: str | None = None
+    image_format: str | None = "png"
+    caption_fragment_index: int | None = None
+    figure_kind: str = "unknown"
+    docling_ref: str | None = None
+    parse_status: ParseStatus = ParseStatus.PARSED
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
 class CrossReferenceData(BaseModel):
     source_fragment_index: int
     raw_reference_text: str

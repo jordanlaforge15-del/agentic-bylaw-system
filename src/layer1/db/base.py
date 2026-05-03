@@ -338,6 +338,40 @@ class ExternalDatasetFeature(Base):
     dataset: Mapped[ExternalDataset] = relationship(back_populates="features")
 
 
+class SourceImage(Base):
+    """A figure (picture) extracted from the source PDF.
+
+    Currently captures whatever Docling exposes as a ``PictureItem`` —
+    typically map schedules and other figures. Storage strategy: write the
+    raw image bytes to a content-addressed file under the configured
+    ``image_storage_dir`` and persist only the path here. Postgres BYTEA
+    storage of figures is intentionally avoided.
+
+    ``figure_kind`` is a coarse categorisation (e.g. ``"unknown"``,
+    ``"precinct_map"``) populated heuristically from caption text. Phase F
+    keeps it minimal; richer classification can land later without a
+    schema change.
+    """
+
+    __tablename__ = "source_image"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), nullable=False
+    )
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox_json: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(json_type()))
+    image_path: Mapped[str | None] = mapped_column(Text)
+    image_format: Mapped[str | None] = mapped_column(String(16))
+    caption_fragment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("source_fragment.id", ondelete="SET NULL")
+    )
+    figure_kind: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    docling_ref: Mapped[str | None] = mapped_column(String(255))
+    parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+
 class GeocodeCache(Base):
     """Persistent cache of address-resolution results.
 

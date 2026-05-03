@@ -5,17 +5,21 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+import hashlib
+
+from layer1.config import get_settings
 from layer1.db.base import (
     CrossReference,
     Document,
     IngestionRun,
     PageBlock,
     SourceFragment,
+    SourceImage,
     SourceTable,
     SourceTableCell,
 )
 from layer1.models.enums import BlockType, FragmentType, IngestionStatus, ParseStatus
-from layer1.models.schemas import FragmentData, PageBlockData, TableData
+from layer1.models.schemas import FragmentData, ImageData, PageBlockData, TableData
 from layer1.parsers.factory import parse_source
 from layer1.pipeline.crossrefs import detect_cross_references
 from layer1.pipeline.hierarchy import reconstruct_hierarchy
@@ -67,6 +71,7 @@ def ingest_file(
         fragments_data = _ensure_fragment_coverage(parsed.page_blocks, fragments_data, parsed.tables)
         db_fragments = _persist_fragments(session, document.id, fragments_data, db_blocks)
         db_tables = _persist_tables(session, document.id, parsed.tables, db_fragments, db_blocks)
+        _persist_images(session, document, parsed.images, db_fragments)
         refs_data = detect_cross_references(fragments_data)
         db_refs = _persist_crossrefs(session, document.id, refs_data, db_fragments)
 
@@ -187,6 +192,79 @@ def _persist_tables(session: Session, document_id: int, tables_data, fragments: 
         tables.append(db_table)
     session.flush()
     return tables
+
+
+def _persist_images(
+    session: Session,
+    document: Document,
+    images_data: list[ImageData],
+    fragments: list[SourceFragment],
+) -> list[SourceImage]:
+    """Write image bytes to the configured storage dir and persist a row.
+
+    Files land at ``<image_storage_dir>/<document.file_hash>/<sha256>.<ext>``
+    so two ingests of the same document share image storage. ``image_path``
+    is left null when the parser couldn't extract bytes (e.g. vector
+    figures); the row still records bbox and docling_ref for addressing.
+    """
+    if not images_data:
+        return []
+    storage_root = Path(get_settings().image_storage_dir) / document.file_hash
+    persisted: list[SourceImage] = []
+    for image in images_data:
+        image_path: str | None = None
+        if image.image_bytes:
+            digest = hashlib.sha256(image.image_bytes).hexdigest()
+            ext = image.image_format or "png"
+            storage_root.mkdir(parents=True, exist_ok=True)
+            target = storage_root / f"{digest}.{ext}"
+            target.write_bytes(image.image_bytes)
+            image_path = str(target)
+        elif image.image_path:
+            image_path = image.image_path
+
+        caption_fragment_id: int | None = None
+        if image.caption_fragment_index is not None and image.caption_fragment_index < len(fragments):
+            caption_fragment_id = fragments[image.caption_fragment_index].id
+        elif image.figure_kind != "unknown":
+            caption_fragment_id = _find_caption_fragment_id(image, fragments)
+
+        db_image = SourceImage(
+            document_id=document.id,
+            page_number=image.page_number,
+            bbox_json=image.bbox.model_dump() if image.bbox else None,
+            image_path=image_path,
+            image_format=image.image_format,
+            caption_fragment_id=caption_fragment_id,
+            figure_kind=image.figure_kind,
+            docling_ref=image.docling_ref,
+            parse_status=image.parse_status,
+            metadata_json=dict(image.metadata),
+        )
+        session.add(db_image)
+        persisted.append(db_image)
+    session.flush()
+    return persisted
+
+
+def _find_caption_fragment_id(
+    image: ImageData, fragments: list[SourceFragment]
+) -> int | None:
+    """Best-effort link from a figure to a fragment on the same page.
+
+    Prefers a SCHEDULE-typed fragment whose page range covers the image's
+    page; falls back to any fragment whose page range contains it. Returns
+    None when no candidate exists rather than guessing wildly.
+    """
+    candidates = [
+        f for f in fragments if f.page_start <= image.page_number <= f.page_end
+    ]
+    if not candidates:
+        return None
+    schedules = [f for f in candidates if f.fragment_type == FragmentType.SCHEDULE]
+    if schedules:
+        return schedules[0].id
+    return candidates[0].id
 
 
 def _persist_crossrefs(session: Session, document_id: int, refs_data, fragments: list[SourceFragment]) -> list[CrossReference]:

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     audit_max_blocks_per_page: int = Field(default=40, alias="AUDIT_MAX_BLOCKS_PER_PAGE")
     audit_max_fragments_per_page: int = Field(default=40, alias="AUDIT_MAX_FRAGMENTS_PER_PAGE")
     parsing_profile: str = Field(default="halifax", alias="PARSING_PROFILE")
+    image_storage_dir: str = Field(default="data/images", alias="IMAGE_STORAGE_DIR")
 
 
 @lru_cache

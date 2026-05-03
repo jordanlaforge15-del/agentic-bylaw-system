@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from layer1.models.schemas import PageBlockData, TableData
+from layer1.models.schemas import ImageData, PageBlockData, TableData
 from layer1.profiles import ParsingProfile
 
 
@@ -11,6 +11,7 @@ from layer1.profiles import ParsingProfile
 class ParseResult:
     page_blocks: list[PageBlockData]
     tables: list[TableData] = field(default_factory=list)
+    images: list[ImageData] = field(default_factory=list)
     page_count: int | None = None
     parser_version: str | None = None
     warnings: list[str] = field(default_factory=list)

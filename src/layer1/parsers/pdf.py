@@ -3,8 +3,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from io import BytesIO
+
 from layer1.models.enums import BlockType, ParseStatus
-from layer1.models.schemas import BBox, PageBlockData, TableCellData, TableData
+from layer1.models.schemas import BBox, ImageData, PageBlockData, TableCellData, TableData
 from layer1.parsers.base import ParseResult, ParserAdapter
 from layer1.parsers.table_fallback import extract_fallback_tables
 from layer1.pipeline.block_classifier import classify_text_block, mark_boilerplate, normalize_text, split_toc_lines, strip_page_prefix
@@ -77,7 +79,15 @@ class DoclingParser(ParserAdapter):
         profile = get_parsing_profile(profile)
         try:
             from docling_core.types.doc.base import CoordOrigin
-            from docling_core.types.doc.document import GroupItem, ListItem, SectionHeaderItem, TableItem, TextItem, TitleItem
+            from docling_core.types.doc.document import (
+                GroupItem,
+                ListItem,
+                PictureItem,
+                SectionHeaderItem,
+                TableItem,
+                TextItem,
+                TitleItem,
+            )
             from docling.datamodel.base_models import InputFormat
             from docling.datamodel.pipeline_options import OcrAutoOptions, PdfPipelineOptions
             from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -98,6 +108,7 @@ class DoclingParser(ParserAdapter):
         document = result.document
         blocks: list[PageBlockData] = []
         tables: list[TableData] = []
+        images: list[ImageData] = []
         warnings: list[str] = []
         order = 0
         page_numbers = sorted(document.pages.keys())
@@ -110,6 +121,16 @@ class DoclingParser(ParserAdapter):
                     continue
                 bbox = _docling_item_bbox(item, page_height, CoordOrigin)
                 raw_text = _docling_item_text(item)
+                if isinstance(item, PictureItem):
+                    images.append(
+                        _docling_picture_to_image(
+                            item,
+                            page_number=page_number,
+                            bbox=bbox,
+                            document=document,
+                        )
+                    )
+                    continue
                 if bbox is None and not isinstance(item, TableItem):
                     if not raw_text:
                         continue
@@ -186,6 +207,7 @@ class DoclingParser(ParserAdapter):
         parsed = ParseResult(
             page_blocks=blocks,
             tables=tables,
+            images=images,
             page_count=len(page_numbers) or None,
             parser_version=self.name,
             warnings=warnings,
@@ -193,6 +215,7 @@ class DoclingParser(ParserAdapter):
                 "docling_pages": len(page_numbers),
                 "docling_items": len(blocks) + len(tables),
                 "docling_tables": len(tables),
+                "docling_images": len(images),
             }
             if debug
             else None,
@@ -508,6 +531,59 @@ def _docling_table_data(item, *, page_number: int, page_height: float, coord_ori
             "docling_ref": item.self_ref,
             "docling_label": getattr(item.label, "value", str(item.label)),
         },
+    )
+
+
+_PRECINCT_MAP_RE = re.compile(
+    r"schedule\s+\d+.*(precinct|height|FAR|zone|district|map|view\s+plane)",
+    re.IGNORECASE,
+)
+
+
+def _docling_picture_to_image(
+    item, *, page_number: int, bbox: BBox | None, document
+) -> ImageData:
+    """Convert a Docling PictureItem into our ImageData record.
+
+    Best-effort PNG bytes via ``item.get_image(document).save(buf)``. The
+    pipeline writes those bytes to disk under a content-addressed path; we
+    don't carry the bytes any further than necessary. ``figure_kind`` is a
+    coarse classification from caption text; the precinct-map regex catches
+    Schedule 15 / Schedule 17 / zone schedules without ML.
+    """
+    image_bytes: bytes | None = None
+    try:
+        pil_image = item.get_image(document)
+        if pil_image is not None:
+            buf = BytesIO()
+            pil_image.save(buf, format="PNG")
+            image_bytes = buf.getvalue()
+    except Exception:
+        # Docling may not have the image bytes for every PictureItem (e.g.
+        # vector figures, or when image extraction wasn't enabled in
+        # pipeline options). Persist the bbox/ref anyway so the figure is
+        # at least addressable.
+        image_bytes = None
+
+    caption_text = ""
+    try:
+        caption = item.caption_text(document)
+        if caption:
+            caption_text = caption
+    except Exception:
+        caption_text = ""
+
+    figure_kind = "precinct_map" if _PRECINCT_MAP_RE.search(caption_text) else "unknown"
+
+    return ImageData(
+        page_number=page_number,
+        bbox=bbox,
+        image_bytes=image_bytes,
+        image_format="png" if image_bytes else None,
+        docling_ref=getattr(item, "self_ref", None),
+        figure_kind=figure_kind,
+        parse_status=ParseStatus.PARSED,
+        metadata={"caption_text": caption_text} if caption_text else {},
     )
 
 

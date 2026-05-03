@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from layer1.db.base import ExternalDataset, ExternalDatasetFeature, SourceFragment
+from layer1.db.base import ExternalDataset, ExternalDatasetFeature, SourceFragment, SourceImage
 from layer2.models.enums import RetrievalChannel, SourceType
 from layer2.models.schemas import CandidateFragment
 
@@ -55,6 +55,10 @@ def expand_datasets(
             else None
         )
         summary = _summarize_dataset(session, dataset)
+        image_id = _find_linked_image_id(session, fragment) if fragment else None
+        metadata: dict = {}
+        if image_id is not None:
+            metadata["source_image_id"] = image_id
         expanded.append(
             CandidateFragment(
                 source_fragment_id=dataset.linked_fragment_id,
@@ -70,10 +74,28 @@ def expand_datasets(
                     "dataset_name": dataset.name,
                     "feature_count": dataset.feature_count,
                 },
+                metadata=metadata,
             )
         )
         seen_dataset_ids.add(dataset.id)
     return expanded
+
+
+def _find_linked_image_id(session, fragment: SourceFragment) -> int | None:
+    """Return the SourceImage id whose caption_fragment is this fragment, if any.
+
+    Cosmetic — lets the caller render the legally enacted map alongside the
+    dataset answer. None is fine; the dataset is the authoritative source
+    either way.
+    """
+    row = (
+        session.execute(
+            select(SourceImage.id).where(SourceImage.caption_fragment_id == fragment.id)
+        )
+        .scalars()
+        .first()
+    )
+    return row
 
 
 def _summarize_dataset(session: Session, dataset: ExternalDataset) -> str:
