@@ -8,6 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature, GeocodeCache
+from layer2.retrieval.google_geocoder import (
+    GoogleGeocoder,
+    GoogleGeocoderConfig,
+    load_google_maps_api_key,
+)
 from layer2.retrieval.location import LocationReference
 from layer2.retrieval.spatial import ResolvedLocation
 
@@ -78,6 +83,7 @@ def resolve_location(
     ref: LocationReference,
     *,
     use_cache: bool = True,
+    google_geocoder: GoogleGeocoder | None = None,
 ) -> ResolvedLocation | None:
     """Resolve a LocationReference to a ResolvedLocation, layered resolvers.
 
@@ -85,14 +91,20 @@ def resolve_location(
       1. Cache hit (if ``use_cache``).
       2. Parcel-id direct lookup against any civic-address dataset.
       3. Civic-address lookup against any role=civic_address dataset.
-      4. Refusal — return None. Named places and intersections fall through
-         here in v1 because they need either a gazetteer or an LLM
-         disambiguator that's outside Layer 1's scope.
+      4. External geocoder (Google Maps), if a key is available — closes
+         the loop for civic-address and named-place questions when no
+         in-database civic-address dataset exists. Provenance is weaker
+         (``ResolvedLocation.source = "google_maps"``) but the spatial
+         channel still works end-to-end.
+      5. Refusal — return None.
 
     Returns None on miss; never raises for a missing match. A None return is
     the correct behaviour and the caller should refuse the question rather
     than guess. ``ResolvedLocation.source`` names the resolver so the
     citation chain can attribute the lookup.
+
+    ``google_geocoder`` is injected for testability — production callers can
+    leave it None and let the helper assemble one from settings.
     """
     cache_key = normalize_reference(ref)
     if use_cache:
@@ -133,9 +145,24 @@ def resolve_location(
             )
 
     else:
-        # named_place / intersection: not resolved in v1.
-        detail = f"resolver does not handle kind={ref.kind!r}"
+        # named_place / intersection: in-database resolvers can't handle
+        # these, but the Google fallback below may pick them up.
+        detail = f"in-database resolvers do not handle kind={ref.kind!r}"
         resolver = "unsupported_kind"
+
+    # External fallback — only runs when no in-database resolver succeeded.
+    if resolved is None:
+        external = google_geocoder or _maybe_build_google_geocoder()
+        if external is not None:
+            external_match = external.resolve(ref)
+            if external_match is not None:
+                resolved = external_match
+                resolver = external.name
+                status = "linked"
+                detail = (
+                    f"resolved via {external.name} with confidence "
+                    f"{external_match.confidence:.2f}"
+                )
 
     if use_cache:
         _cache_put(
@@ -200,6 +227,29 @@ def _find_by_civic_address(
         if feature_civic == target_civic and feature_street == target_street:
             return feature, dataset
     return None
+
+
+def _maybe_build_google_geocoder() -> GoogleGeocoder | None:
+    """Lazy-build a GoogleGeocoder from settings if a key is on disk.
+
+    Returning None when there's no key file is the silent-skip path that
+    keeps existing test environments working without injecting credentials.
+    The function is intentionally module-level (not cached) so a key dropped
+    in mid-run picks up on the next call.
+    """
+    from layer2.config import get_settings
+
+    settings = get_settings()
+    api_key = load_google_maps_api_key(settings.google_maps_api_key_path)
+    if not api_key:
+        return None
+    return GoogleGeocoder(
+        GoogleGeocoderConfig(
+            api_key=api_key,
+            region_bias=settings.google_maps_region_bias,
+            timeout_s=settings.google_maps_request_timeout_s,
+        )
+    )
 
 
 def _civic_address_dataset_ids(session: Session) -> list[int]:

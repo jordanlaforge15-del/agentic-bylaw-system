@@ -10,3 +10,11 @@ htmlcov/
 *.db
 dist/
 build/
+
+# Secret material — keep out of version control.
+google_maps_api_key
+openai_apikey
+*_api_key
+*_apikey
+*.pem
+*.key
