@@ -6,8 +6,8 @@ crs: EPSG:4326
 
 links_to:
   document_match:
-    municipality: Halifax Regional Municipality
-    bylaw_name: Regional Centre Land Use By-law
+    municipality: HRM
+    bylaw_name: Regional Centre Land Use By-Law
   fragment_citation: Schedule 15
 
 attributes:

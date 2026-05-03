@@ -24,7 +24,7 @@ def upgrade() -> None:
         sa.Column("caption_fragment_id", sa.Integer(), sa.ForeignKey("source_fragment.id", ondelete="SET NULL"), nullable=True),
         sa.Column("figure_kind", sa.String(length=64), nullable=False),
         sa.Column("docling_ref", sa.String(length=255), nullable=True),
-        sa.Column("parse_status", sa.Enum("PARSED", "UNCERTAIN", "FALLBACK", "ERROR", name="parsestatus", create_type=False), nullable=False),
+        sa.Column("parse_status", postgresql.ENUM("PARSED", "UNCERTAIN", "FALLBACK", "ERROR", name="parsestatus", create_type=False), nullable=False),
         sa.Column("metadata_json", json_type, nullable=False),
     )
     op.create_index("ix_source_image_document_page", "source_image", ["document_id", "page_number"])

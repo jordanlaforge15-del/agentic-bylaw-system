@@ -29,7 +29,7 @@ def upgrade() -> None:
         sa.Column("linked_fragment_citation", sa.String(length=255), nullable=True),
         sa.Column("linked_fragment_id", sa.Integer(), sa.ForeignKey("source_fragment.id", ondelete="SET NULL"), nullable=True),
         sa.Column("schema_mapping_json", json_type, nullable=False),
-        sa.Column("parse_status", sa.Enum("PARSED", "UNCERTAIN", "FALLBACK", "ERROR", name="parsestatus", create_type=False), nullable=False),
+        sa.Column("parse_status", postgresql.ENUM("PARSED", "UNCERTAIN", "FALLBACK", "ERROR", name="parsestatus", create_type=False), nullable=False),
         sa.Column("ingestion_timestamp", sa.DateTime(timezone=True), nullable=False),
         sa.Column("metadata_json", json_type, nullable=False),
         sa.UniqueConstraint("name", name="uq_external_dataset_name"),
@@ -46,7 +46,7 @@ def upgrade() -> None:
         sa.Column("canonical_attributes_json", json_type, nullable=False),
         sa.Column("geometry_geojson", json_type, nullable=False),
         sa.Column("geometry_bbox_json", json_type, nullable=False),
-        sa.Column("parse_status", sa.Enum("PARSED", "UNCERTAIN", "FALLBACK", "ERROR", name="parsestatus", create_type=False), nullable=False),
+        sa.Column("parse_status", postgresql.ENUM("PARSED", "UNCERTAIN", "FALLBACK", "ERROR", name="parsestatus", create_type=False), nullable=False),
         sa.Column("metadata_json", json_type, nullable=False),
         sa.UniqueConstraint("external_dataset_id", "feature_key", name="uq_external_dataset_feature_key"),
     )
