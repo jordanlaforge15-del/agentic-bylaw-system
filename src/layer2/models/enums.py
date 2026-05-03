@@ -22,6 +22,8 @@ class SourceType(StrEnum):
     TABLE = "table"
     TABLE_CELL = "table_cell"
     CLAIM = "claim"
+    DATASET = "dataset"
+    DATASET_FEATURE = "dataset_feature"
 
 
 class RetrievalChannel(StrEnum):
@@ -31,6 +33,8 @@ class RetrievalChannel(StrEnum):
     CROSS_REFERENCE = "cross_reference"
     CLAIM_REUSE = "claim_reuse"
     TABLE = "table"
+    DATASET = "dataset"
+    SPATIAL = "spatial"
 
 
 class AnswerStatus(StrEnum):
