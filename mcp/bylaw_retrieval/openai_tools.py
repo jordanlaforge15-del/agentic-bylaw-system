@@ -72,7 +72,10 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
             "name": "search_bylaw_evidence",
             "description": (
                 "Search bylaw source fragments using a natural-language question or a compact retrieval query. "
-                "Use this to gather citation-grounded evidence about what rules may affect a built-form question."
+                "Use this to gather citation-grounded evidence about what rules may affect a built-form question. "
+                "If the question references a specific address, parcel, intersection, named place, or coordinate, "
+                "populate the 'location' argument rather than embedding the address in 'query' — the retrieval API "
+                "will use it to spatially filter any geo datasets linked to matching fragments (e.g. height precincts)."
             ),
             "parameters": {
                 "type": "object",
@@ -85,9 +88,37 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                     "page": {"type": "integer", "minimum": 1},
                     "page_start": {"type": "integer", "minimum": 1},
                     "page_end": {"type": "integer", "minimum": 1},
+                    "location": {
+                        "type": "object",
+                        "description": (
+                            "Structured location slot. Set the fields you have; leave the rest null. "
+                            "For street addresses use civic_number + street (and optional unit). "
+                            "For parcel ids use parcel_id. For landmarks use named_place. "
+                            "For intersections supply two or more street names in intersection_streets. "
+                            "If you already have a GeoJSON point or polygon (EPSG:4326), pass it as 'geometry' "
+                            "to skip geocoding entirely."
+                        ),
+                        "properties": {
+                            "civic_number": {"type": "string"},
+                            "street": {"type": "string"},
+                            "unit": {"type": "string"},
+                            "parcel_id": {"type": "string"},
+                            "named_place": {"type": "string"},
+                            "intersection_streets": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "geometry": {
+                                "type": "object",
+                                "description": "GeoJSON Point or Polygon in EPSG:4326.",
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
                     "include_context": {"type": "boolean", "default": True},
                     "include_cross_references": {"type": "boolean", "default": True},
                     "include_tables": {"type": "boolean", "default": True},
+                    "include_datasets": {"type": "boolean", "default": True},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 8},
                 },
                 "required": ["query"],

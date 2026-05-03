@@ -10,16 +10,32 @@ from bylaw_retrieval.retrieval.schemas import (
     AncestorFragment,
     CitationLookupRequest,
     CrossReferenceSummary,
+    DatasetFeatureMatch,
     DocumentOutlineItem,
     DocumentOutlineResponse,
     DocumentSummary,
+    LinkedDataset,
+    LocationSlot,
     RetrievalMatch,
     RetrievalRequest,
     RetrievalResponse,
     TableCellSummary,
     TableSummary,
 )
-from layer1.db.base import CrossReference, Document, SourceFragment, SourceTable, SourceTableCell
+from layer1.db.base import (
+    CrossReference,
+    Document,
+    ExternalDataset,
+    ExternalDatasetFeature,
+    SourceFragment,
+    SourceImage,
+    SourceTable,
+    SourceTableCell,
+)
+from layer2.retrieval.datasets import _summarize_dataset
+from layer2.retrieval.geocode import resolve_location
+from layer2.retrieval.location import LocationReference
+from layer2.retrieval.spatial import ResolvedLocation, query_features
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
@@ -105,6 +121,7 @@ class RetrievalService:
                 continue
             scored.append((score, fragment))
         scored.sort(key=lambda item: (-item[0], item[1].page_start, item[1].id))
+        resolved_location = self._resolve_location_slot(request.location)
         matches = [
             self._build_match(
                 fragment,
@@ -112,10 +129,37 @@ class RetrievalService:
                 include_context=request.include_context,
                 include_cross_references=request.include_cross_references,
                 include_tables=request.include_tables,
+                include_datasets=request.include_datasets,
+                resolved_location=resolved_location,
             )
             for score, fragment in scored[: request.limit]
         ]
         return RetrievalResponse(request=request, total_matches=len(scored), matches=matches)
+
+    def _resolve_location_slot(self, slot: LocationSlot | None) -> ResolvedLocation | None:
+        """Translate a structured slot to a ResolvedLocation.
+
+        - ``geometry`` short-circuits geocoding (caller already has a point/parcel).
+        - Otherwise build a LocationReference from the slot fields and run it
+          through the layered ``resolve_location`` (in-database civic-address
+          dataset, then Google fallback if configured).
+        - The MCP path NEVER invokes the regex extractor — that's reserved for
+          callers who don't have an LLM in front of them.
+        """
+        if slot is None:
+            return None
+        if slot.geometry is not None:
+            return ResolvedLocation(
+                kind=_kind_from_geometry(slot.geometry),
+                geometry=slot.geometry,
+                confidence=1.0,
+                source="caller_supplied",
+                reference_text=None,
+            )
+        ref = _slot_to_reference(slot)
+        if ref is None:
+            return None
+        return resolve_location(self.session, ref)
 
     def _fragment_scope_statement(self, request: RetrievalRequest) -> Select[tuple[SourceFragment]]:
         stmt = (
@@ -147,6 +191,8 @@ class RetrievalService:
         include_context: bool,
         include_cross_references: bool,
         include_tables: bool,
+        include_datasets: bool = True,
+        resolved_location: ResolvedLocation | None = None,
     ) -> RetrievalMatch:
         document = self._get_document(fragment.document_id)
         return RetrievalMatch(
@@ -166,8 +212,68 @@ class RetrievalService:
             ancestor_chain=self._ancestor_chain(fragment) if include_context else [],
             cross_references=self._cross_references_for_fragment(fragment) if include_cross_references else [],
             related_tables=self._related_tables_for_fragment(fragment) if include_tables else [],
+            linked_datasets=self._linked_datasets_for_fragment(fragment, resolved_location)
+            if include_datasets
+            else [],
             metadata_json=fragment.metadata_json or {},
         )
+
+    def _linked_datasets_for_fragment(
+        self,
+        fragment: SourceFragment,
+        resolved_location: ResolvedLocation | None,
+    ) -> list[LinkedDataset]:
+        datasets = (
+            self.session.execute(
+                select(ExternalDataset).where(ExternalDataset.linked_fragment_id == fragment.id)
+            )
+            .scalars()
+            .all()
+        )
+        if not datasets:
+            return []
+        results: list[LinkedDataset] = []
+        for dataset in datasets:
+            summary = _summarize_dataset(self.session, dataset)
+            image_id = (
+                self.session.execute(
+                    select(SourceImage.id).where(SourceImage.caption_fragment_id == fragment.id)
+                )
+                .scalars()
+                .first()
+            )
+            feature_matches: list[DatasetFeatureMatch] = []
+            if resolved_location is not None:
+                for match in query_features(
+                    self.session, dataset_id=dataset.id, location=resolved_location
+                ):
+                    feature_matches.append(
+                        DatasetFeatureMatch(
+                            feature_id=match.feature.id,
+                            feature_key=match.feature.feature_key,
+                            canonical_attributes=dict(
+                                match.feature.canonical_attributes_json or {}
+                            ),
+                            contains_input=match.contains_input,
+                            overlap_metric=match.overlap_area,
+                        )
+                    )
+            results.append(
+                LinkedDataset(
+                    dataset_id=dataset.id,
+                    name=dataset.name,
+                    publisher=dataset.publisher,
+                    feature_count=dataset.feature_count,
+                    crs=dataset.crs,
+                    summary_text=summary,
+                    source_image_id=image_id,
+                    feature_matches=feature_matches,
+                    location_resolver=(
+                        resolved_location.source if resolved_location is not None else None
+                    ),
+                )
+            )
+        return results
 
     def _document_summary(self, document: Document) -> DocumentSummary:
         consolidation_date = str(document.consolidation_date) if document.consolidation_date else None
@@ -332,3 +438,46 @@ def _truncate(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return f"{text[: max_chars - 1].rstrip()}..."
+
+
+def _slot_to_reference(slot: LocationSlot) -> LocationReference | None:
+    """Promote the structured slot to the in-memory reference shape used by
+    the layered geocoder. Returns None when the slot has nothing usable so
+    callers can short-circuit without raising.
+    """
+    if slot.parcel_id:
+        return LocationReference(
+            raw_text=f"PID {slot.parcel_id}",
+            kind="parcel_id",
+            parcel_id=slot.parcel_id,
+        )
+    if slot.civic_number and slot.street:
+        return LocationReference(
+            raw_text=f"{slot.civic_number} {slot.street}".strip(),
+            kind="civic_address",
+            civic_number=slot.civic_number,
+            street=slot.street,
+            unit=slot.unit,
+        )
+    if slot.named_place:
+        return LocationReference(
+            raw_text=slot.named_place,
+            kind="named_place",
+            name=slot.named_place,
+        )
+    if len(slot.intersection_streets) >= 2:
+        return LocationReference(
+            raw_text=" and ".join(slot.intersection_streets),
+            kind="intersection",
+            streets=list(slot.intersection_streets),
+        )
+    return None
+
+
+def _kind_from_geometry(geometry: dict) -> str:
+    geom_type = geometry.get("type", "")
+    if geom_type in {"Polygon", "MultiPolygon"}:
+        return "parcel"
+    if geom_type in {"Point", "MultiPoint"}:
+        return "point"
+    return "shape"

@@ -56,6 +56,42 @@ class TableSummary(BaseModel):
     cells: list[TableCellSummary] = Field(default_factory=list)
 
 
+class DatasetFeatureMatch(BaseModel):
+    """A single precinct/feature match against an external geo dataset.
+
+    Populated when ``RetrievalRequest.location`` was supplied and a fragment-
+    linked dataset spatially intersects that location.
+    """
+
+    feature_id: int
+    feature_key: str
+    canonical_attributes: dict[str, Any] = Field(default_factory=dict)
+    contains_input: bool = False
+    overlap_metric: float = 0.0
+
+
+class LinkedDataset(BaseModel):
+    """A dataset linked to the matched fragment via Phase B's bylaw-citation
+    binding (e.g. Schedule 15 -> halifax_height_precincts). Always populated
+    when present on the fragment so callers can render the dataset summary
+    even without a location. Spatial features are filled only when a
+    location was supplied and resolved.
+    """
+
+    dataset_id: int
+    name: str
+    publisher: str | None = None
+    feature_count: int
+    crs: str
+    summary_text: str
+    source_image_id: int | None = None
+    feature_matches: list[DatasetFeatureMatch] = Field(default_factory=list)
+    location_resolver: str | None = Field(
+        default=None,
+        description="Name of the resolver that produced the location used for spatial matching, when applicable.",
+    )
+
+
 class RetrievalMatch(BaseModel):
     fragment_id: int
     document_id: int
@@ -73,7 +109,48 @@ class RetrievalMatch(BaseModel):
     ancestor_chain: list[AncestorFragment] = Field(default_factory=list)
     cross_references: list[CrossReferenceSummary] = Field(default_factory=list)
     related_tables: list[TableSummary] = Field(default_factory=list)
+    linked_datasets: list[LinkedDataset] = Field(default_factory=list)
     metadata_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class LocationSlot(BaseModel):
+    """Structured location parameter on retrieval requests.
+
+    The LLM caller is expected to populate this when the question references
+    a specific place — *not* by parsing the question text inside the API.
+    Set the fields you have; leave the rest null. ``geometry`` short-circuits
+    geocoding entirely and is the right shape for callers that already have
+    a point or parcel polygon (a map UI click, an upstream geocoder).
+    """
+
+    civic_number: str | None = Field(
+        default=None,
+        description="Street number, e.g. '1234' or '1234A'. Pair with 'street'.",
+    )
+    street: str | None = Field(
+        default=None,
+        description="Street name including suffix, e.g. 'Barrington Street'.",
+    )
+    unit: str | None = Field(default=None, description="Optional unit/apartment qualifier.")
+    parcel_id: str | None = Field(
+        default=None,
+        description="Parcel identifier (PID) when known. Bypasses address geocoding.",
+    )
+    named_place: str | None = Field(
+        default=None,
+        description="Named place, e.g. 'Halifax Citadel'. Coarser than civic_address; produces lower-confidence matches.",
+    )
+    intersection_streets: list[str] = Field(
+        default_factory=list,
+        description="Two or more street names for an intersection reference.",
+    )
+    geometry: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Optional GeoJSON geometry (Point/Polygon) in EPSG:4326. When set, "
+            "skips geocoding and intersects directly against any spatial datasets."
+        ),
+    )
 
 
 class RetrievalRequest(BaseModel):
@@ -88,6 +165,15 @@ class RetrievalRequest(BaseModel):
     page: int | None = Field(default=None, ge=1, description="Optional exact page filter.")
     page_start: int | None = Field(default=None, ge=1, description="Optional page range start.")
     page_end: int | None = Field(default=None, ge=1, description="Optional page range end.")
+    location: LocationSlot | None = Field(
+        default=None,
+        description=(
+            "Structured location slot. If the user question references a specific address, parcel, "
+            "intersection, named place, or coordinate, populate this field rather than embedding the "
+            "address in 'query'. The retrieval API will use it to drive spatial filtering of any "
+            "linked geo datasets (e.g. height precincts)."
+        ),
+    )
     include_context: bool = Field(
         default=True,
         description="Include ancestor chain and related context for each match.",
@@ -99,6 +185,10 @@ class RetrievalRequest(BaseModel):
     include_tables: bool = Field(
         default=True,
         description="Include nearby or attached tables when present.",
+    )
+    include_datasets: bool = Field(
+        default=True,
+        description="Include any external geo datasets linked to matching fragments.",
     )
     limit: int = Field(default=8, ge=1, le=25)
 

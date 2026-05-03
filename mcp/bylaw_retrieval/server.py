@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import argparse
 
-from bylaw_retrieval.retrieval import CitationLookupRequest, RetrievalRequest, RetrievalService
+from typing import Any
+
+from bylaw_retrieval.retrieval import (
+    CitationLookupRequest,
+    LocationSlot,
+    RetrievalRequest,
+    RetrievalService,
+)
 from layer1.db.session import session_scope
 
 SERVER_NAME = "Bylaw Retrieval MCP"
@@ -82,12 +89,31 @@ def create_mcp_server(db_url: str | None = None):
         page: int | None = None,
         page_start: int | None = None,
         page_end: int | None = None,
+        location: dict[str, Any] | None = None,
         include_context: bool = True,
         include_cross_references: bool = True,
         include_tables: bool = True,
+        include_datasets: bool = True,
         limit: int = 8,
     ) -> dict:
-        """Use this when translating a user question into a citation-grounded retrieval request across one or more bylaws."""
+        """Search for citation-grounded bylaw evidence.
+
+        Use this when translating a user question into a citation-grounded retrieval
+        request across one or more bylaws.
+
+        IMPORTANT — location handling: if the user question references a specific
+        address, parcel, intersection, named place, or coordinate, populate the
+        ``location`` argument rather than embedding the address in ``query``. The
+        retrieval API uses ``location`` to drive spatial filtering of any geo
+        datasets linked to matching fragments (e.g. height precincts).
+
+        ``location`` is an object with optional fields:
+          - civic_number + street (and optional unit) for street addresses
+          - parcel_id (PID) when known
+          - named_place for landmarks ("Halifax Citadel")
+          - intersection_streets (list of 2+ street names)
+          - geometry for caller-supplied GeoJSON Point/Polygon (EPSG:4326)
+        """
         request = RetrievalRequest(
             query=query,
             document_id=document_id,
@@ -97,9 +123,11 @@ def create_mcp_server(db_url: str | None = None):
             page=page,
             page_start=page_start,
             page_end=page_end,
+            location=LocationSlot.model_validate(location) if location else None,
             include_context=include_context,
             include_cross_references=include_cross_references,
             include_tables=include_tables,
+            include_datasets=include_datasets,
             limit=limit,
         )
         with session_scope(db_url) as session:
