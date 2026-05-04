@@ -216,6 +216,17 @@ class RetrievalResponse(BaseModel):
     request: RetrievalRequest
     total_matches: int
     matches: list[RetrievalMatch] = Field(default_factory=list)
+    notes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Server-side advisories about how the request was handled. "
+            "Populated when the server detects that the caller could have "
+            "produced better results by structuring the request differently "
+            "— e.g. an address embedded in the 'query' string but no "
+            "'location' field supplied. LLM clients should read these notes "
+            "and adjust subsequent calls accordingly."
+        ),
+    )
 
 
 class CitationLookupRequest(BaseModel):

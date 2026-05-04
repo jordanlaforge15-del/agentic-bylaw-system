@@ -71,11 +71,19 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
             "type": "function",
             "name": "search_bylaw_evidence",
             "description": (
-                "Search bylaw source fragments using a natural-language question or a compact retrieval query. "
-                "Use this to gather citation-grounded evidence about what rules may affect a built-form question. "
-                "If the question references a specific address, parcel, intersection, named place, or coordinate, "
-                "populate the 'location' argument rather than embedding the address in 'query' — the retrieval API "
-                "will use it to spatially filter any geo datasets linked to matching fragments (e.g. height precincts)."
+                "Search bylaw source fragments using a natural-language question or a "
+                "compact retrieval query. Use this to gather citation-grounded evidence "
+                "about what rules may affect a built-form question. "
+                "CRITICAL: if the question references ANY address, parcel, intersection, "
+                "named place, or coordinate (e.g. '6321 Quinpool Road', 'PID 00012345', "
+                "'Halifax Citadel'), you MUST populate the structured 'location' argument. "
+                "Embedding the address only in 'query' produces text-only matches and "
+                "silently skips the spatial datasets (zone, height precinct, FAR, "
+                "heritage, bonus zoning) needed for property-specific answers. "
+                "Example for '6321 Quinpool Road': set query='maximum building height' "
+                "and location={civic_number: '6321', street: 'Quinpool Road'}. "
+                "If the response's 'notes' array contains a warning that 'location' was "
+                "missing, re-issue the call with the slot set."
             ),
             "parameters": {
                 "type": "object",

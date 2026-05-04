@@ -43,9 +43,24 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         SERVER_NAME,
         json_response=True,
         instructions=(
-            "Use these read-only tools to retrieve citation-grounded bylaw source fragments, "
-            "tables, and cross-references. These tools do not determine what is legally "
-            "permitted; they return source evidence for the agent to reason over."
+            "These read-only tools return citation-grounded bylaw source "
+            "fragments, tables, cross-references, and spatial features from "
+            "linked geo datasets. They return source EVIDENCE; they do not "
+            "determine what is legally permitted — that reasoning belongs to "
+            "the calling agent.\n\n"
+            "ADDRESS-AWARE QUERIES — READ THIS FIRST.\n"
+            "When the user mentions ANY address, parcel, intersection, or "
+            "named place (e.g. '6321 Quinpool Road', 'PID 00012345', 'corner "
+            "of Spring Garden and Queen', 'Halifax Citadel'), you MUST set "
+            "the structured 'location' field on search_bylaw_evidence. Do "
+            "NOT rely on putting the address in the 'query' string alone — "
+            "that produces text-only matches and silently skips zone, "
+            "height, FAR, heritage, and bonus-zoning datasets, which are "
+            "the exact data needed to answer most planning questions.\n\n"
+            "Example: for '6321 Quinpool Road' send "
+            "location={civic_number: '6321', street: 'Quinpool Road'}. "
+            "If the response contains a 'notes' array warning that the "
+            "location was missing, re-issue the call with the slot set."
             + scope_note
         ),
     )
@@ -115,29 +130,57 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
     ) -> dict:
         """Search for citation-grounded bylaw evidence.
 
-        Use this when translating a user question into a citation-grounded retrieval
-        request across one or more bylaws.
+        Use this when translating a user question into a citation-grounded
+        retrieval request across one or more bylaws.
 
-        IMPORTANT — location handling: if the user question references a specific
-        address, parcel, intersection, named place, or coordinate, populate the
-        ``location`` argument rather than embedding the address in ``query``. The
-        retrieval API uses ``location`` to drive spatial filtering of any geo
-        datasets linked to matching fragments (e.g. height precincts).
+        ====================================================================
+        CRITICAL: ADDRESSES MUST GO IN THE 'location' FIELD, NOT IN 'query'.
+        ====================================================================
 
-        ``location`` is an object with optional fields:
-          - civic_number + street (and optional unit) for street addresses
-          - parcel_id (PID) when known
-          - named_place for landmarks ("Halifax Citadel")
-          - intersection_streets (list of 2+ street names)
-          - geometry for caller-supplied GeoJSON Point/Polygon (EPSG:4326)
+        If the user mentions ANY of:
+          - a street address ("6321 Quinpool Road", "5648 Bilby Street")
+          - a parcel id ("PID 00012345")
+          - an intersection ("corner of Spring Garden and Queen")
+          - a named place ("Halifax Citadel", "Public Gardens")
 
-        Each match's ``linked_datasets[*].location_confidence`` reports how
-        confident the geocoder was in the address-to-coordinate step
-        (0..1). Values below ~0.85 mean the geocoder fell back to
+        you MUST populate the structured ``location`` argument. Embedding the
+        address only in ``query`` produces TEXT-ONLY matches and silently
+        skips the spatial datasets (zone, height precinct, FAR, heritage
+        district, bonus zoning, shadow impact) — exactly the data needed to
+        answer most planning questions about a specific property.
+
+        Example call for "what's the max height at 6321 Quinpool Road":
+
+            search_bylaw_evidence(
+                query="maximum building height",
+                location={
+                    "civic_number": "6321",
+                    "street": "Quinpool Road"
+                }
+            )
+
+        Other ``location`` shapes:
+          - civic_number + street (+ optional unit) for street addresses
+          - parcel_id when known
+          - named_place for landmarks
+          - intersection_streets: list of 2+ street names
+          - geometry: caller-supplied GeoJSON Point/Polygon in EPSG:4326
+
+        --------------------------------------------------------------------
+        Reading the response:
+
+        Each match's ``linked_datasets[*].location_confidence`` reports the
+        geocoder's confidence in the address-to-coordinate step (0..1).
+        Values below ~0.85 mean the geocoder fell back to
         RANGE_INTERPOLATED or GEOMETRIC_CENTER quality. When you see a
         low-confidence value, qualify your answer accordingly — the
         spatial match may have hit a neighbouring precinct rather than
         the actual property.
+
+        The response's top-level ``notes`` array carries server-side
+        advisories. If you see a note saying the address should have been
+        in the 'location' field, RE-ISSUE the call with the slot populated
+        — do not just ignore it.
         """
         request = RetrievalRequest(
             query=query,
