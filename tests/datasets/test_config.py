@@ -81,7 +81,12 @@ def test_real_halifax_config_loads():
     )
     assert cfg.name == "halifax_height_precincts"
     assert cfg.links_to.fragment_citation == "Schedule 15"
+    # MAXBLDHGT (metres) and MAXBLDSTRY (storeys) are mutually exclusive in
+    # the published Halifax data — both fields are optional in the canonical
+    # schema so a feature with only one populated parses cleanly.
     assert "max_height_m" in cfg.attributes.canonical
-    assert "display_label" in cfg.attributes.canonical
+    assert "max_height_storeys" in cfg.attributes.canonical
+    assert cfg.attributes.canonical["max_height_m"].optional is True
+    assert cfg.attributes.canonical["max_height_storeys"].optional is True
     assert "effective_date" in cfg.attributes.canonical
     assert cfg.attributes.canonical["effective_date"].optional is True

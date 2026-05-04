@@ -129,10 +129,24 @@ def _summarize_dataset(session: Session, dataset: ExternalDataset) -> str:
         for attrs in feature_keys
         if isinstance(attrs, dict) and attrs.get("max_height_m") is not None
     })
+    storey_values = sorted({
+        attrs.get("max_height_storeys")
+        for attrs in feature_keys
+        if isinstance(attrs, dict) and attrs.get("max_height_storeys") is not None
+    })
     if height_values:
         summary += (
-            f" Maximum heights range from {height_values[0]:g} m to "
+            f" Maximum heights (metres) range from {height_values[0]:g} m to "
             f"{height_values[-1]:g} m across {len(height_values)} distinct value(s)."
+        )
+    if storey_values:
+        summary += (
+            f" Maximum heights (storeys) range from {storey_values[0]} to "
+            f"{storey_values[-1]} across {len(storey_values)} distinct value(s)."
+        )
+    if height_values and storey_values:
+        summary += (
+            " Per-precinct caps are expressed in metres OR storeys (mutually exclusive)."
         )
 
     distinct_labels = _distinct_labels(feature_keys, key="display_label", limit=8)

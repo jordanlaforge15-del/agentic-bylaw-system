@@ -1,7 +1,7 @@
 name: halifax_height_precincts
 publisher: Halifax Regional Municipality
 format: geojson
-source_path: data/geo-datasets/Height_Precincts_3210696484251958940.geojson
+source_path: data/geo-datasets/Maximum_Building_Heights_6478354320888850499.geojson
 crs: EPSG:4326
 
 links_to:
@@ -11,13 +11,19 @@ links_to:
   fragment_citation: Schedule 15
 
 attributes:
-  feature_key: GLOBALID
+  feature_key: GlobalID
   canonical:
+    # Mutually exclusive in the published data: a precinct caps height by
+    # metres OR by stories, never both. Both are optional so a feature with
+    # only one set still parses cleanly.
     max_height_m:
-      from: HEIGHT
+      from: MAXBLDHGT
       type: float
-    display_label:
-      synthesize: "{HEIGHT}m precinct"
+      optional: true
+    max_height_storeys:
+      from: MAXBLDSTRY
+      type: int
+      optional: true
     effective_date:
       from: SDATE
       type: rfc2822_date
@@ -26,6 +32,14 @@ attributes:
       from: SOURCE
       type: string
       optional: true
+    bylaw_area:
+      from: BYLAW_AREA
+      type: string
+      optional: true
   ignore:
     - OBJECTID
+    - BHTMAX_ID
+    - FCODE
     - SACC
+    - ADDDATE
+    - MODDATE

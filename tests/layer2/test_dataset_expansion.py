@@ -26,10 +26,10 @@ links_to:
     bylaw_name: Regional Centre Land Use By-law
   fragment_citation: Schedule 15
 attributes:
-  feature_key: GLOBALID
+  feature_key: GlobalID
   canonical:
-    max_height_m: { from: HEIGHT, type: float }
-    display_label: { synthesize: "{HEIGHT}m precinct" }
+    max_height_m: { from: MAXBLDHGT, type: float, optional: true }
+    max_height_storeys: { from: MAXBLDSTRY, type: int, optional: true }
   ignore: [OBJECTID, SACC]
 """
 
@@ -106,7 +106,12 @@ def test_expand_emits_dataset_candidate_when_fragment_is_linked(linked_dataset):
     assert "Schedule 15" in dc.text
     assert "mini_height_precincts_layer2" in dc.text
     assert "3 feature" in dc.text
-    assert "25 m" in dc.text and "50 m" in dc.text
+    # Mini fixture has metres-typed features (25, 35) and a storeys-typed
+    # feature (9). The summary should describe both ranges and call out
+    # the mutual-exclusion convention for the LLM.
+    assert "25 m" in dc.text and "35 m" in dc.text
+    assert "storey" in dc.text.lower()
+    assert "mutually exclusive" in dc.text
     assert dc.reason["expansion"] == "linked_dataset"
     assert dc.reason["dataset_name"] == "mini_height_precincts_layer2"
 

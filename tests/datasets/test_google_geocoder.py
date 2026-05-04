@@ -32,10 +32,10 @@ links_to:
     bylaw_name: Regional Centre Land Use By-law
   fragment_citation: Schedule 15
 attributes:
-  feature_key: GLOBALID
+  feature_key: GlobalID
   canonical:
-    max_height_m: { from: HEIGHT, type: float }
-    display_label: { synthesize: "{HEIGHT}m precinct" }
+    max_height_m: { from: MAXBLDHGT, type: float, optional: true }
+    max_height_storeys: { from: MAXBLDSTRY, type: int, optional: true }
   ignore: [OBJECTID, SACC]
 """
 

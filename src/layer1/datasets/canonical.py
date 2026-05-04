@@ -9,10 +9,17 @@ from typing import Any
 # a field here is the trigger for a corresponding API capability; do not add
 # speculatively.
 CANONICAL_FIELDS: dict[str, str] = {
+    # Building-height precinct fields. ``max_height_m`` and
+    # ``max_height_storeys`` are mutually exclusive in Halifax's published
+    # schedule (a precinct caps building height by metres OR by stories,
+    # never both), so per-feature only one is populated. Both are required
+    # in the canonical schema so the API can return whichever is set.
     "max_height_m": "float",
+    "max_height_storeys": "int",
     "display_label": "string",
     "effective_date": "date",
     "source_case": "string",
+    "bylaw_area": "string",
     # Civic-address fields — populated by datasets with role=civic_address
     # so the geocoder (Phase E) can resolve a LocationReference to a point
     # or parcel polygon.

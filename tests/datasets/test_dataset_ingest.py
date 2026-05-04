@@ -22,13 +22,13 @@ links_to:
     bylaw_name: Regional Centre Land Use By-law
   fragment_citation: Schedule 15
 attributes:
-  feature_key: GLOBALID
+  feature_key: GlobalID
   canonical:
-    max_height_m: { from: HEIGHT, type: float }
-    display_label: { synthesize: "{HEIGHT}m precinct" }
+    max_height_m: { from: MAXBLDHGT, type: float, optional: true }
+    max_height_storeys: { from: MAXBLDSTRY, type: int, optional: true }
     effective_date: { from: SDATE, type: rfc2822_date, optional: true }
     source_case: { from: SOURCE, type: string, optional: true }
-  ignore: [OBJECTID, SACC]
+  ignore: [OBJECTID, BHTMAX_ID, FCODE, BYLAW_AREA, SACC]
 """
 
 
@@ -65,10 +65,22 @@ def test_ingests_mini_fixture_end_to_end(tmp_path: Path):
             .all()
         )
         assert len(features) == 3
-        heights = sorted(
-            f.canonical_attributes_json["max_height_m"] for f in features
+        # Mini fixture has two metres-based features (25, 35) and one
+        # storeys-based feature (9). MAXBLDHGT and MAXBLDSTRY are mutually
+        # exclusive in the published Halifax data, so one feature has
+        # max_height_storeys but no max_height_m.
+        heights_m = sorted(
+            f.canonical_attributes_json["max_height_m"]
+            for f in features
+            if f.canonical_attributes_json.get("max_height_m") is not None
         )
-        assert heights == [25.0, 35.0, 50.0]
+        storeys = sorted(
+            f.canonical_attributes_json["max_height_storeys"]
+            for f in features
+            if f.canonical_attributes_json.get("max_height_storeys") is not None
+        )
+        assert heights_m == [25.0, 35.0]
+        assert storeys == [9]
 
         first = features[0]
         # Raw passthrough preserves untouched source fields:
@@ -90,12 +102,14 @@ def test_ingests_real_halifax_dataset_when_present(tmp_path: Path):
     db_url = _setup_db(tmp_path)
     with session_scope(db_url) as session:
         result = ingest_geo_dataset(session, CONFIG_PATH)
-        # All 62 features in the real Halifax dataset persist. One has a
-        # self-intersecting ring that we repair via shapely.make_valid; that
-        # feature is marked UNCERTAIN, which propagates to the dataset row.
-        assert result.dataset.feature_count == 62
-        assert result.dataset.parse_status == ParseStatus.UNCERTAIN
-        assert result.feature_warnings == 1
+        # The current Halifax Maximum Building Heights export (1822 features)
+        # parses clean — no invalid geometry, no required-field misses.
+        # MAXBLDHGT and MAXBLDSTRY are both optional canonical fields since
+        # they're mutually exclusive per feature; missing one is expected,
+        # not a warning.
+        assert result.dataset.feature_count == 1822
+        assert result.dataset.parse_status == ParseStatus.PARSED
+        assert result.feature_warnings == 0
 
 
 def test_unique_dataset_name_constraint(tmp_path: Path):

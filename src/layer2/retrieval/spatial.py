@@ -158,9 +158,14 @@ def _feature_to_candidate(
     label = canonical.get("display_label")
     if label:
         parts.append(label)
-    height = canonical.get("max_height_m")
-    if height is not None:
-        parts.append(f"max_height_m={height:g}")
+    height_m = canonical.get("max_height_m")
+    height_storeys = canonical.get("max_height_storeys")
+    if height_m is not None:
+        parts.append(f"max_height_m={height_m:g}")
+    if height_storeys is not None:
+        parts.append(f"max_height_storeys={height_storeys}")
+    if height_m is None and height_storeys is None:
+        parts.append("no maximum height specified")
     case = canonical.get("source_case")
     if case:
         parts.append(f"source_case={case}")
