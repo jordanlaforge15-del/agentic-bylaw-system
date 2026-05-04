@@ -96,11 +96,14 @@ class RetrievalService:
         limit: int = 50,
     ) -> list[DocumentSummary]:
         stmt = select(Document).order_by(Document.municipality, Document.bylaw_name, Document.id)
-        # Apply default scope only when no explicit filter was given.
-        if not municipality and not bylaw_name:
-            default_id = self._resolve_default_document_id()
-            if default_id is not None:
-                stmt = stmt.where(Document.id == default_id)
+        # Hard scope: when a default document is configured (--latest-only),
+        # it ALWAYS pins the result set. Other filters AND with it. A query
+        # that asks for a different bylaw/municipality returns empty rather
+        # than crossing into a stale or superseded ingest — better empty
+        # than wrong.
+        default_id = self._resolve_default_document_id()
+        if default_id is not None:
+            stmt = stmt.where(Document.id == default_id)
         if municipality:
             stmt = stmt.where(Document.municipality.ilike(f"%{municipality}%"))
         if bylaw_name:
@@ -140,14 +143,13 @@ class RetrievalService:
 
     def lookup_citation(self, request: CitationLookupRequest) -> RetrievalMatch:
         stmt = select(SourceFragment).where(SourceFragment.citation_path == request.citation_path)
-        # Honour explicit document_id; otherwise apply the default scope so
-        # ambiguous citation paths across multiple ingests resolve to the
-        # active document instead of erroring on ambiguity.
-        effective_document_id = request.document_id
-        if effective_document_id is None:
-            effective_document_id = self._resolve_default_document_id()
-        if effective_document_id is not None:
-            stmt = stmt.where(SourceFragment.document_id == effective_document_id)
+        # Hard scope: default document id ANDs with the request's
+        # document_id. See _fragment_scope_statement for rationale.
+        default_id = self._resolve_default_document_id()
+        if default_id is not None:
+            stmt = stmt.where(SourceFragment.document_id == default_id)
+        if request.document_id is not None:
+            stmt = stmt.where(SourceFragment.document_id == request.document_id)
         fragments = self.session.execute(stmt.order_by(SourceFragment.id).limit(2)).scalars().all()
         if not fragments:
             scope = f" in document {request.document_id}" if request.document_id is not None else ""
@@ -223,19 +225,17 @@ class RetrievalService:
             .join(Document, Document.id == SourceFragment.document_id)
             .order_by(SourceFragment.page_start, SourceFragment.reading_order_start, SourceFragment.id)
         )
-        # Default scope only applies when the caller gave no scoping filter
-        # at all. Any of document_id / municipality / bylaw_name disables it,
-        # so comparative queries across bylaws still work (e.g. a request
-        # filtering by municipality reaches every doc for that municipality).
-        effective_document_id = request.document_id
-        if (
-            effective_document_id is None
-            and not request.municipality
-            and not request.bylaw_name
-        ):
-            effective_document_id = self._resolve_default_document_id()
-        if effective_document_id is not None:
-            stmt = stmt.where(SourceFragment.document_id == effective_document_id)
+        # Hard scope: when the deployment has configured a default document
+        # (--latest-only), that document_id is ALWAYS pinned. Any request
+        # filter (document_id, municipality, bylaw_name) ANDs with it. A
+        # request asking for a different document or bylaw therefore
+        # returns empty rather than leaking into a stale or superseded
+        # ingest — better empty than wrong.
+        default_id = self._resolve_default_document_id()
+        if default_id is not None:
+            stmt = stmt.where(SourceFragment.document_id == default_id)
+        if request.document_id is not None:
+            stmt = stmt.where(SourceFragment.document_id == request.document_id)
         if request.municipality:
             stmt = stmt.where(Document.municipality.ilike(f"%{request.municipality}%"))
         if request.bylaw_name:

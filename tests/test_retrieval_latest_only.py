@@ -121,7 +121,9 @@ def test_search_unscoped_without_resolver_hits_both(tmp_path: Path):
     assert new_id in doc_ids
 
 
-def test_explicit_document_id_overrides_default(tmp_path: Path):
+def test_explicit_document_id_does_not_escape_default(tmp_path: Path):
+    """--latest-only is a hard scope. Asking for a different document_id
+    returns empty, not the requested document."""
     db_url = f"sqlite:///{tmp_path / 'latest.db'}"
     create_all(db_url)
     old_id, new_id = _seed_two_docs(db_url)
@@ -133,12 +135,34 @@ def test_explicit_document_id_overrides_default(tmp_path: Path):
         response = service.search(
             RetrievalRequest(query="maximum height", document_id=old_id, limit=10)
         )
-    assert all(m.document_id == old_id for m in response.matches)
+    assert response.matches == []
 
 
-def test_explicit_municipality_overrides_default(tmp_path: Path):
-    """Comparative queries (filter by municipality across multiple docs) must
-    bypass the latest-only default — otherwise the user can't actually compare."""
+def test_municipality_filter_ands_with_default_returning_empty_on_mismatch(tmp_path: Path):
+    """The LLM might helpfully pass municipality="Halifax" thinking it's
+    scoping to a Halifax bylaw. In hard-scope mode, that ANDs with the
+    active document. If the active document's municipality is "HRM" (the
+    real-world case), the result is empty — better than leaking into a
+    superseded "Halifax" bylaw that happens to mention the same address."""
+    db_url = f"sqlite:///{tmp_path / 'latest.db'}"
+    create_all(db_url)
+    old_id, new_id = _seed_two_docs(db_url)
+    # _seed_two_docs gave the new doc municipality="HRM"; the old has
+    # municipality="Halifax". An LLM filter for "Halifax" + --latest-only
+    # must not reach the old doc.
+    with session_scope(db_url) as session:
+        service = RetrievalService(
+            session, default_document_id_resolver=latest_document_id_resolver
+        )
+        response = service.search(
+            RetrievalRequest(query="maximum height", municipality="Halifax", limit=10)
+        )
+    assert response.matches == []
+
+
+def test_municipality_filter_matching_default_still_returns(tmp_path: Path):
+    """If the LLM's municipality filter happens to match the active doc,
+    results flow through normally."""
     db_url = f"sqlite:///{tmp_path / 'latest.db'}"
     create_all(db_url)
     old_id, new_id = _seed_two_docs(db_url)
@@ -148,13 +172,14 @@ def test_explicit_municipality_overrides_default(tmp_path: Path):
             session, default_document_id_resolver=latest_document_id_resolver
         )
         response = service.search(
-            RetrievalRequest(query="maximum height", municipality="Halifax", limit=10)
+            RetrievalRequest(query="maximum height", municipality="HRM", limit=10)
         )
-    # municipality="Halifax" matches the old peninsula doc only
-    assert all(m.document_id == old_id for m in response.matches)
+    assert all(m.document_id == new_id for m in response.matches)
 
 
-def test_explicit_bylaw_name_overrides_default(tmp_path: Path):
+def test_bylaw_name_filter_does_not_escape_default(tmp_path: Path):
+    """Same story for bylaw_name — a request for the Peninsula bylaw under
+    --latest-only returns empty rather than the Peninsula content."""
     db_url = f"sqlite:///{tmp_path / 'latest.db'}"
     create_all(db_url)
     old_id, new_id = _seed_two_docs(db_url)
@@ -166,7 +191,7 @@ def test_explicit_bylaw_name_overrides_default(tmp_path: Path):
         response = service.search(
             RetrievalRequest(query="maximum height", bylaw_name="Peninsula", limit=10)
         )
-    assert all(m.document_id == old_id for m in response.matches)
+    assert response.matches == []
 
 
 def test_list_documents_with_default_returns_only_latest(tmp_path: Path):
@@ -183,7 +208,10 @@ def test_list_documents_with_default_returns_only_latest(tmp_path: Path):
     assert docs[0].id == new_id
 
 
-def test_list_documents_explicit_filter_overrides_default(tmp_path: Path):
+def test_list_documents_explicit_filter_ands_with_default(tmp_path: Path):
+    """list_documents with municipality="Halifax" + --latest-only returns
+    empty when the active doc's municipality is HRM (hard scope, no leak
+    into Peninsula docs even when filter matches them)."""
     db_url = f"sqlite:///{tmp_path / 'latest.db'}"
     create_all(db_url)
     old_id, new_id = _seed_two_docs(db_url)
@@ -193,7 +221,14 @@ def test_list_documents_explicit_filter_overrides_default(tmp_path: Path):
             session, default_document_id_resolver=latest_document_id_resolver
         )
         docs = service.list_documents(municipality="Halifax")
-    assert {d.id for d in docs} == {old_id}
+    assert docs == []
+
+    with session_scope(db_url) as session:
+        service = RetrievalService(
+            session, default_document_id_resolver=latest_document_id_resolver
+        )
+        docs = service.list_documents(municipality="HRM")
+    assert {d.id for d in docs} == {new_id}
 
 
 def test_lookup_citation_with_default_picks_latest_for_ambiguous_path(tmp_path: Path):
@@ -234,6 +269,25 @@ def test_lookup_citation_with_default_picks_latest_for_ambiguous_path(tmp_path: 
         )
         match = service.lookup_citation(CitationLookupRequest(citation_path="40"))
     assert match.document_id == new_id
+
+
+def test_lookup_citation_explicit_document_id_cannot_escape_default(tmp_path: Path):
+    """An explicit document_id on lookup_citation under --latest-only is
+    overridden — same hard-scope rule as search."""
+    db_url = f"sqlite:///{tmp_path / 'latest.db'}"
+    create_all(db_url)
+    old_id, new_id = _seed_two_docs(db_url)
+
+    with session_scope(db_url) as session:
+        service = RetrievalService(
+            session, default_document_id_resolver=latest_document_id_resolver
+        )
+        # Old doc has citation_path="40" but the service should refuse and
+        # only resolve against the new (latest) doc — which has no "40" yet.
+        with pytest.raises(ValueError, match="not found"):
+            service.lookup_citation(
+                CitationLookupRequest(citation_path="40", document_id=old_id)
+            )
 
 
 def test_resolver_runs_per_request_so_new_ingest_is_picked_up(tmp_path: Path):

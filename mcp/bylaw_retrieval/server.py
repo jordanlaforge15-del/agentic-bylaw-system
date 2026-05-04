@@ -27,9 +27,11 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
     scope_resolver = latest_document_id_resolver if latest_only else None
     scope_note = (
         " This server is launched with --latest-only: every retrieval is "
-        "automatically scoped to the most recently ingested document. To "
-        "search a different document, pass an explicit document_id, "
-        "municipality, or bylaw_name on the request."
+        "hard-scoped to the most recently ingested document. The "
+        "document_id, municipality, and bylaw_name filters on requests are "
+        "still accepted but they AND with the active document — they cannot "
+        "reach a different bylaw. Queries that target a different bylaw "
+        "will return empty results."
         if latest_only
         else ""
     )
