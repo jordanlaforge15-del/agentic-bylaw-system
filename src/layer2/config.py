@@ -39,6 +39,12 @@ class Layer2Settings(BaseSettings):
         default="google_maps_api_key", alias="GOOGLE_MAPS_API_KEY_PATH"
     )
     google_maps_region_bias: str = Field(default="ca", alias="GOOGLE_MAPS_REGION_BIAS")
+    # Hard-filter on geocoding results. country:CA prevents Google from
+    # falling back to non-Canadian matches for ambiguous addresses. Override
+    # via env to narrow further (e.g. country:CA|locality:Halifax).
+    google_maps_components: str = Field(
+        default="country:CA", alias="GOOGLE_MAPS_COMPONENTS"
+    )
     google_maps_request_timeout_s: float = Field(
         default=5.0, alias="GOOGLE_MAPS_REQUEST_TIMEOUT_S"
     )

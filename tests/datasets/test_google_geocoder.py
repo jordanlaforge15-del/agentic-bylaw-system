@@ -113,7 +113,10 @@ def test_geocoder_returns_point_for_rooftop_match():
     assert resolved.geometry == {"type": "Point", "coordinates": [-63.5752, 44.6488]}
     assert resolved.confidence == 0.95
     assert resolved.source == "google_maps"
-    assert http.calls[0]["params"]["address"] == "1234, Barrington Street"
+    # Civic number + street joined with a SPACE (not a comma) — using a
+    # comma here was producing region-mismatched Google results even with
+    # region_bias=ca (e.g. "6299, South Street" misrouting to Australia).
+    assert http.calls[0]["params"]["address"] == "1234 Barrington Street"
     assert http.calls[0]["params"]["region"] == "ca"
     assert http.calls[0]["params"]["key"] == "test-key"
 
@@ -185,6 +188,79 @@ def test_geocoder_returns_none_on_invalid_json():
     http = _MockHttp(_MockResponse(None, raises=ValueError("not json")))
     geocoder = GoogleGeocoder(_config(), http_client=http)
     assert geocoder.resolve(_civic()) is None
+
+
+def test_geocoder_sends_components_hard_filter():
+    """Regression: region_bias is a soft hint and Google cheerfully falls
+    back to non-Canadian matches without a hard filter (e.g. '6299 South
+    Street' returning Perth, Australia). The components parameter is a
+    hard constraint — country:CA forces a Canadian-only result set."""
+    payload = {
+        "status": "OK",
+        "results": [
+            {"geometry": {"location": {"lat": 44.6, "lng": -63.5}, "location_type": "ROOFTOP"}}
+        ],
+    }
+    http = _MockHttp(_MockResponse(payload))
+    geocoder = GoogleGeocoder(_config(), http_client=http)
+    geocoder.resolve(_civic())
+    assert http.calls[0]["params"]["components"] == "country:CA"
+
+
+def test_geocoder_omits_components_when_blank():
+    """An empty components string is treated as 'no hard filter'. Lets
+    deployments that need global coverage opt out."""
+    payload = {
+        "status": "OK",
+        "results": [
+            {"geometry": {"location": {"lat": 44.6, "lng": -63.5}, "location_type": "ROOFTOP"}}
+        ],
+    }
+    http = _MockHttp(_MockResponse(payload))
+    geocoder = GoogleGeocoder(
+        GoogleGeocoderConfig(api_key="x", components=""), http_client=http
+    )
+    geocoder.resolve(_civic())
+    assert "components" not in http.calls[0]["params"]
+
+
+def test_civic_address_query_format_uses_space_not_comma():
+    """Regression: with a comma between civic_number and street, Google's
+    Geocoding API ignored region_bias for some addresses (e.g. '6299, South
+    Street' returned a Perth, Australia match instead of Halifax). The
+    address query string must read like a real address."""
+    payload = {
+        "status": "OK",
+        "results": [
+            {"geometry": {"location": {"lat": 44.6, "lng": -63.5}, "location_type": "ROOFTOP"}}
+        ],
+    }
+    http = _MockHttp(_MockResponse(payload))
+    geocoder = GoogleGeocoder(_config(), http_client=http)
+    geocoder.resolve(_civic("6299", "South Street"))
+    assert http.calls[0]["params"]["address"] == "6299 South Street"
+
+
+def test_civic_address_with_unit_keeps_unit_comma_separated():
+    """A unit component IS comma-separated since it's a logically distinct
+    address component, just like 'Halifax' or 'NS' would be."""
+    payload = {
+        "status": "OK",
+        "results": [
+            {"geometry": {"location": {"lat": 44.6, "lng": -63.5}, "location_type": "ROOFTOP"}}
+        ],
+    }
+    http = _MockHttp(_MockResponse(payload))
+    geocoder = GoogleGeocoder(_config(), http_client=http)
+    ref = LocationReference(
+        raw_text="1234 Barrington Street Unit 5",
+        kind="civic_address",
+        civic_number="1234",
+        street="Barrington Street",
+        unit="5",
+    )
+    geocoder.resolve(ref)
+    assert http.calls[0]["params"]["address"] == "1234 Barrington Street, Unit 5"
 
 
 def test_geocoder_handles_named_place():

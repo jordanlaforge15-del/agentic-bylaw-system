@@ -142,6 +142,10 @@ def test_search_with_geometry_slot_skips_geocoding(linked_dataset):
     assert len(top.linked_datasets) == 1
     ds = top.linked_datasets[0]
     assert ds.location_resolver == "caller_supplied"
+    # Caller-supplied geometry implies maximum confidence — no geocoder
+    # involved, no approximation. Surface the value so LLM consumers can
+    # distinguish "I trust this" from "approximate, qualify the answer".
+    assert ds.location_confidence == 1.0
     assert len(ds.feature_matches) == 1
     fm = ds.feature_matches[0]
     assert fm.canonical_attributes["max_height_m"] == 25.0
@@ -194,6 +198,10 @@ def test_search_with_civic_address_slot_uses_layered_resolver(linked_dataset, mo
     assert len(top.linked_datasets) == 1
     ds = top.linked_datasets[0]
     assert ds.location_resolver == "google_maps"
+    # ROOFTOP-quality match -> 0.95 confidence per Phase G's mapping table.
+    # Surfacing this lets an LLM distinguish a precise rooftop hit from a
+    # RANGE_INTERPOLATED or GEOMETRIC_CENTER fallback.
+    assert ds.location_confidence == 0.95
     assert len(ds.feature_matches) == 1
     assert ds.feature_matches[0].canonical_attributes["max_height_m"] == 25.0
 
