@@ -90,6 +90,16 @@ class LinkedDataset(BaseModel):
         default=None,
         description="Name of the resolver that produced the location used for spatial matching, when applicable.",
     )
+    location_confidence: float | None = Field(
+        default=None,
+        description=(
+            "Confidence (0..1) of the geocoded location used for spatial "
+            "matching. Values below ~0.85 indicate the geocoder fell back "
+            "to RANGE_INTERPOLATED or GEOMETRIC_CENTER quality — the "
+            "resulting feature_matches may be approximate. Callers should "
+            "qualify any answer based on a low-confidence match."
+        ),
+    )
 
 
 class RetrievalMatch(BaseModel):

@@ -72,6 +72,58 @@ SEEDS: dict[str, SeedSpec] = {
         ),
         fragment_type=FragmentType.SCHEDULE,
     ),
+    "far": SeedSpec(
+        citation_label="Schedule 17",
+        citation_path="schedules.schedule_17",
+        text=(
+            "Schedule 17: Maximum Floor Area Ratio Precincts. The maximum "
+            "floor area ratio (FAR) cap that applies to a lot is determined "
+            "by which precinct on this schedule contains the lot. "
+            "Authoritative geometry and per-precinct FAR values are stored "
+            "in the linked external geo dataset (halifax_far_precincts)."
+        ),
+        fragment_type=FragmentType.SCHEDULE,
+    ),
+    "heritage": SeedSpec(
+        citation_label="Schedule 22",
+        citation_path="schedules.schedule_22",
+        text=(
+            "Schedule 22: Heritage Conservation Districts. Lands within a "
+            "designated heritage conservation district are subject to "
+            "additional design and conservation requirements over and above "
+            "the underlying zone. The authoritative district boundaries and "
+            "names are stored in the linked external geo dataset "
+            "(halifax_heritage_districts), which includes both Active and "
+            "Proposed districts; consult the dataset's district_status "
+            "attribute when using a returned match."
+        ),
+        fragment_type=FragmentType.SCHEDULE,
+    ),
+    "bonus_zoning": SeedSpec(
+        citation_label="Schedule 50",
+        citation_path="schedules.schedule_50",
+        text=(
+            "Schedule 50: Incentive or Bonus Zoning Rate Districts. Within "
+            "these districts the by-law allows additional density or height "
+            "in exchange for community benefits, calculated by the rate "
+            "table in Appendix 3 (Incentive or Bonus Zoning Rate Adjustment "
+            "Methodology). District boundaries and codes are stored in the "
+            "linked external geo dataset (halifax_bonus_zoning_districts)."
+        ),
+        fragment_type=FragmentType.SCHEDULE,
+    ),
+    "shadow_impact": SeedSpec(
+        citation_label="Schedule 51",
+        citation_path="schedules.schedule_51",
+        text=(
+            "Schedule 51: Shadow Impact Assessment Protocol Identified "
+            "Areas. Development within these areas may trigger the shadow "
+            "impact assessment protocol set out in Appendix 2. Authoritative "
+            "area boundaries and identifiers are stored in the linked "
+            "external geo dataset (halifax_shadow_impact_areas)."
+        ),
+        fragment_type=FragmentType.SCHEDULE,
+    ),
 }
 
 

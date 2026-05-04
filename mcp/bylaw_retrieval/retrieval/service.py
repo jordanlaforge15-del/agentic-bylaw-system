@@ -476,6 +476,9 @@ class RetrievalService:
                     location_resolver=(
                         resolved_location.source if resolved_location is not None else None
                     ),
+                    location_confidence=(
+                        resolved_location.confidence if resolved_location is not None else None
+                    ),
                 )
             )
         return results

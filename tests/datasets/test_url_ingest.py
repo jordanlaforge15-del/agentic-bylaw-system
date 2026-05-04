@@ -285,6 +285,44 @@ def test_real_halifax_zoning_yaml_loads():
     assert "bylaw_area_id" in canonical
 
 
+@pytest.mark.parametrize(
+    "yaml_name,expected_dataset_name,expected_canonical",
+    [
+        (
+            "halifax_far_precincts.yaml",
+            "halifax_far_precincts",
+            {"max_far"},
+        ),
+        (
+            "halifax_heritage_districts.yaml",
+            "halifax_heritage_districts",
+            {"district_name", "district_status"},
+        ),
+        (
+            "halifax_bonus_zoning_districts.yaml",
+            "halifax_bonus_zoning_districts",
+            {"district_code", "district_name"},
+        ),
+        (
+            "halifax_shadow_impact_areas.yaml",
+            "halifax_shadow_impact_areas",
+            {"impact_area"},
+        ),
+    ],
+)
+def test_polygon_schedule_yamls_load(
+    yaml_name: str, expected_dataset_name: str, expected_canonical: set[str]
+):
+    """Each polygon-based RCLUB schedule YAML must load cleanly and declare
+    the canonical fields its retrieval consumers depend on."""
+    cfg = load_dataset_config(Path("src/layer1/datasets") / yaml_name)
+    assert cfg.name == expected_dataset_name
+    assert cfg.source_url and "/arcgis/rest/services/" in cfg.source_url
+    assert cfg.source_path is None
+    assert cfg.attributes.feature_key == "GLOBALID"
+    assert expected_canonical <= set(cfg.attributes.canonical)
+
+
 def _query_param(url: str, name: str) -> str:
     """Pick a single query-string parameter out of a URL for assertions."""
     from urllib.parse import parse_qs, urlparse

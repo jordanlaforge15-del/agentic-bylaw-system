@@ -27,6 +27,20 @@ CANONICAL_FIELDS: dict[str, str] = {
     "zone_code": "string",
     "zone_description": "string",
     "bylaw_area_id": "int",
+    # Built-form precinct fields surfaced by additional schedule datasets.
+    # Each is populated only by the dataset(s) where the value is meaningful;
+    # the API consumer disambiguates via the linked dataset's name.
+    "max_far": "float",
+    # District-style fields shared across the various RCLUB schedules that
+    # carve the bylaw area into named regions (Heritage Conservation
+    # Districts, Bonus Zoning Rate Districts, Shadow Impact Assessment
+    # Areas, etc.). Generic names — the dataset_name in the response
+    # makes it clear which "district" the field describes.
+    "district_name": "string",
+    "district_code": "string",
+    "district_status": "string",
+    "district_label": "string",
+    "impact_area": "string",
     # Civic-address fields — populated by datasets with role=civic_address
     # so the geocoder (Phase E) can resolve a LocationReference to a point
     # or parcel polygon.

@@ -29,6 +29,13 @@ _DEFAULT_ENDPOINT = "https://maps.googleapis.com/maps/api/geocode/json"
 class GoogleGeocoderConfig:
     api_key: str
     region_bias: str = "ca"
+    # ``components`` is a hard filter (unlike region_bias which is a soft
+    # hint). Without this, a query like "6299 South Street" can resolve to
+    # Perth, Australia even with region_bias="ca", because Google treats
+    # the bias as a fallback rather than a constraint. country:CA forces
+    # results to Canadian addresses; deployments with a known city can
+    # narrow further (e.g. "country:CA|administrative_area:NS|locality:Halifax").
+    components: str = "country:CA"
     timeout_s: float = 5.0
     endpoint: str = _DEFAULT_ENDPOINT
 
@@ -93,14 +100,17 @@ class GoogleGeocoder:
         if not query:
             self._record_failure("EMPTY_QUERY")
             return None
+        params: dict[str, Any] = {
+            "address": query,
+            "key": self._config.api_key,
+            "region": self._config.region_bias,
+        }
+        if self._config.components:
+            params["components"] = self._config.components
         try:
             response = self._http.get(
                 self._config.endpoint,
-                params={
-                    "address": query,
-                    "key": self._config.api_key,
-                    "region": self._config.region_bias,
-                },
+                params=params,
                 timeout=self._config.timeout_s,
             )
         except (httpx.HTTPError, OSError) as exc:
@@ -146,8 +156,16 @@ class GoogleGeocoder:
 
 def _query_string(ref: LocationReference) -> str:
     if ref.kind == "civic_address":
-        parts = [p for p in [ref.civic_number, ref.street, ref.unit] if p]
-        return ", ".join(parts) if parts else ref.raw_text
+        # Real-world address format: "1234 Barrington Street, Unit 5".
+        # Civic number and street are joined with a space (not a comma) —
+        # using a comma here was causing Google to misroute to other-region
+        # matches even with region_bias=ca. Unit is comma-separated since
+        # it's a logically distinct address component.
+        primary_parts = [p for p in [ref.civic_number, ref.street] if p]
+        primary = " ".join(primary_parts)
+        if ref.unit:
+            primary = f"{primary}, Unit {ref.unit}" if primary else f"Unit {ref.unit}"
+        return primary or ref.raw_text
     if ref.kind == "named_place":
         return ref.name or ref.raw_text
     if ref.kind == "intersection":

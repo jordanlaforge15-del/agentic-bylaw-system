@@ -260,6 +260,7 @@ def _maybe_build_google_geocoder() -> GoogleGeocoder | None:
         GoogleGeocoderConfig(
             api_key=api_key,
             region_bias=settings.google_maps_region_bias,
+            components=settings.google_maps_components,
             timeout_s=settings.google_maps_request_timeout_s,
         )
     )

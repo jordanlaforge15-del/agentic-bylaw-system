@@ -130,6 +130,14 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
           - named_place for landmarks ("Halifax Citadel")
           - intersection_streets (list of 2+ street names)
           - geometry for caller-supplied GeoJSON Point/Polygon (EPSG:4326)
+
+        Each match's ``linked_datasets[*].location_confidence`` reports how
+        confident the geocoder was in the address-to-coordinate step
+        (0..1). Values below ~0.85 mean the geocoder fell back to
+        RANGE_INTERPOLATED or GEOMETRIC_CENTER quality. When you see a
+        low-confidence value, qualify your answer accordingly — the
+        spatial match may have hit a neighbouring precinct rather than
+        the actual property.
         """
         request = RetrievalRequest(
             query=query,

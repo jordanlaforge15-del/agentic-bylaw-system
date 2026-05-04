@@ -1,0 +1,39 @@
+name: halifax_bonus_zoning_districts
+publisher: Halifax Regional Municipality
+format: geojson
+# Schedule 50 of the RCLUB: Incentive or Bonus Zoning Rate Districts.
+source_url: https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/RC_Bonus_Zoning_Rate_Districts/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=geojson
+crs: EPSG:4326
+
+links_to:
+  document_match:
+    municipality: HRM
+    bylaw_name: Regional Centre Land Use By-Law
+  fragment_citation: Schedule 50
+
+attributes:
+  feature_key: GLOBALID
+  canonical:
+    district_code:
+      from: BRD_CODE
+      type: string
+    district_name:
+      from: BRD_NAME
+      type: string
+      optional: true
+    effective_date:
+      from: SDATE
+      type: epoch_ms_date
+      optional: true
+    source_case:
+      from: SOURCE
+      type: string
+      optional: true
+  ignore:
+    - OBJECTID
+    - FCODE
+    - SACC
+    - ADDDATE
+    - MODDATE
+    - Shape__Area
+    - Shape__Length
