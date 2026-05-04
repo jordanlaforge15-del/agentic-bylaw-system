@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -20,6 +20,13 @@ CANONICAL_FIELDS: dict[str, str] = {
     "effective_date": "date",
     "source_case": "string",
     "bylaw_area": "string",
+    # Zoning fields — populated by datasets like the HRM Zoning Boundaries
+    # layer where each polygon assigns a zone code (e.g. "ER-3", "DD") to
+    # a geographic area. The bylaw_area_id is the numeric LUB identifier
+    # that lets a downstream filter restrict to a single bylaw's zones.
+    "zone_code": "string",
+    "zone_description": "string",
+    "bylaw_area_id": "int",
     # Civic-address fields — populated by datasets with role=civic_address
     # so the geocoder (Phase E) can resolve a LocationReference to a point
     # or parcel polygon.
@@ -29,7 +36,7 @@ CANONICAL_FIELDS: dict[str, str] = {
 }
 
 
-SUPPORTED_TYPES = {"float", "int", "string", "bool", "date", "rfc2822_date"}
+SUPPORTED_TYPES = {"float", "int", "string", "bool", "date", "rfc2822_date", "epoch_ms_date"}
 
 
 class CoercionError(ValueError):
@@ -75,6 +82,19 @@ def coerce_value(raw: Any, type_name: str) -> Any:
             if parsed is None:
                 raise CoercionError(f"cannot parse RFC 2822 date: {raw!r}")
             return parsed.date().isoformat()
+        if type_name == "epoch_ms_date":
+            # ArcGIS REST endpoints commonly return dates as Unix epoch
+            # milliseconds (e.g. 1003968000000). Static Hub GeoJSON exports
+            # of the same data convert these to RFC 2822 strings — so the
+            # caller picks the right type for the source they're using.
+            try:
+                ms = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise CoercionError(f"epoch_ms_date expects integer ms, got {raw!r}") from exc
+            try:
+                return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat()
+            except (OverflowError, OSError, ValueError) as exc:
+                raise CoercionError(f"epoch_ms {ms} is out of range: {exc}") from exc
     except CoercionError:
         raise
     except Exception as exc:

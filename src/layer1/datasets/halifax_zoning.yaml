@@ -1,0 +1,49 @@
+name: halifax_zoning_boundaries
+publisher: Halifax Regional Municipality
+format: geojson
+# Live ArcGIS REST endpoint. The ingester paginates automatically when the
+# URL contains '/arcgis/rest/services/'. outSR=4326 asks the server to
+# reproject from EPSG:3857 (the layer's native CRS) into EPSG:4326, so our
+# parser gets a CRS-clean payload without needing pyproj on the client side.
+source_url: https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/ZoningBoundaries/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=geojson
+crs: EPSG:4326
+
+links_to:
+  document_match:
+    municipality: HRM
+    bylaw_name: Regional Centre Land Use By-Law
+  fragment_citation: Zoning Schedule
+
+attributes:
+  feature_key: GLOBALID
+  canonical:
+    zone_code:
+      from: ZONE
+      type: string
+    zone_description:
+      from: DESCRIPTION
+      type: string
+      optional: true
+    bylaw_area_id:
+      from: BYLAW_ID
+      type: int
+      optional: true
+    effective_date:
+      # ArcGIS REST returns SDATE as Unix epoch milliseconds; the Hub's
+      # static GeoJSON export uses RFC 2822 strings for the same value.
+      # Picking epoch_ms_date here matches the URL source we configured
+      # above. If you switch this dataset to a static-file source_path,
+      # change to rfc2822_date.
+      from: SDATE
+      type: epoch_ms_date
+      optional: true
+    source_case:
+      from: SOURCE
+      type: string
+      optional: true
+  ignore:
+    - OBJECTID
+    - FCODE
+    - SACC
+    - Shape__Area
+    - Shape__Length

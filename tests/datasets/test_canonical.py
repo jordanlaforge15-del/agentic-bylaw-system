@@ -52,6 +52,26 @@ def test_coerce_rfc2822_date_matches_halifax_format():
         coerce_value("definitely not rfc 2822", "rfc2822_date")
 
 
+def test_coerce_epoch_ms_date_matches_arcgis_rest_format():
+    """ArcGIS REST endpoints return dates as Unix epoch milliseconds.
+    Spot-check against known values from the live HRM Zoning Boundaries
+    dataset response."""
+    # 1003968000000 ms = 2001-10-25 00:00:00 UTC
+    assert coerce_value(1003968000000, "epoch_ms_date") == "2001-10-25"
+    # 1769990400000 ms = 2026-02-02 00:00:00 UTC (recent SDATE)
+    assert coerce_value(1769990400000, "epoch_ms_date") == "2026-02-02"
+    # Strings that look like integers also work — JSON sometimes preserves
+    # numeric strings when the column was loaded loosely.
+    assert coerce_value("1554508800000", "epoch_ms_date") == "2019-04-06"
+
+
+def test_coerce_epoch_ms_date_rejects_non_integer():
+    with pytest.raises(CoercionError):
+        coerce_value("not a number", "epoch_ms_date")
+    with pytest.raises(CoercionError):
+        coerce_value(None, "epoch_ms_date")
+
+
 def test_unsupported_type_rejected():
     with pytest.raises(CoercionError):
         coerce_value("anything", "polygon")
