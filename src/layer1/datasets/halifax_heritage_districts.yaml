@@ -1,0 +1,44 @@
+name: halifax_heritage_districts
+publisher: Halifax Regional Municipality
+format: geojson
+# Schedule 22 of the RCLUB: Heritage Conservation Districts.
+# This is a HRM-wide layer (active + proposed); spatial filter on the
+# bylaw_area_id of intersected zones is not built in here, so the dataset
+# may include districts outside the Regional Centre. The retrieval surface
+# disambiguates via dataset name; the LLM should treat "Active" status
+# differently from "Proposed".
+source_url: https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/Active_and_Proposed_Heritage_Conservation_Districts/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=geojson
+crs: EPSG:4326
+
+links_to:
+  document_match:
+    municipality: HRM
+    bylaw_name: Regional Centre Land Use By-Law
+  fragment_citation: Schedule 22
+
+attributes:
+  feature_key: GLOBALID
+  canonical:
+    district_name:
+      from: HCDNAME
+      type: string
+    district_label:
+      from: HCDLABEL
+      type: string
+      optional: true
+    district_status:
+      from: STATUS
+      type: string
+      optional: true
+    effective_date:
+      from: EFFDATE
+      type: epoch_ms_date
+      optional: true
+  ignore:
+    - OBJECTID
+    - FCODE
+    - SACC
+    - ADDDATE
+    - MODDATE
+    - Shape__Area
+    - Shape__Length
