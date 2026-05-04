@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from typing import Callable
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, desc, select
 from sqlalchemy.orm import Session
 
 from bylaw_retrieval.retrieval.schemas import (
@@ -40,9 +41,53 @@ from layer2.retrieval.spatial import ResolvedLocation, query_features
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
+# Resolver signature: takes a session, returns a document_id (or None if no
+# document exists yet). Called per-request so a fresh ingest mid-session is
+# picked up without a server restart.
+DocumentIdResolver = Callable[[Session], int | None]
+
+
+def latest_document_id_resolver(session: Session) -> int | None:
+    """Return the id of the most recently ingested document, or None.
+
+    "Most recent" means largest ``ingestion_timestamp``; ties broken by id
+    descending. Used by the MCP server's ``--latest-only`` mode to scope
+    every request to the freshest ingest, since dev workflows commonly
+    re-ingest the same bylaw multiple times.
+    """
+    return (
+        session.execute(
+            select(Document.id).order_by(
+                desc(Document.ingestion_timestamp), desc(Document.id)
+            ).limit(1)
+        )
+        .scalars()
+        .first()
+    )
+
+
 class RetrievalService:
-    def __init__(self, session: Session):
+    def __init__(
+        self,
+        session: Session,
+        *,
+        default_document_id_resolver: DocumentIdResolver | None = None,
+    ) -> None:
+        """Layer 1 retrieval service.
+
+        ``default_document_id_resolver`` lets a deployment scope all queries
+        to a chosen document (e.g. "latest only") unless the caller passes
+        an explicit ``document_id`` / ``municipality`` / ``bylaw_name``
+        filter. The resolver runs per request, so re-ingests are picked up
+        without restarting the server.
+        """
         self.session = session
+        self._default_document_id_resolver = default_document_id_resolver
+
+    def _resolve_default_document_id(self) -> int | None:
+        if self._default_document_id_resolver is None:
+            return None
+        return self._default_document_id_resolver(self.session)
 
     def list_documents(
         self,
@@ -51,6 +96,11 @@ class RetrievalService:
         limit: int = 50,
     ) -> list[DocumentSummary]:
         stmt = select(Document).order_by(Document.municipality, Document.bylaw_name, Document.id)
+        # Apply default scope only when no explicit filter was given.
+        if not municipality and not bylaw_name:
+            default_id = self._resolve_default_document_id()
+            if default_id is not None:
+                stmt = stmt.where(Document.id == default_id)
         if municipality:
             stmt = stmt.where(Document.municipality.ilike(f"%{municipality}%"))
         if bylaw_name:
@@ -90,8 +140,14 @@ class RetrievalService:
 
     def lookup_citation(self, request: CitationLookupRequest) -> RetrievalMatch:
         stmt = select(SourceFragment).where(SourceFragment.citation_path == request.citation_path)
-        if request.document_id is not None:
-            stmt = stmt.where(SourceFragment.document_id == request.document_id)
+        # Honour explicit document_id; otherwise apply the default scope so
+        # ambiguous citation paths across multiple ingests resolve to the
+        # active document instead of erroring on ambiguity.
+        effective_document_id = request.document_id
+        if effective_document_id is None:
+            effective_document_id = self._resolve_default_document_id()
+        if effective_document_id is not None:
+            stmt = stmt.where(SourceFragment.document_id == effective_document_id)
         fragments = self.session.execute(stmt.order_by(SourceFragment.id).limit(2)).scalars().all()
         if not fragments:
             scope = f" in document {request.document_id}" if request.document_id is not None else ""
@@ -167,8 +223,19 @@ class RetrievalService:
             .join(Document, Document.id == SourceFragment.document_id)
             .order_by(SourceFragment.page_start, SourceFragment.reading_order_start, SourceFragment.id)
         )
-        if request.document_id is not None:
-            stmt = stmt.where(SourceFragment.document_id == request.document_id)
+        # Default scope only applies when the caller gave no scoping filter
+        # at all. Any of document_id / municipality / bylaw_name disables it,
+        # so comparative queries across bylaws still work (e.g. a request
+        # filtering by municipality reaches every doc for that municipality).
+        effective_document_id = request.document_id
+        if (
+            effective_document_id is None
+            and not request.municipality
+            and not request.bylaw_name
+        ):
+            effective_document_id = self._resolve_default_document_id()
+        if effective_document_id is not None:
+            stmt = stmt.where(SourceFragment.document_id == effective_document_id)
         if request.municipality:
             stmt = stmt.where(Document.municipality.ilike(f"%{request.municipality}%"))
         if request.bylaw_name:

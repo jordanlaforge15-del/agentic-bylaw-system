@@ -9,11 +9,16 @@ from bylaw_retrieval.retrieval.schemas import (
     RetrievalRequest,
     RetrievalResponse,
 )
-from bylaw_retrieval.retrieval.service import RetrievalService
+from bylaw_retrieval.retrieval.service import (
+    DocumentIdResolver,
+    RetrievalService,
+    latest_document_id_resolver,
+)
 
 __all__ = [
     "CitationLookupRequest",
     "DatasetFeatureMatch",
+    "DocumentIdResolver",
     "DocumentOutlineResponse",
     "DocumentSummary",
     "LinkedDataset",
@@ -22,5 +27,6 @@ __all__ = [
     "RetrievalRequest",
     "RetrievalResponse",
     "RetrievalService",
+    "latest_document_id_resolver",
 ]
 
