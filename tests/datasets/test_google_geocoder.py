@@ -128,12 +128,51 @@ def test_geocoder_rejects_low_confidence_approximate_match():
     http = _MockHttp(_MockResponse(payload))
     geocoder = GoogleGeocoder(_config(), http_client=http)
     assert geocoder.resolve(_civic()) is None
+    assert geocoder.last_failure_reason == "LOW_CONFIDENCE"
 
 
 def test_geocoder_returns_none_on_zero_results():
     http = _MockHttp(_MockResponse({"status": "ZERO_RESULTS", "results": []}))
     geocoder = GoogleGeocoder(_config(), http_client=http)
     assert geocoder.resolve(_civic()) is None
+    assert geocoder.last_failure_reason == "ZERO_RESULTS"
+
+
+def test_geocoder_surfaces_request_denied_reason():
+    """REQUEST_DENIED is the symptom of an unconfigured Geocoding API on the
+    user's Google Cloud project. The reason and the error_message must be
+    visible to operators so they can act on it instead of silently
+    debugging a 'no spatial match' that's actually an auth failure."""
+    payload = {
+        "status": "REQUEST_DENIED",
+        "results": [],
+        "error_message": "This API is not activated on your API project.",
+    }
+    http = _MockHttp(_MockResponse(payload))
+    geocoder = GoogleGeocoder(_config(), http_client=http)
+    assert geocoder.resolve(_civic()) is None
+    assert geocoder.last_failure_reason == "REQUEST_DENIED"
+    assert "not activated" in (geocoder.last_failure_detail or "")
+
+
+def test_geocoder_surfaces_network_error():
+    http = _MockHttp(httpx.ConnectError("network down"))
+    geocoder = GoogleGeocoder(_config(), http_client=http)
+    assert geocoder.resolve(_civic()) is None
+    assert geocoder.last_failure_reason == "NETWORK_ERROR"
+
+
+def test_geocoder_surfaces_low_confidence():
+    payload = {
+        "status": "OK",
+        "results": [
+            {"geometry": {"location": {"lat": 44.0, "lng": -63.0}, "location_type": "APPROXIMATE"}}
+        ],
+    }
+    http = _MockHttp(_MockResponse(payload))
+    geocoder = GoogleGeocoder(_config(), http_client=http)
+    assert geocoder.resolve(_civic()) is None
+    assert geocoder.last_failure_reason == "LOW_CONFIDENCE"
 
 
 def test_geocoder_returns_none_on_network_error():
@@ -266,6 +305,38 @@ def test_resolve_location_prefers_in_database_resolver_over_google(tmp_path: Pat
     assert resolved is not None
     assert resolved.source == "mini_civic_addresses_g"
     assert http.calls == []  # in-database resolver took the lookup
+
+
+def test_geocode_cache_records_request_denied_reason(tmp_path: Path):
+    """End-to-end: a Google REQUEST_DENIED leaves a cache row whose
+    ``detail`` and ``resolver`` columns make the failure mode visible to
+    operators without requiring server logs."""
+    db_url = f"sqlite:///{tmp_path / 'cache.db'}"
+    create_layer1(db_url)
+    create_layer2(db_url)
+
+    payload = {
+        "status": "REQUEST_DENIED",
+        "results": [],
+        "error_message": "This API is not activated on your API project.",
+    }
+    http = _MockHttp(_MockResponse(payload))
+    geocoder = GoogleGeocoder(_config(), http_client=http)
+
+    ref = _civic()
+    with session_scope(db_url) as session:
+        resolved = resolve_location(session, ref, google_geocoder=geocoder)
+
+    assert resolved is None
+
+    with session_scope(db_url) as session:
+        cached = session.query(GeocodeCache).filter_by(
+            normalized_text=normalize_reference(ref)
+        ).one()
+        assert cached.status == "no_match"
+        assert "REQUEST_DENIED" in (cached.detail or "")
+        assert "not activated" in (cached.detail or "")
+        assert cached.resolver == "google_maps:request_denied"
 
 
 def test_resolve_location_without_geocoder_still_refuses_gracefully(tmp_path: Path):

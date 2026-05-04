@@ -56,9 +56,13 @@ def load_google_maps_api_key(path: str | Path) -> str | None:
 class GoogleGeocoder:
     """Resolves civic_address LocationReferences to points via Google Geocoding API.
 
-    Failure modes are all handled the same way: return ``None`` and let the
-    layered ``resolve_location`` machinery log a miss in the cache. We never
-    raise from here — a network blip shouldn't crash retrieval.
+    Failure modes are handled by returning ``None``; we never raise from
+    here so a network blip can't crash retrieval. Each failure also stamps
+    ``last_failure_reason`` and ``last_failure_detail`` on the instance so
+    callers can record the reason in audit/cache rows. Reasons follow Google's
+    own status taxonomy (REQUEST_DENIED, OVER_QUERY_LIMIT, ZERO_RESULTS, ...)
+    plus our own short codes for cases Google doesn't have status values for
+    (NETWORK_ERROR, INVALID_JSON, LOW_CONFIDENCE, MISSING_GEOMETRY).
     """
 
     name = "google_maps"
@@ -71,12 +75,23 @@ class GoogleGeocoder:
     ) -> None:
         self._config = config
         self._http = http_client or httpx
+        self.last_failure_reason: str | None = None
+        self.last_failure_detail: str | None = None
+
+    def _record_failure(self, reason: str, detail: str | None = None) -> None:
+        self.last_failure_reason = reason
+        self.last_failure_detail = detail
 
     def resolve(self, ref: LocationReference) -> ResolvedLocation | None:
+        self.last_failure_reason = None
+        self.last_failure_detail = None
+
         if ref.kind not in {"civic_address", "named_place", "intersection"}:
+            self._record_failure("UNSUPPORTED_KIND", f"kind={ref.kind!r}")
             return None
         query = _query_string(ref)
         if not query:
+            self._record_failure("EMPTY_QUERY")
             return None
         try:
             response = self._http.get(
@@ -88,22 +103,37 @@ class GoogleGeocoder:
                 },
                 timeout=self._config.timeout_s,
             )
-        except (httpx.HTTPError, OSError):
+        except (httpx.HTTPError, OSError) as exc:
+            self._record_failure("NETWORK_ERROR", str(exc))
             return None
         try:
             payload = response.json()
-        except ValueError:
+        except ValueError as exc:
+            self._record_failure("INVALID_JSON", str(exc))
             return None
-        if payload.get("status") != "OK" or not payload.get("results"):
+        status = payload.get("status")
+        if status != "OK":
+            self._record_failure(
+                status or "UNKNOWN_STATUS",
+                payload.get("error_message"),
+            )
+            return None
+        if not payload.get("results"):
+            self._record_failure("ZERO_RESULTS")
             return None
 
         best = payload["results"][0]
         location_type = (best.get("geometry") or {}).get("location_type") or ""
         confidence = _CONFIDENCE_BY_TYPE.get(location_type, 0.5)
         if confidence < _MIN_ACCEPTED_TYPE_CONFIDENCE:
+            self._record_failure(
+                "LOW_CONFIDENCE",
+                f"location_type={location_type!r} below threshold {_MIN_ACCEPTED_TYPE_CONFIDENCE}",
+            )
             return None
         loc = (best.get("geometry") or {}).get("location") or {}
         if "lat" not in loc or "lng" not in loc:
+            self._record_failure("MISSING_GEOMETRY")
             return None
         return ResolvedLocation(
             kind="point",

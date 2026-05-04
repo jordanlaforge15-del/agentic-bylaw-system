@@ -163,6 +163,19 @@ def resolve_location(
                     f"resolved via {external.name} with confidence "
                     f"{external_match.confidence:.2f}"
                 )
+            else:
+                # Surface the geocoder's own failure reason so audits and
+                # the geocode_cache row record WHY (REQUEST_DENIED,
+                # ZERO_RESULTS, NETWORK_ERROR, ...) rather than leaving a
+                # silent miss that's hard to diagnose later.
+                reason = getattr(external, "last_failure_reason", None)
+                reason_detail = getattr(external, "last_failure_detail", None)
+                if reason:
+                    bits = [f"{external.name} failed: {reason}"]
+                    if reason_detail:
+                        bits.append(f"({reason_detail})")
+                    detail = " ".join(bits)
+                    resolver = f"{external.name}:{reason.lower()}"
 
     if use_cache:
         _cache_put(
