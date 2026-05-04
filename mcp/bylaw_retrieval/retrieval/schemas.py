@@ -106,6 +106,15 @@ class RetrievalMatch(BaseModel):
     confidence: float | None = None
     text: str
     score: float
+    retrieval_channels: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Which retrieval channel(s) surfaced this match — e.g. ['text'], "
+            "['spatial'], or ['text', 'spatial']. A spatial-only match means "
+            "the location intersected a linked dataset even though keyword "
+            "scoring didn't pick the fragment up."
+        ),
+    )
     ancestor_chain: list[AncestorFragment] = Field(default_factory=list)
     cross_references: list[CrossReferenceSummary] = Field(default_factory=list)
     related_tables: list[TableSummary] = Field(default_factory=list)

@@ -81,7 +81,7 @@ def test_retrieval_search_returns_citation_grounded_matches(tmp_path: Path):
         service = RetrievalService(session)
         response = service.search(
             RetrievalRequest(
-                query="front yard setback",
+                query="residential zones",  # actually appears in synthetic_bylaw.txt
                 document_id=document_id,
                 limit=3,
             )
@@ -185,6 +185,9 @@ def test_openai_adapter_mirrors_retrieval_contract(tmp_path: Path):
         executor = OpenAIToolExecutor(session)
         search_result = executor.execute(
             "search_bylaw_evidence",
-            {"query": "lot coverage", "document_id": document_id, "limit": 2},
+            # "residential" actually appears in synthetic_bylaw.txt; "lot
+            # coverage" historically passed only because every parsed
+            # fragment scored a +1 baseline regardless of query match.
+            {"query": "residential zones", "document_id": document_id, "limit": 2},
         )
         assert search_result["total_matches"] >= 1

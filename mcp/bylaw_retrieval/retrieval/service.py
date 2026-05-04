@@ -169,19 +169,54 @@ class RetrievalService:
             include_tables=request.include_tables,
         )
 
+    # Spatial-channel scoring constants. The values are deliberately higher
+    # than typical text-channel scores so a confident spatial hit (the input
+    # point falls inside a precinct polygon) surfaces near the top, even when
+    # the linked fragment's text wouldn't otherwise be picked up by the
+    # keyword scorer. Partial overlaps (e.g. a line crossing several
+    # precincts) score lower so they don't drown out exact containment.
+    _SPATIAL_CONTAINS_SCORE = 100.0
+    _SPATIAL_PARTIAL_SCORE = 50.0
+    _SPATIAL_TEXT_BOTH_BONUS = 10.0
+
     def search(self, request: RetrievalRequest) -> RetrievalResponse:
-        stmt = self._fragment_scope_statement(request)
-        fragments = self.session.execute(stmt).scalars().all()
-        scored = []
-        for fragment in fragments:
-            score = self._score_fragment(fragment, request.query)
-            if score <= 0:
-                continue
-            scored.append((score, fragment))
-        scored.sort(key=lambda item: (-item[0], item[1].page_start, item[1].id))
+        # Two retrievers run in parallel: text-keyword scoring against
+        # fragments, and spatial intersection against linked geo datasets
+        # when a location is supplied. They produce disjoint or overlapping
+        # candidate fragment sets that are merged on fragment_id, with a
+        # bonus for fragments surfaced by both channels.
         resolved_location = self._resolve_location_slot(request.location)
-        matches = [
-            self._build_match(
+
+        text_scored = self._text_channel_scores(request)
+        spatial_scored = (
+            self._spatial_channel_scores(request, resolved_location)
+            if resolved_location is not None
+            else {}
+        )
+
+        merged = self._merge_channel_scores(text_scored, spatial_scored)
+        total_matches = len(merged)
+
+        # Resolve candidate fragments from the union of both channels.
+        candidate_fragment_ids = [fid for _, fid, _ in merged[: request.limit]]
+        if not candidate_fragment_ids:
+            return RetrievalResponse(request=request, total_matches=0, matches=[])
+
+        fragments_by_id = {
+            fragment.id: fragment
+            for fragment in self.session.execute(
+                select(SourceFragment).where(SourceFragment.id.in_(candidate_fragment_ids))
+            )
+            .scalars()
+            .all()
+        }
+
+        matches: list[RetrievalMatch] = []
+        for score, fragment_id, channels in merged[: request.limit]:
+            fragment = fragments_by_id.get(fragment_id)
+            if fragment is None:
+                continue
+            match = self._build_match(
                 fragment,
                 score=score,
                 include_context=request.include_context,
@@ -190,9 +225,112 @@ class RetrievalService:
                 include_datasets=request.include_datasets,
                 resolved_location=resolved_location,
             )
-            for score, fragment in scored[: request.limit]
-        ]
-        return RetrievalResponse(request=request, total_matches=len(scored), matches=matches)
+            match.retrieval_channels = sorted(channels)
+            matches.append(match)
+
+        return RetrievalResponse(request=request, total_matches=total_matches, matches=matches)
+
+    # _score_fragment adds +1.0 for any PARSED fragment as a quality signal,
+    # independent of whether the query text actually appeared in it. That
+    # baseline shouldn't qualify a fragment as a "text-channel match" — it's
+    # a metadata bonus, not a content match. Tag a fragment as text-channel
+    # only when its score exceeds this baseline.
+    _TEXT_CHANNEL_THRESHOLD = 1.0
+
+    def _text_channel_scores(self, request: RetrievalRequest) -> dict[int, float]:
+        """Keyword-score every in-scope fragment. Returns {fragment_id: score}
+        for fragments whose score exceeds the parse-status baseline (i.e. the
+        query text actually matched some content).
+        """
+        stmt = self._fragment_scope_statement(request)
+        fragments = self.session.execute(stmt).scalars().all()
+        scored: dict[int, float] = {}
+        for fragment in fragments:
+            score = self._score_fragment(fragment, request.query)
+            if score > self._TEXT_CHANNEL_THRESHOLD:
+                scored[fragment.id] = score
+        return scored
+
+    def _spatial_channel_scores(
+        self,
+        request: RetrievalRequest,
+        location: ResolvedLocation,
+    ) -> dict[int, float]:
+        """Spatial intersection against every linked dataset whose linked
+        fragment is in the active scope. Returns {fragment_id: score}.
+
+        A linked fragment surfaces at most once per spatial query — if
+        multiple datasets share the same linked fragment, the strongest
+        match (containment over partial overlap) wins.
+        """
+        # Mirror the same scope rules used by the text channel so a request
+        # under --latest-only (or with explicit document_id / municipality /
+        # bylaw_name) constrains the spatial channel identically.
+        dataset_stmt = (
+            select(ExternalDataset)
+            .join(SourceFragment, SourceFragment.id == ExternalDataset.linked_fragment_id)
+            .join(Document, Document.id == SourceFragment.document_id)
+            .where(ExternalDataset.linked_fragment_id.is_not(None))
+        )
+        default_id = self._resolve_default_document_id()
+        if default_id is not None:
+            dataset_stmt = dataset_stmt.where(SourceFragment.document_id == default_id)
+        if request.document_id is not None:
+            dataset_stmt = dataset_stmt.where(SourceFragment.document_id == request.document_id)
+        if request.municipality:
+            dataset_stmt = dataset_stmt.where(
+                Document.municipality.ilike(f"%{request.municipality}%")
+            )
+        if request.bylaw_name:
+            dataset_stmt = dataset_stmt.where(
+                Document.bylaw_name.ilike(f"%{request.bylaw_name}%")
+            )
+        datasets = self.session.execute(dataset_stmt).scalars().all()
+
+        scored: dict[int, float] = {}
+        for dataset in datasets:
+            assert dataset.linked_fragment_id is not None  # narrowed by query above
+            for match in query_features(
+                self.session, dataset_id=dataset.id, location=location
+            ):
+                score = (
+                    self._SPATIAL_CONTAINS_SCORE
+                    if match.contains_input
+                    else self._SPATIAL_PARTIAL_SCORE
+                )
+                # Keep the strongest score per linked fragment.
+                if score > scored.get(dataset.linked_fragment_id, 0.0):
+                    scored[dataset.linked_fragment_id] = score
+        return scored
+
+    def _merge_channel_scores(
+        self,
+        text_scored: dict[int, float],
+        spatial_scored: dict[int, float],
+    ) -> list[tuple[float, int, list[str]]]:
+        """Return [(score, fragment_id, channels)] sorted by score desc.
+
+        Channel set per fragment lets the caller see whether the match came
+        from text, spatial, or both. Fragments hit by both channels get a
+        small bonus on top of the max channel score so they outrank
+        single-channel hits with the same raw score.
+        """
+        fragment_ids = set(text_scored) | set(spatial_scored)
+        merged: list[tuple[float, int, list[str]]] = []
+        for fid in fragment_ids:
+            text_s = text_scored.get(fid, 0.0)
+            spatial_s = spatial_scored.get(fid, 0.0)
+            channels: list[str] = []
+            if text_s > 0:
+                channels.append("text")
+            if spatial_s > 0:
+                channels.append("spatial")
+            score = max(text_s, spatial_s)
+            if text_s > 0 and spatial_s > 0:
+                score += self._SPATIAL_TEXT_BOTH_BONUS
+            merged.append((score, fid, channels))
+        merged.sort(key=lambda entry: (-entry[0], entry[1]))
+        return merged
 
     def _resolve_location_slot(self, slot: LocationSlot | None) -> ResolvedLocation | None:
         """Translate a structured slot to a ResolvedLocation.
