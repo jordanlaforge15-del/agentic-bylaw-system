@@ -1,0 +1,39 @@
+{
+  "type": "FeatureCollection",
+  "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+  "features": [
+    {
+      "type": "Feature",
+      "id": 1,
+      "geometry": {"type": "Point", "coordinates": [-63.59, 44.65]},
+      "properties": {
+        "ADDR_ID": "addr-001",
+        "CIVIC_NUMBER": "1234",
+        "STREET_NAME": "Barrington Street",
+        "PID": "00000001"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": 2,
+      "geometry": {"type": "Point", "coordinates": [-63.57, 44.65]},
+      "properties": {
+        "ADDR_ID": "addr-002",
+        "CIVIC_NUMBER": "5000",
+        "STREET_NAME": "Spring Garden Road",
+        "PID": "00000002"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": 3,
+      "geometry": {"type": "Point", "coordinates": [-63.55, 44.65]},
+      "properties": {
+        "ADDR_ID": "addr-003",
+        "CIVIC_NUMBER": "999",
+        "STREET_NAME": "Main St",
+        "PID": "00000003"
+      }
+    }
+  ]
+}

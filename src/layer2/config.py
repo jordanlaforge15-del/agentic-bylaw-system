@@ -32,6 +32,16 @@ class Layer2Settings(BaseSettings):
         default="conditioned_by,references,defines,applies_to,excepts,modifies",
         alias="LAYER2_SEMANTIC_GRAPH_ALLOWED_EDGE_TYPES",
     )
+    # External geocoder fallback. The key is read from a file at runtime so
+    # it never lives in source. The default path matches the convention the
+    # repo already uses for OpenAI keys; both files are gitignored.
+    google_maps_api_key_path: str = Field(
+        default="google_maps_api_key", alias="GOOGLE_MAPS_API_KEY_PATH"
+    )
+    google_maps_region_bias: str = Field(default="ca", alias="GOOGLE_MAPS_REGION_BIAS")
+    google_maps_request_timeout_s: float = Field(
+        default=5.0, alias="GOOGLE_MAPS_REQUEST_TIMEOUT_S"
+    )
 
 
 @lru_cache

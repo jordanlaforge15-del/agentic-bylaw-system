@@ -13,7 +13,9 @@ from layer2.embeddings.base import BaseEmbeddingClient
 from layer2.llm.base import BaseLLMClient
 from layer2.models.enums import RetrievalChannel, SourceType, VerificationStatus
 from layer2.models.schemas import CachedClaimContext, CandidateFragment, QueryUnderstanding, RetrievalBundle
+from layer2.retrieval.datasets import expand_datasets
 from layer2.retrieval.expansion import expand_cross_references, expand_hierarchy
+from layer2.retrieval.spatial import ResolvedLocation, expand_spatial
 from layer2.retrieval.merge import merge_and_dedupe_candidates
 from layer2.retrieval.api import execute_retrieval_plan
 from layer2.retrieval.planner import create_retrieval_plan
@@ -422,11 +424,13 @@ def _candidate_pool_limit(candidates: list[CandidateFragment], top_k: int) -> li
     return kept
 
 
-def _candidate_identity(candidate: CandidateFragment) -> tuple[int | None, int | None, int | None, str]:
+def _candidate_identity(candidate: CandidateFragment) -> tuple:
     return (
         candidate.source_fragment_id,
         candidate.source_table_id,
         candidate.source_table_cell_id,
+        candidate.external_dataset_id,
+        candidate.external_dataset_feature_id,
         candidate.source_type,
     )
 
@@ -441,6 +445,7 @@ def retrieve_context(
     embedding_client: BaseEmbeddingClient,
     planner_llm_client: BaseLLMClient | None = None,
     top_k: int | None = None,
+    location: ResolvedLocation | None = None,
 ) -> RetrievalBundle:
     top_k = top_k or settings.top_k
     understanding = understand_question(question_text)
@@ -465,6 +470,8 @@ def retrieve_context(
     merged = merge_and_dedupe_candidates(semantic, planned, fts, vector, tables)
     expanded = expand_hierarchy(session, document_id, merged)
     expanded = expand_cross_references(session, expanded)
+    expanded = expand_datasets(session, expanded)
+    expanded = expand_spatial(session, expanded, location=location)
     expanded = expand_semantic_graph(
         session,
         document_id=document_id,

@@ -10,3 +10,16 @@ htmlcov/
 *.db
 dist/
 build/
+
+# Secret material — keep out of version control.
+google_maps_api_key
+openai_apikey
+*_api_key
+*_apikey
+*.pem
+*.key
+
+# Local cache for URL-fetched datasets. Keep schema configs and small
+# fixtures under data/geo-datasets/ tracked, but evict the per-fetch
+# artifacts that the URL-based ingester writes.
+data/.cache/

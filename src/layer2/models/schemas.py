@@ -23,6 +23,8 @@ class CandidateFragment(BaseModel):
     source_fragment_id: int | None = None
     source_table_id: int | None = None
     source_table_cell_id: int | None = None
+    external_dataset_id: int | None = None
+    external_dataset_feature_id: int | None = None
     source_type: str
     retrieval_channel: str
     base_score: float = 0.0

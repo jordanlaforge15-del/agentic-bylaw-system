@@ -1,0 +1,66 @@
+{
+  "type": "FeatureCollection",
+  "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+  "features": [
+    {
+      "type": "Feature",
+      "id": 1,
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-63.60, 44.64], [-63.58, 44.64], [-63.58, 44.66], [-63.60, 44.66], [-63.60, 44.64]]]
+      },
+      "properties": {
+        "GlobalID": "11111111-1111-1111-1111-111111111111",
+        "OBJECTID": 1,
+        "BHTMAX_ID": "1001",
+        "FCODE": "CDMBH",
+        "BYLAW_AREA": 23,
+        "MAXBLDHGT": 25,
+        "MAXBLDSTRY": null,
+        "SDATE": "Sat, 03 Nov 2018 00:00:00 GMT",
+        "SOURCE": "Case H00045",
+        "SACC": "IN"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": 2,
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-63.58, 44.64], [-63.56, 44.64], [-63.56, 44.66], [-63.58, 44.66], [-63.58, 44.64]]]
+      },
+      "properties": {
+        "GlobalID": "22222222-2222-2222-2222-222222222222",
+        "OBJECTID": 2,
+        "BHTMAX_ID": "1002",
+        "FCODE": "CDMBH",
+        "BYLAW_AREA": 23,
+        "MAXBLDHGT": 35,
+        "MAXBLDSTRY": null,
+        "SDATE": "Mon, 15 Apr 2019 00:00:00 GMT",
+        "SOURCE": "Case 23307",
+        "SACC": "IN"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": 3,
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-63.56, 44.64], [-63.54, 44.64], [-63.54, 44.66], [-63.56, 44.66], [-63.56, 44.64]]]
+      },
+      "properties": {
+        "GlobalID": "33333333-3333-3333-3333-333333333333",
+        "OBJECTID": 3,
+        "BHTMAX_ID": "1003",
+        "FCODE": "CDMBS",
+        "BYLAW_AREA": 23,
+        "MAXBLDHGT": null,
+        "MAXBLDSTRY": 9,
+        "SDATE": "Wed, 10 Jun 2020 00:00:00 GMT",
+        "SOURCE": "ORIGINAL MAP",
+        "SACC": "IN"
+      }
+    }
+  ]
+}

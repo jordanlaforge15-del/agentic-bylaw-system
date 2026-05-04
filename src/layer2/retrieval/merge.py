@@ -4,16 +4,18 @@ from layer2.models.schemas import CandidateFragment
 
 
 def merge_and_dedupe_candidates(*candidate_groups: list[CandidateFragment]) -> list[CandidateFragment]:
-    merged: dict[tuple[int | None, int | None, int | None, str], CandidateFragment] = {}
+    merged: dict[tuple, CandidateFragment] = {}
     for group in candidate_groups:
         for candidate in group:
             key = (
                 candidate.source_fragment_id,
                 candidate.source_table_id,
                 candidate.source_table_cell_id,
+                candidate.external_dataset_id,
+                candidate.external_dataset_feature_id,
                 candidate.source_type,
                 candidate.metadata.get("semantic_fact_id"),
-                candidate.metadata.get("page_block_id") if not any([candidate.source_fragment_id, candidate.source_table_id, candidate.source_table_cell_id]) else None,
+                candidate.metadata.get("page_block_id") if not any([candidate.source_fragment_id, candidate.source_table_id, candidate.source_table_cell_id, candidate.external_dataset_id, candidate.external_dataset_feature_id]) else None,
             )
             existing = merged.get(key)
             if existing is None:

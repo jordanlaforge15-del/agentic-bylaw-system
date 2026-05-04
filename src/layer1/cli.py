@@ -15,6 +15,8 @@ from layer1.models.enums import IngestionStatus
 from layer1.pipeline.audit import audit_document_pages
 from layer1.pipeline.export import export_document_json
 from layer1.pipeline.ingest import ingest_file
+from layer1.datasets.linker import find_orphan_datasets, relink_orphan_datasets
+from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 from layer1.profiles import available_profile_names, get_parsing_profile
 from layer1.semantic.enrichment import enrich_document_semantics, validate_document_semantics
 from layer1.validators.structural import validate_document_objects
@@ -171,6 +173,72 @@ def show_summary(
                 **counts,
             }
         )
+
+
+@app.command("ingest-dataset")
+def ingest_dataset(
+    config: Path = typer.Argument(..., exists=True, readable=True, help="Path to dataset YAML config"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+    create_schema: bool = typer.Option(False, "--create-schema", help="Create tables before ingesting"),
+) -> None:
+    if create_schema:
+        create_all(db_url)
+    with session_scope(db_url) as session:
+        result = ingest_geo_dataset(session, config)
+        console.print(
+            {
+                "dataset_id": result.dataset.id,
+                "name": result.dataset.name,
+                "feature_count": result.dataset.feature_count,
+                "parse_status": result.dataset.parse_status.value,
+                "feature_warnings": result.feature_warnings,
+                "warnings": result.warnings[:10],
+                "link_status": result.link_result.status,
+                "link_detail": result.link_result.detail,
+            }
+        )
+
+
+@app.command("relink-datasets")
+def relink_datasets(
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    """Re-attempt fragment linkage for any datasets currently orphaned."""
+    with session_scope(db_url) as session:
+        results = relink_orphan_datasets(session)
+        if not results:
+            console.print("[green]No orphan datasets to relink.[/green]")
+            return
+        for result in results:
+            console.print(
+                {
+                    "dataset_id": result.dataset_id,
+                    "status": result.status,
+                    "fragment_id": result.fragment_id,
+                    "detail": result.detail,
+                }
+            )
+
+
+@app.command("dataset-orphans")
+def dataset_orphans(
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    """List datasets that are not yet linked to a bylaw fragment."""
+    with session_scope(db_url) as session:
+        orphans = find_orphan_datasets(session)
+        if not orphans:
+            console.print("[green]No orphan datasets.[/green]")
+            return
+        for dataset in orphans:
+            console.print(
+                {
+                    "dataset_id": dataset.id,
+                    "name": dataset.name,
+                    "linked_fragment_citation": dataset.linked_fragment_citation,
+                    "link_status": dataset.metadata_json.get("link_status"),
+                }
+            )
 
 
 @app.command("audit-pages")

@@ -286,3 +286,119 @@ class SemanticReviewEvent(Base):
     reviewer: Mapped[str | None] = mapped_column(String(255))
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ExternalDataset(Base):
+    __tablename__ = "external_dataset"
+    __table_args__ = (UniqueConstraint("name", name="uq_external_dataset_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    publisher: Mapped[str | None] = mapped_column(String(255))
+    source_url: Mapped[str | None] = mapped_column(Text)
+    source_path: Mapped[str | None] = mapped_column(Text)
+    format: Mapped[str] = mapped_column(String(32), nullable=False)
+    version: Mapped[str | None] = mapped_column(String(255))
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    crs: Mapped[str] = mapped_column(String(64), nullable=False)
+    feature_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    linked_document_id: Mapped[int | None] = mapped_column(ForeignKey("document.id", ondelete="SET NULL"))
+    linked_fragment_citation: Mapped[str | None] = mapped_column(String(255))
+    linked_fragment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("source_fragment.id", ondelete="SET NULL"), index=True
+    )
+    schema_mapping_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
+    ingestion_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+    features: Mapped[list["ExternalDatasetFeature"]] = relationship(
+        back_populates="dataset", cascade="all, delete-orphan"
+    )
+
+
+class ExternalDatasetFeature(Base):
+    __tablename__ = "external_dataset_feature"
+    __table_args__ = (
+        UniqueConstraint("external_dataset_id", "feature_key", name="uq_external_dataset_feature_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    external_dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("external_dataset.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    feature_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    attributes_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    canonical_attributes_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    geometry_geojson: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    geometry_bbox_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+    dataset: Mapped[ExternalDataset] = relationship(back_populates="features")
+
+
+class SourceImage(Base):
+    """A figure (picture) extracted from the source PDF.
+
+    Currently captures whatever Docling exposes as a ``PictureItem`` —
+    typically map schedules and other figures. Storage strategy: write the
+    raw image bytes to a content-addressed file under the configured
+    ``image_storage_dir`` and persist only the path here. Postgres BYTEA
+    storage of figures is intentionally avoided.
+
+    ``figure_kind`` is a coarse categorisation (e.g. ``"unknown"``,
+    ``"precinct_map"``) populated heuristically from caption text. Phase F
+    keeps it minimal; richer classification can land later without a
+    schema change.
+    """
+
+    __tablename__ = "source_image"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), nullable=False
+    )
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox_json: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(json_type()))
+    image_path: Mapped[str | None] = mapped_column(Text)
+    image_format: Mapped[str | None] = mapped_column(String(16))
+    caption_fragment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("source_fragment.id", ondelete="SET NULL")
+    )
+    figure_kind: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    docling_ref: Mapped[str | None] = mapped_column(String(255))
+    parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+
+class GeocodeCache(Base):
+    """Persistent cache of address-resolution results.
+
+    Layer 1 stays the source-of-truth layer; the cache lives here because the
+    civic-address dataset itself is a Layer 1 ``external_dataset``, and a
+    cache hit just shortcuts the Layer 2 lookup. TTL is enforced by the
+    geocoder, not by the schema, since validity depends on which resolver
+    served the answer.
+    """
+
+    __tablename__ = "geocode_cache"
+    __table_args__ = (UniqueConstraint("normalized_text", name="uq_geocode_cache_normalized_text"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    normalized_text: Mapped[str] = mapped_column(String(500), nullable=False)
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    resolver: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_dataset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("external_dataset.id", ondelete="SET NULL")
+    )
+    source_feature_id: Mapped[int | None] = mapped_column(
+        ForeignKey("external_dataset_feature.id", ondelete="SET NULL")
+    )
+    geometry_geojson: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(json_type()))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    detail: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
