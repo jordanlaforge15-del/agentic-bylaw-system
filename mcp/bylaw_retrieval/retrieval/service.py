@@ -35,7 +35,7 @@ from layer1.db.base import (
 )
 from layer2.retrieval.datasets import _summarize_dataset
 from layer2.retrieval.geocode import resolve_location
-from layer2.retrieval.location import LocationReference
+from layer2.retrieval.location import LocationReference, RegexLocationExtractor
 from layer2.retrieval.spatial import ResolvedLocation, query_features
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
@@ -197,10 +197,14 @@ class RetrievalService:
         merged = self._merge_channel_scores(text_scored, spatial_scored)
         total_matches = len(merged)
 
+        notes = self._build_response_notes(request, resolved_location)
+
         # Resolve candidate fragments from the union of both channels.
         candidate_fragment_ids = [fid for _, fid, _ in merged[: request.limit]]
         if not candidate_fragment_ids:
-            return RetrievalResponse(request=request, total_matches=0, matches=[])
+            return RetrievalResponse(
+                request=request, total_matches=0, matches=[], notes=notes
+            )
 
         fragments_by_id = {
             fragment.id: fragment
@@ -228,7 +232,53 @@ class RetrievalService:
             match.retrieval_channels = sorted(channels)
             matches.append(match)
 
-        return RetrievalResponse(request=request, total_matches=total_matches, matches=matches)
+        return RetrievalResponse(
+            request=request,
+            total_matches=total_matches,
+            matches=matches,
+            notes=notes,
+        )
+
+    def _build_response_notes(
+        self,
+        request: RetrievalRequest,
+        resolved_location: ResolvedLocation | None,
+    ) -> list[str]:
+        """Generate server-side advisories aimed at LLM callers.
+
+        Currently the only signal is "address-shaped text in query but no
+        location field" — a strong indicator that the LLM didn't recognise
+        the question needed spatial filtering. The note tells the LLM
+        exactly what to change in the next call. Defense-in-depth: the
+        tool description tells them upfront, the server's instructions
+        field tells them again, and this is the third layer that fires
+        only when the first two didn't work.
+        """
+        notes: list[str] = []
+        if request.location is None:
+            extracted = RegexLocationExtractor().extract(request.query or "")
+            if extracted:
+                ref = extracted[0]
+                if ref.kind == "civic_address" and ref.civic_number and ref.street:
+                    notes.append(
+                        "The query contains a civic address "
+                        f"({ref.raw_text!r}) but no 'location' field was "
+                        "supplied. Spatial filtering against zone, height, "
+                        "FAR, heritage, and bonus-zoning datasets was NOT "
+                        "performed. Re-issue the request with "
+                        "location={civic_number: "
+                        f"{ref.civic_number!r}, street: {ref.street!r}"
+                        "} to receive the spatial answer."
+                    )
+                elif ref.kind == "parcel_id" and ref.parcel_id:
+                    notes.append(
+                        f"The query contains a parcel id ({ref.parcel_id!r}) "
+                        "but no 'location' field was supplied. Re-issue "
+                        "with location={parcel_id: "
+                        f"{ref.parcel_id!r}"
+                        "} to enable spatial filtering."
+                    )
+        return notes
 
     # _score_fragment adds +1.0 for any PARSED fragment as a quality signal,
     # independent of whether the query text actually appeared in it. That
