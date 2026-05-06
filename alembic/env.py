@@ -8,6 +8,7 @@ from sqlalchemy import engine_from_config, pool
 
 from layer1.db.base import Base
 import layer2.db.models  # noqa: F401
+import advisor.db.models  # noqa: F401
 
 config = context.config
 
