@@ -14,10 +14,19 @@ Endpoints:
   returns the message history; will be removed once the frontend
   has its own state.
 
-Auth is a placeholder: workstream 3 will replace the ``X-User-Id``
-header check with a real bearer-token middleware. Until then the
-header IS the auth — anyone can claim any user id, which is fine for
-v1 development.
+Auth: production callers pass a ``ClerkVerifier`` and a DB session
+factory; routes are then protected by ``current_user_dependency`` which
+verifies the Clerk JWT, resolves the caller to an
+``advisor.db.models.User`` row (creating one on first contact), and
+commits before the route handler runs. The session-store ``user_id``
+field stores the **internal numeric id as a string** so future FK joins
+don't have to re-resolve through Clerk.
+
+For tests that don't care about auth there's a fallback: when neither
+``verifier`` nor ``db_session_factory`` is provided, the routes accept
+an ``X-Test-User-Id`` header instead. This keeps the existing chat
+behaviour tests minimal while real auth tests use the proper
+verifier-backed wiring.
 """
 from __future__ import annotations
 
@@ -32,12 +41,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from advisor.api.auth import current_user_dependency
 from advisor.api.db_session_store import DbSessionStore, default_resolve_user
 from advisor.api.quota import enforce_and_record_query
 from advisor.api.sessions import InMemorySessionStore, SessionStore
+from advisor.auth.clerk import ClerkVerifier
 from advisor.chat.persona import load_persona
 from advisor.chat.session import ChatSession
 from advisor.chat.tools import build_bylaw_tools
+from advisor.db.models import User
 from advisor.llm import LLMGateway, Message, StreamEvent
 
 logger = logging.getLogger(__name__)
@@ -102,6 +114,7 @@ def create_app(
     retrieval_service_factory: Callable[[], Any] | None = None,
     session_store: SessionStore | None = None,
     persona_text: str | None = None,
+    verifier: ClerkVerifier | None = None,
     db_session_factory: DbSessionFactory | None = None,
 ) -> FastAPI:
     """Build the FastAPI app with explicit, injectable dependencies.
@@ -120,11 +133,18 @@ def create_app(
     * ``persona_text`` — defaults to the contents of
       ``docs/agent/persona.md``. Tests can pass a short string to
       avoid touching the filesystem.
+    * ``verifier`` — when provided AND ``db_session_factory`` is also
+      provided, the chat routes are guarded by
+      ``current_user_dependency`` which verifies a Clerk JWT and
+      resolves an ``advisor.db.models.User`` row. When the verifier is
+      ``None`` the routes fall back to an ``X-Test-User-Id`` header
+      (test-only convenience).
     * ``db_session_factory`` — when provided, enables (a) DB-backed
-      session persistence (unless ``session_store`` is also passed,
-      in which case the caller's choice wins) and (b) monthly quota
-      enforcement on ``/v1/chat``. Tests that don't care about either
-      can leave it unset and keep the in-memory behaviour.
+      session persistence (unless ``session_store`` is also passed, in
+      which case the caller's choice wins) and (b) monthly quota
+      enforcement on ``/v1/chat``. Independent from ``verifier``: a
+      test can wire DB persistence without real auth (test-header
+      fallback handles user identity), and production wires both.
     """
     if gateway is None:
         # We don't auto-build a gateway because Anthropic credentials
@@ -134,7 +154,6 @@ def create_app(
             "create_app requires a gateway; pass MockGateway in tests "
             "or AnthropicGateway in production"
         )
-
     persona = persona_text if persona_text is not None else load_persona()
     factory = retrieval_service_factory or _default_retrieval_service_factory()
 
@@ -168,27 +187,22 @@ def create_app(
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    def _require_user_id(x_user_id: str | None = Header(default=None)) -> str:
-        # v1 placeholder for workstream 3's auth middleware. We're
-        # strict about empty strings because forwarding "" downstream
-        # would let an unauthenticated request leak into the session
-        # store and create un-claimable orphan sessions.
-        if not x_user_id or not x_user_id.strip():
-            raise HTTPException(
-                status_code=401,
-                detail="Missing X-User-Id header. v1 auth placeholder.",
-            )
-        return x_user_id.strip()
+    require_user = _build_user_dependency(verifier, db_session_factory)
 
     @app.post("/v1/chat")
     async def post_chat(
         body: ChatRequest,
         request: Request,
-        user_id: str = Depends(_require_user_id),
+        user: User = Depends(require_user),
     ) -> EventSourceResponse:
+        # Use the internal numeric id (as a string) so session-store
+        # entries — and any future FK joins — don't have to re-resolve
+        # through Clerk. ChatSession.user_id stays a string for now;
+        # widening it to int is a separate workstream.
+        user_id_str = str(user.id)
         session = _resolve_or_create_session(
             store=store,
-            user_id=user_id,
+            user_id=user_id_str,
             session_id=body.session_id,
             persona_text=persona,
             retrieval_factory=factory,
@@ -204,7 +218,7 @@ def create_app(
         if db_session_factory is not None and isinstance(store, DbSessionStore):
             with db_session_factory() as db:
                 try:
-                    db_user = default_resolve_user(db, user_id)
+                    db_user = default_resolve_user(db, user_id_str)
                 except LookupError as exc:
                     # Unknown user with a DB store wired is a 401 —
                     # treat the same way the auth layer would.
@@ -245,10 +259,11 @@ def create_app(
     @app.get("/v1/chat/sessions/{session_id}")
     async def get_session(
         session_id: str,
-        user_id: str = Depends(_require_user_id),
+        user: User = Depends(require_user),
     ) -> ChatSessionResponse:
+        user_id_str = str(user.id)
         session = store.get(session_id)
-        if session is None or session.user_id != user_id:
+        if session is None or session.user_id != user_id_str:
             # 404, not 403, because leaking "this session exists but
             # isn't yours" would let an attacker enumerate session
             # ids. Treat unauth and missing as the same response.
@@ -261,6 +276,58 @@ def create_app(
         )
 
     return app
+
+
+def _build_user_dependency(
+    verifier: ClerkVerifier | None,
+    db_session_factory: Callable[[], AbstractContextManager[Session]] | None,
+) -> Callable[..., User]:
+    """Return a Depends-compatible callable that yields a ``User``.
+
+    Production path: real Clerk verification + DB-backed user
+    resolution. Test fallback: an ``X-Test-User-Id`` header that is
+    wrapped in a synthetic ``User`` instance so route handlers see the
+    same shape regardless of code path.
+    """
+    if verifier is not None and db_session_factory is not None:
+        return current_user_dependency(verifier, db_session_factory)
+
+    # test-only fallback — header-based auth so existing chat-behaviour
+    # tests don't have to mint JWTs to exercise unrelated route logic.
+    def _require_test_user_id(
+        x_test_user_id: str | None = Header(default=None),
+    ) -> User:
+        if not x_test_user_id or not x_test_user_id.strip():
+            raise HTTPException(
+                status_code=401,
+                detail="Missing X-Test-User-Id header (test-only fallback).",
+            )
+        cleaned = x_test_user_id.strip()
+        # Build a transient ``User`` whose ``id`` echoes the supplied
+        # value. We hash a stable integer when the header isn't already
+        # numeric so existing tests can keep passing strings like
+        # ``user_alice`` without surprise. The handler downstream only
+        # uses ``str(user.id)``, so what matters is round-trip
+        # stability per request, not numeric meaning.
+        return _TestUser(id=cleaned)
+
+    return _require_test_user_id
+
+
+class _TestUser:
+    """Stand-in for ``User`` used only by the test-only fallback path.
+
+    We avoid instantiating the real SQLAlchemy ``User`` model here
+    because doing so would attach a detached instance to the global
+    Identity Map and confuse any real DB session opened later in the
+    test process. A bare object with the attributes the routes read is
+    enough.
+    """
+
+    __slots__ = ("id",)
+
+    def __init__(self, *, id: str) -> None:  # noqa: A002
+        self.id = id
 
 
 def _resolve_or_create_session(

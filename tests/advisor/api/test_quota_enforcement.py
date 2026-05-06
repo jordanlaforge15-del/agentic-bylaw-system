@@ -108,7 +108,7 @@ def test_chat_succeeds_when_under_quota(tmp_path: Path, monkeypatch) -> None:
         response = client.post(
             "/v1/chat",
             json={"message": "hi"},
-            headers={"X-User-Id": str(user_id)},
+            headers={"X-Test-User-Id": str(user_id)},
         )
     assert response.status_code == 200
     assert "message_stop" in _parse_sse_event_names(response.text)
@@ -138,7 +138,7 @@ def test_chat_returns_429_when_quota_exceeded(
         response = client.post(
             "/v1/chat",
             json={"message": "hi"},
-            headers={"X-User-Id": str(user_id)},
+            headers={"X-Test-User-Id": str(user_id)},
         )
     assert response.status_code == 429
     body = response.json()
@@ -175,13 +175,13 @@ def test_quota_increments_on_successful_chat(
         r1 = client.post(
             "/v1/chat",
             json={"message": "first"},
-            headers={"X-User-Id": str(user_id)},
+            headers={"X-Test-User-Id": str(user_id)},
         )
         assert r1.status_code == 200
         r2 = client.post(
             "/v1/chat",
             json={"message": "second"},
-            headers={"X-User-Id": str(user_id)},
+            headers={"X-Test-User-Id": str(user_id)},
         )
         assert r2.status_code == 200
 
@@ -223,7 +223,7 @@ def test_quota_resets_at_month_boundary(
         response = client.post(
             "/v1/chat",
             json={"message": "first of june"},
-            headers={"X-User-Id": str(user_id)},
+            headers={"X-Test-User-Id": str(user_id)},
         )
     assert response.status_code == 200
 
