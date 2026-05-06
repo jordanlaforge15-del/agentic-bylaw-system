@@ -81,6 +81,17 @@ class User(Base):
     stripe_customer_id: Mapped[str | None] = mapped_column(
         String(255), index=True
     )
+    # Subscription bookkeeping populated by the billing webhook.
+    # Nullable because free-tier users have no subscription, and a
+    # cancelled subscription clears these back to None until the
+    # user upgrades again.
+    stripe_subscription_id: Mapped[str | None] = mapped_column(
+        String(255), index=True
+    )
+    subscription_status: Mapped[str | None] = mapped_column(String(32))
+    subscription_current_period_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     metadata_json: Mapped[dict] = mapped_column(
         MutableDict.as_mutable(json_type()), nullable=False, default=dict
     )

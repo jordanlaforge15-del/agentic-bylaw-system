@@ -32,6 +32,9 @@ EXPECTED_COLUMNS = {
         "monthly_queries_used",
         "month_started_at",
         "stripe_customer_id",
+        "stripe_subscription_id",
+        "subscription_status",
+        "subscription_current_period_end",
         "metadata_json",
     },
     "advisor_chat_session": {
