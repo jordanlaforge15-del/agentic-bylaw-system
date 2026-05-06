@@ -24,13 +24,16 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from advisor.api.db_session_store import DbSessionStore, default_resolve_user
+from advisor.api.quota import enforce_and_record_query
 from advisor.api.sessions import InMemorySessionStore, SessionStore
 from advisor.chat.persona import load_persona
 from advisor.chat.session import ChatSession
@@ -38,6 +41,9 @@ from advisor.chat.tools import build_bylaw_tools
 from advisor.llm import LLMGateway, Message, StreamEvent
 
 logger = logging.getLogger(__name__)
+
+
+DbSessionFactory = Callable[[], AbstractContextManager[Session]]
 
 
 # Production retrieval factory: opens a fresh session per request via
@@ -96,10 +102,11 @@ def create_app(
     retrieval_service_factory: Callable[[], Any] | None = None,
     session_store: SessionStore | None = None,
     persona_text: str | None = None,
+    db_session_factory: DbSessionFactory | None = None,
 ) -> FastAPI:
     """Build the FastAPI app with explicit, injectable dependencies.
 
-    All four injection points are optional:
+    Injection points (all optional):
 
     * ``gateway`` — defaults to ``None`` (callers must pass one for
       v1; we don't auto-construct AnthropicGateway because it requires
@@ -107,10 +114,17 @@ def create_app(
     * ``retrieval_service_factory`` — defaults to a production
       session_scope-backed factory. Tests pass a stub callable that
       yields a service bound to an in-memory sqlite session.
-    * ``session_store`` — defaults to ``InMemorySessionStore``.
+    * ``session_store`` — defaults to ``InMemorySessionStore`` (or
+      ``DbSessionStore`` when ``db_session_factory`` is supplied and
+      ``session_store`` is omitted).
     * ``persona_text`` — defaults to the contents of
       ``docs/agent/persona.md``. Tests can pass a short string to
       avoid touching the filesystem.
+    * ``db_session_factory`` — when provided, enables (a) DB-backed
+      session persistence (unless ``session_store`` is also passed,
+      in which case the caller's choice wins) and (b) monthly quota
+      enforcement on ``/v1/chat``. Tests that don't care about either
+      can leave it unset and keep the in-memory behaviour.
     """
     if gateway is None:
         # We don't auto-build a gateway because Anthropic credentials
@@ -121,9 +135,22 @@ def create_app(
             "or AnthropicGateway in production"
         )
 
-    store: SessionStore = session_store or InMemorySessionStore()
     persona = persona_text if persona_text is not None else load_persona()
     factory = retrieval_service_factory or _default_retrieval_service_factory()
+
+    # If the caller wired a DB factory and didn't override the store,
+    # default to the DB-backed store. Otherwise fall back to the
+    # in-memory store as before so existing tests stay green.
+    store: SessionStore
+    if session_store is not None:
+        store = session_store
+    elif db_session_factory is not None:
+        store = DbSessionStore(
+            db_session_factory=db_session_factory,
+            tool_defs_handler_factory=lambda: _build_tools_with_factory(factory),
+        )
+    else:
+        store = InMemorySessionStore()
 
     app = FastAPI(title="Halifax Bylaw Advisor", version="0.1.0")
 
@@ -135,6 +162,7 @@ def create_app(
     app.state.session_store = store
     app.state.persona_text = persona
     app.state.retrieval_factory = factory
+    app.state.db_session_factory = db_session_factory
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -165,6 +193,38 @@ def create_app(
             persona_text=persona,
             retrieval_factory=factory,
         )
+
+        # Enforce + record the monthly quota BEFORE we start streaming.
+        # If the user is over their limit, ``enforce_and_record_query``
+        # raises a 429 and FastAPI never opens the SSE response. We
+        # only enforce when a DB factory is wired AND we're using a
+        # DB-backed store — the in-memory test mode skips this so
+        # existing tests don't need DB fixtures. Token counts are 0
+        # for now — see advisor.api.quota's docstring.
+        if db_session_factory is not None and isinstance(store, DbSessionStore):
+            with db_session_factory() as db:
+                try:
+                    db_user = default_resolve_user(db, user_id)
+                except LookupError as exc:
+                    # Unknown user with a DB store wired is a 401 —
+                    # treat the same way the auth layer would.
+                    raise HTTPException(
+                        status_code=401, detail="Unknown user"
+                    ) from exc
+                try:
+                    db_session_pk = int(session.session_id)
+                except ValueError:
+                    db_session_pk = None
+                enforce_and_record_query(
+                    db,
+                    db_user,
+                    event_type="llm_call",
+                    session_id=db_session_pk,
+                    model=session.model,
+                    provider=getattr(gateway, "name", None),
+                    tokens_input=0,
+                    tokens_output=0,
+                )
 
         async def event_stream() -> AsyncIterator[dict[str, str]]:
             # Send the session id up front so the frontend can persist
