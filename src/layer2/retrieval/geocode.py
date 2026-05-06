@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -8,13 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature, GeocodeCache
-from layer2.retrieval.google_geocoder import (
-    GoogleGeocoder,
-    GoogleGeocoderConfig,
-    load_google_maps_api_key,
-)
+from layer2.retrieval.google_geocoder import GoogleGeocoder, GoogleGeocoderConfig
 from layer2.retrieval.location import LocationReference
 from layer2.retrieval.spatial import ResolvedLocation
+
+logger = logging.getLogger(__name__)
 
 
 _STREET_SUFFIX_NORMALIZATION = {
@@ -242,19 +241,39 @@ def _find_by_civic_address(
     return None
 
 
-def _maybe_build_google_geocoder() -> GoogleGeocoder | None:
-    """Lazy-build a GoogleGeocoder from settings if a key is on disk.
+_MISSING_KEY_LOGGED = False
 
-    Returning None when there's no key file is the silent-skip path that
-    keeps existing test environments working without injecting credentials.
-    The function is intentionally module-level (not cached) so a key dropped
-    in mid-run picks up on the next call.
+
+def _maybe_build_google_geocoder() -> GoogleGeocoder | None:
+    """Lazy-build a GoogleGeocoder from settings if ``GOOGLE_MAPS_API_KEY``
+    is set in the environment (or in an auto-loaded .env file).
+
+    Returns None when no key is configured. We emit a one-shot WARNING the
+    first time this happens per process so an operator can SEE that the
+    geocoder is silently disabled — the previous file-path implementation
+    failed silently when launched with the wrong cwd, which masked exactly
+    this kind of misconfiguration for hours at a time.
+
+    The function is intentionally module-level (not cached) so a key set
+    mid-run via ``os.environ[...]`` picks up on the next call once the
+    settings cache is cleared. ``get_settings()`` itself IS cached, so a
+    long-running process started without the key needs the cache cleared
+    or a restart for a fresh key to take effect.
     """
+    global _MISSING_KEY_LOGGED
     from layer2.config import get_settings
 
     settings = get_settings()
-    api_key = load_google_maps_api_key(settings.google_maps_api_key_path)
+    api_key = settings.google_maps_api_key
     if not api_key:
+        if not _MISSING_KEY_LOGGED:
+            logger.warning(
+                "Google Maps geocoder disabled: GOOGLE_MAPS_API_KEY is not "
+                "set. Civic-address resolution will fall through to the "
+                "in-database resolver only. Set the env var (or add it to "
+                ".env) and restart to enable the fallback."
+            )
+            _MISSING_KEY_LOGGED = True
         return None
     return GoogleGeocoder(
         GoogleGeocoderConfig(
