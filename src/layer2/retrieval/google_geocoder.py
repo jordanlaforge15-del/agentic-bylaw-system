@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -45,19 +44,6 @@ class HttpClient(Protocol):
     monkeypatching httpx globally."""
 
     def get(self, url: str, *, params: dict[str, Any], timeout: float) -> Any: ...
-
-
-def load_google_maps_api_key(path: str | Path) -> str | None:
-    """Read the API key from disk. Returns None if the file is missing or
-    empty so callers can detect the "no geocoder configured" case without
-    raising. The contents are stripped — trailing newlines from text editors
-    have caused real headaches with these tokens before.
-    """
-    p = Path(path)
-    if not p.exists():
-        return None
-    raw = p.read_text(encoding="utf-8").strip()
-    return raw or None
 
 
 class GoogleGeocoder:

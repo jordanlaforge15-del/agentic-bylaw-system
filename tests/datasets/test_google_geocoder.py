@@ -12,11 +12,7 @@ from layer1.models.enums import FragmentType, ParseStatus
 from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 from layer2.db.init_db import create_all as create_layer2
 from layer2.retrieval.geocode import normalize_reference, resolve_location
-from layer2.retrieval.google_geocoder import (
-    GoogleGeocoder,
-    GoogleGeocoderConfig,
-    load_google_maps_api_key,
-)
+from layer2.retrieval.google_geocoder import GoogleGeocoder, GoogleGeocoderConfig
 from layer2.retrieval.location import LocationReference
 
 
@@ -74,22 +70,6 @@ def _civic(num: str = "1234", street: str = "Barrington Street") -> LocationRefe
 
 def _config(api_key: str = "test-key") -> GoogleGeocoderConfig:
     return GoogleGeocoderConfig(api_key=api_key, region_bias="ca", timeout_s=1.0)
-
-
-def test_load_api_key_strips_trailing_newline(tmp_path: Path):
-    p = tmp_path / "key"
-    p.write_text("AIzaSyABC123\n")
-    assert load_google_maps_api_key(p) == "AIzaSyABC123"
-
-
-def test_load_api_key_returns_none_when_missing(tmp_path: Path):
-    assert load_google_maps_api_key(tmp_path / "absent") is None
-
-
-def test_load_api_key_returns_none_when_empty(tmp_path: Path):
-    p = tmp_path / "empty"
-    p.write_text("   \n")
-    assert load_google_maps_api_key(p) is None
 
 
 def test_geocoder_returns_point_for_rooftop_match():
@@ -288,6 +268,38 @@ def test_geocoder_skips_parcel_id_kind():
     ref = LocationReference(raw_text="PID 123", kind="parcel_id", parcel_id="123")
     assert geocoder.resolve(ref) is None
     assert http.calls == []  # no network call attempted
+
+
+def test_settings_reads_google_maps_api_key_from_env(monkeypatch):
+    """``GOOGLE_MAPS_API_KEY`` must be read from the env, not a file path —
+    the previous file-path implementation silently disabled the geocoder
+    when the calling process's cwd wasn't the repo root. This test locks
+    in the env-only contract."""
+    from layer2 import config as cfg
+
+    cfg.get_settings.cache_clear()
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "test-env-key")
+    settings = cfg.Layer2Settings()
+    assert settings.google_maps_api_key == "test-env-key"
+    cfg.get_settings.cache_clear()
+
+
+def test_settings_google_maps_api_key_defaults_to_none(monkeypatch):
+    """When ``GOOGLE_MAPS_API_KEY`` is unset, the field is None — not an
+    empty string, not a path. ``_maybe_build_google_geocoder`` keys off
+    truthiness, so None is the correct disabled-state sentinel."""
+    from layer2 import config as cfg
+
+    cfg.get_settings.cache_clear()
+    monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+    # Avoid pydantic-settings auto-loading a .env that has the key set
+    # locally — we want to assert the unset behaviour deterministically.
+    monkeypatch.setattr(
+        cfg.Layer2Settings, "model_config", {**cfg.Layer2Settings.model_config, "env_file": None}
+    )
+    settings = cfg.Layer2Settings()
+    assert settings.google_maps_api_key is None
+    cfg.get_settings.cache_clear()
 
 
 def test_resolve_location_uses_google_fallback_when_dataset_misses(tmp_path: Path):

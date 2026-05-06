@@ -32,11 +32,13 @@ class Layer2Settings(BaseSettings):
         default="conditioned_by,references,defines,applies_to,excepts,modifies",
         alias="LAYER2_SEMANTIC_GRAPH_ALLOWED_EDGE_TYPES",
     )
-    # External geocoder fallback. The key is read from a file at runtime so
-    # it never lives in source. The default path matches the convention the
-    # repo already uses for OpenAI keys; both files are gitignored.
-    google_maps_api_key_path: str = Field(
-        default="google_maps_api_key", alias="GOOGLE_MAPS_API_KEY_PATH"
+    # External geocoder fallback. Read directly from the env (or .env file
+    # auto-loaded by pydantic-settings). Previously this was a *file path* —
+    # which silently broke when the calling process's cwd wasn't the repo
+    # root, since the relative path failed to resolve and the geocoder was
+    # disabled with no log line. Env-only is cwd-independent by design.
+    google_maps_api_key: str | None = Field(
+        default=None, alias="GOOGLE_MAPS_API_KEY"
     )
     google_maps_region_bias: str = Field(default="ca", alias="GOOGLE_MAPS_REGION_BIAS")
     # Hard-filter on geocoding results. country:CA prevents Google from
