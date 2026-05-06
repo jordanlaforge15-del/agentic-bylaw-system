@@ -31,7 +31,7 @@ Frontends that consume this don't need to know it's synthetic.
 """
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 
 from advisor.llm import (
@@ -67,6 +67,15 @@ class ChatSession:
     tool_defs: list[ToolDefinition] = field(default_factory=list)
     tool_handlers: dict[str, ToolHandler] = field(default_factory=dict)
     model: str = "claude-opus-4-5"
+    # Hook fired AFTER ``send_user_message_blocking`` finishes a turn —
+    # i.e. after ``self.messages`` has been replaced with the full
+    # post-turn conversation. The DB-backed ``SessionStore`` registers
+    # this to persist newly-appended messages without the chat route
+    # having to know anything about persistence. Default ``None`` keeps
+    # the in-memory path's behaviour unchanged.
+    on_turn_complete: Callable[["ChatSession"], None] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     async def send_user_message_blocking(
         self, gateway: LLMGateway, text: str
@@ -102,6 +111,15 @@ class ChatSession:
         # already includes the original user message because we
         # appended it before building the request.
         self.messages = list(result.conversation)
+
+        # Fire the post-turn hook AFTER messages are settled. The
+        # callback receives ``self`` so it can read the new message
+        # list and persist whatever it likes. Exceptions propagate —
+        # a persistence failure should fail the chat turn loudly
+        # rather than silently drop a message.
+        if self.on_turn_complete is not None:
+            self.on_turn_complete(self)
+
         return result.final_response
 
     async def send_user_message(
