@@ -116,6 +116,11 @@ def create_app(
     persona_text: str | None = None,
     verifier: ClerkVerifier | None = None,
     db_session_factory: DbSessionFactory | None = None,
+    billing_settings: Any | None = None,
+    stripe_client_factory: Callable[[], Any] | None = None,
+    billing_db_session_factory: Callable[[], Any] | None = None,
+    billing_user_dependency: Callable[..., Any] | None = None,
+    billing_user_resolver: Callable[[Any, Any], Any] | None = None,
 ) -> FastAPI:
     """Build the FastAPI app with explicit, injectable dependencies.
 
@@ -145,6 +150,16 @@ def create_app(
       enforcement on ``/v1/chat``. Independent from ``verifier``: a
       test can wire DB persistence without real auth (test-header
       fallback handles user identity), and production wires both.
+    * Billing kwargs (``billing_settings``, ``stripe_client_factory``,
+      ``billing_db_session_factory``, ``billing_user_dependency``,
+      ``billing_user_resolver``) — wire the Stripe billing router.
+      When all five are provided AND ``billing_settings.enabled`` is
+      True, the live billing router is mounted. Otherwise a dormant
+      stub router is mounted that returns 503 from every billing
+      endpoint, so the frontend can probe ``/v1/billing/*`` without
+      crashing during the pre-Stripe phase. Typed as ``Any`` so this
+      module doesn't import ``advisor.billing`` eagerly — the import
+      is lazy in the body for the same reason the Stripe SDK is.
     """
     if gateway is None:
         # We don't auto-build a gateway because Anthropic credentials
@@ -182,6 +197,39 @@ def create_app(
     app.state.persona_text = persona
     app.state.retrieval_factory = factory
     app.state.db_session_factory = db_session_factory
+
+    # Billing router. Mounted in two flavours:
+    # * If ``billing_settings`` is provided AND ``enabled=True`` AND
+    #   the wiring kwargs are present, the live router is mounted.
+    # * Otherwise, a dormant stub router that 503s every endpoint —
+    #   so the frontend can probe ``/v1/billing/me`` regardless and
+    #   the operator can flip the flag without redeploying. This
+    #   block is the ONLY billing-related edit to this file; all
+    #   other billing logic lives in ``advisor.billing``.
+    from advisor.billing.router import (  # noqa: PLC0415 — lazy import
+        build_billing_router,
+        build_dormant_billing_router,
+    )
+
+    if (
+        billing_settings is not None
+        and getattr(billing_settings, "enabled", False)
+        and stripe_client_factory is not None
+        and billing_db_session_factory is not None
+        and billing_user_dependency is not None
+        and billing_user_resolver is not None
+    ):
+        app.include_router(
+            build_billing_router(
+                settings=billing_settings,
+                client_factory=stripe_client_factory,
+                db_session_factory=billing_db_session_factory,
+                user_dependency=billing_user_dependency,
+                user_resolver=billing_user_resolver,
+            )
+        )
+    else:
+        app.include_router(build_dormant_billing_router())
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
