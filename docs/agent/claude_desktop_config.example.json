@@ -1,0 +1,22 @@
+{
+  "//": "Two example shapes for the bylaw-retrieval MCP server in Claude Desktop's config file.",
+  "//path": "Save the actual file at ~/Library/Application Support/Claude/claude_desktop_config.json (macOS) or the equivalent on your OS.",
+  "//pick-one": "Use ONE of the two shapes below depending on what your Claude Desktop build supports.",
+
+  "mcpServers": {
+    "//comment-http": "PREFERRED: streamable-HTTP transport when Claude Desktop supports it directly. Replace YOUR_HOSTED_URL with the URL provided to you.",
+    "halifax-bylaw-advisor-http": {
+      "url": "https://YOUR_HOSTED_URL/mcp",
+      "transport": "streamable-http"
+    },
+
+    "//comment-stdio": "FALLBACK: stdio transport via a local bridge client. Use this if your Claude Desktop build only supports stdio. Replace the path with wherever the bridge binary lives.",
+    "halifax-bylaw-advisor-stdio": {
+      "command": "/path/to/bylaw-advisor-bridge",
+      "args": ["--remote-url", "https://YOUR_HOSTED_URL/mcp"],
+      "env": {
+        "BYLAW_ADVISOR_API_KEY": "your-api-key-from-signup"
+      }
+    }
+  }
+}
