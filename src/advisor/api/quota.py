@@ -20,12 +20,14 @@ is what every billing-aware SaaS lands on for quota-exhaustion.
 
 Token-counting note
 -------------------
-Callers currently pass ``tokens_input=0`` / ``tokens_output=0`` because
-real per-turn token accounting is a follow-up. The call site is wired
-end-to-end so the audit row exists with ``event_type="llm_call"``;
-plumbing the actual token counts through the synthetic-streaming path
-in ``advisor.chat.session`` is the next deliverable. See the chat
-route in ``advisor.api.app`` for the call site.
+The up-front ``enforce_and_record_query`` call passes ``tokens_input=0``
+/ ``tokens_output=0`` because we haven't called the LLM yet. After the
+chat stream finishes, the route calls ``update_usage_event_tokens`` to
+patch the row with the real aggregate from ``ChatSession.last_turn_usage``.
+The two-step pattern (record up front, update after) keeps quota
+enforcement strictly *before* the LLM call (so a user over their limit
+can never run a free LLM call) while still recording accurate per-event
+token counts in the audit trail.
 """
 from __future__ import annotations
 
@@ -88,3 +90,26 @@ def enforce_and_record_query(
                 ),
             },
         ) from exc
+
+
+def update_usage_event_tokens(
+    db: Session,
+    *,
+    usage_event_id: int,
+    tokens_input: int,
+    tokens_output: int,
+) -> None:
+    """Patch a previously recorded ``UsageEvent`` with real token counts.
+
+    Called from the chat route after the LLM stream finishes — by that
+    point ``ChatSession.last_turn_usage`` carries the aggregate counts
+    that weren't known at quota-enforcement time. A missing row is
+    silently ignored; the most likely cause is that the up-front
+    ``record_query`` raised before the row was committed, in which
+    case there's nothing to update.
+    """
+    row = db.get(UsageEvent, usage_event_id)
+    if row is None:
+        return
+    row.tokens_input = tokens_input
+    row.tokens_output = tokens_output

@@ -227,3 +227,33 @@ async def test_multiple_tool_calls_in_one_response_handled_in_order():
     assert all(isinstance(b, ToolResultBlock) for b in user_msg.content)
     ids = [b.tool_use_id for b in user_msg.content if isinstance(b, ToolResultBlock)]
     assert ids == ["tu_1", "tu_2"]
+
+
+@pytest.mark.asyncio
+async def test_total_usage_aggregates_across_iterations():
+    """``total_usage`` sums ``CompletionResponse.usage`` from every
+    iteration. The default MockGateway usage is 10/20 per call, so a
+    two-iteration tool-use loop reports 20/40."""
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+            ),
+            text_response("done."),
+        ]
+    )
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return "ok"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+    )
+
+    assert result.total_usage is not None
+    assert result.total_usage.input_tokens == 20
+    assert result.total_usage.output_tokens == 40

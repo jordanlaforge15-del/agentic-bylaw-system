@@ -42,6 +42,7 @@ from advisor.llm import (
     Message,
     StreamEvent,
     TextBlock,
+    TokenUsage,
     ToolDefinition,
 )
 from advisor.llm.mock import MockGateway
@@ -74,6 +75,14 @@ class ChatSession:
     # having to know anything about persistence. Default ``None`` keeps
     # the in-memory path's behaviour unchanged.
     on_turn_complete: Callable[["ChatSession"], None] | None = field(
+        default=None, repr=False, compare=False
+    )
+    # Aggregate token usage from the most recent ``send_user_message_blocking``
+    # call (sum of every per-iteration ``CompletionResponse.usage`` the
+    # tool loop produced). Reset to ``None`` between turns. Persistence
+    # hooks read this to attribute tokens to the final assistant row,
+    # and the chat route reads it to update the up-front ``UsageEvent``.
+    last_turn_usage: TokenUsage | None = field(
         default=None, repr=False, compare=False
     )
 
@@ -111,6 +120,11 @@ class ChatSession:
         # already includes the original user message because we
         # appended it before building the request.
         self.messages = list(result.conversation)
+        # Stash the aggregate usage so the persistence hook (and the
+        # chat route) can attribute real token counts. Reset before
+        # we set so a turn with no reported usage clears the prior
+        # value rather than carrying it forward.
+        self.last_turn_usage = result.total_usage
 
         # Fire the post-turn hook AFTER messages are settled. The
         # callback receives ``self`` so it can read the new message
