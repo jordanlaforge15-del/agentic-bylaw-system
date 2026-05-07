@@ -21,6 +21,7 @@ type Props = {
   thinking: boolean;
   thinkSteps: string[];
   thinkStep: number;
+  error?: string | null;
 };
 
 export function ChatThread({
@@ -28,11 +29,19 @@ export function ChatThread({
   thinking,
   thinkSteps,
   thinkStep,
+  error,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  // Track total streamed body length so a streaming agent reply
+  // also auto-scrolls as text deltas arrive (not just on message
+  // count change).
+  const totalBodyLen = messages.reduce(
+    (n, m) => n + (m.kind === "agent" ? m.body.length : 0),
+    0,
+  );
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [messages.length, thinking, thinkStep]);
+  }, [messages.length, thinking, thinkStep, totalBodyLen]);
 
   return (
     <div
@@ -45,6 +54,23 @@ export function ChatThread({
         return <AgentMsg key={i} msg={m} idx={i} />;
       })}
       {thinking && <ThinkingMsg steps={thinkSteps} step={thinkStep} />}
+      {error && <ErrorMsg body={error} />}
+    </div>
+  );
+}
+
+function ErrorMsg({ body }: { body: string }) {
+  return (
+    <div
+      className="self-center max-w-[680px] text-[12.5px] font-mono"
+      style={{
+        color: "var(--brick)",
+        border: "1px solid var(--brick)",
+        padding: "10px 14px",
+        letterSpacing: "0.02em",
+      }}
+    >
+      {body}
     </div>
   );
 }
@@ -97,91 +123,80 @@ function AgentMsg({ msg, idx }: { msg: AgentMessage; idx: number }) {
       </div>
 
       <div className="pl-8 flex flex-col gap-3.5">
+        {msg.answer && (
+          <div
+            className="font-sans font-extrabold text-[24px] leading-[1.1]"
+            style={{ letterSpacing: "-0.03em" }}
+          >
+            <HighlightWord>{msg.answer}</HighlightWord>
+          </div>
+        )}
         <div
-          className="font-sans font-extrabold text-[24px] leading-[1.1]"
-          style={{ letterSpacing: "-0.03em" }}
-        >
-          <HighlightWord>{msg.answer}</HighlightWord>
-        </div>
-        <div
-          className="text-[14.5px] leading-[1.55] text-text"
-          style={{ maxWidth: 640 }}
+          className="text-[14.5px] leading-[1.6] text-text whitespace-pre-wrap"
+          style={{ maxWidth: 720 }}
         >
           {msg.body}
         </div>
 
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className={cn(
-            "self-start inline-flex items-center gap-2 cursor-pointer font-mono uppercase",
-            "bg-transparent border border-hair text-text-muted",
-            "px-2.5 py-[7px]",
-          )}
-          style={{ fontSize: 10.5, letterSpacing: "0.08em" }}
-        >
-          <span>{open ? "▾" : "▸"}</span>
-          <span>{msg.reasoning.length} reasoning steps</span>
-        </button>
+        {msg.reasoning.length > 0 && (
+          <>
+            <button
+              type="button"
+              onClick={() => setOpen((o) => !o)}
+              className={cn(
+                "self-start inline-flex items-center gap-2 cursor-pointer font-mono uppercase",
+                "bg-transparent border border-hair text-text-muted",
+                "px-2.5 py-[7px]",
+              )}
+              style={{ fontSize: 10.5, letterSpacing: "0.08em" }}
+            >
+              <span>{open ? "▾" : "▸"}</span>
+              <span>{msg.reasoning.length} reasoning steps</span>
+            </button>
+            {open && (
+              <div className="border border-hair bg-surface-alt">
+                {msg.reasoning.map((r, i) => (
+                  <div
+                    key={r.n}
+                    className="grid items-baseline gap-3.5 px-3.5 py-3"
+                    style={{
+                      gridTemplateColumns: "36px 76px 1fr",
+                      borderBottom:
+                        i < msg.reasoning.length - 1
+                          ? "1px solid var(--hair)"
+                          : "none",
+                    }}
+                  >
+                    <Mono muted>{r.n}</Mono>
+                    <Mono accent size={11} className="font-semibold">
+                      {r.cite}
+                    </Mono>
+                    <span className="text-[13px] leading-[1.5]">{r.body}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
 
-        {open && (
-          <div className="border border-hair bg-surface-alt">
-            {msg.reasoning.map((r, i) => (
-              <div
-                key={r.n}
-                className="grid items-baseline gap-3.5 px-3.5 py-3"
+        {msg.sources.length > 0 && (
+          <div className="flex gap-1.5 flex-wrap">
+            {msg.sources.map((s, i) => (
+              <span
+                key={i}
+                className="inline-flex items-center gap-1.5 border border-hair font-mono text-text-muted"
                 style={{
-                  gridTemplateColumns: "36px 76px 1fr",
-                  borderBottom:
-                    i < msg.reasoning.length - 1
-                      ? "1px solid var(--hair)"
-                      : "none",
+                  padding: "4px 8px",
+                  fontSize: 10,
+                  letterSpacing: "0.04em",
                 }}
               >
-                <Mono muted>{r.n}</Mono>
-                <Mono accent size={11} className="font-semibold">
-                  {r.cite}
-                </Mono>
-                <span className="text-[13px] leading-[1.5]">{r.body}</span>
-              </div>
+                <span className="bg-accent" style={{ width: 4, height: 4 }} />
+                {s.section}
+              </span>
             ))}
           </div>
         )}
-
-        <div className="flex gap-1.5 flex-wrap">
-          {msg.sources.map((s, i) => (
-            <span
-              key={i}
-              className="inline-flex items-center gap-1.5 border border-hair font-mono text-text-muted"
-              style={{
-                padding: "4px 8px",
-                fontSize: 10,
-                letterSpacing: "0.04em",
-              }}
-            >
-              <span className="bg-accent" style={{ width: 4, height: 4 }} />
-              {s.section}
-            </span>
-          ))}
-        </div>
-
-        <div className="flex gap-2 mt-0.5">
-          {["Copy", "Cite", "Export", "Helpful", "Off"].map((a) => (
-            <button
-              key={a}
-              type="button"
-              className="bg-transparent text-text-muted cursor-pointer font-mono uppercase"
-              style={{
-                padding: "4px 0",
-                fontSize: 10,
-                letterSpacing: "0.1em",
-                marginRight: 8,
-              }}
-            >
-              {a}
-            </button>
-          ))}
-        </div>
       </div>
     </div>
   );
