@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+/*
+ * ABS° design system. Two themes — Blueprint (light) and Setback (dark) —
+ * keyed off [data-mode] on the <html> element. Tailwind utility classes
+ * read the values via the @theme block below, so swapping data-mode
+ * re-themes every consumer of bg-surface, text-text-muted, etc., with
+ * zero JS work.
+ *
+ * No border-radius anywhere. Sharp corners are part of the brand.
+ */
+
+@theme {
+  --font-sans: var(--font-inter-tight), "Inter Tight", system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace,
+    monospace;
+
+  --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
+  --color-surface-ink: var(--surface-ink);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-rule: var(--rule);
+  --color-hair: var(--hair);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-on-accent: var(--on-accent);
+  --color-brick: var(--brick);
+  --color-overlay: var(--overlay);
+}
+
+/* Light · "Blueprint" — default. */
+:root,
+[data-mode="light"] {
+  --surface: #ffffff;
+  --surface-alt: #f7f6f2;
+  --surface-ink: #0a0a0a;
+  --text: #0a0a0a;
+  --text-muted: #7a7468;
+  --rule: rgba(10, 10, 10, 0.45);
+  --hair: rgba(10, 10, 10, 0.1);
+  --accent: #c9f24c;
+  --accent-ink: #5a7a1a;
+  --on-accent: #0a0a0a;
+  --brick: #a64b2a;
+  --overlay: rgba(10, 10, 10, 0.5);
+}
+
+/* Dark · "Setback". */
+[data-mode="dark"] {
+  --surface: #0a0a0a;
+  --surface-alt: #171614;
+  --surface-ink: #ede8db;
+  --text: #ede8db;
+  --text-muted: #9a9484;
+  --rule: rgba(237, 232, 219, 0.5);
+  --hair: rgba(237, 232, 219, 0.12);
+  --accent: #c9f24c;
+  --accent-ink: #c9f24c;
+  --on-accent: #0a0a0a;
+  --brick: #d56a44;
+  --overlay: rgba(237, 232, 219, 0.05);
+}
+
+html,
+body {
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: #c9f24c;
+  color: #0a0a0a;
+}
+
+/* Animations referenced by AgentWalkthrough / AddressDemo / ThinkingMsg. */
+@keyframes abs-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes abs-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes abs-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.abs-pulse-dot {
+  animation: abs-pulse 1s ease-in-out infinite;
+  border-radius: 50%;
+}
+
+.abs-cursor {
+  display: inline-block;
+  animation: abs-blink 0.9s steps(2) infinite;
+}
+
+.abs-fade-in {
+  animation: abs-fade 0.5s ease-out;
+}
