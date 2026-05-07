@@ -61,6 +61,8 @@ export default function SignupPage() {
   const [role, setRole] = useState(ROLES[0]);
   const [project, setProject] = useState("");
   const [submitted, setSubmitted] = useState<{ id: string } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (submitted) {
     return (
@@ -159,11 +161,28 @@ export default function SignupPage() {
       }
     >
       <form
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
-          if (project.trim().length < 10) return;
-          const id = `ABS-${Math.floor(1000 + Math.random() * 9000)}`;
-          setSubmitted({ id });
+          if (project.trim().length < 10 || submitting) return;
+          setSubmitting(true);
+          setError(null);
+          try {
+            const res = await fetch("/api/invite", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email, name, role, project }),
+            });
+            if (!res.ok) {
+              setError("Could not submit your request. Try again in a moment.");
+              setSubmitting(false);
+              return;
+            }
+            const data = (await res.json()) as { id: string };
+            setSubmitted({ id: data.id });
+          } catch {
+            setError("Could not reach the server. Try again in a moment.");
+            setSubmitting(false);
+          }
         }}
         className="flex flex-col gap-4"
       >
@@ -206,14 +225,25 @@ export default function SignupPage() {
           variant="primary"
           size="lg"
           type="submit"
-          disabled={project.trim().length < 10}
+          disabled={project.trim().length < 10 || submitting}
           style={{
-            opacity: project.trim().length < 10 ? 0.55 : 1,
-            cursor: project.trim().length < 10 ? "not-allowed" : "pointer",
+            opacity: project.trim().length < 10 || submitting ? 0.55 : 1,
+            cursor:
+              project.trim().length < 10 || submitting
+                ? "not-allowed"
+                : "pointer",
           }}
         >
-          Request invite →
+          {submitting ? "Submitting…" : "Request invite →"}
         </Btn>
+        {error && (
+          <span
+            className="text-[12.5px]"
+            style={{ color: "var(--brick)" }}
+          >
+            {error}
+          </span>
+        )}
         <div className="text-[13px] text-text-muted">
           Already have an account?{" "}
           <Link
