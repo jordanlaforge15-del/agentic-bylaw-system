@@ -43,7 +43,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from advisor.api.auth import current_user_dependency
 from advisor.api.db_session_store import DbSessionStore, default_resolve_user
-from advisor.api.quota import enforce_and_record_query
+from advisor.api.quota import enforce_and_record_query, update_usage_event_tokens
 from advisor.api.sessions import InMemorySessionStore, SessionStore
 from advisor.auth.clerk import ClerkVerifier
 from advisor.chat.persona import load_persona
@@ -262,7 +262,9 @@ def create_app(
         # only enforce when a DB factory is wired AND we're using a
         # DB-backed store — the in-memory test mode skips this so
         # existing tests don't need DB fixtures. Token counts are 0
-        # for now — see advisor.api.quota's docstring.
+        # at this point because the LLM call hasn't happened yet; we
+        # patch the row with real counts after the stream finishes.
+        usage_event_id: int | None = None
         if db_session_factory is not None and isinstance(store, DbSessionStore):
             with db_session_factory() as db:
                 try:
@@ -277,7 +279,7 @@ def create_app(
                     db_session_pk = int(session.session_id)
                 except ValueError:
                     db_session_pk = None
-                enforce_and_record_query(
+                usage_event = enforce_and_record_query(
                     db,
                     db_user,
                     event_type="llm_call",
@@ -287,6 +289,10 @@ def create_app(
                     tokens_input=0,
                     tokens_output=0,
                 )
+                # ``session_scope`` commits on exit, so the row gets
+                # an id we can reference from the post-stream update.
+                db.flush()
+                usage_event_id = usage_event.id
 
         async def event_stream() -> AsyncIterator[dict[str, str]]:
             # Send the session id up front so the frontend can persist
@@ -297,10 +303,23 @@ def create_app(
                 "event": "session",
                 "data": json.dumps({"session_id": session.session_id}),
             }
-            async for stream_event in session.send_user_message(
-                gateway, body.message
-            ):
-                yield _format_sse_event(stream_event)
+            try:
+                async for stream_event in session.send_user_message(
+                    gateway, body.message
+                ):
+                    yield _format_sse_event(stream_event)
+            finally:
+                # Patch the up-front UsageEvent with the aggregate
+                # tokens the loop produced. Done in ``finally`` so a
+                # mid-stream client disconnect still records whatever
+                # cost we incurred up to that point. Skip silently
+                # when there's nothing to update (in-memory test
+                # store, or no usage reported by the gateway).
+                _patch_usage_event_tokens(
+                    db_session_factory=db_session_factory,
+                    usage_event_id=usage_event_id,
+                    chat_session=session,
+                )
 
         return EventSourceResponse(event_stream())
 
@@ -324,6 +343,39 @@ def create_app(
         )
 
     return app
+
+
+def _patch_usage_event_tokens(
+    *,
+    db_session_factory: DbSessionFactory | None,
+    usage_event_id: int | None,
+    chat_session: ChatSession,
+) -> None:
+    """Patch the up-front ``UsageEvent`` with real aggregate token counts.
+
+    No-op when the DB factory isn't wired or the up-front
+    ``enforce_and_record_query`` was skipped (no event id to update).
+    Catches and logs any DB exception — failing here would otherwise
+    propagate out of the SSE generator and surface to the client as a
+    confusing 500 *after* the stream had already been delivered.
+    """
+    if db_session_factory is None or usage_event_id is None:
+        return
+    usage = chat_session.last_turn_usage
+    if usage is None:
+        return
+    try:
+        with db_session_factory() as db:
+            update_usage_event_tokens(
+                db,
+                usage_event_id=usage_event_id,
+                tokens_input=usage.input_tokens,
+                tokens_output=usage.output_tokens,
+            )
+    except Exception:  # noqa: BLE001 — last-mile audit update; don't fail the request
+        logger.exception(
+            "failed to patch tokens on UsageEvent id=%s", usage_event_id
+        )
 
 
 def _build_user_dependency(

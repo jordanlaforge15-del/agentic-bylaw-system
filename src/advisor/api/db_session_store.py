@@ -51,12 +51,15 @@ shape.
 
 Token-counting note
 -------------------
-``ChatMessage.tokens_input`` / ``tokens_output`` are written as 0 for
-now. Real token accounting per turn is a follow-up — the underlying
-``CompletionResponse`` has ``usage`` data, but the chat session
-doesn't currently propagate it back to the persistence hook. When
-that lands, this store will read from ``ChatSession`` (or a richer
-``on_turn_complete`` arg) without a schema change.
+``ChatMessage.tokens_input`` / ``tokens_output`` are written from
+``ChatSession.last_turn_usage`` (set by ``send_user_message_blocking``
+to the aggregate of every per-iteration ``CompletionResponse.usage``
+the tool loop produced). The aggregate is attributed to the LAST new
+row in the persisted batch — that row is always the final assistant
+turn for this user message. Intermediate tool_use / tool_result rows
+keep tokens at 0 because we don't have per-iteration breakdowns. If
+``last_turn_usage`` is ``None`` (e.g. mock gateway with no usage
+reported) we fall back to 0 silently.
 """
 from __future__ import annotations
 
@@ -303,6 +306,12 @@ class DbSessionStore:
         last_persisted = self._last_persisted_sequence.get(
             chat_session.session_id, -1
         )
+        # Aggregate usage gets attributed to the last new row (the
+        # final assistant turn for this user message). See the
+        # module docstring's "Token-counting note".
+        usage = chat_session.last_turn_usage
+        final_input = usage.input_tokens if usage is not None else 0
+        final_output = usage.output_tokens if usage is not None else 0
 
         with self._db_session_factory() as db:
             new_rows: list[DbChatMessage] = []
@@ -316,14 +325,14 @@ class DbSessionStore:
                         role=str(message.role.value),
                         content_json=_message_content_to_json(message),
                         tool_calls_json=[],
-                        # Token counting is wired but always 0 for now —
-                        # see the module docstring's "Token-counting note".
                         tokens_input=0,
                         tokens_output=0,
                     )
                 )
             if not new_rows:
                 return
+            new_rows[-1].tokens_input = final_input
+            new_rows[-1].tokens_output = final_output
             db.add_all(new_rows)
             db.flush()
 

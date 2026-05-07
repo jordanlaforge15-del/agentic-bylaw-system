@@ -17,8 +17,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from advisor.api import create_app
-from advisor.db.models import User
+from advisor.db.models import UsageEvent, User
 from advisor.db import quota as quota_module
+from advisor.llm import TokenUsage
 from advisor.llm.mock import MockGateway, text_response
 from layer1.db.init_db import create_all
 
@@ -191,6 +192,51 @@ def test_quota_increments_on_successful_chat(
         assert user is not None
         # Was 3, +2 successful chats => 5.
         assert user.monthly_queries_used == 5
+    finally:
+        s.close()
+
+
+def test_usage_event_tokens_patched_after_stream(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """After the SSE stream completes the chat route patches the
+    up-front ``UsageEvent`` row with the aggregate token counts the
+    LLM reported. Quota counters are unaffected — only the audit row
+    learns the real numbers."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    db_session_factory, factory = _build_factory(db_url)
+    user_id = _seed_user(factory, clerk_user_id="clerk_tokens")
+
+    monkeypatch.setattr(
+        quota_module, "_utc_today", lambda: date(2026, 5, 15)
+    )
+
+    gateway = MockGateway(
+        scripted=[text_response("answer")],
+        default_usage=TokenUsage(input_tokens=77, output_tokens=88),
+    )
+    app = _make_app(gateway=gateway, db_session_factory=db_session_factory)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat",
+            json={"message": "hi"},
+            headers={"X-Test-User-Id": str(user_id)},
+        )
+    assert response.status_code == 200
+
+    s = factory()
+    try:
+        events = (
+            s.query(UsageEvent)
+            .filter(UsageEvent.user_id == user_id)
+            .filter(UsageEvent.event_type == "llm_call")
+            .all()
+        )
+        assert len(events) == 1
+        assert events[0].tokens_input == 77
+        assert events[0].tokens_output == 88
     finally:
         s.close()
 

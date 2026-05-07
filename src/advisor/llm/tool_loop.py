@@ -35,6 +35,7 @@ from advisor.llm.base import (
     LLMRole,
     Message,
     TextBlock,
+    TokenUsage,
     ToolResultBlock,
     ToolUseBlock,
 )
@@ -66,6 +67,12 @@ class ToolLoopResult:
     conversation: list[Message]
     tool_calls: list["ToolInvocation"] = field(default_factory=list)
     iterations: int = 0
+    # Sum of every per-iteration ``CompletionResponse.usage`` seen
+    # during the loop. Set to ``None`` when the gateway didn't return
+    # usage on any iteration (e.g. older MockGateway responses). The
+    # aggregate matters because tool-use turns make multiple model
+    # calls; the final response's ``usage`` only covers the last one.
+    total_usage: TokenUsage | None = None
 
 
 @dataclass
@@ -108,12 +115,14 @@ async def run_tool_loop(
     """
     conversation = list(request.messages)
     tool_calls: list[ToolInvocation] = []
+    total_usage: TokenUsage | None = None
 
     for iteration in range(1, max_iterations + 1):
         current_request = request.model_copy(
             update={"messages": list(conversation)}
         )
         response = await gateway.complete(current_request)
+        total_usage = _accumulate_usage(total_usage, response.usage)
 
         # Always append the assistant turn to the conversation, even
         # when it contains tool_use blocks — the next request needs
@@ -130,6 +139,7 @@ async def run_tool_loop(
                 conversation=conversation,
                 tool_calls=tool_calls,
                 iterations=iteration,
+                total_usage=total_usage,
             )
 
         result_blocks: list[ContentBlock] = []
@@ -196,6 +206,32 @@ async def _run_one_handler(
         tool_name=block.name,
         input=dict(block.input),
         output=output,
+    )
+
+
+def _accumulate_usage(
+    total: TokenUsage | None, delta: TokenUsage | None
+) -> TokenUsage | None:
+    """Sum two optional ``TokenUsage`` snapshots.
+
+    Returns ``None`` only when both inputs are ``None`` (i.e. the
+    gateway has never reported usage). Once we've seen any usage we
+    keep accumulating into a real ``TokenUsage`` so a later
+    ``None`` doesn't blank the running total.
+    """
+    if delta is None:
+        return total
+    if total is None:
+        return delta.model_copy()
+    return TokenUsage(
+        input_tokens=total.input_tokens + delta.input_tokens,
+        output_tokens=total.output_tokens + delta.output_tokens,
+        cache_creation_input_tokens=(
+            total.cache_creation_input_tokens + delta.cache_creation_input_tokens
+        ),
+        cache_read_input_tokens=(
+            total.cache_read_input_tokens + delta.cache_read_input_tokens
+        ),
     )
 
 

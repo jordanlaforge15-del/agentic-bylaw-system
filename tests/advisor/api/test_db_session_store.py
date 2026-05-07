@@ -21,7 +21,7 @@ from advisor.chat.session import ChatSession
 from advisor.db.models import ChatMessage as DbChatMessage
 from advisor.db.models import ChatSession as DbChatSession
 from advisor.db.models import User
-from advisor.llm import LLMRole, Message, TextBlock
+from advisor.llm import LLMRole, Message, TextBlock, TokenUsage
 from layer1.db.init_db import create_all
 
 
@@ -243,6 +243,61 @@ def test_on_turn_complete_persists_new_messages_only(tmp_path: Path) -> None:
             )
         ).scalar_one()
         assert count_again == 4
+    finally:
+        s.close()
+
+
+def test_on_turn_complete_attributes_tokens_to_last_new_row(
+    tmp_path: Path,
+) -> None:
+    """When ``last_turn_usage`` is set, the hook writes tokens onto the
+    final new row (the assistant turn). Earlier rows in the same batch
+    keep tokens at 0 because we don't have per-iteration breakdowns."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    db_session_factory, factory = _build_factory(db_url)
+    user_id = _seed_user(factory, clerk_user_id="clerk_tokens")
+
+    s = factory()
+    try:
+        chat_row = DbChatSession(user_id=user_id)
+        s.add(chat_row)
+        s.commit()
+        chat_pk = chat_row.id
+    finally:
+        s.close()
+
+    store = DbSessionStore(
+        db_session_factory=db_session_factory,
+        tool_defs_handler_factory=_empty_tool_factory,
+    )
+    chat_session = store.get(str(chat_pk))
+    assert chat_session is not None
+
+    chat_session.messages = [
+        Message(role=LLMRole.USER, content="how high?"),
+        Message(role=LLMRole.ASSISTANT, content=[TextBlock(text="90m.")]),
+    ]
+    chat_session.last_turn_usage = TokenUsage(
+        input_tokens=123, output_tokens=456
+    )
+    assert chat_session.on_turn_complete is not None
+    chat_session.on_turn_complete(chat_session)
+
+    s = factory()
+    try:
+        rows = (
+            s.execute(
+                select(DbChatMessage)
+                .where(DbChatMessage.session_id == chat_pk)
+                .order_by(DbChatMessage.sequence)
+            )
+            .scalars()
+            .all()
+        )
+        assert [r.role for r in rows] == ["user", "assistant"]
+        assert (rows[0].tokens_input, rows[0].tokens_output) == (0, 0)
+        assert (rows[1].tokens_input, rows[1].tokens_output) == (123, 456)
     finally:
         s.close()
 
