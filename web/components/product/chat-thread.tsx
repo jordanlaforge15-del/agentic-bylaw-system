@@ -19,29 +19,24 @@ import { cn } from "@/lib/cn";
 type Props = {
   messages: Message[];
   thinking: boolean;
-  thinkSteps: string[];
-  thinkStep: number;
+  thinkLabel: string;
   error?: string | null;
 };
 
 export function ChatThread({
   messages,
   thinking,
-  thinkSteps,
-  thinkStep,
+  thinkLabel,
   error,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
-  // Track total streamed body length so a streaming agent reply
-  // also auto-scrolls as text deltas arrive (not just on message
-  // count change).
   const totalBodyLen = messages.reduce(
     (n, m) => n + (m.kind === "agent" ? m.body.length : 0),
     0,
   );
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [messages.length, thinking, thinkStep, totalBodyLen]);
+  }, [messages.length, thinking, thinkLabel, totalBodyLen, error]);
 
   return (
     <div
@@ -53,7 +48,7 @@ export function ChatThread({
         if (m.kind === "user") return <UserMsg key={i} msg={m} />;
         return <AgentMsg key={i} msg={m} idx={i} />;
       })}
-      {thinking && <ThinkingMsg steps={thinkSteps} step={thinkStep} />}
+      {thinking && <ThinkingMsg label={thinkLabel} />}
       {error && <ErrorMsg body={error} />}
     </div>
   );
@@ -202,7 +197,7 @@ function AgentMsg({ msg, idx }: { msg: AgentMessage; idx: number }) {
   );
 }
 
-function ThinkingMsg({ steps, step }: { steps: string[]; step: number }) {
+function ThinkingMsg({ label }: { label: string }) {
   return (
     <div className="flex flex-col gap-3 mb-1">
       <div className="flex items-center gap-2">
@@ -223,21 +218,14 @@ function ThinkingMsg({ steps, step }: { steps: string[]; step: number }) {
           style={{ width: 6, height: 6 }}
         />
       </div>
-      <div className="pl-8 flex flex-col gap-1.5">
-        {steps.slice(0, step + 1).map((s, i) => (
-          <div
-            key={i}
-            className="flex items-center gap-2.5 font-mono"
-            style={{
-              fontSize: 12,
-              letterSpacing: "0.02em",
-              color: i === step ? "var(--text)" : "var(--text-muted)",
-            }}
-          >
-            <span className="text-accent-ink">{i === step ? "→" : "✓"}</span>
-            <span>{s}</span>
-          </div>
-        ))}
+      <div className="pl-8">
+        <div
+          className="flex items-center gap-2.5 font-mono"
+          style={{ fontSize: 12, letterSpacing: "0.02em" }}
+        >
+          <span className="text-accent-ink">→</span>
+          <span>{label}</span>
+        </div>
       </div>
     </div>
   );

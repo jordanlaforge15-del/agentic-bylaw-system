@@ -23,29 +23,33 @@ import { Composer } from "@/components/product/composer";
 import { ParcelPane } from "@/components/product/parcel-pane";
 import type { AgentMessage, Message } from "@/lib/mock";
 
-// Cosmetic only — the backend doesn't emit progress events for tool
-// calls yet, so we cycle through these steps to keep the UI alive
-// while the LLM is thinking. Once the first text_delta arrives we
-// drop the indicator entirely.
-const STEPS = [
-  "Locating relevant bylaw section…",
-  "Searching bylaw evidence…",
-  "Reading citations…",
-  "Cross-checking schedules…",
-  "Compiling answer…",
-];
+// We swap the indicator label based on which tool the agent is
+// actually running. Anything we don't recognise falls back to
+// "Reading bylaw…" — so the indicator never lies, only generalises.
+const TOOL_LABELS: Record<string, string> = {
+  list_documents: "Listing bylaw documents…",
+  get_document_outline: "Reading the bylaw outline…",
+  search_bylaw_evidence: "Searching bylaw evidence…",
+  lookup_citation: "Looking up a citation…",
+};
 
 const READING = { addr: "Halifax Regional Centre", zone: "RC-LUB" };
 
 const OPENING: Message = {
   kind: "system",
-  body: "Connected to advisor · Regional Centre Land Use By-Law indexed.",
+  body:
+    "Connected · Regional Centre LUB indexed · Halifax zoning boundaries + " +
+    "height/FAR/heritage/bonus schedules loaded · Google geocoder online. " +
+    "Ask about a specific HRM address or about the bylaw text directly.",
 };
 
 export default function ProductAppPage() {
   const [messages, setMessages] = useState<Message[]>([OPENING]);
   const [thinking, setThinking] = useState(false);
-  const [thinkStep, setThinkStep] = useState(0);
+  // Honest indicator: starts as "Reading bylaw…" and updates to the
+  // current tool name as `content_block_start` events arrive. No
+  // pre-baked rotation.
+  const [thinkLabel, setThinkLabel] = useState("Reading bylaw…");
   const [error, setError] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -53,17 +57,10 @@ export default function ProductAppPage() {
   const send = async (text: string) => {
     setMessages((prev) => [...prev, { kind: "user", body: text }]);
     setThinking(true);
-    setThinkStep(0);
+    setThinkLabel("Reading bylaw…");
     setError(null);
 
-    // Cycle the cosmetic step indicator until the first text_delta
-    // lands. We keep the interval id in a closure so the catch /
-    // finally branches can clear it.
-    const stepTimer = setInterval(() => {
-      setThinkStep((s) => (s + 1) % STEPS.length);
-    }, 700);
     const stopThinking = () => {
-      clearInterval(stepTimer);
       setThinking(false);
     };
 
@@ -94,6 +91,8 @@ export default function ProductAppPage() {
       const decoder = new TextDecoder();
       let buffer = "";
       let agentStarted = false;
+      let backendError: string | null = null;
+      let messageStopped = false;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -115,6 +114,23 @@ export default function ProductAppPage() {
             } catch {
               // ignore malformed session event
             }
+          } else if (ev.event === "content_block_start") {
+            // Tool-use blocks tell us what the agent is *actually*
+            // doing. Update the indicator label so it reflects
+            // reality. Text blocks are handled via content_block_delta.
+            try {
+              const data = JSON.parse(ev.data) as {
+                content_block?: { type?: string; name?: string };
+              };
+              const block = data.content_block;
+              if (block?.type === "tool_use" && block.name) {
+                setThinkLabel(
+                  TOOL_LABELS[block.name] || `Running ${block.name}…`,
+                );
+              }
+            } catch {
+              // ignore
+            }
           } else if (ev.event === "content_block_delta") {
             let data: { text_delta?: string | null } | null = null;
             try {
@@ -130,28 +146,77 @@ export default function ProductAppPage() {
               }
               appendAgentDelta(setMessages, delta);
             }
+          } else if (ev.event === "message_stop") {
+            messageStopped = true;
+          } else if (ev.event === "chat_error") {
+            // Backend caught its own exception and surfaced a
+            // structured error before closing the stream.
+            try {
+              const data = JSON.parse(ev.data) as {
+                kind?: string;
+                message?: string;
+              };
+              backendError =
+                data.message ||
+                "The agent couldn't complete this question.";
+            } catch {
+              backendError = "The agent couldn't complete this question.";
+            }
           }
-          // message_stop, message_delta, content_block_start/stop:
-          // intentionally ignored for v1.
         }
+      }
+
+      // The reader closed cleanly. Now decide whether the response
+      // was actually a complete answer. Three failure modes:
+      //   1. backend emitted chat_error      → show that message
+      //   2. stream cut off mid-content      → flag it
+      //   3. stream ended with no content    → flag it
+      stopThinking();
+      if (backendError) {
+        setError(humanizeBackendError(backendError));
+      } else if (!agentStarted) {
+        setError(
+          "The agent didn't return any text. Try rephrasing — for an " +
+            "address question, include the civic number and street " +
+            "(e.g. \"What's the zone of 1967 Woodlawn Terrace?\").",
+        );
+      } else if (!messageStopped) {
+        setError(
+          "The agent's response was cut off before completion. Try " +
+            "asking again, or simplify the question.",
+        );
       }
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         setError(`Network error: ${(e as Error).message}`);
       }
     } finally {
-      clearInterval(stepTimer);
-      setThinking(false);
+      stopThinking();
       abortRef.current = null;
     }
   };
+
+  // Translate the raw backend error text into something the user
+  // can act on. The backend already strips traceback / internal
+  // details, but the messages can still be opaque.
+  function humanizeBackendError(raw: string): string {
+    if (raw.includes("max_iterations")) {
+      return (
+        "The agent gave up after 10 tool calls without finding an " +
+        "answer. Try rephrasing — be specific about the address or " +
+        "bylaw section. If you asked about an address, make sure it's " +
+        "within HRM."
+      );
+    }
+    return `Backend error: ${raw}`;
+  }
 
   const onNew = () => {
     abortRef.current?.abort();
     sessionIdRef.current = null;
     setMessages([OPENING]);
     setThinking(false);
-    setThinkStep(0);
+    setThinkLabel("Reading bylaw…");
     setError(null);
   };
 
@@ -164,8 +229,7 @@ export default function ProductAppPage() {
           <ChatThread
             messages={messages}
             thinking={thinking}
-            thinkSteps={STEPS}
-            thinkStep={thinkStep}
+            thinkLabel={thinkLabel}
             error={error}
           />
           <Composer onSend={send} disabled={thinking} />

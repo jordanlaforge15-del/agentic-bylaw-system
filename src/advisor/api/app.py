@@ -308,6 +308,24 @@ def create_app(
                     gateway, body.message
                 ):
                     yield _format_sse_event(stream_event)
+            except Exception as exc:  # noqa: BLE001 — surface to client
+                # The chat session raised mid-stream (most often a
+                # ToolLoopError when the LLM can't terminate, or an
+                # underlying provider error). Emit a structured
+                # ``chat_error`` SSE event so the frontend can render
+                # something useful instead of a silent disconnect.
+                # We log the full traceback here; only a short user-
+                # safe message goes over the wire.
+                logger.exception("chat stream failed")
+                yield {
+                    "event": "chat_error",
+                    "data": json.dumps(
+                        {
+                            "kind": type(exc).__name__,
+                            "message": str(exc) or "Internal chat error.",
+                        }
+                    ),
+                }
             finally:
                 # Patch the up-front UsageEvent with the aggregate
                 # tokens the loop produced. Done in ``finally`` so a
