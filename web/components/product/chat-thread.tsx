@@ -6,6 +6,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { AgentMarkdown } from "@/components/product/agent-markdown";
 import { HighlightWord } from "@/components/highlight-word";
 import { Mono } from "@/components/mono";
 import type {
@@ -127,10 +128,10 @@ function AgentMsg({ msg, idx }: { msg: AgentMessage; idx: number }) {
           </div>
         )}
         <div
-          className="text-[14.5px] leading-[1.6] text-text whitespace-pre-wrap"
+          className="text-[14.5px] leading-[1.6] text-text"
           style={{ maxWidth: 720 }}
         >
-          {msg.body}
+          <AgentMarkdown source={msg.body} />
         </div>
 
         {msg.reasoning.length > 0 && (
