@@ -9,6 +9,17 @@ services:
       - "5432:5432"
     volumes:
       - layer1-postgres:/var/lib/postgresql/data
+    # Cap how long an idle-in-transaction or any single statement can
+    # tie up a backend. The advisor's spatial scan over 11k zoning
+    # polygons runs in seconds normally, but if a client disconnects
+    # mid-stream the SQLAlchemy session may not roll back promptly —
+    # without a server-side cap, that can wedge a connection (and any
+    # row locks it holds) indefinitely. 60s/120s is generous enough
+    # for any legitimate query and short enough to self-heal.
+    command: >
+      postgres
+      -c idle_in_transaction_session_timeout=60000
+      -c statement_timeout=120000
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U layer1 -d layer1"]
       interval: 5s
