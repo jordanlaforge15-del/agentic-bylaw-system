@@ -1,27 +1,25 @@
-// Right pane of /app. Parcel context: address block, inline site-plan SVG
-// (intentionally schematic, not survey-accurate), six dotted-hairline
-// metadata rows, and a "cited this thread" list. A sticky bottom row
-// holds the export + share CTAs.
+// Right pane of /app. Shows the parcel context derived from the
+// current session's spatial-join tool results: address, geocode
+// confidence, zone / height / heritage / FAR / bonus / shadow rows
+// (only the ones actually returned by the spatial query — empty
+// datasets are dropped), and a "cited this thread" list of distinct
+// citations the agent has pulled.
+//
+// When `parcel` is null, we render an honest empty state rather than
+// stale fixtures. The site-plan SVG stays as a schematic placeholder
+// for now; eventually it would be drawn from the resolved parcel
+// polygon, but that needs the geocoder to surface the parcel
+// geometry first.
 
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
+import type { ParcelContext } from "@/lib/parcel";
 
-const META: Array<[string, string]> = [
-  ["Lot area", "372 m²"],
-  ["Frontage", "11.4 m"],
-  ["Zoning", "ER-1"],
-  ["Existing units", "1 (1924)"],
-  ["Heritage", "No"],
-  ["Within transit zone", "Yes"],
-];
+type Props = {
+  parcel: ParcelContext | null;
+};
 
-const CITED: Array<{ c: string; n: string; d: string }> = [
-  { c: "§ 9.4", n: "Backyard Suites", d: "2025-11-04" },
-  { c: "§ 5.4", n: "Yard Requirements", d: "2025-11-04" },
-  { c: "§ 2.8", n: "Variances", d: "2025-11-04" },
-];
-
-export function ParcelPane() {
+export function ParcelPane({ parcel }: Props) {
   return (
     <aside
       className="border-l border-hair bg-surface-alt flex flex-col min-h-0 overflow-auto"
@@ -29,165 +27,172 @@ export function ParcelPane() {
     >
       <div className="border-b border-hair px-5 py-4 flex justify-between items-center">
         <Mono muted>PARCEL</Mono>
-        <button
-          type="button"
-          className="bg-transparent border border-hair text-text font-mono cursor-pointer"
-          style={{
-            padding: "4px 8px",
-            fontSize: 9.5,
-            letterSpacing: "0.1em",
-          }}
-        >
-          CHANGE
-        </button>
+        {parcel && (
+          <Mono muted size={9.5}>
+            {parcel.geocode
+              ? `${parcel.geocode.resolver?.toUpperCase() || "GEOCODED"} · ${(parcel.geocode.confidence * 100).toFixed(0)}%`
+              : "—"}
+          </Mono>
+        )}
       </div>
 
-      <div className="px-5 py-[18px] flex flex-col gap-1.5">
-        <div
-          className="font-sans font-bold leading-[1.15]"
-          style={{ fontSize: 22, letterSpacing: "-0.025em" }}
-        >
-          5184 Morris St
-        </div>
-        <div className="text-[12.5px] text-text-muted">
-          Halifax, NS · B3J 1B5
-        </div>
-      </div>
-
-      <div className="px-5 pb-[18px]">
-        <div
-          className="bg-surface border border-hair relative overflow-hidden"
-          style={{ aspectRatio: "4 / 3" }}
-        >
-          <svg
-            viewBox="0 0 200 150"
-            className="w-full h-full"
-            preserveAspectRatio="xMidYMid meet"
-          >
-            <rect
-              x="20"
-              y="20"
-              width="160"
-              height="110"
-              fill="none"
-              stroke="var(--text)"
-              strokeWidth="0.6"
-            />
-            <rect
-              x="36"
-              y="36"
-              width="128"
-              height="78"
-              fill="var(--text)"
-              fillOpacity="0.04"
-              stroke="var(--text)"
-              strokeWidth="0.4"
-              strokeDasharray="2 2"
-            />
-            <rect
-              x="56"
-              y="48"
-              width="60"
-              height="40"
-              fill="var(--text)"
-              fillOpacity="0.08"
-              stroke="var(--text)"
-              strokeWidth="0.6"
-            />
-            <rect
-              x="120"
-              y="68"
-              width="34"
-              height="34"
-              fill="var(--accent)"
-              fillOpacity="0.5"
-              stroke="var(--accent)"
-              strokeWidth="0.8"
-            />
-            <text
-              x="137"
-              y="88"
-              fontSize="5"
-              fill="var(--text)"
-              fontFamily="var(--font-mono)"
-              textAnchor="middle"
-            >
-              SUITE
-            </text>
-            <line
-              x1="20"
-              y1="14"
-              x2="180"
-              y2="14"
-              stroke="var(--accent)"
-              strokeWidth="0.6"
-            />
-            <text
-              x="100"
-              y="11"
-              fontSize="4.5"
-              fill="var(--text)"
-              fontFamily="var(--font-mono)"
-              textAnchor="middle"
-            >
-              11.4 m
-            </text>
-          </svg>
-          <div
-            className="absolute bottom-1.5 right-2 font-mono text-text-muted"
-            style={{ fontSize: 8.5, letterSpacing: "0.14em" }}
-          >
-            SITE · 1:200
-          </div>
-        </div>
-      </div>
-
-      <div className="px-5 pb-[18px] flex flex-col gap-2">
-        {META.map(([k, v]) => (
-          <div
-            key={k}
-            className="flex justify-between text-[12px] pb-1.5"
-            style={{ borderBottom: "1px dotted var(--hair)" }}
-          >
-            <span
-              className="text-text-muted font-mono"
-              style={{ letterSpacing: "0.04em" }}
-            >
-              {k}
-            </span>
-            <span className="font-semibold">{v}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="border-t border-hair px-5 py-3 flex flex-col gap-2.5">
-        <Mono muted>CITED THIS THREAD · 3</Mono>
-        {CITED.map((s) => (
-          <div
-            key={s.c}
-            className="bg-surface border border-hair p-3 flex flex-col gap-1"
-          >
-            <div className="flex justify-between items-baseline">
-              <Mono accent size={11} className="font-semibold">
-                {s.c}
-              </Mono>
-              <Mono muted size={9}>
-                {s.d}
-              </Mono>
-            </div>
-            <span className="text-[12.5px]">{s.n}</span>
-          </div>
-        ))}
-      </div>
+      {parcel ? <ParcelDetails parcel={parcel} /> : <EmptyParcel />}
 
       <div className="mt-auto border-t border-hair px-5 py-3.5 flex flex-col gap-2">
-        <Btn variant="primary" size="sm" className="w-full">
+        <Btn
+          variant="primary"
+          size="sm"
+          className="w-full"
+          disabled={!parcel}
+          style={{ opacity: parcel ? 1 : 0.5 }}
+        >
           Export reading (PDF)
         </Btn>
-        <Btn variant="ghost" size="sm" className="w-full">
+        <Btn
+          variant="ghost"
+          size="sm"
+          className="w-full"
+          disabled={!parcel}
+          style={{ opacity: parcel ? 1 : 0.5 }}
+        >
           Share with team
         </Btn>
       </div>
     </aside>
   );
+}
+
+function EmptyParcel() {
+  return (
+    <div className="px-5 py-7 flex flex-col gap-3">
+      <div
+        className="font-sans font-bold leading-[1.15]"
+        style={{ fontSize: 18, letterSpacing: "-0.02em" }}
+      >
+        No parcel yet.
+      </div>
+      <p className="text-[13px] text-text-muted leading-[1.55] m-0">
+        Ask a question with a Halifax civic address — e.g.{" "}
+        <em>&ldquo;What zone is 1967 Woodlawn Terrace?&rdquo;</em> — and the
+        spatial-join attributes will land here: zone, max height, heritage
+        district, FAR, bonus zoning, shadow-impact overlap.
+      </p>
+    </div>
+  );
+}
+
+function ParcelDetails({ parcel }: { parcel: ParcelContext }) {
+  const rows = buildRows(parcel);
+  return (
+    <>
+      <div className="px-5 py-[18px] flex flex-col gap-1.5">
+        <div
+          className="font-sans font-bold leading-[1.15]"
+          style={{ fontSize: 22, letterSpacing: "-0.025em" }}
+        >
+          {parcel.address.civic_number} {parcel.address.street}
+        </div>
+        <div className="text-[12.5px] text-text-muted">
+          Halifax Regional Municipality
+        </div>
+      </div>
+
+      <div className="px-5 pb-[18px] flex flex-col gap-2">
+        {rows.map(([k, v]) => (
+          <div
+            key={k}
+            className="flex justify-between gap-3 text-[12px] pb-1.5"
+            style={{ borderBottom: "1px dotted var(--hair)" }}
+          >
+            <span
+              className="text-text-muted font-mono shrink-0"
+              style={{ letterSpacing: "0.04em" }}
+            >
+              {k}
+            </span>
+            <span
+              className="font-semibold text-right"
+              style={{ wordBreak: "break-word" }}
+            >
+              {v}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {parcel.cited.length > 0 && (
+        <div className="border-t border-hair px-5 py-3 flex flex-col gap-2.5">
+          <Mono muted>CITED THIS THREAD · {parcel.cited.length}</Mono>
+          {parcel.cited.map((s) => (
+            <div
+              key={s.citation}
+              className="bg-surface border border-hair p-3 flex flex-col gap-1"
+            >
+              <div className="flex justify-between items-baseline gap-2">
+                <Mono accent size={11} className="font-semibold">
+                  {compactCitation(s.citation)}
+                </Mono>
+                {s.date && (
+                  <Mono muted size={9}>
+                    {s.date}
+                  </Mono>
+                )}
+              </div>
+              <span className="text-[12.5px] text-text-muted">{s.title}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function buildRows(parcel: ParcelContext): Array<[string, string]> {
+  const rows: Array<[string, string]> = [];
+  if (parcel.zone) {
+    rows.push([
+      "Zone",
+      parcel.zone.description
+        ? `${parcel.zone.code} · ${parcel.zone.description}`
+        : parcel.zone.code,
+    ]);
+  }
+  if (parcel.height && parcel.height.max_m != null) {
+    rows.push(["Max height", `${parcel.height.max_m} m`]);
+  }
+  if (parcel.heritage) {
+    rows.push([
+      "Heritage",
+      parcel.heritage.status
+        ? `${parcel.heritage.name} (${parcel.heritage.status})`
+        : parcel.heritage.name,
+    ]);
+  }
+  if (parcel.far && parcel.far.max != null) {
+    rows.push(["Max FAR", parcel.far.max.toString()]);
+  }
+  if (parcel.bonus) {
+    rows.push(["Bonus zoning", parcel.bonus.name]);
+  }
+  if (parcel.shadow) {
+    rows.push(["Shadow impact", parcel.shadow.area]);
+  }
+  if (rows.length === 0) {
+    rows.push(["Spatial match", "Address geocoded but no attribute layers hit"]);
+  }
+  return rows;
+}
+
+// "Schedule 17 > 117 > [Maximum Streetwall Heights] > (a)" → "§ 117(a)"-ish.
+// The full path is too noisy for a card; we keep the most distinctive
+// segment (the leaf label) plus an optional schedule prefix.
+function compactCitation(path: string): string {
+  const parts = path.split(/\s*>\s*/);
+  if (parts.length === 1) return path;
+  const lead = parts[0];
+  const tail = parts[parts.length - 1];
+  if (lead.toLowerCase().startsWith("schedule")) {
+    return `${lead} · ${tail}`;
+  }
+  return tail;
 }

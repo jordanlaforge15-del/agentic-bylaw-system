@@ -22,6 +22,11 @@ import { ChatThread } from "@/components/product/chat-thread";
 import { Composer } from "@/components/product/composer";
 import { ParcelPane } from "@/components/product/parcel-pane";
 import type { AgentMessage, Message } from "@/lib/mock";
+import {
+  extractParcelContext,
+  type BackendMessage,
+  type ParcelContext,
+} from "@/lib/parcel";
 
 // We swap the indicator label based on which tool the agent is
 // actually running. Anything we don't recognise falls back to
@@ -63,7 +68,32 @@ export default function ProductAppPage() {
   // Bumped after every successful chat turn / session switch — sidebar
   // refetches its list whenever this changes.
   const [sidebarRefresh, setSidebarRefresh] = useState(0);
+  // Parcel context for the right pane. Derived from the current
+  // session's spatial-join tool results; null when the conversation
+  // has no address-bearing question yet.
+  const [parcel, setParcel] = useState<ParcelContext | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Re-pull the active session and re-extract parcel context. Used
+  // after a chat turn completes and after switching to a different
+  // session in the sidebar. No-ops when there's no active session.
+  const refreshParcel = async (sessionId: string | null) => {
+    if (!sessionId) {
+      setParcel(null);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as { messages: BackendMessage[] };
+      setParcel(extractParcelContext(data.messages));
+    } catch {
+      // network blip — leave the previous parcel state alone
+    }
+  };
 
   const send = async (text: string) => {
     setMessages((prev) => [...prev, { kind: "user", body: text }]);
@@ -211,6 +241,10 @@ export default function ProductAppPage() {
       // Refresh the sidebar so a newly-created session, or an
       // updated message_count on the existing one, lands in the list.
       setSidebarRefresh((n) => n + 1);
+      // Refresh the parcel pane from the latest session detail.
+      // Reads sessionIdRef directly (not the captured local) so we
+      // always see the post-stream value the SSE handler set.
+      void refreshParcel(sessionIdRef.current);
     }
   };
 
@@ -231,6 +265,7 @@ export default function ProductAppPage() {
       const data = (await res.json()) as { messages: BackendMessage[] };
       setMessages(translateHistory(data.messages));
       setSessionId(id);
+      setParcel(extractParcelContext(data.messages));
     } catch (e) {
       setError(`Couldn't load that reading: ${(e as Error).message}`);
     }
@@ -258,6 +293,7 @@ export default function ProductAppPage() {
     setThinking(false);
     setThinkLabel("Reading bylaw…");
     setError(null);
+    setParcel(null);
   };
 
   return (
@@ -279,7 +315,7 @@ export default function ProductAppPage() {
           />
           <Composer onSend={send} disabled={thinking} />
         </main>
-        <ParcelPane />
+        <ParcelPane parcel={parcel} />
       </div>
     </div>
   );
@@ -307,21 +343,6 @@ function appendAgentDelta(
     return [...prev, fresh];
   });
 }
-
-// Backend (Anthropic-shape) message types — only the bits we read.
-// A user message has either a plain string content (the actual user
-// input) or a list with tool_result blocks (intermediate replies the
-// LLM never sees as input). An assistant message's content is always
-// a list and may mix text + tool_use blocks.
-type BackendBlock =
-  | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; tool_use_id: string; content: unknown };
-
-type BackendMessage = {
-  role: "user" | "assistant";
-  content: string | BackendBlock[];
-};
 
 // Convert a saved Anthropic-shape conversation into the simpler UI
 // shape (system / user / agent rows). We collapse the tool-use loop:
