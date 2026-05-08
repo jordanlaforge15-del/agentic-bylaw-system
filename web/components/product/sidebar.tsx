@@ -1,27 +1,75 @@
-// Left pane of /app. Lists recent readings; active item gets a 2px accent
-// left border + alt-surface background. Search input filters by addr+title.
-// Footer row: 28×28 accent-square avatar + workspace + plan line.
+// Left pane of /app. Fetches the current user's chat sessions from
+// /api/chat/sessions, renders one button per session, and calls
+// `onSelect(id)` when one is clicked. The active session gets a 2px
+// accent left border + alt-surface background.
+//
+// `refreshTrigger` is a number the page bumps after each successful
+// chat turn — bumping it triggers a refetch so newly-created sessions
+// (or updated titles after the first user message) appear without a
+// page reload.
 
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
-import { SAMPLE_THREADS, type Thread } from "@/lib/mock";
 import { cn } from "@/lib/cn";
+
+type SessionSummary = {
+  session_id: string;
+  model: string;
+  title: string;
+  message_count: number;
+};
 
 type Props = {
   onNew: () => void;
+  onSelect: (id: string) => void;
+  activeSessionId: string | null;
+  refreshTrigger: number;
 };
 
-export function Sidebar({ onNew }: Props) {
+export function Sidebar({
+  onNew,
+  onSelect,
+  activeSessionId,
+  refreshTrigger,
+}: Props) {
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [q, setQ] = useState("");
-  const filtered = useMemo<Thread[]>(
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/chat/sessions", { cache: "no-store" });
+        if (!res.ok) {
+          if (!cancelled)
+            setLoadError(`Couldn't load sessions (HTTP ${res.status})`);
+          return;
+        }
+        const data = (await res.json()) as { sessions: SessionSummary[] };
+        if (!cancelled) {
+          setSessions(data.sessions);
+          setLoadError(null);
+        }
+      } catch (e) {
+        if (!cancelled)
+          setLoadError(`Couldn't load sessions: ${(e as Error).message}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshTrigger]);
+
+  const filtered = useMemo<SessionSummary[]>(
     () =>
-      SAMPLE_THREADS.filter(
-        (x) => !q || (x.addr + x.title).toLowerCase().includes(q.toLowerCase()),
+      sessions.filter(
+        (x) => !q || x.title.toLowerCase().includes(q.toLowerCase()),
       ),
-    [q],
+    [sessions, q],
   );
 
   return (
@@ -47,47 +95,63 @@ export function Sidebar({ onNew }: Props) {
         </Mono>
       </div>
       <div className="flex-1 overflow-y-auto px-2 pb-3 flex flex-col gap-0.5">
-        {filtered.map((th) => (
-          <button
-            key={th.id}
-            type="button"
-            className={cn(
-              "text-left flex flex-col gap-1 cursor-pointer text-text font-sans",
-              "px-3 py-2.5 pl-3",
-              th.active ? "bg-surface-alt" : "bg-transparent",
-            )}
-            style={{
-              borderLeft: th.active
-                ? "2px solid var(--accent)"
-                : "2px solid transparent",
-            }}
+        {loadError && (
+          <div
+            className="text-[12px] font-mono px-3 py-2"
+            style={{ color: "var(--brick)" }}
           >
-            <div className="flex justify-between items-baseline gap-2">
+            {loadError}
+          </div>
+        )}
+        {!loadError && filtered.length === 0 && (
+          <div className="text-[12px] text-text-muted px-3 py-3 leading-[1.4]">
+            {sessions.length === 0
+              ? "No readings yet. Ask a question to start one."
+              : "No matches."}
+          </div>
+        )}
+        {filtered.map((th) => {
+          const active = th.session_id === activeSessionId;
+          return (
+            <button
+              key={th.session_id}
+              type="button"
+              onClick={() => onSelect(th.session_id)}
+              className={cn(
+                "text-left flex flex-col gap-1 cursor-pointer text-text font-sans",
+                "px-3 py-2.5 pl-3 transition-colors",
+                active
+                  ? "bg-surface-alt"
+                  : "bg-transparent hover:bg-surface-alt",
+              )}
+              style={{
+                borderLeft: active
+                  ? "2px solid var(--accent)"
+                  : "2px solid transparent",
+              }}
+            >
               <span
                 className="text-[12.5px] font-semibold tracking-[-0.005em]"
+                style={{
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                }}
               >
-                {th.addr}
+                {th.title}
               </span>
-              {th.unread && (
-                <span
-                  className="bg-accent rounded-full"
-                  style={{ width: 6, height: 6 }}
-                />
-              )}
-            </div>
-            <span className="text-[11.5px] text-text-muted leading-[1.35]">
-              {th.title}
-            </span>
-            <div className="flex justify-between items-baseline mt-0.5">
-              <Mono muted size={9}>
-                {th.zone}
-              </Mono>
-              <Mono muted size={9}>
-                {th.updated.toUpperCase()}
-              </Mono>
-            </div>
-          </button>
-        ))}
+              <div className="flex justify-between items-baseline mt-0.5">
+                <Mono muted size={9}>
+                  {th.message_count} MSG
+                </Mono>
+                <Mono muted size={9}>
+                  {th.session_id.slice(0, 8)}
+                </Mono>
+              </div>
+            </button>
+          );
+        })}
       </div>
       <div className="border-t border-hair px-4 py-3 flex items-center gap-2.5">
         <div

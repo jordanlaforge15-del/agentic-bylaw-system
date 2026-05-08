@@ -50,7 +50,7 @@ from advisor.chat.persona import load_persona
 from advisor.chat.session import ChatSession
 from advisor.chat.tools import build_bylaw_tools
 from advisor.db.models import User
-from advisor.llm import LLMGateway, Message, StreamEvent
+from advisor.llm import LLMGateway, LLMRole, Message, StreamEvent
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +106,27 @@ class ChatSessionResponse(BaseModel):
     user_id: str
     model: str
     messages: list[Message]
+
+
+class ChatSessionSummary(BaseModel):
+    """One row in the response of ``GET /v1/chat/sessions``.
+
+    ``title`` is the first user message in the session, truncated. It's
+    cheap to derive at request time; persisting a stored title would
+    just drift unless we also wired a "rename session" UX.
+    ``message_count`` counts only user-facing turns (user input or
+    assistant text reply), not the intermediate tool_use / tool_result
+    rounds — that's what a sidebar wants to display.
+    """
+
+    session_id: str
+    model: str
+    title: str
+    message_count: int
+
+
+class ChatSessionList(BaseModel):
+    sessions: list[ChatSessionSummary]
 
 
 def create_app(
@@ -341,6 +362,24 @@ def create_app(
 
         return EventSourceResponse(event_stream())
 
+    @app.get("/v1/chat/sessions")
+    async def list_sessions(
+        user: User = Depends(require_user),
+    ) -> ChatSessionList:
+        """Return the current user's sessions, newest-first.
+
+        "Newest-first" relies on dict insertion order in the in-memory
+        store — every freshly-created session is appended, and Python
+        guarantees insertion order. The DB-backed store should sort by
+        ``updated_at`` once that field exists.
+        """
+        user_id_str = str(user.id)
+        sessions = store.list_for_user(user_id_str)
+        summaries = [_summarise_session(s) for s in sessions]
+        # Newest-first.
+        summaries.reverse()
+        return ChatSessionList(sessions=summaries)
+
     @app.get("/v1/chat/sessions/{session_id}")
     async def get_session(
         session_id: str,
@@ -361,6 +400,44 @@ def create_app(
         )
 
     return app
+
+
+def _summarise_session(session: ChatSession) -> ChatSessionSummary:
+    """Project a full ``ChatSession`` into the lightweight sidebar shape.
+
+    Title comes from the first user message in the conversation,
+    truncated. Tool-result intermediate user messages (whose ``content``
+    is a list of blocks rather than a string) are skipped. If no user
+    message has ever been sent, fall back to a placeholder.
+
+    ``message_count`` counts only the rounds a human would call a
+    "turn" — a user input or an assistant text reply — so a session
+    that ran a 3-tool-call loop and produced one final answer reads
+    as 2 messages, not 8.
+    """
+    title = "New reading"
+    user_count = 0
+    assistant_text_count = 0
+    for m in session.messages:
+        if m.role == LLMRole.USER:
+            if isinstance(m.content, str):
+                user_count += 1
+                if title == "New reading":
+                    title = m.content[:80] + ("…" if len(m.content) > 80 else "")
+            # else: tool_result intermediate, ignore
+        elif m.role == LLMRole.ASSISTANT and isinstance(m.content, list):
+            if any(
+                getattr(b, "type", None) == "text"
+                and getattr(b, "text", "").strip()
+                for b in m.content
+            ):
+                assistant_text_count += 1
+    return ChatSessionSummary(
+        session_id=session.session_id,
+        model=session.model,
+        title=title,
+        message_count=user_count + assistant_text_count,
+    )
 
 
 def _patch_usage_event_tokens(

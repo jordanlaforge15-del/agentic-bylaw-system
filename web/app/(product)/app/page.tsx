@@ -51,7 +51,18 @@ export default function ProductAppPage() {
   // pre-baked rotation.
   const [thinkLabel, setThinkLabel] = useState("Reading bylaw…");
   const [error, setError] = useState<string | null>(null);
+  // Active session id is mirrored in state (so the sidebar can highlight
+  // the active row) and in a ref (so streaming closures see the latest
+  // value without re-binding). `setSessionId` updates both.
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const setSessionId = (id: string | null) => {
+    sessionIdRef.current = id;
+    setActiveSessionId(id);
+  };
+  // Bumped after every successful chat turn / session switch — sidebar
+  // refetches its list whenever this changes.
+  const [sidebarRefresh, setSidebarRefresh] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
   const send = async (text: string) => {
@@ -114,7 +125,7 @@ export default function ProductAppPage() {
           if (ev.event === "session") {
             try {
               const data = JSON.parse(ev.data) as { session_id?: string };
-              if (data.session_id) sessionIdRef.current = data.session_id;
+              if (data.session_id) setSessionId(data.session_id);
             } catch {
               // ignore malformed session event
             }
@@ -197,6 +208,31 @@ export default function ProductAppPage() {
     } finally {
       stopThinking();
       abortRef.current = null;
+      // Refresh the sidebar so a newly-created session, or an
+      // updated message_count on the existing one, lands in the list.
+      setSidebarRefresh((n) => n + 1);
+    }
+  };
+
+  const selectSession = async (id: string) => {
+    if (id === activeSessionId) return;
+    abortRef.current?.abort();
+    setError(null);
+    setThinking(false);
+    try {
+      const res = await fetch(
+        `/api/chat/sessions/${encodeURIComponent(id)}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) {
+        setError(`Couldn't load that reading (HTTP ${res.status}).`);
+        return;
+      }
+      const data = (await res.json()) as { messages: BackendMessage[] };
+      setMessages(translateHistory(data.messages));
+      setSessionId(id);
+    } catch (e) {
+      setError(`Couldn't load that reading: ${(e as Error).message}`);
     }
   };
 
@@ -217,7 +253,7 @@ export default function ProductAppPage() {
 
   const onNew = () => {
     abortRef.current?.abort();
-    sessionIdRef.current = null;
+    setSessionId(null);
     setMessages([OPENING]);
     setThinking(false);
     setThinkLabel("Reading bylaw…");
@@ -228,7 +264,12 @@ export default function ProductAppPage() {
     <div className="h-screen flex flex-col bg-surface text-text overflow-hidden">
       <AppHeader reading={READING} />
       <div className="flex-1 flex min-h-0">
-        <Sidebar onNew={onNew} />
+        <Sidebar
+          onNew={onNew}
+          onSelect={selectSession}
+          activeSessionId={activeSessionId}
+          refreshTrigger={sidebarRefresh}
+        />
         <main className="flex-1 flex flex-col min-w-0 bg-surface">
           <ChatThread
             messages={messages}
@@ -265,6 +306,67 @@ function appendAgentDelta(
     };
     return [...prev, fresh];
   });
+}
+
+// Backend (Anthropic-shape) message types — only the bits we read.
+// A user message has either a plain string content (the actual user
+// input) or a list with tool_result blocks (intermediate replies the
+// LLM never sees as input). An assistant message's content is always
+// a list and may mix text + tool_use blocks.
+type BackendBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: unknown }
+  | { type: "tool_result"; tool_use_id: string; content: unknown };
+
+type BackendMessage = {
+  role: "user" | "assistant";
+  content: string | BackendBlock[];
+};
+
+// Convert a saved Anthropic-shape conversation into the simpler UI
+// shape (system / user / agent rows). We collapse the tool-use loop:
+// intermediate assistant turns that contain only tool_use blocks and
+// user turns that carry tool_result are dropped, leaving just the
+// human-readable turns. The opening system message is prepended so
+// resumed sessions still show the "connected" banner.
+function translateHistory(messages: BackendMessage[]): Message[] {
+  const out: Message[] = [OPENING];
+  for (const m of messages) {
+    if (m.role === "user") {
+      if (typeof m.content === "string" && m.content.trim()) {
+        out.push({ kind: "user", body: m.content });
+      }
+      // tool_result intermediate → skip
+      continue;
+    }
+    // assistant
+    if (typeof m.content === "string") {
+      // Defensive: a future provider could collapse to a string. Treat
+      // it the same as a single text block.
+      out.push(buildAgentFromText(m.content));
+      continue;
+    }
+    const text = m.content
+      .filter((b): b is { type: "text"; text: string } => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+    if (text.trim()) {
+      out.push(buildAgentFromText(text));
+    }
+    // pure tool_use intermediate → skip
+  }
+  return out;
+}
+
+function buildAgentFromText(text: string): AgentMessage {
+  return {
+    kind: "agent",
+    answer: "",
+    body: text,
+    reasoning: [],
+    confidence: 0.9,
+    sources: [],
+  };
 }
 
 type SseEvent = { event: string; data: string };
