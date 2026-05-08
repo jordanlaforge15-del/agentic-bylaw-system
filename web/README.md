@@ -67,3 +67,20 @@ npm run dev          # Next dev server with hot reload
 npm run build        # production build (also runs type-aware checks)
 npm run typecheck    # tsc --noEmit
 ```
+
+## Restarting the dev server
+
+`npm` has no separate restart subcommand — just run `npm run dev`
+again. If routes hang or you see stale errors after editing
+`proxy.ts`, `middleware`-shaped files, or `.env.local`, the most
+likely cause is a stale Turbopack cache. Full reset:
+
+```bash
+lsof -ti:3000 | xargs kill -9 2>/dev/null   # kill any zombie bound to :3000
+rm -rf .next                                 # nuke compile cache
+npm run dev
+```
+
+The cache lives at `web/.next/`. Hot-reload picks up most edits in
+place, but middleware / proxy / env changes sometimes need the
+clean rebuild above.
