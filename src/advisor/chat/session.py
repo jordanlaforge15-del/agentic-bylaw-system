@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from advisor.llm import (
     CompletionRequest,
@@ -85,6 +86,11 @@ class ChatSession:
     last_turn_usage: TokenUsage | None = field(
         default=None, repr=False, compare=False
     )
+    # Wall-clock of the most recent turn. Used by the sidebar to render
+    # "2m ago" / "yesterday" — the in-memory store has no other notion
+    # of recency, and the DB-backed store overwrites this on load with
+    # the row's ``updated_at`` so both paths surface a consistent value.
+    updated_at: datetime | None = field(default=None, compare=False)
 
     async def send_user_message_blocking(
         self, gateway: LLMGateway, text: str
@@ -125,6 +131,7 @@ class ChatSession:
         # we set so a turn with no reported usage clears the prior
         # value rather than carrying it forward.
         self.last_turn_usage = result.total_usage
+        self.updated_at = datetime.now(timezone.utc)
 
         # Fire the post-turn hook AFTER messages are settled. The
         # callback receives ``self`` so it can read the new message

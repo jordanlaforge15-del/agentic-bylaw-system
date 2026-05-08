@@ -123,6 +123,10 @@ class ChatSessionSummary(BaseModel):
     model: str
     title: str
     message_count: int
+    # ISO 8601 timestamp of the most recent turn, or None for sessions
+    # that exist but have never been written to. The frontend renders
+    # this as a relative label ("2m ago"); the backend stays neutral.
+    updated_at: str | None = None
 
 
 class ChatSessionList(BaseModel):
@@ -368,16 +372,24 @@ def create_app(
     ) -> ChatSessionList:
         """Return the current user's sessions, newest-first.
 
-        "Newest-first" relies on dict insertion order in the in-memory
-        store — every freshly-created session is appended, and Python
-        guarantees insertion order. The DB-backed store should sort by
-        ``updated_at`` once that field exists.
+        Order key: ``updated_at`` when present (the DB store always
+        populates it; the in-memory store populates it after the first
+        turn). Sessions that have never been written to fall back to
+        dict insertion order so a freshly minted empty session still
+        sorts above older ones from the same render.
         """
         user_id_str = str(user.id)
         sessions = store.list_for_user(user_id_str)
-        summaries = [_summarise_session(s) for s in sessions]
-        # Newest-first.
-        summaries.reverse()
+        ordered = sorted(
+            enumerate(sessions),
+            key=lambda pair: (
+                pair[1].updated_at.timestamp()
+                if pair[1].updated_at is not None
+                else float(pair[0])
+            ),
+            reverse=True,
+        )
+        summaries = [_summarise_session(s) for _, s in ordered]
         return ChatSessionList(sessions=summaries)
 
     @app.get("/v1/chat/sessions/{session_id}")
@@ -437,6 +449,11 @@ def _summarise_session(session: ChatSession) -> ChatSessionSummary:
         model=session.model,
         title=title,
         message_count=user_count + assistant_text_count,
+        updated_at=(
+            session.updated_at.isoformat()
+            if session.updated_at is not None
+            else None
+        ),
     )
 
 

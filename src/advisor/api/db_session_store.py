@@ -188,6 +188,7 @@ class DbSessionStore:
                 messages=messages,
                 tool_defs=list(tool_defs),
                 tool_handlers=dict(tool_handlers),
+                updated_at=row.updated_at,
             )
 
             # Track how many messages we've already persisted so the
@@ -256,7 +257,7 @@ class DbSessionStore:
             rows = (
                 db.query(DbChatSession)
                 .filter(DbChatSession.user_id == user.id)
-                .order_by(DbChatSession.created_at.desc())
+                .order_by(DbChatSession.updated_at.desc())
                 .all()
             )
             return [
@@ -264,6 +265,7 @@ class DbSessionStore:
                     session_id=str(r.id),
                     user_id=user_id,
                     system_prompt="",
+                    updated_at=r.updated_at,
                 )
                 for r in rows
             ]
@@ -334,6 +336,12 @@ class DbSessionStore:
             new_rows[-1].tokens_input = final_input
             new_rows[-1].tokens_output = final_output
             db.add_all(new_rows)
+            # Bump ``updated_at`` so the sidebar's recency sort surfaces
+            # this session at the top after the turn lands. SQLAlchemy
+            # won't auto-touch the column on a child INSERT.
+            row = db.get(DbChatSession, db_session_pk)
+            if row is not None and chat_session.updated_at is not None:
+                row.updated_at = chat_session.updated_at
             db.flush()
 
         self._last_persisted_sequence[chat_session.session_id] = (

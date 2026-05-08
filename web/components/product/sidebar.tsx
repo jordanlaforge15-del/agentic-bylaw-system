@@ -20,7 +20,27 @@ type SessionSummary = {
   model: string;
   title: string;
   message_count: number;
+  updated_at: string | null;
 };
+
+// Render a backend ISO timestamp as a sidebar-friendly relative label.
+// Buckets: <60s "just now"; <60m "Nm"; <24h "Nh"; <7d "Nd"; older as
+// "MMM D" (e.g. "May 6"). Returns "—" for null/unparseable inputs so
+// freshly-minted sessions stay readable.
+function formatRelative(iso: string | null): string {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "—";
+  const diffSec = Math.max(0, (Date.now() - t) / 1000);
+  if (diffSec < 60) return "just now";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m`;
+  if (diffSec < 86_400) return `${Math.floor(diffSec / 3600)}h`;
+  if (diffSec < 7 * 86_400) return `${Math.floor(diffSec / 86_400)}d`;
+  return new Date(t).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+}
 
 type Props = {
   onNew: () => void;
@@ -145,9 +165,7 @@ export function Sidebar({
                 <Mono muted size={9}>
                   {th.message_count} MSG
                 </Mono>
-                <Mono muted size={9}>
-                  {th.session_id.slice(0, 8)}
-                </Mono>
+                <Mono muted size={9}>{formatRelative(th.updated_at)}</Mono>
               </div>
             </button>
           );
