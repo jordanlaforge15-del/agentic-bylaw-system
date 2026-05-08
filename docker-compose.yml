@@ -1,6 +1,9 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    image: agentic-bylaw-system-postgres:pg16-pgvector-postgis
     environment:
       POSTGRES_DB: layer1
       POSTGRES_USER: layer1

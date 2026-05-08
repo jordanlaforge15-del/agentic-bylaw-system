@@ -1,0 +1,19 @@
+# Postgres image with both pgvector AND postgis. The upstream
+# pgvector/pgvector image is debian-bookworm-based and ships with
+# postgresql-16; we layer the postgis extension binaries on top so
+# CREATE EXTENSION postgis works against the same cluster that
+# already has CREATE EXTENSION vector.
+#
+# Why a custom image rather than swapping to a public combo image:
+# the existing layer1-postgres volume was created with this exact
+# pgvector binary. Swapping pgvector versions risks a binary-format
+# mismatch on the existing fragment_embedding column. Layering
+# postgis on top of the unchanged pgvector image is the safer
+# minimum diff.
+FROM pgvector/pgvector:pg16
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        postgresql-16-postgis-3 \
+        postgresql-16-postgis-3-scripts \
+    && rm -rf /var/lib/apt/lists/*
