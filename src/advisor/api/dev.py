@@ -4,12 +4,22 @@ Run with::
 
     uvicorn advisor.api.dev:app --host 127.0.0.1 --port 8000 --reload
 
-Differences from :mod:`advisor.api.main` (production):
+Two auth modes, picked by env var:
 
-* **No Clerk verifier** — the chat routes accept the ``X-Test-User-Id``
-  header instead of a Clerk JWT. This is the existing test-only
-  fallback in :func:`advisor.api.app.create_app`. Lets us iterate on
-  the frontend without standing up Clerk.
+* **Default (no env)** — the chat routes accept the
+  ``X-Test-User-Id`` header instead of a Clerk JWT. This is the
+  test-only fallback in :func:`advisor.api.app.create_app`. Lets us
+  iterate on the frontend without Clerk credentials.
+
+* **Clerk opt-in** — set ``CLERK_JWKS_URL`` (and optionally
+  ``CLERK_AUDIENCE`` / ``CLERK_ISSUER``) to wire a real
+  ``ClerkVerifier``. The chat routes then require an
+  ``Authorization: Bearer <jwt>`` header, exactly like production.
+  Useful for integration-testing the Next.js Clerk flow against a
+  local FastAPI without standing up the full prod entrypoint.
+
+Other dev-only choices (unchanged):
+
 * **In-memory session store** — we deliberately do *not* pass
   ``db_session_factory`` so the advisor uses ``InMemorySessionStore``
   and skips quota enforcement. Sessions die on restart; that's fine
@@ -28,11 +38,14 @@ Env vars expected:
                          the docker-compose layer1 connection string).
     ADVISOR_DEV_CORS_ORIGINS — optional, comma-separated, defaults to
                          http://localhost:3000.
+    CLERK_JWKS_URL     — optional. Set to enable real Clerk JWT
+                         verification. When unset, the X-Test-User-Id
+                         fallback is used.
 
 This module is *not* imported by the production entrypoint and never
 runs in prod. The fallback auth header (``X-Test-User-Id``) makes
 chat trivially impersonatable, so this server must never face the
-public internet.
+public internet without ``CLERK_JWKS_URL`` set.
 """
 from __future__ import annotations
 
@@ -43,23 +56,41 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from advisor.api.app import create_app
+from advisor.auth.clerk import ClerkVerifier
+from advisor.auth.settings import build_verifier as build_clerk_verifier
 from advisor.llm.registry import build_gateway
 
 logger = logging.getLogger(__name__)
 
 
+def _maybe_build_verifier() -> ClerkVerifier | None:
+    """Return a ``ClerkVerifier`` when ``CLERK_JWKS_URL`` is set, else ``None``.
+
+    Mirrors the prod entrypoint's logic so the dev server can be
+    flipped between modes by setting / unsetting one env var. We
+    deliberately do not consult ``CLERK_SECRET_KEY`` here — the
+    advisor backend never calls Clerk's REST API; it only verifies
+    tokens against the public JWKS.
+    """
+    if not os.environ.get("CLERK_JWKS_URL"):
+        return None
+    return build_clerk_verifier()
+
+
 def build_dev_app() -> FastAPI:
     """Construct the dev FastAPI app.
 
-    No Clerk, no DB-backed session store, no quota — but real LLM and
-    real retrieval. Identity comes from ``X-Test-User-Id``.
+    No DB-backed session store, no quota — but real LLM and real
+    retrieval. Identity comes from either Clerk (when
+    ``CLERK_JWKS_URL`` is set) or ``X-Test-User-Id`` (default).
     """
     gateway = build_gateway()
-    # Deliberately omit verifier and db_session_factory: that activates
-    # the X-Test-User-Id fallback and the in-memory store. Retrieval
-    # uses the default factory, which opens a layer1 session_scope per
-    # tool call — same as production.
-    app = create_app(gateway=gateway)
+    verifier = _maybe_build_verifier()
+    # Deliberately omit db_session_factory: that activates the
+    # in-memory store and skips quota. ``verifier`` is wired only when
+    # Clerk env is set; otherwise the X-Test-User-Id fallback path
+    # inside create_app stays active for fast local iteration.
+    app = create_app(gateway=gateway, verifier=verifier)
 
     origins_env = os.environ.get(
         "ADVISOR_DEV_CORS_ORIGINS", "http://localhost:3000"
@@ -70,17 +101,32 @@ def build_dev_app() -> FastAPI:
         allow_origins=origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
-        # X-Test-User-Id is the dev auth header. We expose Last-Event-ID
-        # for SSE reconnects, though we don't currently honour them.
-        allow_headers=["Content-Type", "X-Test-User-Id", "Last-Event-ID"],
+        # Allow both the test-only header and the real Authorization
+        # header so the dev server works in either auth mode without a
+        # CORS reconfig.
+        allow_headers=[
+            "Content-Type",
+            "X-Test-User-Id",
+            "Authorization",
+            "Last-Event-ID",
+        ],
         expose_headers=["X-Session-Id"],
     )
 
-    logger.warning(
-        "advisor.api.dev is running in PERMISSIVE mode — X-Test-User-Id "
-        "header is the only auth. Do NOT expose this server to the "
-        "public internet."
-    )
+    if verifier is None:
+        logger.warning(
+            "advisor.api.dev is running in PERMISSIVE mode — "
+            "X-Test-User-Id header is the only auth. Do NOT expose "
+            "this server to the public internet. Set CLERK_JWKS_URL to "
+            "enable real Clerk JWT verification."
+        )
+    else:
+        logger.info(
+            "advisor.api.dev is running with Clerk JWT verification "
+            "(CLERK_JWKS_URL=%s). The X-Test-User-Id fallback is "
+            "disabled.",
+            os.environ.get("CLERK_JWKS_URL"),
+        )
     return app
 
 
