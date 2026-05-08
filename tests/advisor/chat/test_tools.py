@@ -181,6 +181,75 @@ async def test_factory_callable_resolved_per_call(seeded_service):
     assert call_count["n"] == 2
 
 
+@pytest.mark.asyncio
+async def test_factory_context_manager_exits_after_each_call(seeded_service):
+    """Regression: a context-manager factory must have ``__exit__``
+    called after each handler returns, otherwise SQLAlchemy sessions
+    leak and the underlying transaction sits 'idle in transaction'
+    until a Postgres timeout fires. The earlier implementation called
+    ``__enter__`` and threw the cm away — which wedged Postgres
+    connections after a few tool calls and required
+    ``idle_in_transaction_session_timeout`` to self-heal.
+    """
+    service, _ = seeded_service
+    enters = {"n": 0}
+    exits = {"n": 0}
+
+    class TrackingCm:
+        def __enter__(self):
+            enters["n"] += 1
+            return service
+
+        def __exit__(self, exc_type, exc, tb):
+            exits["n"] += 1
+            return False
+
+    def factory():
+        return TrackingCm()
+
+    _, handlers = build_bylaw_tools(factory)
+    await handlers["list_documents"]({"limit": 5})
+    await handlers["list_documents"]({"limit": 5})
+
+    assert enters["n"] == 2
+    assert exits["n"] == 2, (
+        "context manager exit was skipped — sessions leak per tool call"
+    )
+
+
+@pytest.mark.asyncio
+async def test_factory_context_manager_exits_on_handler_exception(
+    seeded_service,
+):
+    """If a handler raises (e.g. malformed input), the cm must still
+    exit so the SQLAlchemy session rolls back rather than leaking.
+    """
+    service, _ = seeded_service
+    exits = {"n": 0}
+
+    class TrackingCm:
+        def __enter__(self):
+            return service
+
+        def __exit__(self, exc_type, exc, tb):
+            exits["n"] += 1
+            return False
+
+    def factory():
+        return TrackingCm()
+
+    _, handlers = build_bylaw_tools(factory)
+    # lookup_citation requires citation_path; omitting it raises
+    # ValidationError BEFORE the service is touched. Even so the cm
+    # never gets entered, so we exercise the exception path with a
+    # request that does enter the service:
+    with pytest.raises(Exception):
+        await handlers["lookup_citation"](
+            {"citation_path": "this-path-does-not-exist", "document_id": 999_999}
+        )
+    assert exits["n"] == 1
+
+
 def test_search_bylaw_evidence_schema_has_location_slot():
     """The tool's input_schema must explicitly document the location
     slot — that's what the LLM reads to know how to populate it.

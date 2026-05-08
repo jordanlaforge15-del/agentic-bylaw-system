@@ -578,43 +578,18 @@ def _resolve_or_create_session(
 def _build_tools_with_factory(
     retrieval_factory: Callable[[], Any],
 ) -> tuple[list, dict]:
-    """Wrap the retrieval factory so each tool call opens its own session.
+    """Build retrieval tools bound to a per-request factory.
 
-    The factory may be either a context manager (production) or a
-    plain callable that returns a RetrievalService (tests). We detect
-    which by looking for ``__enter__`` and adapt accordingly. This
-    means tests can pass a simple ``lambda: service`` and get the
-    same handler shape as production, which uses ``session_scope``.
+    ``retrieval_factory`` may be either a callable returning a
+    ``RetrievalService`` (tests) or a callable returning a context
+    manager that yields one (production's session_scope-backed
+    factory). ``build_bylaw_tools`` handles both shapes inside each
+    handler — it enters the cm before the synchronous service call
+    and exits it after, so the underlying SQLAlchemy session always
+    closes even if the LLM disconnects mid-stream and the chat
+    coroutine is cancelled.
     """
-
-    def _open_service():
-        result = retrieval_factory()
-        # If the factory returns a context manager, enter it lazily
-        # — but that breaks our handler signature, which expects a
-        # plain RetrievalService. So in practice, callable factories
-        # MUST return a service directly; context-manager factories
-        # are invoked inside the handler closure. We unwrap here:
-        if hasattr(result, "__enter__"):
-            # Eagerly enter and discard the cm — fine for tests
-            # because they hold their own session. Production wraps
-            # session_scope inside a per-tool-call context manager
-            # below.
-            return result.__enter__()  # type: ignore[union-attr]
-        return result
-
-    # For each tool call we want a fresh session if the factory is a
-    # context manager. We achieve that by wrapping the factory in a
-    # callable that opens-and-closes the cm around the synchronous
-    # service usage. Because the RetrievalService methods are sync
-    # and the data they return is fully materialised before we
-    # serialise to JSON, we can close the session immediately after
-    # each call without worrying about lazy-loaded relationships.
-    def _per_call_service():
-        # We don't keep the cm open across the handler boundary; the
-        # handler resolves once, calls one method, and serialises.
-        return _open_service()
-
-    return build_bylaw_tools(_per_call_service)
+    return build_bylaw_tools(retrieval_factory)
 
 
 def _format_sse_event(event: StreamEvent) -> dict[str, str]:

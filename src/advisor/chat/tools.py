@@ -23,7 +23,8 @@ Each handler:
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from advisor.llm import ToolDefinition
@@ -217,42 +218,66 @@ def build_bylaw_tools(
     plus a name -> async handler dict.
     """
 
-    def _resolve() -> RetrievalService:
+    @contextmanager
+    def _resolve_cm() -> Iterator[RetrievalService]:
+        # The factory may yield three shapes:
+        #   * a bare RetrievalService — yield it as-is (test fixtures
+        #     manage their own session lifecycle).
+        #   * a callable returning a service — call and yield. Same
+        #     test path, just lazy.
+        #   * a callable returning a context manager — production's
+        #     ``session_scope``-backed factory. Enter the cm, yield
+        #     the service, and exit through the ``with`` block on the
+        #     way out so the underlying SQLAlchemy session is closed
+        #     and any open transaction is committed/rolled back.
+        # The third case is the load-bearing one: the previous
+        # implementation called ``__enter__()`` and discarded the cm,
+        # which leaked one DB connection per tool call and left
+        # transactions ``idle in transaction`` until Postgres killed
+        # them via ``idle_in_transaction_session_timeout``.
         if callable(retrieval_service):
-            return retrieval_service()
-        return retrieval_service
+            result = retrieval_service()
+            if hasattr(result, "__enter__"):
+                with result as service:
+                    yield service
+                return
+            yield result
+            return
+        yield retrieval_service
 
     async def list_documents_handler(payload: dict[str, Any]) -> str:
         # ``list_documents`` takes plain kwargs rather than a request
         # model, so we pluck the supported fields explicitly. Unknown
         # fields are silently ignored — the JSON Schema above is what
         # constrains the LLM, not our parsing here.
-        service = _resolve()
-        documents = service.list_documents(
-            municipality=payload.get("municipality"),
-            bylaw_name=payload.get("bylaw_name"),
-            limit=payload.get("limit", 50),
-        )
-        body = {"documents": [doc.model_dump(mode="json") for doc in documents]}
-        return json.dumps(body)
+        with _resolve_cm() as service:
+            documents = service.list_documents(
+                municipality=payload.get("municipality"),
+                bylaw_name=payload.get("bylaw_name"),
+                limit=payload.get("limit", 50),
+            )
+            body = {
+                "documents": [doc.model_dump(mode="json") for doc in documents]
+            }
+            return json.dumps(body)
 
     async def get_document_outline_handler(payload: dict[str, Any]) -> str:
-        service = _resolve()
-        outline = service.get_document_outline(
-            document_id=payload["document_id"],
-            max_fragments=payload.get("max_fragments", 250),
-            include_text=payload.get("include_text", False),
-        )
-        return json.dumps(outline.model_dump(mode="json"))
+        with _resolve_cm() as service:
+            outline = service.get_document_outline(
+                document_id=payload["document_id"],
+                max_fragments=payload.get("max_fragments", 250),
+                include_text=payload.get("include_text", False),
+            )
+            return json.dumps(outline.model_dump(mode="json"))
 
     async def lookup_citation_handler(payload: dict[str, Any]) -> str:
         # model_validate will raise ValidationError on missing required
         # fields; the tool loop catches that and surfaces it to the LLM
         # as a tool_result error so it can self-correct.
         request = CitationLookupRequest.model_validate(payload)
-        service = _resolve()
-        match = service.lookup_citation(request)
-        return json.dumps(match.model_dump(mode="json"))
+        with _resolve_cm() as service:
+            match = service.lookup_citation(request)
+            return json.dumps(match.model_dump(mode="json"))
 
     async def search_bylaw_evidence_handler(payload: dict[str, Any]) -> str:
         # Mirror the MCP server's location-slot handling: a missing
@@ -281,9 +306,9 @@ def build_bylaw_tools(
             include_datasets=payload.get("include_datasets", True),
             limit=payload.get("limit", 8),
         )
-        service = _resolve()
-        response = service.search(request)
-        return json.dumps(response.model_dump(mode="json"))
+        with _resolve_cm() as service:
+            response = service.search(request)
+            return json.dumps(response.model_dump(mode="json"))
 
     tool_defs = [
         ToolDefinition(
