@@ -97,9 +97,13 @@ export default function ProductAppPage() {
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        // Normalise CRLF → LF up-front. sse_starlette frames events
+        // with \r\n\r\n by default; the parser below looks for \n\n
+        // and splits lines on \n. Without this normalisation no
+        // frame boundary is ever found and zero events are parsed.
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
 
-        // SSE frames are separated by blank lines (\n\n).
+        // SSE frames are separated by blank lines.
         let nl: number;
         while ((nl = buffer.indexOf("\n\n")) !== -1) {
           const raw = buffer.slice(0, nl);
