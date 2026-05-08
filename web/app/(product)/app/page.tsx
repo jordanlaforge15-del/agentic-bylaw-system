@@ -27,6 +27,8 @@ import {
   type BackendMessage,
   type ParcelContext,
 } from "@/lib/parcel";
+import { humanizeToolUse } from "@/lib/reasoning";
+import type { AgentReasoningStep } from "@/lib/mock";
 
 // We swap the indicator label based on which tool the agent is
 // actually running. Anything we don't recognise falls back to
@@ -74,10 +76,16 @@ export default function ProductAppPage() {
   const [parcel, setParcel] = useState<ParcelContext | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Re-pull the active session and re-extract parcel context. Used
-  // after a chat turn completes and after switching to a different
-  // session in the sidebar. No-ops when there's no active session.
-  const refreshParcel = async (sessionId: string | null) => {
+  // Re-pull the active session and snap our local state to the
+  // server's authoritative copy. Two outputs:
+  //   1. parcel pane (extractParcelContext)
+  //   2. message list (translateHistory) — picks up reasoning steps
+  //      that weren't visible during streaming because tool_use blocks
+  //      precede the final text in the saved conversation.
+  // The id we requested is captured at call time; if the user has
+  // since switched sessions we drop the result on the floor rather
+  // than clobber.
+  const refreshFromSession = async (sessionId: string | null) => {
     if (!sessionId) {
       setParcel(null);
       return;
@@ -89,9 +97,11 @@ export default function ProductAppPage() {
       );
       if (!res.ok) return;
       const data = (await res.json()) as { messages: BackendMessage[] };
+      if (sessionIdRef.current !== sessionId) return; // user moved on
       setParcel(extractParcelContext(data.messages));
+      setMessages(translateHistory(data.messages));
     } catch {
-      // network blip — leave the previous parcel state alone
+      // network blip — leave previous state alone
     }
   };
 
@@ -241,10 +251,11 @@ export default function ProductAppPage() {
       // Refresh the sidebar so a newly-created session, or an
       // updated message_count on the existing one, lands in the list.
       setSidebarRefresh((n) => n + 1);
-      // Refresh the parcel pane from the latest session detail.
-      // Reads sessionIdRef directly (not the captured local) so we
+      // Snap to authoritative session state: refreshes parcel pane
+      // and replays reasoning steps that streaming didn't surface.
+      // Reads sessionIdRef directly (not a captured local) so we
       // always see the post-stream value the SSE handler set.
-      void refreshParcel(sessionIdRef.current);
+      void refreshFromSession(sessionIdRef.current);
     }
   };
 
@@ -352,9 +363,31 @@ function appendAgentDelta(
 // resumed sessions still show the "connected" banner.
 function translateHistory(messages: BackendMessage[]): Message[] {
   const out: Message[] = [OPENING];
+  // One agent message per user question. The tool-use loop can emit
+  // many intermediate assistant turns ("Let me check X" → tool →
+  // "Now let me also check Y" → tool → final answer); rendering all
+  // of them inflates the chat and makes the post-stream snap (which
+  // splits a single streamed message into N) jarring. Instead we
+  // accumulate everything between user messages and emit one agent
+  // turn whose body is the *last* text-bearing assistant turn (the
+  // final answer) and whose reasoning is every tool call that
+  // happened along the way.
+  let pendingReasoning: AgentReasoningStep[] = [];
+  let pendingFinalText = "";
+
+  const flush = () => {
+    if (!pendingFinalText.trim() && pendingReasoning.length === 0) return;
+    out.push(
+      buildAgentFromText(pendingFinalText.trim(), pendingReasoning),
+    );
+    pendingReasoning = [];
+    pendingFinalText = "";
+  };
+
   for (const m of messages) {
     if (m.role === "user") {
       if (typeof m.content === "string" && m.content.trim()) {
+        flush();
         out.push({ kind: "user", body: m.content });
       }
       // tool_result intermediate → skip
@@ -362,29 +395,39 @@ function translateHistory(messages: BackendMessage[]): Message[] {
     }
     // assistant
     if (typeof m.content === "string") {
-      // Defensive: a future provider could collapse to a string. Treat
-      // it the same as a single text block.
-      out.push(buildAgentFromText(m.content));
+      // Defensive: future provider might collapse to string.
+      pendingFinalText = m.content;
       continue;
+    }
+    for (const b of m.content) {
+      if (b.type === "tool_use") {
+        pendingReasoning.push(
+          humanizeToolUse(b.name, b.input ?? {}, pendingReasoning.length),
+        );
+      }
     }
     const text = m.content
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text)
       .join("");
     if (text.trim()) {
-      out.push(buildAgentFromText(text));
+      // Overwrite — only the last text turn becomes the rendered body.
+      pendingFinalText = text;
     }
-    // pure tool_use intermediate → skip
   }
+  flush();
   return out;
 }
 
-function buildAgentFromText(text: string): AgentMessage {
+function buildAgentFromText(
+  text: string,
+  reasoning: AgentReasoningStep[] = [],
+): AgentMessage {
   return {
     kind: "agent",
     answer: "",
     body: text,
-    reasoning: [],
+    reasoning,
     confidence: 0.9,
     sources: [],
   };
