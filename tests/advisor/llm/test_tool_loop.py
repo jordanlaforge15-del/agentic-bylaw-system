@@ -159,30 +159,57 @@ async def test_unknown_tool_name_reports_configuration_error():
 
 
 @pytest.mark.asyncio
-async def test_max_iterations_guards_against_infinite_loops():
+async def test_max_iterations_forces_text_synthesis_instead_of_raising():
     """A misbehaving model that keeps emitting tool_use forever must
-    not hang the chat backend. The loop bails after max_iterations
-    with a clear exception."""
+    not hang the chat backend OR error out generically. The loop
+    runs ``max_iterations`` tool rounds, then forces ONE more call
+    with tools stripped so the model has to produce a real text
+    answer from whatever it already retrieved.
 
-    def keep_calling_tools(_request: CompletionRequest):
+    This is what makes "Can 2 COM lots be combined?" — a question
+    the LUB doesn't answer — surface as a useful "the LUB doesn't
+    cover this" reply instead of a generic agent-gave-up error.
+    """
+    n_calls = {"i": 0}
+
+    def script(_request: CompletionRequest):
+        n_calls["i"] += 1
+        # First N calls: keep asking for the tool. The (N+1)th call
+        # is the synthesis call — by then ``tools`` is [] in the
+        # request, so we return a plain text response.
+        if not _request.tools:
+            return text_response(
+                "The LUB does not cover lot consolidation; "
+                "see the HRM Subdivision By-law."
+            )
         return tool_use_response(
-            tool_id=f"tu_{id(_request)}",
+            tool_id=f"tu_{n_calls['i']}",
             tool_name="search_bylaw_evidence",
             tool_input={},
         )
 
-    gateway = MockGateway(callable_=keep_calling_tools)
+    gateway = MockGateway(callable_=script)
 
     async def handler(_payload: dict[str, Any]) -> str:
-        return "ok"
+        return "no relevant fragments"
 
-    with pytest.raises(ToolLoopError, match="max_iterations"):
-        await run_tool_loop(
-            gateway,
-            request=_request_with_tool(),
-            handlers={"search_bylaw_evidence": handler},
-            max_iterations=3,
-        )
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+        max_iterations=3,
+    )
+
+    assert result.iterations == 3
+    assert result.terminated_reason == "iteration_cap"
+    assert len(result.tool_calls) == 3
+    # Synthesis turn produced a real text answer.
+    assert "Subdivision" in text_of(result.final_response)
+    # The conversation ends with an assistant turn (the synthesis),
+    # preceded by a user(tool_result + nudge) turn so the persistence
+    # path can save the full audit trail.
+    assert result.conversation[-1].role == LLMRole.ASSISTANT
+    assert result.conversation[-2].role == LLMRole.USER
 
 
 @pytest.mark.asyncio

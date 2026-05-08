@@ -61,6 +61,12 @@ class ToolLoopResult:
 
     ``tool_calls`` records each tool invocation in order — useful for
     audit, billing, and observability.
+
+    ``terminated_reason`` is ``"end_turn"`` when the model produced a
+    natural text response, or ``"iteration_cap"`` when we hit
+    ``max_iterations`` and forced a text-only synthesis turn. Callers
+    can surface a UI hint when the answer was forced rather than
+    organic.
     """
 
     final_response: CompletionResponse
@@ -73,6 +79,7 @@ class ToolLoopResult:
     # aggregate matters because tool-use turns make multiple model
     # calls; the final response's ``usage`` only covers the last one.
     total_usage: TokenUsage | None = None
+    terminated_reason: str = "end_turn"
 
 
 @dataclass
@@ -88,9 +95,28 @@ class ToolInvocation:
 
 
 class ToolLoopError(Exception):
-    """Raised when the loop hits its iteration limit without the LLM
-    issuing a non-tool-use response. Suggests an infinite-loop bug in
-    the model or handlers that can't make progress."""
+    """Reserved for unrecoverable loop errors (e.g. gateway crash).
+
+    The iteration cap no longer raises — see ``run_tool_loop`` for
+    the synthesis-fallback path. Kept around for future use and to
+    avoid breaking callers that catch it.
+    """
+
+
+# Nudge appended to the last tool_result message when we hit the
+# iteration cap. Lives next to the loop so the wording stays close
+# to the prompt-engineering decision it represents.
+_ITERATION_CAP_NUDGE = (
+    "You have used your full tool budget for this turn. Stop calling "
+    "tools and answer now using ONLY the evidence already retrieved "
+    "above. If the user's question genuinely cannot be answered from "
+    "what was retrieved, say so plainly in one paragraph and name the "
+    "specific bylaw section, schedule, or external dataset that would "
+    "actually contain the answer (for example: 'Lot consolidation is "
+    "governed by the HRM Subdivision By-law, not the Land Use By-law'). "
+    "Never claim a generic 'I couldn't find an answer' — be specific "
+    "about what was missing."
+)
 
 
 async def run_tool_loop(
@@ -111,7 +137,13 @@ async def run_tool_loop(
 
     ``max_iterations`` is a safety cap. Most chats settle in 1–3
     rounds; anything higher than 5 in practice usually means a
-    handler is misbehaving.
+    handler is misbehaving. When the cap is hit we don't raise —
+    instead we make one more model call with tools stripped, forcing
+    a text-only synthesis from whatever evidence was already
+    retrieved. That converts a hard error ("agent gave up") into a
+    real answer ("the LUB doesn't cover this; see the Subdivision
+    By-law"), and keeps the partial conversation persistable so the
+    audit trail isn't lost.
     """
     conversation = list(request.messages)
     tool_calls: list[ToolInvocation] = []
@@ -140,6 +172,7 @@ async def run_tool_loop(
                 tool_calls=tool_calls,
                 iterations=iteration,
                 total_usage=total_usage,
+                terminated_reason="end_turn",
             )
 
         result_blocks: list[ContentBlock] = []
@@ -164,9 +197,34 @@ async def run_tool_loop(
 
         conversation.append(Message(role=LLMRole.USER, content=result_blocks))
 
-    raise ToolLoopError(
-        f"tool-use loop exceeded max_iterations={max_iterations}; "
-        f"likely a model or handler that can't terminate"
+    # Iteration cap reached. Force the model to synthesize a text
+    # response: tack a stop-and-answer nudge onto the last user
+    # message (Anthropic forbids consecutive same-role turns, so we
+    # mutate rather than append) and strip tools so it can't request
+    # another round.
+    last_user = conversation[-1]
+    nudged_content = list(last_user.content) + [TextBlock(text=_ITERATION_CAP_NUDGE)]
+    conversation[-1] = Message(role=LLMRole.USER, content=nudged_content)
+
+    synthesis_request = request.model_copy(
+        update={"messages": list(conversation), "tools": []}
+    )
+    final_response = await gateway.complete(synthesis_request)
+    total_usage = _accumulate_usage(total_usage, final_response.usage)
+    conversation.append(
+        Message(role=LLMRole.ASSISTANT, content=list(final_response.content))
+    )
+    logger.warning(
+        "tool-use loop hit max_iterations=%d; forced synthesis turn",
+        max_iterations,
+    )
+    return ToolLoopResult(
+        final_response=final_response,
+        conversation=conversation,
+        tool_calls=tool_calls,
+        iterations=max_iterations,
+        total_usage=total_usage,
+        terminated_reason="iteration_cap",
     )
 
 
