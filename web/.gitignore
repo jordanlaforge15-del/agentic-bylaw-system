@@ -35,3 +35,6 @@ next-env.d.ts
 
 # locally-captured invite requests — may contain PII, never commit
 data/
+
+# clerk configuration (can include secrets)
+/.clerk/

@@ -11,9 +11,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { UserButton, useUser } from "@clerk/nextjs";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 import { cn } from "@/lib/cn";
+
+// Inlined at build time (NEXT_PUBLIC_*). When unset we don't even
+// touch Clerk's UserButton — the static "Halifax Studio" placeholder
+// covers the dev path so devs running `npm run dev` against the
+// X-Test-User-Id fallback still get a sensible footer.
+const CLERK_ENABLED = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 type SessionSummary = {
   session_id: string;
@@ -172,27 +179,69 @@ export function Sidebar({
         })}
       </div>
       <div className="border-t border-hair px-4 py-3 flex items-center gap-2.5">
-        <div
-          className="bg-text text-surface flex items-center justify-center font-mono font-semibold"
-          style={{ width: 28, height: 28, fontSize: 11 }}
-        >
-          HS
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-[12.5px] font-semibold">Halifax Studio</div>
-          <div className="text-[10.5px] text-text-muted">
-            Practice · 4 seats
-          </div>
-        </div>
-        <button
-          type="button"
-          className="bg-transparent text-text-muted cursor-pointer font-mono"
-          style={{ fontSize: 11 }}
-          aria-label="Settings"
-        >
-          ⚙
-        </button>
+        {CLERK_ENABLED ? <ClerkProfile /> : <PlaceholderProfile />}
       </div>
     </aside>
+  );
+}
+
+// Sidebar footer in Clerk mode. Renders Clerk's UserButton (avatar +
+// account / sign-out menu) once the SDK has hydrated; until then or
+// for the rare not-signed-in case (proxy.ts redirects /app/* before
+// it can mount, so this is mostly defensive) we fall back to the
+// static placeholder.
+function ClerkProfile() {
+  const { isLoaded, isSignedIn, user } = useUser();
+  if (!isLoaded || !isSignedIn) return <PlaceholderProfile />;
+  const label =
+    user?.primaryEmailAddress?.emailAddress ||
+    user?.fullName ||
+    user?.username ||
+    "Signed in";
+  return (
+    <>
+      <UserButton
+        appearance={{
+          elements: {
+            rootBox: "flex items-center",
+            avatarBox: "w-7 h-7 rounded-none",
+          },
+        }}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-[12.5px] font-semibold truncate">{label}</div>
+        <div className="text-[10.5px] text-text-muted">
+          Click avatar to manage or sign out
+        </div>
+      </div>
+    </>
+  );
+}
+
+// Static team-card stand-in shown when Clerk isn't configured (dev
+// mode) or the user isn't signed in. Kept inline rather than promoted
+// to its own file because nothing else renders it.
+function PlaceholderProfile() {
+  return (
+    <>
+      <div
+        className="bg-text text-surface flex items-center justify-center font-mono font-semibold"
+        style={{ width: 28, height: 28, fontSize: 11 }}
+      >
+        HS
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[12.5px] font-semibold">Halifax Studio</div>
+        <div className="text-[10.5px] text-text-muted">Practice · 4 seats</div>
+      </div>
+      <button
+        type="button"
+        className="bg-transparent text-text-muted cursor-pointer font-mono"
+        style={{ fontSize: 11 }}
+        aria-label="Settings"
+      >
+        ⚙
+      </button>
+    </>
   );
 }

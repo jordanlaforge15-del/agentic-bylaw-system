@@ -20,7 +20,7 @@ const COLUMNS: Column[] = [
   {
     h: "Account",
     items: [
-      { label: "Log in", href: "/login" },
+      { label: "Log in", href: "/sign-in" },
       { label: "Get an invite", href: "/signup" },
       { label: "Billing", href: "/billing" },
       { label: "Support", href: "/support" },

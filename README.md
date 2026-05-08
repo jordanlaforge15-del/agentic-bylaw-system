@@ -350,6 +350,88 @@ layer1 audit-page 1 26 --llm --out examples/page26_audit.json
 
 The LLM audit does not replace deterministic checks or human review. It consumes source-page text plus Layer 1 blocks/fragments/tables/cross-references and returns a structured verdict to help prioritize manual inspection.
 
+## Web Demo
+
+The `web/` directory ships a Next.js 16 frontend that talks to the
+FastAPI advisor backend (`src/advisor/api/`). It runs in two modes
+controlled by environment, with no code changes needed to switch.
+
+### Dev mode (no Clerk)
+
+For local work and the quick demo path. The Next proxy routes forward
+an `X-Test-User-Id` header upstream, and FastAPI's auth dependency
+honours that header only when `CLERK_JWKS_URL` is unset.
+
+```bash
+# 1. FastAPI advisor backend (in-memory session store, real LLM,
+#    real retrieval). Requires ANTHROPIC_API_KEY in .env.
+uvicorn advisor.api.dev:app --host 127.0.0.1 --port 8000
+
+# 2. Next.js frontend in a second terminal.
+cd web
+cp .env.local.example .env.local   # leave Clerk vars at the placeholder values
+npm install
+npm run dev
+```
+
+In this mode `proxy.ts` (Clerk middleware) no-ops, the chat sidebar
+shows a static "Halifax Studio" placeholder instead of `<UserButton />`,
+and every request is keyed to `ADVISOR_DEMO_USER_ID` (`demo-user-1` by
+default). Sessions live in memory and disappear on backend restart.
+
+### Production / Clerk mode
+
+Real per-user identity. The Next proxy mints a Clerk session JWT and
+forwards it as `Authorization: Bearer …`; FastAPI validates against
+Clerk's JWKS and resolves a row in `advisor_user` keyed by the Clerk
+`sub` claim.
+
+```bash
+# Web — fill in real Clerk keys (Clerk dashboard → API keys):
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_…
+CLERK_SECRET_KEY=sk_live_…
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+ADVISOR_API_URL=https://advisor.example.com
+
+# Advisor backend — point at your Clerk instance's JWKS endpoint:
+CLERK_JWKS_URL=https://<your-instance>.clerk.accounts.dev/.well-known/jwks.json
+CLERK_AUDIENCE=…   # if your prod entrypoint reads it
+CLERK_ISSUER=…     # if your prod entrypoint reads it
+DATABASE_URL=postgresql+psycopg://…
+```
+
+Run the **production** entrypoint, which builds the verifier from
+those env vars and wires the DB-backed session store + billing:
+
+```bash
+uvicorn advisor.api.main:app --host 0.0.0.0 --port 8000
+```
+
+In this mode `proxy.ts` redirects unauthenticated `/app/*` and
+`/admin/*` requests to `/sign-in`, the chat sidebar renders Clerk's
+`<UserButton />` (avatar + sign-out menu), and `X-Test-User-Id` is
+ignored by FastAPI.
+
+### Switching modes
+
+The decision is per-process, picked up at boot:
+
+| Frontend env | Backend env | Mode |
+| --- | --- | --- |
+| `CLERK_SECRET_KEY` unset | `uvicorn advisor.api.dev:app` (no `CLERK_JWKS_URL`) | Dev / `X-Test-User-Id` |
+| `CLERK_SECRET_KEY` set | `uvicorn advisor.api.main:app` with `CLERK_JWKS_URL` set | Clerk |
+
+Mixing modes (e.g. real Clerk on the web side, dev backend) will
+401 every request — the dev backend rejects the `Authorization`
+header it doesn't know how to verify, and the prod backend rejects
+the `X-Test-User-Id` header when a verifier is wired.
+
+The legacy shared-password gate (cookie `abs_demo` / `abs_admin`,
+route `/access`, env vars `DEMO_PASSWORD` / `ADMIN_PASSWORD`) is
+still in the tree as dead code so a one-file revert of `proxy.ts`
+restores it. It is no longer wired into routing.
+
 ## Known Limitations
 
 - OCR is exposed as a flag, but production PaddleOCR image extraction needs tuning against scanned PDFs.
