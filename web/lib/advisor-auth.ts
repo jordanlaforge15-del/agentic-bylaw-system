@@ -18,10 +18,23 @@ import { auth } from "@clerk/nextjs/server";
 
 const DEMO_USER_ID = process.env.ADVISOR_DEMO_USER_ID || "demo-user-1";
 
+// True only when both Clerk keys are set AND look like real values.
+// The example .env file ships placeholders like "sk_test_replace-me";
+// if someone copies it without filling in real keys, calling auth()
+// would crash @clerk/backend at request time. Falling back to the
+// dev path here keeps things working until real keys land.
+function isClerkConfigured(): boolean {
+  const sk = process.env.CLERK_SECRET_KEY;
+  const pk = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+  if (!sk || !pk) return false;
+  if (sk.includes("replace") || pk.includes("replace")) return false;
+  return /^sk_(test|live)_/.test(sk) && /^pk_(test|live)_/.test(pk);
+}
+
 export async function buildAdvisorAuthHeaders(): Promise<
   Record<string, string> | null
 > {
-  if (!process.env.CLERK_SECRET_KEY) {
+  if (!isClerkConfigured()) {
     return { "X-Test-User-Id": DEMO_USER_ID };
   }
   const { userId, getToken } = await auth();

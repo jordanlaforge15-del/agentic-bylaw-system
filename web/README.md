@@ -7,7 +7,7 @@ the chat product lives at `/app` under `app/(product)/`.
 ## Quick start (dev mode)
 
 ```bash
-cp .env.local.example .env.local   # leave Clerk vars at the placeholder values
+cp .env.local.example .env.local   # leave Clerk vars commented out
 npm install
 npm run dev
 ```

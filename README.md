@@ -369,7 +369,7 @@ uvicorn advisor.api.dev:app --host 127.0.0.1 --port 8000
 
 # 2. Next.js frontend in a second terminal.
 cd web
-cp .env.local.example .env.local   # leave Clerk vars at the placeholder values
+cp .env.local.example .env.local   # leave Clerk vars commented out
 npm install
 npm run dev
 ```

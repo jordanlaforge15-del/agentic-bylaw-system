@@ -16,11 +16,14 @@ import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 import { cn } from "@/lib/cn";
 
-// Inlined at build time (NEXT_PUBLIC_*). When unset we don't even
-// touch Clerk's UserButton — the static "Halifax Studio" placeholder
-// covers the dev path so devs running `npm run dev` against the
-// X-Test-User-Id fallback still get a sensible footer.
-const CLERK_ENABLED = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+// Inlined at build time (NEXT_PUBLIC_*). When unset OR set to a
+// placeholder (the example file ships "pk_test_replace-me"), we
+// don't even touch Clerk's UserButton — the static "Halifax Studio"
+// placeholder covers the dev path so devs running `npm run dev`
+// against the X-Test-User-Id fallback still get a sensible footer.
+const _PK = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ?? "";
+const CLERK_ENABLED =
+  /^pk_(test|live)_/.test(_PK) && _PK.length > 40 && !_PK.includes("replace");
 
 type SessionSummary = {
   session_id: string;
