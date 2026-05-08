@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter_Tight, JetBrains_Mono } from "next/font/google";
+import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 
 const interTight = Inter_Tight({
@@ -34,16 +35,23 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      data-mode="light"
-      className={`${interTight.variable} ${jetbrainsMono.variable}`}
-      suppressHydrationWarning
+    <ClerkProvider
+      signInUrl="/sign-in"
+      signUpUrl="/sign-up"
+      signInFallbackRedirectUrl="/app"
+      signUpFallbackRedirectUrl="/app"
     >
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
-      </head>
-      <body className="bg-surface text-text font-sans">{children}</body>
-    </html>
+      <html
+        lang="en"
+        data-mode="light"
+        className={`${interTight.variable} ${jetbrainsMono.variable}`}
+        suppressHydrationWarning
+      >
+        <head>
+          <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+        </head>
+        <body className="bg-surface text-text font-sans">{children}</body>
+      </html>
+    </ClerkProvider>
   );
 }

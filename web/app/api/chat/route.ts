@@ -2,13 +2,13 @@
 // $ADVISOR_API_URL (default http://127.0.0.1:8000).
 //
 // Why a proxy instead of calling /v1/chat from the browser:
-//   1. Hides the X-Test-User-Id auth header — the browser never sees
-//      it, can't tamper with it, and we can swap it for a Clerk JWT
-//      later without touching client code.
+//   1. Clerk's session token never reaches the browser as a
+//      bearer header — we mint it via auth() server-side and
+//      forward it as Authorization: Bearer <jwt>. The client only
+//      ever sees a same-origin /api/chat URL.
 //   2. Avoids CORS in dev (no Access-Control-Allow-Origin gymnastics
 //      between :3000 and :8000).
-//   3. Gives us one canonical place to switch backends or add
-//      logging without redeploying the client.
+//   3. Single canonical place to swap backends, log, or add headers.
 //
 // The backend speaks SSE. We forward the raw byte stream untouched —
 // no JSON re-encoding, no event filtering — so the browser sees the
@@ -17,13 +17,10 @@
 // That keeps this file dumb and lets the client own all parsing.
 
 import { NextRequest } from "next/server";
+import { buildAdvisorAuthHeaders } from "@/lib/advisor-auth";
 
 const ADVISOR_API_URL =
   process.env.ADVISOR_API_URL || "http://127.0.0.1:8000";
-// Single shared user id for the demo phase. Replaces the Clerk JWT we
-// don't have yet. Anything stable per-process is fine; the backend
-// uses it to key the session store.
-const DEMO_USER_ID = process.env.ADVISOR_DEMO_USER_ID || "demo-user-1";
 
 export const dynamic = "force-dynamic";
 // Node runtime — we need fetch streaming + AbortController which the
@@ -43,12 +40,20 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  const authHeaders = await buildAdvisorAuthHeaders();
+  if (authHeaders === null) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const upstream = await fetch(`${ADVISOR_API_URL}/v1/chat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
-      "X-Test-User-Id": DEMO_USER_ID,
+      ...authHeaders,
     },
     body: JSON.stringify({
       message: body.message,
