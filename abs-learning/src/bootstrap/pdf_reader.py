@@ -51,7 +51,12 @@ class PdfBootstrapReader:
         if total == 0:
             return (0, 0)
 
-        skip = max(1, int(total * 0.05))
+        # Trim ~5% of pages off each end as front/back matter, but cap the
+        # absolute trim so that on long bylaws (e.g. 400+ pages) we don't
+        # skip past the first few real provisions. Halifax's Regional
+        # Centre LUB has its first numbered section on page 8 of 457 — a
+        # blanket 5% skip would land at page 23 and miss Part I entirely.
+        skip = max(1, min(int(total * 0.05), 5))
         first_scan = skip + 1
         last_scan = total - skip
         if first_scan > last_scan:

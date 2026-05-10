@@ -33,8 +33,22 @@ Focus only on the citation structure. Do not summarise content.
 For each level of the hierarchy you find, produce:
   - level: a short name (part, section, subsection, clause, subclause)
   - pattern: a Python regex that matches the citation label at the START of a
-    line (use ^ anchor). The pattern must match ONLY the label, not the
-    content that follows.
+    line (use ^ anchor). The pattern must match ONLY the label characters
+    themselves, not the content that follows.
+    HARD RULES for pattern construction:
+      * The pattern must successfully match the bare label string in
+        isolation (e.g. "Part I", "1", "(a)", "(i)") with re.match.
+        Validate this mentally before emitting the pattern.
+      * Do NOT add lookaheads, lookbehinds, or trailing required groups
+        that demand whitespace, punctuation, or any other context after
+        the label. Bare labels with no trailing characters MUST match.
+      * Use \\b only as a non-consuming end-of-label boundary; never
+        require a literal whitespace character after the label.
+      * Examples of acceptable patterns:
+          part      -> ^Part [IVXLC]+
+          section   -> ^\\d{1,3}\\b
+          clause    -> ^\\([a-z]{1,2}\\)
+          subclause -> ^\\([ivxlc]+\\)
   - label_format: a human-readable template showing the label shape,
     e.g. "Part {roman}" or "({alpha})"
 
@@ -47,6 +61,13 @@ Also identify:
 
 If you are uncertain about a pattern, include it with a flag rather than
 omitting it. A flagged uncertain pattern is more useful than a missing one.
+
+The flags list is for genuine uncertainty or ambiguity that downstream
+parsers must know about (e.g. "two competing patterns observed for
+section level"). Do NOT add flags for benign observations such as page
+footers, table-of-contents leaders, diagram captions, or commentary on
+chapter/part naming. Keep the flags list short — at most 2 entries
+unless the document is genuinely pathological.
 
 Return ONLY valid JSON matching the required schema. No prose."""
 
