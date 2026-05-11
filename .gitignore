@@ -23,3 +23,9 @@ openai_apikey
 # fixtures under data/geo-datasets/ tracked, but evict the per-fetch
 # artifacts that the URL-based ingester writes.
 data/.cache/
+
+# Local scratch — never committed
+tmp/
+.claude/
+.DS_Store
+*.swp
