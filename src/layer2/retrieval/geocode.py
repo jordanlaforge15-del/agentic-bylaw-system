@@ -104,12 +104,42 @@ def resolve_location(
 
     ``google_geocoder`` is injected for testability — production callers can
     leave it None and let the helper assemble one from settings.
+
+    See ``resolve_location_with_detail`` when the caller also needs the
+    failure reason (to surface as a note back to an LLM, for example).
+    """
+    resolved, _ = resolve_location_with_detail(
+        session, ref, use_cache=use_cache, google_geocoder=google_geocoder
+    )
+    return resolved
+
+
+def resolve_location_with_detail(
+    session: Session,
+    ref: LocationReference,
+    *,
+    use_cache: bool = True,
+    google_geocoder: GoogleGeocoder | None = None,
+) -> tuple[ResolvedLocation | None, str | None]:
+    """Same as ``resolve_location`` but also returns the failure detail.
+
+    When the call ends in a miss, ``detail`` is a short human-readable
+    reason (REQUEST_DENIED, ZERO_RESULTS, "no civic-address dataset
+    matches…", "no external geocoder available", …) so the caller can
+    surface it back to the LLM as a response note instead of leaving a
+    silent miss the model has to guess at.
+
+    On a successful resolve, ``detail`` is None — callers don't need a
+    success message; the populated geometry is the answer.
     """
     cache_key = normalize_reference(ref)
     if use_cache:
-        cached = _cache_get(session, cache_key)
-        if cached is not None:
-            return cached
+        cached_row = _cache_get_row(session, cache_key)
+        if cached_row is not None and cached_row.status == "linked":
+            return _resolved_from_cache_row(cached_row), None
+        if cached_row is not None:
+            # Cached miss — replay the detail without re-running the lookup.
+            return None, cached_row.detail
 
     resolved: ResolvedLocation | None = None
     detail = ""
@@ -175,6 +205,17 @@ def resolve_location(
                         bits.append(f"({reason_detail})")
                     detail = " ".join(bits)
                     resolver = f"{external.name}:{reason.lower()}"
+        else:
+            # No external geocoder available (key unset / lazy-build returned
+            # None). Mark the miss explicitly so the caller can distinguish a
+            # config issue from a genuine "address doesn't exist" miss —
+            # otherwise both look identical to anything reading the cache row.
+            resolver = "no_external_geocoder"
+            geocoder_hint = (
+                "no external geocoder available "
+                "(GOOGLE_MAPS_API_KEY unset or geocoder disabled)"
+            )
+            detail = f"{detail}; {geocoder_hint}" if detail else geocoder_hint
 
     if use_cache:
         _cache_put(
@@ -188,7 +229,7 @@ def resolve_location(
             source_dataset_id=source_dataset_id,
             source_feature_id=source_feature_id,
         )
-    return resolved
+    return resolved, (None if resolved is not None else (detail or None))
 
 
 def _find_by_parcel_id(
@@ -319,14 +360,24 @@ def _feature_to_resolved(
 
 
 def _cache_get(session: Session, normalized_text: str) -> ResolvedLocation | None:
-    row = (
+    row = _cache_get_row(session, normalized_text)
+    if row is None or row.geometry_geojson is None or row.status != "linked":
+        return None
+    return _resolved_from_cache_row(row)
+
+
+def _cache_get_row(session: Session, normalized_text: str) -> GeocodeCache | None:
+    return (
         session.execute(
             select(GeocodeCache).where(GeocodeCache.normalized_text == normalized_text)
         )
         .scalars()
         .first()
     )
-    if row is None or row.geometry_geojson is None or row.status != "linked":
+
+
+def _resolved_from_cache_row(row: GeocodeCache) -> ResolvedLocation | None:
+    if row.geometry_geojson is None or row.status != "linked":
         return None
     geom = row.geometry_geojson
     geom_type = geom.get("type", "")

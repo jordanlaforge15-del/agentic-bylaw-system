@@ -95,14 +95,24 @@ def test_notes_warn_for_parcel_id_in_query(db_url: str):
 
 def test_no_notes_when_location_slot_supplied(db_url: str):
     """Caller populated the slot — nothing to warn about, even if the
-    address text is also present in the query."""
+    address text is also present in the query.
+
+    Uses the ``geometry`` shape so resolution is a no-op; otherwise the
+    test environment (no civic-address dataset, no Google geocoder) would
+    correctly emit the geocoder-failure note and mask the property under
+    test (the address-in-query advisory must NOT fire when a slot is
+    present).
+    """
     with session_scope(db_url) as session:
         service = RetrievalService(session)
         response = service.search(
             RetrievalRequest(
                 query="maximum building height at 6321 Quinpool Road",
                 location=LocationSlot(
-                    civic_number="6321", street="Quinpool Road"
+                    geometry={
+                        "type": "Point",
+                        "coordinates": [-63.5980, 44.6488],
+                    }
                 ),
                 limit=5,
             )

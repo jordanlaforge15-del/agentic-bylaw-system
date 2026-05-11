@@ -227,6 +227,36 @@ def test_search_with_unresolvable_slot_returns_dataset_without_features(linked_d
     assert ds.location_resolver is None  # geocoder returned None
 
 
+def test_search_with_unresolvable_slot_emits_failure_note(linked_dataset):
+    """Regression: when a location slot is supplied but the geocoder fails,
+    the response carries a note explaining WHY. Without this signal the LLM
+    sees empty linked_datasets and hallucinates "may be outside the LUB
+    boundary" type explanations. Repro for the production miss on
+    "5234 Morris Street, Halifax" — local civic-address resolver finds no
+    match and no external geocoder is wired up in the test environment, so
+    resolution fails and the note must fire."""
+    with session_scope(linked_dataset["db_url"]) as session:
+        service = RetrievalService(session)
+        response = service.search(
+            RetrievalRequest(
+                query="max height",
+                document_id=linked_dataset["document_id"],
+                location=LocationSlot(
+                    civic_number="5234", street="Morris Street"
+                ),
+                limit=5,
+            )
+        )
+
+    assert response.notes, "expected a server-side note when resolution fails"
+    note = response.notes[0]
+    assert "location" in note.lower()
+    assert "could not resolve" in note.lower() or "could not" in note.lower()
+    # The failure detail from the resolver should be surfaced so the LLM
+    # (and on-call) can distinguish "key unset" from "ZERO_RESULTS" etc.
+    assert "civic_number" in note or "no civic-address dataset" in note or "geocoder" in note.lower()
+
+
 def test_search_include_datasets_false_omits_linked_datasets(linked_dataset):
     """Existing clients that don't know about linked_datasets can opt out."""
     with session_scope(linked_dataset["db_url"]) as session:
