@@ -34,7 +34,7 @@ from layer1.db.base import (
     SourceTableCell,
 )
 from layer2.retrieval.datasets import _summarize_dataset
-from layer2.retrieval.geocode import resolve_location
+from layer2.retrieval.geocode import resolve_location_with_detail
 from layer2.retrieval.location import LocationReference, RegexLocationExtractor
 from layer2.retrieval.spatial import ResolvedLocation, query_features
 
@@ -185,7 +185,9 @@ class RetrievalService:
         # when a location is supplied. They produce disjoint or overlapping
         # candidate fragment sets that are merged on fragment_id, with a
         # bonus for fragments surfaced by both channels.
-        resolved_location = self._resolve_location_slot(request.location)
+        resolved_location, resolution_detail = self._resolve_location_slot(
+            request.location
+        )
 
         text_scored = self._text_channel_scores(request)
         spatial_scored = (
@@ -197,7 +199,9 @@ class RetrievalService:
         merged = self._merge_channel_scores(text_scored, spatial_scored)
         total_matches = len(merged)
 
-        notes = self._build_response_notes(request, resolved_location)
+        notes = self._build_response_notes(
+            request, resolved_location, resolution_detail
+        )
 
         # Resolve candidate fragments from the union of both channels.
         candidate_fragment_ids = [fid for _, fid, _ in merged[: request.limit]]
@@ -243,16 +247,23 @@ class RetrievalService:
         self,
         request: RetrievalRequest,
         resolved_location: ResolvedLocation | None,
+        resolution_detail: str | None,
     ) -> list[str]:
         """Generate server-side advisories aimed at LLM callers.
 
-        Currently the only signal is "address-shaped text in query but no
-        location field" — a strong indicator that the LLM didn't recognise
-        the question needed spatial filtering. The note tells the LLM
-        exactly what to change in the next call. Defense-in-depth: the
-        tool description tells them upfront, the server's instructions
-        field tells them again, and this is the third layer that fires
-        only when the first two didn't work.
+        Two signals today:
+        - "address-shaped text in query but no location field" — a strong
+          indicator that the LLM didn't recognise the question needed
+          spatial filtering. The note tells the LLM exactly what to
+          change in the next call.
+        - "location slot supplied but resolution failed" — when the caller
+          DID populate ``location`` but the geocoder returned nothing
+          (REQUEST_DENIED, ZERO_RESULTS, key unset, ...). Without this
+          note the LLM sees empty ``linked_datasets`` with no explanation
+          and tends to hallucinate plausible-but-wrong reasons ("may be
+          outside the LUB boundary"). Defense-in-depth: the tool
+          description tells the LLM upfront to use the slot; this fires
+          when the slot WAS used but the resolver lost.
         """
         notes: list[str] = []
         if request.location is None:
@@ -278,6 +289,18 @@ class RetrievalService:
                         f"{ref.parcel_id!r}"
                         "} to enable spatial filtering."
                     )
+        elif resolved_location is None:
+            reason = resolution_detail or "unknown reason"
+            notes.append(
+                "A 'location' slot was supplied but the geocoder could "
+                f"not resolve it ({reason}). Spatial filtering against "
+                "zone, height, FAR, heritage, and bonus-zoning datasets "
+                "was NOT performed — any spatial fields in this response "
+                "are empty as a result. Do not infer a zone or precinct "
+                "from text-channel matches alone; tell the user the "
+                "address could not be resolved and recommend they verify "
+                "via HRM's mapping tools."
+            )
         return notes
 
     # _score_fragment adds +1.0 for any PARSED fragment as a quality signal,
@@ -382,30 +405,39 @@ class RetrievalService:
         merged.sort(key=lambda entry: (-entry[0], entry[1]))
         return merged
 
-    def _resolve_location_slot(self, slot: LocationSlot | None) -> ResolvedLocation | None:
-        """Translate a structured slot to a ResolvedLocation.
+    def _resolve_location_slot(
+        self, slot: LocationSlot | None
+    ) -> tuple[ResolvedLocation | None, str | None]:
+        """Translate a structured slot to a ResolvedLocation plus optional failure detail.
 
         - ``geometry`` short-circuits geocoding (caller already has a point/parcel).
         - Otherwise build a LocationReference from the slot fields and run it
-          through the layered ``resolve_location`` (in-database civic-address
-          dataset, then Google fallback if configured).
+          through the layered ``resolve_location_with_detail`` (in-database
+          civic-address dataset, then Google fallback if configured).
         - The MCP path NEVER invokes the regex extractor — that's reserved for
           callers who don't have an LLM in front of them.
+
+        Returns ``(resolved, detail)``. ``detail`` is a short reason string
+        when ``resolved`` is None (REQUEST_DENIED, "address malformed", etc.)
+        so the caller can surface it back to the LLM as a response note.
         """
         if slot is None:
-            return None
+            return None, None
         if slot.geometry is not None:
-            return ResolvedLocation(
-                kind=_kind_from_geometry(slot.geometry),
-                geometry=slot.geometry,
-                confidence=1.0,
-                source="caller_supplied",
-                reference_text=None,
+            return (
+                ResolvedLocation(
+                    kind=_kind_from_geometry(slot.geometry),
+                    geometry=slot.geometry,
+                    confidence=1.0,
+                    source="caller_supplied",
+                    reference_text=None,
+                ),
+                None,
             )
         ref = _slot_to_reference(slot)
         if ref is None:
-            return None
-        return resolve_location(self.session, ref)
+            return None, "location slot did not contain enough information to build a reference"
+        return resolve_location_with_detail(self.session, ref)
 
     def _fragment_scope_statement(self, request: RetrievalRequest) -> Select[tuple[SourceFragment]]:
         stmt = (
