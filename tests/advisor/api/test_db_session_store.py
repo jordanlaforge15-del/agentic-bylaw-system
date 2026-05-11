@@ -331,6 +331,42 @@ def test_user_id_resolves_to_clerk_user_id_when_not_numeric(
         s.close()
 
 
+def test_create_and_get_return_same_user_id(tmp_path: Path) -> None:
+    """``create`` and ``get`` must return the same ``user_id`` string.
+
+    Regression test for a bug where ``create`` echoed the external
+    clerk_user_id back to the caller but ``get`` returned the internal
+    integer FK stringified. The route handler compared the two and
+    404'd legitimate session-detail requests when the user-id formats
+    happened to differ (always, in test-fallback mode where the
+    clerk_user_id is the X-Test-User-Id header value, not a number).
+    """
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    db_session_factory, factory = _build_factory(db_url)
+    _seed_user(factory, clerk_user_id="smoke-test-1")
+
+    store = DbSessionStore(
+        db_session_factory=db_session_factory,
+        tool_defs_handler_factory=_empty_tool_factory,
+    )
+    created = store.create(
+        user_id="smoke-test-1",
+        system_prompt="x",
+        tool_defs=[],
+        tool_handlers={},
+    )
+    assert created.user_id == "smoke-test-1"
+
+    fetched = store.get(created.session_id)
+    assert fetched is not None
+    assert fetched.user_id == created.user_id, (
+        "get() must return the same user_id format as create() so route "
+        "handlers can compare against str(user.clerk_user_id) without "
+        "modality-specific normalization."
+    )
+
+
 def test_user_id_resolves_to_internal_id_when_numeric(tmp_path: Path) -> None:
     """A numeric external_user_id is parsed as ``User.id``."""
     db_url = _db_url(tmp_path)
