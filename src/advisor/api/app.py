@@ -268,11 +268,16 @@ def create_app(
         request: Request,
         user: User = Depends(require_user),
     ) -> EventSourceResponse:
-        # Use the internal numeric id (as a string) so session-store
-        # entries — and any future FK joins — don't have to re-resolve
-        # through Clerk. ChatSession.user_id stays a string for now;
-        # widening it to int is a separate workstream.
-        user_id_str = str(user.id)
+        # Use the external clerk_user_id (or the X-Test-User-Id
+        # header value in the dev fallback). Both ``create`` and
+        # ``get`` on the session store return this same string in
+        # ``ChatSession.user_id``, so handler comparisons against it
+        # round-trip cleanly. Using ``str(user.id)`` here previously
+        # caused a session-vs-user-id mismatch in test mode and would
+        # have caused the same mismatch in Clerk mode — sessions
+        # would create fine but ``GET /v1/chat/sessions/{id}`` would
+        # 404 because the comparison never matched.
+        user_id_str = user.clerk_user_id
         session = _resolve_or_create_session(
             store=store,
             user_id=user_id_str,
@@ -378,7 +383,7 @@ def create_app(
         dict insertion order so a freshly minted empty session still
         sorts above older ones from the same render.
         """
-        user_id_str = str(user.id)
+        user_id_str = user.clerk_user_id
         sessions = store.list_for_user(user_id_str)
         ordered = sorted(
             enumerate(sessions),
@@ -397,7 +402,7 @@ def create_app(
         session_id: str,
         user: User = Depends(require_user),
     ) -> ChatSessionResponse:
-        user_id_str = str(user.id)
+        user_id_str = user.clerk_user_id
         session = store.get(session_id)
         if session is None or session.user_id != user_id_str:
             # 404, not 403, because leaking "this session exists but
@@ -534,12 +539,17 @@ class _TestUser:
     Identity Map and confuse any real DB session opened later in the
     test process. A bare object with the attributes the routes read is
     enough.
+
+    Both ``id`` and ``clerk_user_id`` are set to the same header value
+    so route handlers can read ``user.clerk_user_id`` uniformly,
+    matching the real ``User`` model's attribute shape.
     """
 
-    __slots__ = ("id",)
+    __slots__ = ("id", "clerk_user_id")
 
     def __init__(self, *, id: str) -> None:  # noqa: A002
         self.id = id
+        self.clerk_user_id = id
 
 
 def _resolve_or_create_session(

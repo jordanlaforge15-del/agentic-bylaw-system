@@ -178,7 +178,14 @@ class DbSessionStore:
                 _row_to_message(m)
                 for m in sorted(row.messages, key=lambda m: m.sequence)
             ]
-            external_user_id = str(row.user_id)
+            # External id (clerk_user_id), NOT the internal FK. `create`
+            # returns the external id in ChatSession.user_id, and route
+            # handlers compare against str(user.id) which is also the
+            # external id (Clerk user id in prod, X-Test-User-Id header
+            # value in the dev fallback). Returning the internal FK
+            # here made `GET /v1/chat/sessions/{id}` 404 on legitimate
+            # requests because the comparison never matched.
+            external_user_id = row.user.clerk_user_id
             tool_defs, tool_handlers = self._tool_factory()
 
             chat_session = ChatSession(
