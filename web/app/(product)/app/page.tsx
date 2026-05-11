@@ -95,13 +95,40 @@ export default function ProductAppPage() {
         `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
         { cache: "no-store" },
       );
-      if (!res.ok) return;
-      const data = (await res.json()) as { messages: BackendMessage[] };
       if (sessionIdRef.current !== sessionId) return; // user moved on
+      if (!res.ok) {
+        // Surface non-2xx so the parcel pane being stale is *visible*.
+        // Previously we returned silently here, which masked a real
+        // backend bug (session-detail 404 from a user_id format
+        // mismatch) for a long time — the pane simply stopped
+        // updating with no signal to the user or anyone watching
+        // browser devtools casually. We never want a silent skip
+        // again. Log the response body for ops/debug grep.
+        const detail = await res.text().catch(() => "");
+        console.error(
+          `[refreshFromSession] HTTP ${res.status} for session ${sessionId}: ${detail.slice(0, 500)}`,
+        );
+        // Don't clobber a more informative error from the stream
+        // phase. Only surface our message if no error is showing.
+        setError((prev) =>
+          prev ?? `Couldn't refresh session state (HTTP ${res.status}). ` +
+            (detail.slice(0, 200) || "Pane may be out of date."),
+        );
+        return;
+      }
+      const data = (await res.json()) as { messages: BackendMessage[] };
       setParcel(extractParcelContext(data.messages));
       setMessages(translateHistory(data.messages));
-    } catch {
-      // network blip — leave previous state alone
+    } catch (e) {
+      // Network blip. Same "don't overwrite stream errors" rule.
+      if (sessionIdRef.current !== sessionId) return;
+      console.error(
+        `[refreshFromSession] fetch threw for session ${sessionId}:`,
+        e,
+      );
+      setError((prev) =>
+        prev ?? `Couldn't refresh session state: ${(e as Error).message}`,
+      );
     }
   };
 
