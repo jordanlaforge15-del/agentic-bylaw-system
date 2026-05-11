@@ -1,6 +1,18 @@
-// Clerk-backed auth gate. Protects /app/* and /admin/*; everything
-// else (marketing, /sign-in, /sign-up, the legacy /access page if a
-// future operator re-enables it) is left open.
+// Auth gate. Protects /app/* and /admin/*; everything else
+// (marketing, /sign-in, /sign-up, /access) is left open.
+//
+// Two modes, picked at request time by isClerkConfigured():
+//
+//   * Clerk configured → clerkMiddleware enforces auth on protected
+//     routes. Unauth requests redirect to /sign-in.
+//
+//   * Clerk NOT configured → falls back to the legacy shared-password
+//     gate (cookie abs_demo / abs_admin, /access page, /api/access
+//     route). This is the "trial deployment" mode: a single shared
+//     password per gate, handed out to friends. Set DEMO_PASSWORD
+//     (and optionally ADMIN_PASSWORD) on the web container. Once
+//     real Clerk keys are wired the fallback becomes unreachable
+//     automatically — no code change to flip back.
 //
 // Why a route matcher rather than `auth.protect()` everywhere:
 //   1. Clerk's `auth.protect()` 404s on unauth API requests but
@@ -9,13 +21,6 @@
 //      see a JSON 404.
 //   2. The matcher captures both routes in one place so the rules
 //      are auditable without grepping route handlers.
-//
-// The legacy shared-password flow (cookie `abs_demo` / `abs_admin`,
-// route /access) is deliberately left in the tree but no longer
-// referenced. Removing the files would force every reviewer to
-// chase a rollback through git history; leaving the dead code in
-// place lets us flip back by reverting one file if Clerk wiring
-// breaks in production.
 //
 // File-name note: Next.js 16 renamed the `middleware.ts` convention
 // to `proxy.ts`. The Clerk SDK helper is still called
@@ -48,10 +53,25 @@ const handler = isClerkConfigured()
         await auth.protect();
       }
     })
-  : // Dev fallback: pass every request through untouched. The chat
-    // proxy routes will forward X-Test-User-Id upstream and FastAPI
-    // accepts it because no verifier is wired.
-    (_req: NextRequest) => NextResponse.next();
+  : // Clerk-not-configured fallback: reuse the legacy shared-password
+    // gate. /app/* requires the abs_demo cookie, /admin/* requires
+    // abs_admin. Missing cookie redirects to /access with the right
+    // gate query param. Set DEMO_PASSWORD (and optionally
+    // ADMIN_PASSWORD) env vars for /api/access to validate against.
+    // Chat proxy routes still send X-Test-User-Id upstream.
+    (req: NextRequest) => {
+      if (!isProtectedRoute(req)) return NextResponse.next();
+      const path = req.nextUrl.pathname;
+      const isAdminRoute = path.startsWith("/admin");
+      const cookieName = isAdminRoute ? "abs_admin" : "abs_demo";
+      if (req.cookies.get(cookieName)?.value === "1") {
+        return NextResponse.next();
+      }
+      const url = new URL("/access", req.url);
+      url.searchParams.set("from", path);
+      if (isAdminRoute) url.searchParams.set("gate", "admin");
+      return NextResponse.redirect(url);
+    };
 
 export default handler;
 
