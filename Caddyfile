@@ -1,0 +1,74 @@
+{
+    email jordanlaforge15@gmail.com
+    # The rate_limit directive comes from the third-party
+    # caddy-ratelimit plugin (compiled into our custom Caddy via
+    # Dockerfile.caddy). It must be ordered explicitly because
+    # Caddy doesn't know where to slot non-standard directives.
+    order rate_limit before basic_auth
+}
+
+agenticbylawsystems.com {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    rate_limit {
+        # Defense-in-depth: cap any single IP at 120 requests/min
+        # across the whole site (including static assets). Stops
+        # volumetric floods from a single source while leaving real
+        # users plenty of headroom — a Next.js page load is roughly
+        # 10–20 requests, so 120/min covers ~6–12 fresh page loads
+        # per minute per IP, which is faster than humans browse.
+        zone global {
+            key {remote_host}
+            events 120
+            window 1m
+        }
+        # Tight gate brute-force protection: 5 password attempts
+        # per IP per minute. POSTs to /api/access also count
+        # toward the global zone above, but this is the bottleneck.
+        zone access_attempts {
+            match {
+                method POST
+                path /api/access*
+            }
+            key {remote_host}
+            events 5
+            window 1m
+        }
+    }
+
+    reverse_proxy web:3000
+}
+
+api.agenticbylawsystems.com {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    rate_limit {
+        # Per-IP cap on chat requests: 10/min. Each request costs
+        # real money in Anthropic tokens. The advisor's per-user
+        # quota is the monthly cost ceiling; this is the per-source
+        # burst floor that stops a runaway script.
+        zone chat {
+            match {
+                method POST
+                path /v1/chat*
+            }
+            key {remote_host}
+            events 10
+            window 1m
+        }
+    }
+
+    reverse_proxy advisor:8000
+}

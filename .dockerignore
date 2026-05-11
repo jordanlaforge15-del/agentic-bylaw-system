@@ -1,0 +1,58 @@
+# --- Git / IDE / OS ---
+.git
+.gitignore
+.gitattributes
+.github
+.claude
+.idea
+.vscode
+.DS_Store
+
+# --- Secrets — never ship these ---
+.env
+.env.*
+!.env.example
+
+# --- Python build artifacts ---
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.so
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+*.egg-info
+.venv
+venv
+
+# --- Node / Next ---
+web/node_modules
+web/.next
+web/out
+node_modules
+
+# --- Docs and tests not needed in the image ---
+docs/*
+!docs/agent
+docs/agent/*
+!docs/agent/persona.md
+tests
+evals
+examples
+*.md
+!README.md
+
+# --- Other deploy files ---
+docker-compose*.yml
+Dockerfile*
+!Dockerfile.advisor
+.dockerignore
+
+# --- Sample data not needed in the image ---
+ingest_15.json
+
+# --- Local dev scripts ---
+scripts

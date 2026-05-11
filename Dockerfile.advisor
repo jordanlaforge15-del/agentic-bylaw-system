@@ -1,0 +1,85 @@
+# syntax=docker/dockerfile:1.7
+
+# ============================================================================
+# Stage 1 — builder
+# Has compilers + dev headers. Builds the venv. Discarded after build.
+# ============================================================================
+FROM python:3.11.10-slim-bookworm AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_ROOT_USER_ACTION=ignore
+
+# Compilers for any Python wheel that doesn't ship arm64 binaries.
+# We don't need libgl/libmagic/poppler here — the advisor doesn't process PDFs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy only the install metadata + source needed by `pip install .`
+# The `mcp/` directory must be present because pyproject.toml declares
+# packages in both src/ and mcp/.
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY mcp ./mcp
+
+# Install into a venv so the runtime stage gets one self-contained directory.
+# No -e (editable) — production should be a normal install.
+# No [dev], no [parsers], no [mcp] extras.
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip "setuptools<82" wheel \
+    && /opt/venv/bin/pip install ".[advisor]"
+
+# ============================================================================
+# Stage 2 — runtime
+# Slim, no compilers, runs as non-root.
+# ============================================================================
+FROM python:3.11.10-slim-bookworm AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+# Runtime-only deps:
+#   ca-certificates → outbound TLS to api.anthropic.com / Clerk JWKS
+#   curl            → used by the HEALTHCHECK below
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user. Container processes should never run as UID 0.
+RUN groupadd --system --gid 1000 advisor \
+    && useradd --system --uid 1000 --gid advisor --home-dir /app --shell /sbin/nologin advisor
+
+WORKDIR /app
+
+# Copy the venv from builder. All the Python deps + installed `advisor`,
+# `layer1`, `layer2`, `bylaw_retrieval` packages live in there.
+COPY --from=builder --chown=advisor:advisor /opt/venv /opt/venv
+
+# Alembic config + migration scripts must be on disk (not in the venv) so
+# the operator can run `alembic upgrade head` from inside this image.
+COPY --chown=advisor:advisor alembic.ini ./
+COPY --chown=advisor:advisor alembic ./alembic
+
+# Workaround: advisor/chat/persona.py uses Path(__file__).parents[3] to find
+# this file, which only resolves correctly under an editable install. We copy
+# the file to where the resolver looks under a regular install. Tracked as
+# follow-up: replace with importlib.resources packaging.
+COPY --chown=advisor:advisor docs/agent/persona.md /opt/venv/lib/python3.11/docs/agent/persona.md
+
+USER advisor
+
+EXPOSE 8000
+
+# In-process healthcheck. The advisor exposes /healthz from the FastAPI app.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:8000/healthz || exit 1
+
+# Production entrypoint documented in .env.example.
+CMD ["uvicorn", "advisor.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
