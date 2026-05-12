@@ -31,6 +31,10 @@ class TextBlock(BaseModel):
 
     type: Literal["text"] = "text"
     text: str
+    # Provider-agnostic hint: backends that support prompt caching
+    # should mark this block as a cache breakpoint. Set on stable
+    # prefixes; ignored by backends without a cache.
+    cache: bool = False
 
 
 class ToolUseBlock(BaseModel):
@@ -45,6 +49,7 @@ class ToolUseBlock(BaseModel):
     id: str
     name: str
     input: dict[str, Any] = Field(default_factory=dict)
+    cache: bool = False
 
 
 class ToolResultBlock(BaseModel):
@@ -60,6 +65,7 @@ class ToolResultBlock(BaseModel):
     tool_use_id: str
     content: str | list["ContentBlock"]
     is_error: bool = False
+    cache: bool = False
 
 
 # Discriminated union of every content block kind. Adding a new block
@@ -92,6 +98,7 @@ class ToolDefinition(BaseModel):
     name: str
     description: str
     input_schema: dict[str, Any]
+    cache: bool = False
 
 
 class CompletionRequest(BaseModel):
@@ -99,8 +106,14 @@ class CompletionRequest(BaseModel):
 
     ``system`` is the system prompt (persona). ``messages`` is the
     conversation history. ``tools`` is empty for plain Q&A or populated
-    when running the tool-use loop. ``cache_breakpoint_count`` lets the
-    backend insert prompt-cache markers per provider conventions.
+    when running the tool-use loop.
+
+    ``cache_system`` / ``cache_tools`` are provider-agnostic hints that
+    the system prompt and the tools array are byte-stable and worth
+    caching. Backends that support prompt caching translate these into
+    their own cache markers (Anthropic: ``cache_control``); others
+    ignore them. Per-block caching is requested via the ``cache``
+    field on individual ``ContentBlock`` / ``ToolDefinition`` entries.
     """
 
     model: str
@@ -111,6 +124,8 @@ class CompletionRequest(BaseModel):
     temperature: float = 0.7
     stop_sequences: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    cache_system: bool = False
+    cache_tools: bool = False
 
 
 class TokenUsage(BaseModel):

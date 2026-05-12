@@ -216,6 +216,61 @@ def test_session_constructed_with_default_model():
 
 
 @pytest.mark.asyncio
+async def test_session_requests_enable_prompt_cache_for_system_and_tools():
+    """Every gateway call the session makes must opt into prompt
+    caching for the persona and tool defs — that's the load-bearing
+    cost lever (Anthropic's ephemeral cache cuts those tokens by
+    ~90%). A regression here silently re-bills the full rate."""
+    session = _empty_session()
+    session.tool_defs = [
+        ToolDefinition(
+            name="search_bylaw_evidence",
+            description="d",
+            input_schema={"type": "object"},
+        )
+    ]
+    gateway = MockGateway(scripted=[text_response("ok")])
+
+    await session.send_user_message_blocking(gateway, "hey")
+
+    request = gateway.calls[0]
+    assert request.cache_system is True
+    assert request.cache_tools is True
+
+
+@pytest.mark.asyncio
+async def test_session_marks_first_assistant_turns_as_cache_milestones():
+    """First-assistant turns are byte-stable across the rest of the
+    session; marking the LAST block of up to two of them gives turn 3+
+    a long stable prefix to read from cache. Without this, the only
+    cached prefix on later turns is system + tools."""
+    session = _empty_session()
+    gateway = MockGateway(
+        scripted=[
+            text_response("first answer"),
+            text_response("second answer"),
+            text_response("third answer"),
+        ]
+    )
+    await session.send_user_message_blocking(gateway, "q1")
+    await session.send_user_message_blocking(gateway, "q2")
+    await session.send_user_message_blocking(gateway, "q3")
+
+    third = gateway.calls[2]
+    # Assistant turns sit at indices 1 and 3 after two completed turns.
+    asst1 = third.messages[1]
+    asst2 = third.messages[3]
+    assert isinstance(asst1.content, list)
+    assert isinstance(asst2.content, list)
+    assert asst1.content[-1].cache is True
+    assert asst2.content[-1].cache is True
+    # Plain user-string messages stay untouched — wrapping them would
+    # change the shape the rest of the chat layer observes.
+    assert third.messages[0].content == "q1"
+    assert third.messages[2].content == "q2"
+
+
+@pytest.mark.asyncio
 async def test_user_message_appended_before_run():
     """Even before the gateway responds, the session's message list
     should already include the user turn — concurrent inspectors
