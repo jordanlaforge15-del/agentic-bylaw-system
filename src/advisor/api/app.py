@@ -489,6 +489,19 @@ def _patch_usage_event_tokens(
     usage = chat_session.last_turn_usage
     trip = chat_session.last_turn_circuit_trip
     if usage is None and trip is None:
+        # Silent skip is invisible to the DB row (it stays at the up-front
+        # zeros) so log it: this is the gateway-raised-before-usage path
+        # (auth/credit error, 400, network drop) that leaves an
+        # untraceable (0,0) UsageEvent. The next occurrence is then
+        # diagnosable from logs alone.
+        logger.info(
+            "skipping UsageEvent token patch id=%s: "
+            "last_turn_usage is None and no circuit trip; "
+            "row stays at (0,0). Likely the LLM call raised before any "
+            "iteration recorded usage (gateway error, auth failure, "
+            "client disconnect mid-call).",
+            usage_event_id,
+        )
         return
     metadata: dict | None = None
     if trip is not None:
