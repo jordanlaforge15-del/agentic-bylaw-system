@@ -71,52 +71,60 @@ const USAGE_HEIGHTS = [
   33, 27, 51, 64, 59, 71, 55, 36, 68, 82, 90,
 ];
 
+// Desktop / tablet table grid. Mobile uses a stacked card layout below
+// (see InvoiceMobileRow) — six columns at 375px would either truncate
+// to illegibility or trigger horizontal scroll.
 const ROW_GRID = "1.5fr 1fr 2fr 1fr 1fr 0.5fr";
 
 export default function BillingPage() {
   return (
     <div
-      className="px-8 py-14 mx-auto"
-      style={{ maxWidth: 1200, minHeight: "calc(100vh - 280px)" }}
+      className="px-5 sm:px-8 py-10 sm:py-12 lg:py-14 mx-auto max-w-[1200px]"
+      style={{ minHeight: "calc(100vh - 280px)" }}
     >
-      <header className="flex flex-col gap-3.5 pb-7 mb-9 border-b border-hair">
+      <header className="flex flex-col gap-3 sm:gap-3.5 pb-6 sm:pb-7 mb-7 sm:mb-9 border-b border-hair">
         <Mono muted size={11}>
           ACCOUNT · BILLING
         </Mono>
         <h1
-          className="font-sans font-extrabold m-0"
-          style={{ fontSize: 56, letterSpacing: "-0.04em", lineHeight: 0.98 }}
+          className="font-sans font-extrabold m-0 text-[36px] sm:text-[44px] lg:text-[56px] leading-[1] lg:leading-[0.98]"
+          style={{ letterSpacing: "-0.04em" }}
         >
           Billing.
         </h1>
-        <p
-          className="text-[17px] text-text-muted leading-[1.45] m-0"
-          style={{ maxWidth: 620 }}
-        >
+        <p className="text-[14px] sm:text-[16px] lg:text-[17px] text-text-muted leading-[1.45] m-0 max-w-[620px]">
           Halifax Studio Co. · Practice plan · 4 seats. Invoices below; export
           anytime.
         </p>
       </header>
 
-      <div
-        className="grid mb-9"
-        style={{ gridTemplateColumns: "2fr 1fr", gap: 14 }}
-      >
+      {/*
+       * Plan + payment row. On mobile the 2fr/1fr split would crush
+       * the payment card to ~120px wide — stack vertically instead so
+       * the VISA chip + masked PAN have room to breathe.
+       */}
+      <div className="grid grid-cols-1 lg:[grid-template-columns:2fr_1fr] gap-3 sm:gap-3.5 mb-7 sm:mb-9">
         <PlanCard />
         <PaymentMethod />
       </div>
 
-      <div className="flex justify-between items-center mb-3.5">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-3.5">
         <Mono muted size={11}>
           INVOICE HISTORY
         </Mono>
-        <Btn variant="quiet" size="sm">
+        <Btn variant="quiet" size="sm" className="self-start sm:self-auto">
           Export all (.csv)
         </Btn>
       </div>
+
+      {/*
+       * Invoice table. The six-column grid only renders at `lg`+;
+       * below that we use a card-per-invoice layout that surfaces
+       * the same fields without the horizontal-scroll trap.
+       */}
       <div className="border border-hair">
         <div
-          className="grid bg-surface-alt border-b border-hair"
+          className="hidden lg:grid bg-surface-alt border-b border-hair"
           style={{
             gridTemplateColumns: ROW_GRID,
             gap: 16,
@@ -132,47 +140,95 @@ export default function BillingPage() {
           )}
         </div>
         {INVOICES.map((inv, i) => (
-          <div
-            key={inv.id}
-            className="grid items-center text-[13px]"
-            style={{
-              gridTemplateColumns: ROW_GRID,
-              gap: 16,
-              padding: "14px 18px",
-              borderBottom:
-                i < INVOICES.length - 1 ? "1px solid var(--hair)" : "none",
-            }}
-          >
-            <span className="font-mono text-[12px]">{inv.id}</span>
-            <span className="text-text-muted">{inv.date}</span>
-            <span>{inv.plan}</span>
-            <span
-              className="font-semibold"
-              style={{ letterSpacing: "-0.01em" }}
+          <div key={inv.id}>
+            {/* Desktop row */}
+            <div
+              className="hidden lg:grid items-center text-[13px]"
+              style={{
+                gridTemplateColumns: ROW_GRID,
+                gap: 16,
+                padding: "14px 18px",
+                borderBottom:
+                  i < INVOICES.length - 1 ? "1px solid var(--hair)" : "none",
+              }}
             >
-              {inv.amount}
-            </span>
-            <span>
-              <Mono accent size={9.5}>
-                {inv.status}
-              </Mono>
-            </span>
-            <button
-              className="bg-transparent border-none text-text-muted cursor-pointer font-mono text-[10px] text-right hover:text-text"
-              style={{ letterSpacing: "0.08em" }}
-            >
-              PDF ↓
-            </button>
+              <span className="font-mono text-[12px]">{inv.id}</span>
+              <span className="text-text-muted">{inv.date}</span>
+              <span>{inv.plan}</span>
+              <span
+                className="font-semibold"
+                style={{ letterSpacing: "-0.01em" }}
+              >
+                {inv.amount}
+              </span>
+              <span>
+                <Mono accent size={9.5}>
+                  {inv.status}
+                </Mono>
+              </span>
+              <button
+                className="bg-transparent border-none text-text-muted cursor-pointer font-mono text-[10px] text-right hover:text-text"
+                style={{ letterSpacing: "0.08em" }}
+              >
+                PDF ↓
+              </button>
+            </div>
+            {/* Mobile / tablet card */}
+            <InvoiceMobileRow
+              inv={inv}
+              isLast={i === INVOICES.length - 1}
+            />
           </div>
         ))}
       </div>
 
-      <div
-        className="mt-9 grid"
-        style={{ gridTemplateColumns: "1fr 1fr", gap: 14 }}
-      >
+      <div className="mt-7 sm:mt-9 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-3.5">
         <UsageCard />
         <TopParcelsCard />
+      </div>
+    </div>
+  );
+}
+
+function InvoiceMobileRow({
+  inv,
+  isLast,
+}: {
+  inv: Invoice;
+  isLast: boolean;
+}) {
+  return (
+    <div
+      className="lg:hidden flex flex-col gap-2 px-4 sm:px-5 py-3.5 sm:py-4"
+      style={{
+        borderBottom: isLast ? "none" : "1px solid var(--hair)",
+      }}
+    >
+      <div className="flex justify-between items-baseline gap-3">
+        <span className="font-mono text-[12px]">{inv.id}</span>
+        <span
+          className="font-semibold text-[14px]"
+          style={{ letterSpacing: "-0.01em" }}
+        >
+          {inv.amount}
+        </span>
+      </div>
+      <div className="text-[12.5px] text-text-muted">{inv.plan}</div>
+      <div className="flex justify-between items-center">
+        <span className="text-[11.5px] text-text-muted font-mono">
+          {inv.date}
+        </span>
+        <div className="flex items-center gap-3">
+          <Mono accent size={9.5}>
+            {inv.status}
+          </Mono>
+          <button
+            className="bg-transparent border-none text-text-muted cursor-pointer font-mono text-[10px] hover:text-text"
+            style={{ letterSpacing: "0.08em" }}
+          >
+            PDF ↓
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -181,33 +237,32 @@ export default function BillingPage() {
 function PlanCard() {
   return (
     <div
-      className="flex flex-col gap-[18px]"
+      className="flex flex-col gap-4 sm:gap-[18px] p-5 sm:p-7 lg:p-7"
       style={{
         background: "var(--text)",
         color: "var(--surface)",
-        padding: 28,
       }}
     >
-      <div className="flex justify-between items-start">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
         <div>
           <Mono size={10} style={{ color: "rgba(255,255,255,0.6)" }}>
             CURRENT PLAN
           </Mono>
           <div
-            className="font-sans font-extrabold mt-1.5"
-            style={{ fontSize: 36, letterSpacing: "-0.035em" }}
+            className="font-sans font-extrabold mt-1 sm:mt-1.5 text-[28px] sm:text-[32px] lg:text-[36px]"
+            style={{ letterSpacing: "-0.035em" }}
           >
             Practice
           </div>
           <div
-            className="text-[13px] mt-1"
+            className="text-[12.5px] sm:text-[13px] mt-1"
             style={{ color: "rgba(255,255,255,0.7)" }}
           >
             $180 / seat / month · billed monthly
           </div>
         </div>
         <span
-          className="font-mono"
+          className="font-mono self-start"
           style={{
             background: "var(--accent)",
             color: "var(--on-accent)",
@@ -221,12 +276,8 @@ function PlanCard() {
       </div>
 
       <div
-        className="grid pt-[18px]"
-        style={{
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 24,
-          borderTop: "1px solid rgba(255,255,255,0.15)",
-        }}
+        className="grid grid-cols-3 gap-4 sm:gap-6 lg:gap-6 pt-4 sm:pt-[18px]"
+        style={{ borderTop: "1px solid rgba(255,255,255,0.15)" }}
       >
         {[
           { l: "SEATS", v: "4 / 10" },
@@ -238,8 +289,8 @@ function PlanCard() {
               {s.l}
             </Mono>
             <div
-              className="font-sans font-bold mt-1"
-              style={{ fontSize: 26, letterSpacing: "-0.025em" }}
+              className="font-sans font-bold mt-1 text-[18px] sm:text-[22px] lg:text-[26px]"
+              style={{ letterSpacing: "-0.025em" }}
             >
               {s.v}
             </div>
@@ -247,13 +298,14 @@ function PlanCard() {
         ))}
       </div>
 
-      <div className="flex gap-2.5 mt-1.5">
-        <Btn variant="accent" size="sm">
+      <div className="flex flex-col sm:flex-row gap-2 sm:gap-2.5 mt-1 sm:mt-1.5">
+        <Btn variant="accent" size="sm" className="w-full sm:w-auto">
           Manage seats
         </Btn>
         <Btn
           variant="ghost"
           size="sm"
+          className="w-full sm:w-auto"
           style={{
             borderColor: "rgba(255,255,255,0.3)",
             color: "var(--surface)",
@@ -268,10 +320,7 @@ function PlanCard() {
 
 function PaymentMethod() {
   return (
-    <div
-      className="bg-surface-alt border border-hair flex flex-col gap-3.5"
-      style={{ padding: 24 }}
-    >
+    <div className="bg-surface-alt border border-hair flex flex-col gap-3 sm:gap-3.5 p-5 sm:p-6">
       <Mono muted size={10}>
         PAYMENT METHOD
       </Mono>
@@ -311,20 +360,19 @@ function UsageCard() {
   const max = Math.max(...USAGE_HEIGHTS);
   return (
     <div
-      className="bg-surface-alt border border-hair"
-      style={{ padding: 24 }}
+      className="bg-surface-alt border border-hair p-5 sm:p-6"
     >
       <Mono muted size={10}>
         USAGE · MAY 2026
       </Mono>
       <div className="flex items-baseline gap-2 mt-2 mb-3.5">
         <span
-          className="font-sans font-extrabold"
-          style={{ fontSize: 38, letterSpacing: "-0.035em" }}
+          className="font-sans font-extrabold text-[30px] sm:text-[34px] lg:text-[38px]"
+          style={{ letterSpacing: "-0.035em" }}
         >
           247
         </span>
-        <span className="text-[13px] text-text-muted">
+        <span className="text-[12.5px] sm:text-[13px] text-text-muted">
           readings · unlimited
         </span>
       </div>

@@ -91,54 +91,61 @@ const FAQS = [
 export default function PricingPage() {
   return (
     <div
-      className="px-8 py-14 mx-auto"
-      style={{ maxWidth: 1200, minHeight: "calc(100vh - 280px)" }}
+      className="px-5 sm:px-8 py-10 sm:py-12 lg:py-14 mx-auto max-w-[1200px]"
+      style={{ minHeight: "calc(100vh - 280px)" }}
     >
-      <header className="flex flex-col gap-3.5 pb-7 mb-10 border-b border-hair">
+      <header className="flex flex-col gap-3 sm:gap-3.5 pb-6 sm:pb-7 mb-7 sm:mb-9 lg:mb-10 border-b border-hair">
         <Mono muted size={11}>
           PRICING · HRM PRIVATE BETA
         </Mono>
         <h1
-          className="font-sans font-extrabold m-0"
-          style={{ fontSize: 56, letterSpacing: "-0.04em", lineHeight: 0.98 }}
+          className="font-sans font-extrabold m-0 text-[36px] sm:text-[44px] lg:text-[56px] leading-[1] lg:leading-[0.98]"
+          style={{ letterSpacing: "-0.04em" }}
         >
           Three tiers. <HighlightWord>One agent.</HighlightWord>
         </h1>
-        <p
-          className="text-[17px] text-text-muted leading-[1.45] m-0"
-          style={{ maxWidth: 620 }}
-        >
+        <p className="text-[14px] sm:text-[16px] lg:text-[17px] text-text-muted leading-[1.45] m-0 max-w-[620px]">
           Beta pricing. Locks for the first year on any plan started before
           public launch. All prices in CAD.
         </p>
       </header>
 
-      <div
-        className="grid"
-        style={{ gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}
-      >
-        {TIERS.map((tier) => (
-          <TierCard key={tier.name} tier={tier} />
+      {/*
+       * Tier grid. Mobile stacks the cards top-to-bottom so the
+       * featured "Practice" card stays in the middle visually. At
+       * `sm` we move to two columns (Drafter + Practice up top,
+       * Developer beneath spanning both); at `lg` the original
+       * three-across returns.
+       */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-3.5">
+        {TIERS.map((tier, i) => (
+          <div
+            key={tier.name}
+            className={
+              // Span both columns at sm if it's the third (Developer)
+              // tier — keeps the visual hierarchy without orphaning a
+              // single card on the bottom row.
+              i === 2 ? "sm:col-span-2 lg:col-span-1" : ""
+            }
+          >
+            <TierCard tier={tier} />
+          </div>
         ))}
       </div>
 
-      <div
-        className="mt-14 grid"
-        style={{ gridTemplateColumns: "1fr 1fr", gap: 18 }}
-      >
+      <div className="mt-9 sm:mt-12 lg:mt-14 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 lg:gap-[18px]">
         {FAQS.map((f) => (
           <div
             key={f.q}
-            className="bg-surface-alt border border-hair"
-            style={{ padding: "20px 22px" }}
+            className="bg-surface-alt border border-hair p-5 sm:p-[20px_22px]"
           >
             <div
-              className="text-[15px] font-semibold mb-1.5"
+              className="text-[14px] sm:text-[15px] font-semibold mb-1.5"
               style={{ letterSpacing: "-0.01em" }}
             >
               {f.q}
             </div>
-            <div className="text-[13.5px] text-text-muted leading-[1.5]">
+            <div className="text-[13px] sm:text-[13.5px] text-text-muted leading-[1.5]">
               {f.a}
             </div>
           </div>
@@ -152,13 +159,11 @@ function TierCard({ tier }: { tier: Tier }) {
   const featured = tier.featured;
   return (
     <div
-      className="relative flex flex-col gap-[22px]"
+      className="relative flex flex-col gap-5 sm:gap-[22px] p-6 sm:p-7 lg:p-7 min-h-[460px] sm:min-h-[500px] lg:min-h-[540px] h-full"
       style={{
         background: featured ? "var(--text)" : "var(--surface)",
         color: featured ? "var(--surface)" : "var(--text)",
         border: featured ? "none" : "1.5px solid var(--text)",
-        padding: 28,
-        minHeight: 540,
       }}
     >
       {featured && (
@@ -190,8 +195,8 @@ function TierCard({ tier }: { tier: Tier }) {
           TIER · {tier.name.toUpperCase()}
         </Mono>
         <div
-          className="font-sans font-bold"
-          style={{ fontSize: 32, letterSpacing: "-0.03em", lineHeight: 1 }}
+          className="font-sans font-bold text-[26px] sm:text-[28px] lg:text-[32px] leading-[1]"
+          style={{ letterSpacing: "-0.03em" }}
         >
           {tier.name}
         </div>
@@ -216,8 +221,8 @@ function TierCard({ tier }: { tier: Tier }) {
         }}
       >
         <span
-          className="font-sans font-extrabold"
-          style={{ fontSize: 56, letterSpacing: "-0.04em", lineHeight: 1 }}
+          className="font-sans font-extrabold text-[44px] sm:text-[48px] lg:text-[56px] leading-[1]"
+          style={{ letterSpacing: "-0.04em" }}
         >
           {tier.price}
         </span>
@@ -256,7 +261,7 @@ function TierCard({ tier }: { tier: Tier }) {
         ))}
       </ul>
 
-      <Link href={tier.ctaHref}>
+      <Link href={tier.ctaHref} className="contents">
         <Btn
           variant={featured ? "accent" : "primary"}
           size="md"

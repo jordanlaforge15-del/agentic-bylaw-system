@@ -109,6 +109,38 @@ body {
   }
 }
 
+/* Drawer + Sheet entrance animations. Sharp ease-out so the panel
+ * arrives with intent rather than drifting in. The scrim fades on its
+ * own (also abs-fade, but without the Y translate visible on a 100%
+ * height element).
+ */
+@keyframes abs-slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes abs-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes abs-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
 .abs-pulse-dot {
   animation: abs-pulse 1s ease-in-out infinite;
   border-radius: 50%;
@@ -122,3 +154,50 @@ body {
 .abs-fade-in {
   animation: abs-fade 0.5s ease-out;
 }
+
+/*
+ * Responsive helpers. Tailwind v4 default breakpoints map to the
+ * design contract:
+ *   base       (< 640) → mobile
+ *   sm:        (≥ 640) → tablet
+ *   lg:        (≥ 1024) → desktop
+ *
+ * The .safe-* utilities pad against the iOS notch / home indicator.
+ * `viewport-fit=cover` (set in app/layout.tsx) lets the page paint
+ * under those areas; consumers add the appropriate safe-* class to
+ * keep tappable / readable content out of them.
+ *
+ * `.h-svh` and `.min-h-svh` use small-viewport units so the layout
+ * doesn't get hidden behind the iOS URL bar when it expands. `.h-dvh`
+ * tracks the dynamic viewport (recomputes when the URL bar collapses).
+ * Use `.h-dvh` for the /app shell where we want every pixel; reserve
+ * `.h-svh` for splash-style centering that should never jump.
+ */
+
+.safe-pt {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-pb {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.safe-pl {
+  padding-left: env(safe-area-inset-left);
+}
+.safe-pr {
+  padding-right: env(safe-area-inset-right);
+}
+.safe-px {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/*
+ * The iOS keyboard composer offset. JS sets --abs-keyboard-inset on
+ * <body> from `visualViewport` (see lib/use-keyboard-inset.ts). The
+ * composer in /app translates up by this much; default 0 means no
+ * offset on desktops where the variable is never written.
+ */
+:root {
+  --abs-keyboard-inset: 0px;
+}
+

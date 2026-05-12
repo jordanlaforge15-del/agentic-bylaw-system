@@ -42,7 +42,7 @@ export function ChatThread({
   return (
     <div
       ref={ref}
-      className="flex-1 overflow-y-auto flex flex-col gap-[18px] px-9 py-6"
+      className="flex-1 overflow-y-auto flex flex-col gap-4 sm:gap-[18px] px-4 sm:px-7 lg:px-9 py-4 sm:py-5 lg:py-6"
     >
       {messages.map((m, i) => {
         if (m.kind === "system") return <SystemMsg key={i} msg={m} />;
@@ -58,11 +58,10 @@ export function ChatThread({
 function ErrorMsg({ body }: { body: string }) {
   return (
     <div
-      className="self-center max-w-[680px] text-[12.5px] font-mono"
+      className="self-center w-full max-w-[680px] text-[12px] sm:text-[12.5px] font-mono px-3 py-2.5 sm:px-3.5 sm:py-2.5"
       style={{
         color: "var(--brick)",
         border: "1px solid var(--brick)",
-        padding: "10px 14px",
         letterSpacing: "0.02em",
       }}
     >
@@ -88,8 +87,7 @@ function UserMsg({ msg }: { msg: UserMessage }) {
   return (
     <div className="flex justify-end mb-1">
       <div
-        className="bg-text text-surface text-[14px] leading-[1.5] px-4 py-3"
-        style={{ maxWidth: "78%" }}
+        className="bg-text text-surface text-[13.5px] sm:text-[14px] leading-[1.45] sm:leading-[1.5] px-3 sm:px-4 py-2.5 sm:py-3 max-w-[85%] sm:max-w-[80%] lg:max-w-[78%]"
       >
         {msg.body}
       </div>
@@ -118,18 +116,17 @@ function AgentMsg({ msg, idx }: { msg: AgentMessage; idx: number }) {
         <Mono accent>{(msg.confidence * 100).toFixed(0)}% CONF</Mono>
       </div>
 
-      <div className="pl-8 flex flex-col gap-3.5">
+      <div className="pl-7 sm:pl-8 flex flex-col gap-3 sm:gap-3.5">
         {msg.answer && (
           <div
-            className="font-sans font-extrabold text-[24px] leading-[1.1]"
+            className="font-sans font-extrabold text-[20px] sm:text-[22px] lg:text-[24px] leading-[1.1]"
             style={{ letterSpacing: "-0.03em" }}
           >
             <HighlightWord>{msg.answer}</HighlightWord>
           </div>
         )}
         <div
-          className="text-[14.5px] leading-[1.6] text-text"
-          style={{ maxWidth: 720 }}
+          className="text-[14px] sm:text-[14.5px] leading-[1.55] sm:leading-[1.6] text-text max-w-full lg:max-w-[720px]"
         >
           <AgentMarkdown source={msg.body} />
         </div>
@@ -154,20 +151,28 @@ function AgentMsg({ msg, idx }: { msg: AgentMessage; idx: number }) {
                 {msg.reasoning.map((r, i) => (
                   <div
                     key={r.n}
-                    className="grid items-baseline gap-3.5 px-3.5 py-3"
+                    className="
+                      flex flex-col gap-1 sm:grid sm:items-baseline sm:gap-3.5
+                      sm:[grid-template-columns:32px_72px_1fr]
+                      lg:[grid-template-columns:36px_76px_1fr]
+                      px-3 sm:px-3.5 py-2.5 sm:py-3
+                    "
                     style={{
-                      gridTemplateColumns: "36px 76px 1fr",
                       borderBottom:
                         i < msg.reasoning.length - 1
                           ? "1px solid var(--hair)"
                           : "none",
                     }}
                   >
-                    <Mono muted>{r.n}</Mono>
-                    <Mono accent size={11} className="font-semibold">
-                      {r.cite}
-                    </Mono>
-                    <span className="text-[13px] leading-[1.5]">{r.body}</span>
+                    <div className="flex items-baseline gap-2 sm:contents">
+                      <Mono muted>{r.n}</Mono>
+                      <Mono accent size={11} className="font-semibold">
+                        {r.cite}
+                      </Mono>
+                    </div>
+                    <span className="text-[12.5px] sm:text-[13px] leading-[1.5]">
+                      {r.body}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -200,7 +205,7 @@ function AgentMsg({ msg, idx }: { msg: AgentMessage; idx: number }) {
 
 function ThinkingMsg({ label }: { label: string }) {
   return (
-    <div className="flex flex-col gap-3 mb-1">
+    <div className="flex flex-col gap-2.5 sm:gap-3 mb-1">
       <div className="flex items-center gap-2">
         <div
           className="bg-accent flex items-center justify-center"
@@ -219,10 +224,10 @@ function ThinkingMsg({ label }: { label: string }) {
           style={{ width: 6, height: 6 }}
         />
       </div>
-      <div className="pl-8">
+      <div className="pl-7 sm:pl-8">
         <div
-          className="flex items-center gap-2.5 font-mono"
-          style={{ fontSize: 12, letterSpacing: "0.02em" }}
+          className="flex items-center gap-2.5 font-mono text-[11.5px] sm:text-[12px]"
+          style={{ letterSpacing: "0.02em" }}
         >
           <span className="text-accent-ink">→</span>
           <span>{label}</span>

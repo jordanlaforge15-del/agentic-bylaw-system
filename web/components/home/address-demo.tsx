@@ -62,8 +62,8 @@ export function AddressDemo() {
 
   return (
     <div
-      className="bg-surface-alt p-[22px] flex flex-col gap-3.5"
-      style={{ border: "1.5px solid var(--text)", minHeight: 320 }}
+      className="bg-surface-alt p-4 sm:p-5 lg:p-[22px] flex flex-col gap-3 sm:gap-3.5 min-h-[280px] sm:min-h-[320px]"
+      style={{ border: "1.5px solid var(--text)" }}
     >
       <div className="flex items-center justify-between">
         <Mono muted>TRY IT · HRM ADDRESSES</Mono>
@@ -92,11 +92,11 @@ export function AddressDemo() {
               value={val}
               onChange={(e) => setVal(e.target.value)}
               placeholder="e.g. 5184 Morris St, Halifax"
-              className="flex-1 bg-surface text-text font-sans text-[15px] outline-none px-4 py-3.5 tracking-[-0.005em]"
+              className="flex-1 min-w-0 bg-surface text-text font-sans text-[14px] sm:text-[15px] outline-none px-3 sm:px-4 py-3 sm:py-3.5 tracking-[-0.005em]"
             />
             <button
               type="submit"
-              className="bg-text text-surface font-sans font-bold px-5 cursor-pointer text-[14px] tracking-[-0.01em]"
+              className="bg-text text-surface font-sans font-bold px-4 sm:px-5 cursor-pointer text-[13px] sm:text-[14px] tracking-[-0.01em]"
             >
               Read it →
             </button>
@@ -172,14 +172,14 @@ export function AddressDemo() {
             {reading.q}
           </div>
           <div
-            className="font-sans font-extrabold text-[32px] leading-[1.1]"
+            className="font-sans font-extrabold text-[24px] sm:text-[28px] lg:text-[32px] leading-[1.1]"
             style={{ letterSpacing: "-0.035em" }}
           >
             <HighlightWord>{reading.verdict}</HighlightWord>
           </div>
-          <div className="flex justify-between items-center pt-2 border-t border-hair">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2.5 sm:gap-2 pt-2 border-t border-hair">
             <Mono muted>SOURCE · HRM LUB {reading.cite}</Mono>
-            <Btn variant="ghost" size="sm">
+            <Btn variant="ghost" size="sm" className="self-start sm:self-auto">
               Open full reading →
             </Btn>
           </div>
