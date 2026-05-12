@@ -17,8 +17,13 @@ Each handler:
 - Translates it into the appropriate Pydantic request model via
   ``model_validate`` so malformed inputs raise ValidationError early.
 - Calls the synchronous ``RetrievalService`` method directly.
-- Returns ``json.dumps(response.model_dump(mode="json"))`` so the LLM
-  receives structured JSON rather than a stringified Python dict.
+- Returns ``json.dumps(...)`` of a *compact* projection of the
+  retrieval response. The full Pydantic shape (kept for the external
+  MCP server's wire contract) carries fields the LLM does not read
+  and dozens of redundant matches; every tool_result block we hand
+  back gets replayed verbatim on every subsequent turn, so any field
+  we ship is billed N times. See ``compact.py`` for the projection
+  rules and the LLM-relevant subset.
 """
 from __future__ import annotations
 
@@ -27,6 +32,12 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from advisor.chat.compact import (
+    compact_document_list,
+    compact_match,
+    compact_outline,
+    compact_search_response,
+)
 from advisor.llm import ToolDefinition
 from advisor.llm.tool_loop import ToolHandler
 from bylaw_retrieval.retrieval import (
@@ -256,10 +267,7 @@ def build_bylaw_tools(
                 bylaw_name=payload.get("bylaw_name"),
                 limit=payload.get("limit", 50),
             )
-            body = {
-                "documents": [doc.model_dump(mode="json") for doc in documents]
-            }
-            return json.dumps(body)
+            return json.dumps(compact_document_list(list(documents)))
 
     async def get_document_outline_handler(payload: dict[str, Any]) -> str:
         with _resolve_cm() as service:
@@ -268,7 +276,7 @@ def build_bylaw_tools(
                 max_fragments=payload.get("max_fragments", 250),
                 include_text=payload.get("include_text", False),
             )
-            return json.dumps(outline.model_dump(mode="json"))
+            return json.dumps(compact_outline(outline))
 
     async def lookup_citation_handler(payload: dict[str, Any]) -> str:
         # model_validate will raise ValidationError on missing required
@@ -277,7 +285,7 @@ def build_bylaw_tools(
         request = CitationLookupRequest.model_validate(payload)
         with _resolve_cm() as service:
             match = service.lookup_citation(request)
-            return json.dumps(match.model_dump(mode="json"))
+            return json.dumps(compact_match(match))
 
     async def search_bylaw_evidence_handler(payload: dict[str, Any]) -> str:
         # Mirror the MCP server's location-slot handling: a missing
@@ -308,7 +316,7 @@ def build_bylaw_tools(
         )
         with _resolve_cm() as service:
             response = service.search(request)
-            return json.dumps(response.model_dump(mode="json"))
+            return json.dumps(compact_search_response(response))
 
     tool_defs = [
         ToolDefinition(
