@@ -73,8 +73,13 @@ def test_build_bylaw_tools_returns_four_tools(seeded_service):
 @pytest.mark.asyncio
 async def test_search_bylaw_evidence_handler_returns_json(seeded_service):
     """search_bylaw_evidence is the bread-and-butter handler. We
-    confirm it accepts a query, returns JSON, and the JSON parses
-    back to a structure with the expected top-level keys."""
+    confirm it accepts a query, returns the compact JSON shape, and
+    the JSON parses back to a structure with the LLM-essential
+    top-level keys. The ``request`` echo is intentionally absent —
+    every byte of tool_result content gets replayed on every
+    subsequent turn, so the compact shape drops the request echo to
+    save tokens.
+    """
     service, document_id = seeded_service
     _, handlers = build_bylaw_tools(service)
     output = await handlers["search_bylaw_evidence"](
@@ -83,7 +88,8 @@ async def test_search_bylaw_evidence_handler_returns_json(seeded_service):
     parsed = json.loads(output)
     assert "matches" in parsed
     assert "total_matches" in parsed
-    assert "request" in parsed
+    assert "shown_matches" in parsed
+    assert "request" not in parsed
 
 
 @pytest.mark.asyncio
@@ -139,8 +145,12 @@ async def test_get_document_outline_handler_returns_json(seeded_service):
 async def test_search_bylaw_evidence_handler_with_location_slot(seeded_service):
     """The location dict must be parsed into a LocationSlot and
     forwarded to RetrievalService.search; a malformed location
-    bubbles up as a ValidationError. We confirm the request
-    survives serialisation back through the response payload."""
+    bubbles up as a ValidationError. The compact response no longer
+    echoes the request payload, so we confirm the call did not raise
+    and that the response shape is intact — the LocationSlot parse
+    happens inside the handler before the service is touched, so a
+    successful response is the signal that parsing worked.
+    """
     service, document_id = seeded_service
     _, handlers = build_bylaw_tools(service)
     raw = await handlers["search_bylaw_evidence"](
@@ -155,11 +165,8 @@ async def test_search_bylaw_evidence_handler_with_location_slot(seeded_service):
         }
     )
     parsed = json.loads(raw)
-    # The response echoes the request, including the location slot
-    # we passed in. That's how we confirm it was carried through
-    # rather than dropped silently.
-    assert parsed["request"]["location"]["civic_number"] == "6321"
-    assert parsed["request"]["location"]["street"] == "Quinpool Road"
+    assert "matches" in parsed
+    assert "total_matches" in parsed
 
 
 @pytest.mark.asyncio
@@ -261,3 +268,176 @@ def test_search_bylaw_evidence_schema_has_location_slot():
     assert "civic_number" in location["properties"]
     assert "parcel_id" in location["properties"]
     assert "geometry" in location["properties"]
+
+
+@pytest.mark.asyncio
+async def test_search_bylaw_evidence_response_drops_noise_fields(seeded_service):
+    """Compact mode strips internal/verbose fields from every match.
+
+    These fields are not needed to produce a citation-grounded answer
+    and replaying them on every tool turn wastes input tokens.
+    """
+    service, document_id = seeded_service
+    _, handlers = build_bylaw_tools(service)
+    raw = await handlers["search_bylaw_evidence"](
+        {"query": "residential zones", "document_id": document_id, "limit": 3}
+    )
+    parsed = json.loads(raw)
+    assert parsed["matches"], "fixture should return at least one match"
+    top = parsed["matches"][0]
+    # Citation + content fields the LLM does use:
+    assert "text" in top
+    assert "page_start" in top
+    assert "municipality" in top
+    # Noise fields the LLM does not use and that should be dropped:
+    for noisy in (
+        "fragment_type",
+        "parse_status",
+        "confidence",
+        "metadata_json",
+    ):
+        assert noisy not in top, f"compact match should not carry {noisy}"
+
+
+@pytest.mark.asyncio
+async def test_search_bylaw_evidence_paginates_beyond_cap(
+    monkeypatch, seeded_service
+):
+    """When the underlying search returns more matches than the
+    compact-mode cap, the handler ships the top K and notes how many
+    were dropped — the LLM doesn't need to wade through long tails.
+    """
+    monkeypatch.setenv("ADVISOR_COMPACT_MAX_MATCHES", "2")
+    service, document_id = seeded_service
+    _, handlers = build_bylaw_tools(service)
+    raw = await handlers["search_bylaw_evidence"](
+        {"query": "zone", "document_id": document_id, "limit": 25}
+    )
+    parsed = json.loads(raw)
+    if parsed["total_matches"] > 2:
+        assert parsed["shown_matches"] == 2
+        assert len(parsed["matches"]) == 2
+        assert "truncation_note" in parsed
+        assert str(parsed["total_matches"] - 2) in parsed["truncation_note"]
+    else:
+        # Fixture is too small to exercise truncation; still confirm
+        # the shape stays consistent.
+        assert parsed["shown_matches"] == parsed["total_matches"]
+        assert "truncation_note" not in parsed
+
+
+@pytest.mark.asyncio
+async def test_lookup_citation_returns_compact_match(seeded_service):
+    """``lookup_citation``'s output is a single match. The compact
+    shape drops the same noise fields the search shape drops.
+    """
+    service, document_id = seeded_service
+    _, handlers = build_bylaw_tools(service)
+    outline_raw = await handlers["get_document_outline"]({"document_id": document_id})
+    outline = json.loads(outline_raw)
+    cited = next(item for item in outline["fragments"] if item.get("citation_path"))
+
+    raw = await handlers["lookup_citation"](
+        {"citation_path": cited["citation_path"], "document_id": document_id}
+    )
+    parsed = json.loads(raw)
+    assert parsed["citation_path"] == cited["citation_path"]
+    assert "text" in parsed
+    assert "fragment_type" not in parsed
+    assert "metadata_json" not in parsed
+    assert "parse_status" not in parsed
+
+
+@pytest.mark.asyncio
+async def test_get_document_outline_compact_shape(seeded_service):
+    """Outline drops fragment_id + fragment_type per fragment — the
+    LLM looks up by citation_path, not by internal fragment_id.
+    """
+    service, document_id = seeded_service
+    _, handlers = build_bylaw_tools(service)
+    raw = await handlers["get_document_outline"](
+        {"document_id": document_id, "max_fragments": 5}
+    )
+    parsed = json.loads(raw)
+    assert parsed["document"]["id"] == document_id
+    # Compact document summary drops parser_version + ingestion_timestamp:
+    assert "parser_version" not in parsed["document"]
+    assert "ingestion_timestamp" not in parsed["document"]
+    for item in parsed["fragments"]:
+        assert "fragment_id" not in item
+        assert "fragment_type" not in item
+
+
+def test_compact_linked_dataset_keeps_canonical_values():
+    """Whitebox: the LLM needs the canonical attribute values from a
+    spatial match (e.g. {"max_height_m": 25.0}) and the geocoder
+    confidence — but not the verbose dataset summary_text,
+    feature_count, crs, or internal feature_id / feature_key /
+    overlap_metric. This test pins the projection so future edits
+    can't silently re-add noise.
+    """
+    from advisor.chat.compact import compact_linked_dataset
+    from bylaw_retrieval.retrieval.schemas import (
+        DatasetFeatureMatch,
+        LinkedDataset,
+    )
+
+    ds = LinkedDataset(
+        dataset_id=42,
+        name="halifax_height_precincts",
+        publisher="HRM",
+        feature_count=137,
+        crs="EPSG:4326",
+        summary_text="A long verbose summary the LLM does not need. " * 8,
+        source_image_id=99,
+        location_resolver="google_maps",
+        location_confidence=0.95,
+        feature_matches=[
+            DatasetFeatureMatch(
+                feature_id=7,
+                feature_key="GlobalID-abc",
+                canonical_attributes={"max_height_m": 25.0},
+                contains_input=True,
+                overlap_metric=0.42,
+            )
+        ],
+    )
+    out = compact_linked_dataset(ds)
+    assert out == {
+        "dataset_id": 42,
+        "name": "halifax_height_precincts",
+        "location_resolver": "google_maps",
+        "location_confidence": 0.95,
+        "feature_matches": [
+            {
+                "canonical_attributes": {"max_height_m": 25.0},
+                "contains_input": True,
+            }
+        ],
+    }
+
+
+def test_compact_search_response_keeps_notes_and_drops_request():
+    """Whitebox: server-side notes on RetrievalResponse remain visible
+    in compact mode (the LLM is supposed to read them and re-issue),
+    but the ``request`` echo is dropped — the LLM already knows what
+    it sent and that field is pure cache bloat.
+    """
+    from advisor.chat.compact import compact_search_response
+    from bylaw_retrieval.retrieval import RetrievalRequest, RetrievalResponse
+
+    req = RetrievalRequest(query="anything", limit=5)
+    response = RetrievalResponse(
+        request=req,
+        total_matches=0,
+        matches=[],
+        notes=["The query contains a civic address but no location field"],
+    )
+    out = compact_search_response(response)
+    assert "request" not in out
+    assert out["notes"] == [
+        "The query contains a civic address but no location field"
+    ]
+    assert out["total_matches"] == 0
+    assert out["shown_matches"] == 0
+    assert "truncation_note" not in out
