@@ -14,7 +14,8 @@
 
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useScrollLock } from "@/lib/use-scroll-lock";
 import { cn } from "@/lib/cn";
 
@@ -35,6 +36,14 @@ export function Sheet({
 }: Props) {
   useScrollLock(open);
 
+  // Same portal rationale as Drawer (see drawer.tsx). An ancestor with
+  // `backdrop-filter` / `transform` / `filter` / `perspective` /
+  // `will-change` / `contain` would re-base our `position: fixed` to
+  // its own box, breaking full-viewport coverage. Render through
+  // `document.body` to make the sheet immune to the ancestor chain.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -44,9 +53,9 @@ export function Sheet({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex flex-col justify-end"
       aria-modal="true"
@@ -91,6 +100,7 @@ export function Sheet({
         </div>
         {children}
       </aside>
-    </div>
+    </div>,
+    document.body,
   );
 }

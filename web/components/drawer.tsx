@@ -22,7 +22,8 @@
 
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useScrollLock } from "@/lib/use-scroll-lock";
 import { cn } from "@/lib/cn";
 
@@ -48,6 +49,20 @@ export function Drawer({
 }: Props) {
   useScrollLock(open);
 
+  // Portal target. We render through `document.body` so the drawer's
+  // `position: fixed` is anchored to the viewport, not to whatever
+  // ancestor created a containing block. This matters because any
+  // ancestor with `transform`, `filter`, `backdrop-filter`,
+  // `perspective`, `will-change`, or `contain` re-bases `fixed`
+  // positioning to that ancestor's box. The marketing TopNav has
+  // `backdrop-blur` (-> `backdrop-filter: blur(...)`) and the original
+  // mount point made the drawer only as tall as the header, hiding
+  // every nav link inside an `overflow-y-auto` zero-height container.
+  // Portaling to body sidesteps the issue regardless of how chrome
+  // around the trigger evolves.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -57,9 +72,9 @@ export function Drawer({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex" aria-modal="true" role="dialog" aria-label={ariaLabel}>
       {/*
        * Scrim. Sits behind the drawer; click closes. We use the
@@ -96,6 +111,7 @@ export function Drawer({
       >
         {children}
       </aside>
-    </div>
+    </div>,
+    document.body,
   );
 }
