@@ -257,6 +257,107 @@ async def test_multiple_tool_calls_in_one_response_handled_in_order():
 
 
 @pytest.mark.asyncio
+async def test_cost_circuit_breaker_trips_on_oversized_request():
+    """When the pre-flight estimator says the request exceeds the
+    token budget, the loop strips tools and forces ONE synthesis turn
+    — the same shape as the iteration-cap fallback. The trip is
+    recorded on the result so the chat route can audit it.
+
+    The test pins a tiny budget (50 tokens) so a request that's
+    nowhere near a production runaway still trips reliably.
+    """
+    seen_requests: list[CompletionRequest] = []
+
+    def script(req: CompletionRequest):
+        seen_requests.append(req)
+        if not req.tools:
+            return text_response("Bounded synthesis answer.")
+        # Without trip the loop would happily keep calling tools; the
+        # estimator should fire before this scripted reply matters.
+        return tool_use_response(
+            tool_id="tu_1",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def handler(_payload):
+        return "ignored"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+        token_budget=10,
+    )
+
+    assert result.terminated_reason == "cost_circuit_trip"
+    assert result.circuit_trip is not None
+    assert result.circuit_trip.budget == 10
+    assert result.circuit_trip.estimated_input_tokens > 10
+    # The trip fires on the FIRST iteration here — the request as
+    # built by ``_request_with_tool`` already exceeds 10 tokens.
+    assert result.circuit_trip.iteration == 1
+    # Synthesis call landed; tools were stripped:
+    assert any(req.tools == [] for req in seen_requests)
+    assert text_of(result.final_response) == "Bounded synthesis answer."
+
+
+@pytest.mark.asyncio
+async def test_cost_circuit_breaker_pass_through_under_budget():
+    """With the default (large) budget a normal turn flows through
+    untouched — no trip, no synthesis fallback, ``circuit_trip`` is
+    ``None``."""
+    gateway = MockGateway(scripted=[text_response("normal answer")])
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={},
+    )
+    assert result.terminated_reason == "end_turn"
+    assert result.circuit_trip is None
+
+
+@pytest.mark.asyncio
+async def test_cost_circuit_trip_after_tool_round():
+    """When the budget is crossed AFTER a tool round has appended a
+    bulky tool_result, the trip iteration is recorded as the iteration
+    that would have ballooned past the cap — and the synthesis call
+    still sees the retrieved evidence in the conversation."""
+    calls = {"i": 0}
+
+    def script(req: CompletionRequest):
+        calls["i"] += 1
+        if not req.tools:
+            return text_response("answered from evidence above")
+        return tool_use_response(
+            tool_id=f"tu_{calls['i']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def fat_handler(_payload):
+        # A 2k-char tool_result blows past a small budget on the
+        # NEXT iteration's pre-flight estimate.
+        return "x" * 2000
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": fat_handler},
+        token_budget=400,
+    )
+
+    assert result.terminated_reason == "cost_circuit_trip"
+    assert result.circuit_trip is not None
+    assert result.circuit_trip.iteration >= 2
+    assert text_of(result.final_response) == "answered from evidence above"
+
+
+@pytest.mark.asyncio
 async def test_total_usage_aggregates_across_iterations():
     """``total_usage`` sums ``CompletionResponse.usage`` from every
     iteration. The default MockGateway usage is 10/20 per call, so a

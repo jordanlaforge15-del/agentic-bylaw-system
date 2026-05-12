@@ -20,6 +20,7 @@ from advisor.api import create_app
 from advisor.db.models import UsageEvent, User
 from advisor.db import quota as quota_module
 from advisor.llm import TokenUsage
+from advisor.llm.budget import default_token_budget
 from advisor.llm.mock import MockGateway, text_response
 from layer1.db.init_db import create_all
 
@@ -239,6 +240,68 @@ def test_usage_event_tokens_patched_after_stream(
         assert events[0].tokens_output == 88
     finally:
         s.close()
+
+
+def test_cost_circuit_trip_recorded_in_usage_event_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When the per-turn input-token budget is exceeded, the chat
+    route patches the up-front ``llm_call`` UsageEvent's
+    ``metadata_json`` with the trip details (estimated tokens,
+    budget, iteration). Analytics filters on
+    ``metadata_json->>cost_circuit_trip`` to count how often the
+    breaker saves us.
+    """
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    db_session_factory, factory = _build_factory(db_url)
+    user_id = _seed_user(factory, clerk_user_id="clerk_trip")
+
+    monkeypatch.setattr(
+        quota_module, "_utc_today", lambda: date(2026, 5, 15)
+    )
+
+    # Pin a tiny budget via env var so the breaker fires on the first
+    # iteration of a normal-sized prompt. cache_clear() ensures the
+    # newly-constructed ChatSession reads the override rather than a
+    # value cached from an earlier test run.
+    monkeypatch.setenv("ADVISOR_TURN_INPUT_TOKEN_BUDGET", "5")
+    default_token_budget.cache_clear()
+
+    gateway = MockGateway(
+        scripted=[text_response("bounded synthesis answer")],
+        default_usage=TokenUsage(input_tokens=11, output_tokens=22),
+    )
+    app = _make_app(gateway=gateway, db_session_factory=db_session_factory)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat",
+            json={"message": "hi"},
+            headers={"X-Test-User-Id": str(user_id)},
+        )
+    assert response.status_code == 200
+
+    s = factory()
+    try:
+        events = (
+            s.query(UsageEvent)
+            .filter(UsageEvent.user_id == user_id)
+            .filter(UsageEvent.event_type == "llm_call")
+            .all()
+        )
+        assert len(events) == 1
+        meta = events[0].metadata_json or {}
+        assert meta.get("cost_circuit_trip") is True
+        assert meta.get("turn_input_token_budget") == 5
+        assert meta.get("estimated_input_tokens", 0) > 5
+        assert meta.get("trip_iteration", 0) >= 1
+        # Tokens still patched alongside the trip metadata:
+        assert events[0].tokens_input == 11
+        assert events[0].tokens_output == 22
+    finally:
+        s.close()
+        default_token_budget.cache_clear()
 
 
 def test_quota_resets_at_month_boundary(

@@ -39,6 +39,11 @@ from advisor.llm.base import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from advisor.llm.budget import (
+    CircuitTripInfo,
+    default_token_budget,
+    estimate_request_input_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +68,16 @@ class ToolLoopResult:
     audit, billing, and observability.
 
     ``terminated_reason`` is ``"end_turn"`` when the model produced a
-    natural text response, or ``"iteration_cap"`` when we hit
-    ``max_iterations`` and forced a text-only synthesis turn. Callers
-    can surface a UI hint when the answer was forced rather than
-    organic.
+    natural text response, ``"iteration_cap"`` when we hit
+    ``max_iterations`` and forced a text-only synthesis turn, or
+    ``"cost_circuit_trip"`` when the pre-flight token estimator caught
+    a runaway turn before it shipped. Callers can surface a UI hint
+    when the answer was forced rather than organic, and persist the
+    distinction in the audit trail.
+
+    ``circuit_trip`` carries the estimate and budget when the breaker
+    fired, so the chat route can record both in the UsageEvent
+    metadata. ``None`` when the turn terminated normally.
     """
 
     final_response: CompletionResponse
@@ -80,6 +91,7 @@ class ToolLoopResult:
     # calls; the final response's ``usage`` only covers the last one.
     total_usage: TokenUsage | None = None
     terminated_reason: str = "end_turn"
+    circuit_trip: CircuitTripInfo | None = None
 
 
 @dataclass
@@ -118,6 +130,21 @@ _ITERATION_CAP_NUDGE = (
     "about what was missing."
 )
 
+# Nudge appended when the per-turn input-token budget would be
+# exceeded on the next gateway call. Phrased as a hard ceiling rather
+# than an iteration cap because the cause is request size, not loop
+# count — the model may otherwise interpret "you used your budget"
+# as iteration exhaustion and emit a different apology shape.
+_COST_CIRCUIT_NUDGE = (
+    "This turn has reached its input-token cost ceiling. Stop calling "
+    "tools and answer now using ONLY the evidence already retrieved "
+    "above. If the retrieved evidence is insufficient to answer the "
+    "user's question, say so plainly in one paragraph and name the "
+    "specific bylaw section, schedule, or external dataset that would "
+    "actually contain the answer. Never claim a generic 'I couldn't "
+    "find an answer' — be specific about what was missing."
+)
+
 
 async def run_tool_loop(
     gateway: LLMGateway,
@@ -125,6 +152,7 @@ async def run_tool_loop(
     request: CompletionRequest,
     handlers: dict[str, ToolHandler],
     max_iterations: int = 10,
+    token_budget: int | None = None,
 ) -> ToolLoopResult:
     """Drive a Messages API conversation through any number of tool-use
     rounds and return when the LLM stops asking for tools.
@@ -144,7 +172,17 @@ async def run_tool_loop(
     real answer ("the LUB doesn't cover this; see the Subdivision
     By-law"), and keeps the partial conversation persistable so the
     audit trail isn't lost.
+
+    ``token_budget`` is the cost-circuit ceiling on input tokens for
+    the whole turn. Each iteration's request is estimated (cheap
+    char-based heuristic — see ``advisor.llm.budget``) before being
+    submitted; if the estimate exceeds the budget the loop takes the
+    same synthesis-fallback path as the iteration cap, with a
+    different nudge. ``None`` reads the default from
+    ``default_token_budget()`` (env-overridable). The breaker is
+    always on; tests pin a small budget to exercise the trip.
     """
+    budget = token_budget if token_budget is not None else default_token_budget()
     conversation = list(request.messages)
     tool_calls: list[ToolInvocation] = []
     total_usage: TokenUsage | None = None
@@ -153,6 +191,33 @@ async def run_tool_loop(
         current_request = request.model_copy(
             update={"messages": list(conversation)}
         )
+
+        estimated = estimate_request_input_tokens(current_request)
+        if estimated > budget:
+            trip = CircuitTripInfo(
+                estimated_input_tokens=estimated,
+                budget=budget,
+                iteration=iteration,
+            )
+            logger.warning(
+                "cost-circuit breaker tripped: estimated %d input tokens "
+                "exceeds budget %d on iteration %d; forcing synthesis turn",
+                estimated,
+                budget,
+                iteration,
+            )
+            return await _force_synthesis(
+                gateway,
+                request=request,
+                conversation=conversation,
+                tool_calls=tool_calls,
+                total_usage=total_usage,
+                iterations=iteration - 1,
+                nudge=_COST_CIRCUIT_NUDGE,
+                terminated_reason="cost_circuit_trip",
+                circuit_trip=trip,
+            )
+
         response = await gateway.complete(current_request)
         total_usage = _accumulate_usage(total_usage, response.usage)
 
@@ -197,14 +262,72 @@ async def run_tool_loop(
 
         conversation.append(Message(role=LLMRole.USER, content=result_blocks))
 
-    # Iteration cap reached. Force the model to synthesize a text
-    # response: tack a stop-and-answer nudge onto the last user
-    # message (Anthropic forbids consecutive same-role turns, so we
-    # mutate rather than append) and strip tools so it can't request
-    # another round.
-    last_user = conversation[-1]
-    nudged_content = list(last_user.content) + [TextBlock(text=_ITERATION_CAP_NUDGE)]
-    conversation[-1] = Message(role=LLMRole.USER, content=nudged_content)
+    logger.warning(
+        "tool-use loop hit max_iterations=%d; forced synthesis turn",
+        max_iterations,
+    )
+    return await _force_synthesis(
+        gateway,
+        request=request,
+        conversation=conversation,
+        tool_calls=tool_calls,
+        total_usage=total_usage,
+        iterations=max_iterations,
+        nudge=_ITERATION_CAP_NUDGE,
+        terminated_reason="iteration_cap",
+        circuit_trip=None,
+    )
+
+
+async def _force_synthesis(
+    gateway: LLMGateway,
+    *,
+    request: CompletionRequest,
+    conversation: list[Message],
+    tool_calls: list["ToolInvocation"],
+    total_usage: TokenUsage | None,
+    iterations: int,
+    nudge: str,
+    terminated_reason: str,
+    circuit_trip: CircuitTripInfo | None,
+) -> ToolLoopResult:
+    """Tack a stop-and-answer nudge onto the last user message and
+    make one final tools-stripped call.
+
+    Shared between the iteration-cap and cost-circuit paths because
+    the recovery shape is identical (mutate-last-user-message +
+    strip-tools + one synthesis call); only the nudge wording and the
+    audit fields differ. Anthropic forbids consecutive same-role
+    turns, so the trailing message MUST already be a user turn —
+    which it is on both paths: the iteration cap arrives right after
+    appending a tool_result user turn, and the cost-circuit trip
+    fires before any new gateway call so the conversation's tail
+    matches the structure the previous iteration left.
+
+    The synthesis call itself is NOT re-checked against the budget.
+    Stripping tools and dropping their definitions usually brings the
+    request well under the cap; on the rare case it doesn't (huge
+    conversation history) we still send it — the user is owed an
+    answer, and the call is the bounded one-more, not a runaway loop.
+    """
+    if not conversation or conversation[-1].role != LLMRole.USER:
+        # First-turn trip: no prior user/tool_result to mutate, so we
+        # don't have a synthesis-fallback shape that satisfies
+        # Anthropic's same-role rule. Surface the original request as
+        # the synthesis attempt — the conversation already ends with
+        # the original user message in that case, and the nudge is
+        # informational only.
+        pass
+    else:
+        last_user = conversation[-1]
+        if isinstance(last_user.content, str):
+            nudged_content: list[ContentBlock] = [
+                TextBlock(text=last_user.content),
+                TextBlock(text=nudge),
+            ]
+        else:
+            nudged_content = list(last_user.content) + [TextBlock(text=nudge)]
+        conversation[-1] = Message(role=LLMRole.USER, content=nudged_content)
 
     synthesis_request = request.model_copy(
         update={"messages": list(conversation), "tools": []}
@@ -214,17 +337,14 @@ async def run_tool_loop(
     conversation.append(
         Message(role=LLMRole.ASSISTANT, content=list(final_response.content))
     )
-    logger.warning(
-        "tool-use loop hit max_iterations=%d; forced synthesis turn",
-        max_iterations,
-    )
     return ToolLoopResult(
         final_response=final_response,
         conversation=conversation,
         tool_calls=tool_calls,
-        iterations=max_iterations,
+        iterations=iterations,
         total_usage=total_usage,
-        terminated_reason="iteration_cap",
+        terminated_reason=terminated_reason,
+        circuit_trip=circuit_trip,
     )
 
 
