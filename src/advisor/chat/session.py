@@ -35,6 +35,10 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from advisor.chat.history_compaction import (
+    compact_history_for_submission,
+    resolve_keep_recent,
+)
 from advisor.llm import (
     CompletionRequest,
     CompletionResponse,
@@ -115,6 +119,14 @@ class ChatSession:
     # of recency, and the DB-backed store overwrites this on load with
     # the row's ``updated_at`` so both paths surface a consistent value.
     updated_at: datetime | None = field(default=None, compare=False)
+    # How many recent user-prompt turns to keep intact when compacting
+    # history for LLM submission. ``None`` defers to the
+    # ``ADVISOR_CHAT_COMPACT_KEEP_RECENT`` env var (default 2). Older
+    # turns get their tool_result block content replaced with a short
+    # deterministic summary so we stop re-paying for full retrieval
+    # payloads on every iteration of the tool loop. Persistence is
+    # unaffected — ``self.messages`` keeps the full payload.
+    compact_keep_recent: int | None = field(default=None, compare=False)
 
     async def send_user_message_blocking(
         self, gateway: LLMGateway, text: str
@@ -132,10 +144,24 @@ class ChatSession:
         # mid-call sees the user's input rather than a stale state.
         self.messages.append(Message(role=LLMRole.USER, content=text))
 
+        # Compact older tool_result payloads into one-line summaries
+        # before submission. ``self.messages`` itself is untouched —
+        # this is a view-only transformation so persistence still
+        # stores the full payload. ``prefix_len`` records how many
+        # messages the loop starts with, so we can splice any newly-
+        # appended messages (tool_use / tool_result / final assistant)
+        # back into the FULL history after the loop returns rather
+        # than overwriting older turns with their compacted variants.
+        prefix_len = len(self.messages)
+        submission_messages = compact_history_for_submission(
+            self.messages,
+            keep_recent=resolve_keep_recent(self.compact_keep_recent),
+        )
+
         request = CompletionRequest(
             model=self.model,
             system=self.system_prompt,
-            messages=_mark_conversation_cache_milestones(self.messages),
+            messages=_mark_conversation_cache_milestones(submission_messages),
             tools=list(self.tool_defs),
             # The system prompt and tools array are byte-stable for the
             # lifetime of the session — flip on prompt caching so the
@@ -152,12 +178,17 @@ class ChatSession:
             token_budget=self.token_budget,
         )
 
-        # Replace our message list with the full conversation the loop
-        # produced — that's the only way to capture intermediate
-        # tool_use / tool_result turns. ``result.conversation``
-        # already includes the original user message because we
-        # appended it before building the request.
-        self.messages = list(result.conversation)
+        # Splice the loop's newly-appended messages back onto the
+        # FULL prefix. ``result.conversation[:prefix_len]`` is the
+        # compacted view we passed in — discard it; the messages it
+        # represents are already present in ``self.messages`` in
+        # their full-payload form. Anything beyond ``prefix_len`` is
+        # what the loop added (assistant tool_use turns, our
+        # tool_result turns built from real handler output, and the
+        # final assistant text) and needs to be preserved verbatim.
+        self.messages = list(self.messages) + list(
+            result.conversation[prefix_len:]
+        )
         # Stash the aggregate usage so the persistence hook (and the
         # chat route) can attribute real token counts. Reset before
         # we set so a turn with no reported usage clears the prior
