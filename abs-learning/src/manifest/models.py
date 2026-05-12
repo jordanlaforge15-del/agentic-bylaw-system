@@ -6,6 +6,7 @@ metadata so jurisdictions with sparse source information can still produce a
 valid manifest, while enforcing the non-negotiable invariants:
 
 - ``ParserConfig.confidence`` must lie in ``[0.0, 1.0]``.
+- ``TaxonomyMap.confidence`` must lie in ``[0.0, 1.0]``.
 - ``CityIntakeManifest`` must reference at least one in-scope source.
 """
 from __future__ import annotations
@@ -20,6 +21,17 @@ DocumentType = Literal["bylaw", "schedule", "appendix", "map", "amendment", "pol
 DocumentFormat = Literal["pdf", "html", "xml", "docx"]
 AccessMethod = Literal["direct_download", "paginated_html", "portal", "api"]
 ManifestStatus = Literal["draft", "approved", "active", "deprecated"]
+
+CanonicalZoneType = Literal[
+    "residential",
+    "commercial",
+    "mixed_use",
+    "industrial",
+    "institutional",
+    "open_space",
+    "special_area",
+    "unknown",
+]
 
 
 class SourceDocument(BaseModel):
@@ -63,6 +75,28 @@ class ParserConfig(BaseModel):
         return v
 
 
+class ZoneDesignation(BaseModel):
+    code: str
+    full_name: Optional[str] = None
+    canonical_type: CanonicalZoneType
+    description: Optional[str] = None
+
+
+class TaxonomyMap(BaseModel):
+    zone_designations: list[ZoneDesignation]
+    use_class_map: dict[str, str]
+    standards_categories: list[str]
+    companion_bylaws_required: list[str]
+    confidence: float
+    flags: list[str] = []
+
+    @field_validator("confidence")
+    @classmethod
+    def confidence_range(cls, v):
+        assert 0.0 <= v <= 1.0, "confidence must be between 0 and 1"
+        return v
+
+
 class Municipality(BaseModel):
     name: str
     jurisdiction_code: str
@@ -83,6 +117,7 @@ class CityIntakeManifest(BaseModel):
     municipality: Municipality
     sources: list[SourceDocument]
     parser_config: Optional[ParserConfig]
+    taxonomy: Optional[TaxonomyMap] = None
     qa_report: Optional[QAReport]
     manifest_version: str
     status: ManifestStatus

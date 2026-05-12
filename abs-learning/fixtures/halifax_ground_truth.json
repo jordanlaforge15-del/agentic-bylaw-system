@@ -24,6 +24,51 @@
     "UC-1",
     "UC-2"
   ],
+  "zone_codes_full": [
+    "CEN-1",
+    "CEN-2",
+    "CH-1",
+    "CH-2",
+    "CDD-1",
+    "CDD-2",
+    "CLI",
+    "COR",
+    "DD",
+    "DH",
+    "DND",
+    "H",
+    "HR-1",
+    "HR-2",
+    "HRI",
+    "INS",
+    "LI",
+    "PCF",
+    "RPK",
+    "UC-1",
+    "UC-2",
+    "ER-1",
+    "ER-2",
+    "ER-3"
+  ],
+  "zone_code_count": 24,
+  "known_use_classes": [
+    "single-unit dwelling use",
+    "secondary suite use",
+    "cluster housing use",
+    "multi-unit dwelling use",
+    "home occupation use",
+    "daycare use"
+  ],
+  "known_standards_categories": [
+    "height",
+    "lot_coverage",
+    "front_setback",
+    "side_setback",
+    "rear_setback",
+    "parking"
+  ],
+  "use_permission_tables": ["1A", "1B", "1C", "1D"],
+  "parts_count_minimum": 5,
   "citation_hierarchy": [
     {
       "level": "part",
