@@ -2,6 +2,7 @@
 a synthetic stream from the final response."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -268,6 +269,279 @@ async def test_session_marks_first_assistant_turns_as_cache_milestones():
     # change the shape the rest of the chat layer observes.
     assert third.messages[0].content == "q1"
     assert third.messages[2].content == "q2"
+
+
+@pytest.mark.asyncio
+async def test_compaction_summarises_older_tool_results_in_submission():
+    """Run three tool-use turns and verify the FINAL gateway call
+    saw the first turn's tool_result content summarised, while
+    ``session.messages`` still carries the full JSON payload (the
+    persistence path reads from there)."""
+    session = _empty_session()
+    session.tool_defs = [
+        ToolDefinition(
+            name="search_bylaw_evidence",
+            description="search",
+            input_schema={"type": "object"},
+        )
+    ]
+
+    # Big payload — the load-bearing thing compaction protects us
+    # from. Each turn re-sends every earlier tool_result verbatim
+    # without compaction, so this would re-bill on turn 3.
+    turn1_payload = json.dumps(
+        {
+            "total_matches": 3,
+            "matches": [
+                {
+                    "citation_path": "4.2.1",
+                    "score": 0.94,
+                    "text": "x" * 800,
+                    "linked_datasets": [{"location_confidence": 0.94}],
+                },
+                {"citation_path": "4.2.3", "score": 0.91, "text": "y" * 800},
+                {"citation_path": "5.1.7", "score": 0.80, "text": "z" * 800},
+            ],
+        }
+    )
+    turn2_payload = json.dumps({"total_matches": 0, "matches": []})
+    turn3_payload = json.dumps({"total_matches": 0, "matches": []})
+
+    payloads = iter([turn1_payload, turn2_payload, turn3_payload])
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return next(payloads)
+
+    session.tool_handlers = {"search_bylaw_evidence": handler}
+
+    gateway = MockGateway(
+        scripted=[
+            # Turn 1
+            tool_use_response(
+                tool_id="tu_1",
+                tool_name="search_bylaw_evidence",
+                tool_input={"query": "height limit ER-2"},
+            ),
+            text_response("first answer"),
+            # Turn 2
+            tool_use_response(
+                tool_id="tu_2",
+                tool_name="search_bylaw_evidence",
+                tool_input={"query": "lot coverage"},
+            ),
+            text_response("second answer"),
+            # Turn 3
+            tool_use_response(
+                tool_id="tu_3",
+                tool_name="search_bylaw_evidence",
+                tool_input={"query": "bedrooms"},
+            ),
+            text_response("third answer"),
+        ]
+    )
+
+    await session.send_user_message_blocking(gateway, "q1")
+    await session.send_user_message_blocking(gateway, "q2")
+    await session.send_user_message_blocking(gateway, "q3")
+
+    # Final gateway call (the synthesis step of turn 3) should have
+    # received the turn-1 tool_result with summarised content. Older
+    # tool_use blocks must remain intact for traceability.
+    final_request = gateway.calls[-1]
+    submitted = final_request.messages
+    # Locate the turn-1 tool_result message (user-role list containing
+    # a ToolResultBlock with tool_use_id="tu_1").
+    submitted_turn1_result = next(
+        m
+        for m in submitted
+        if m.role == LLMRole.USER
+        and isinstance(m.content, list)
+        and any(
+            isinstance(b, ToolResultBlock) and b.tool_use_id == "tu_1"
+            for b in m.content
+        )
+    )
+    summarised_block = next(
+        b
+        for b in submitted_turn1_result.content
+        if isinstance(b, ToolResultBlock) and b.tool_use_id == "tu_1"
+    )
+    assert isinstance(summarised_block.content, str)
+    assert summarised_block.content.startswith(
+        "[retrieved: 3 matches for 'height limit ER-2',"
+    )
+    assert len(summarised_block.content) < 300
+
+    # Turn-1 tool_use block stays intact (traceability).
+    submitted_turn1_use = next(
+        m
+        for m in submitted
+        if m.role == LLMRole.ASSISTANT
+        and isinstance(m.content, list)
+        and any(
+            isinstance(b, ToolUseBlock) and b.id == "tu_1" for b in m.content
+        )
+    )
+    use_block = next(
+        b
+        for b in submitted_turn1_use.content
+        if isinstance(b, ToolUseBlock) and b.id == "tu_1"
+    )
+    assert use_block.input == {"query": "height limit ER-2"}
+
+    # session.messages — the persistence-bound copy — still carries
+    # the full turn-1 payload. This is the load-bearing guarantee:
+    # compaction is view-only.
+    persisted_turn1_result = next(
+        m
+        for m in session.messages
+        if m.role == LLMRole.USER
+        and isinstance(m.content, list)
+        and any(
+            isinstance(b, ToolResultBlock) and b.tool_use_id == "tu_1"
+            for b in m.content
+        )
+    )
+    persisted_block = next(
+        b
+        for b in persisted_turn1_result.content
+        if isinstance(b, ToolResultBlock) and b.tool_use_id == "tu_1"
+    )
+    assert persisted_block.content == turn1_payload
+
+
+@pytest.mark.asyncio
+async def test_compaction_keep_recent_field_overrides_default():
+    """``compact_keep_recent=1`` should compact turn 1 even when only
+    two completed turns are in history — the default of 2 would leave
+    both intact."""
+    session = _empty_session()
+    session.compact_keep_recent = 1
+    session.tool_defs = [
+        ToolDefinition(
+            name="search_bylaw_evidence",
+            description="search",
+            input_schema={"type": "object"},
+        )
+    ]
+
+    payload = json.dumps(
+        {"total_matches": 1, "matches": [{"citation_path": "1.1", "score": 0.8}]}
+    )
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return payload
+
+    session.tool_handlers = {"search_bylaw_evidence": handler}
+
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1",
+                tool_name="search_bylaw_evidence",
+                tool_input={"query": "a"},
+            ),
+            text_response("first answer"),
+            tool_use_response(
+                tool_id="tu_2",
+                tool_name="search_bylaw_evidence",
+                tool_input={"query": "b"},
+            ),
+            text_response("second answer"),
+        ]
+    )
+
+    await session.send_user_message_blocking(gateway, "q1")
+    await session.send_user_message_blocking(gateway, "q2")
+
+    submitted = gateway.calls[-1].messages
+    turn1_result = next(
+        m
+        for m in submitted
+        if m.role == LLMRole.USER
+        and isinstance(m.content, list)
+        and any(
+            isinstance(b, ToolResultBlock) and b.tool_use_id == "tu_1"
+            for b in m.content
+        )
+    )
+    block = next(
+        b
+        for b in turn1_result.content
+        if isinstance(b, ToolResultBlock) and b.tool_use_id == "tu_1"
+    )
+    assert isinstance(block.content, str)
+    assert block.content.startswith("[retrieved:")
+
+
+@pytest.mark.asyncio
+async def test_compaction_is_byte_stable_across_repeated_submissions():
+    """Anthropic prompt caching keys on byte-stable prefixes. Running
+    the same conversation through ``send_user_message_blocking`` twice
+    in a row (different sessions, identical inputs) must produce
+    byte-identical submitted-message payloads up through the compacted
+    prefix."""
+
+    async def _run_three_turns() -> list[Message]:
+        session = _empty_session()
+        session.tool_defs = [
+            ToolDefinition(
+                name="search_bylaw_evidence",
+                description="search",
+                input_schema={"type": "object"},
+            )
+        ]
+        payload = json.dumps(
+            {
+                "total_matches": 2,
+                "matches": [
+                    {
+                        "citation_path": "4.2.1",
+                        "score": 0.94,
+                        "linked_datasets": [{"location_confidence": 0.94}],
+                    },
+                    {"citation_path": "4.2.3", "score": 0.91},
+                ],
+            }
+        )
+
+        async def handler(_payload: dict[str, Any]) -> str:
+            return payload
+
+        session.tool_handlers = {"search_bylaw_evidence": handler}
+
+        gateway = MockGateway(
+            scripted=[
+                tool_use_response(
+                    tool_id="tu_1",
+                    tool_name="search_bylaw_evidence",
+                    tool_input={"query": "max height"},
+                ),
+                text_response("first"),
+                tool_use_response(
+                    tool_id="tu_2",
+                    tool_name="search_bylaw_evidence",
+                    tool_input={"query": "lot coverage"},
+                ),
+                text_response("second"),
+                tool_use_response(
+                    tool_id="tu_3",
+                    tool_name="search_bylaw_evidence",
+                    tool_input={"query": "bedrooms"},
+                ),
+                text_response("third"),
+            ]
+        )
+        await session.send_user_message_blocking(gateway, "q1")
+        await session.send_user_message_blocking(gateway, "q2")
+        await session.send_user_message_blocking(gateway, "q3")
+        return list(gateway.calls[-1].messages)
+
+    first = await _run_three_turns()
+    second = await _run_three_turns()
+    a = json.dumps([m.model_dump(mode="json") for m in first], sort_keys=True)
+    b = json.dumps([m.model_dump(mode="json") for m in second], sort_keys=True)
+    assert a == b
 
 
 @pytest.mark.asyncio
