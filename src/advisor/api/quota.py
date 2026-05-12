@@ -98,6 +98,7 @@ def update_usage_event_tokens(
     usage_event_id: int,
     tokens_input: int,
     tokens_output: int,
+    metadata: dict | None = None,
 ) -> None:
     """Patch a previously recorded ``UsageEvent`` with real token counts.
 
@@ -107,9 +108,23 @@ def update_usage_event_tokens(
     silently ignored; the most likely cause is that the up-front
     ``record_query`` raised before the row was committed, in which
     case there's nothing to update.
+
+    ``metadata``, when provided, is shallow-merged into the row's
+    existing ``metadata_json``. The chat route uses this to attach
+    cost-circuit trip details (estimated input tokens, budget,
+    iteration) on turns where ``ChatSession.last_turn_circuit_trip``
+    is set, so the trip is queryable in analytics without inventing a
+    separate audit row.
     """
     row = db.get(UsageEvent, usage_event_id)
     if row is None:
         return
     row.tokens_input = tokens_input
     row.tokens_output = tokens_output
+    if metadata:
+        # ``metadata_json`` is a MutableDict; mutating it in place lets
+        # SQLAlchemy track the change. Shallow merge keeps existing
+        # keys (set up front by ``enforce_and_record_query``) intact.
+        existing = row.metadata_json or {}
+        existing.update(metadata)
+        row.metadata_json = existing

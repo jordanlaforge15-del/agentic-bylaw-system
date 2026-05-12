@@ -47,6 +47,7 @@ from advisor.llm import (
     TokenUsage,
     ToolDefinition,
 )
+from advisor.llm.budget import CircuitTripInfo, default_token_budget
 from advisor.llm.mock import MockGateway
 from advisor.llm.tool_loop import ToolHandler, run_tool_loop
 
@@ -96,6 +97,19 @@ class ChatSession:
     last_turn_usage: TokenUsage | None = field(
         default=None, repr=False, compare=False
     )
+    # Per-turn input-token budget enforced by the cost-circuit breaker
+    # in ``run_tool_loop``. The default reads from
+    # ``ADVISOR_TURN_INPUT_TOKEN_BUDGET`` (falling back to a sane
+    # safety-net cap); tests can pin a small value to exercise the
+    # trip path without env-var manipulation.
+    token_budget: int = field(default_factory=default_token_budget)
+    # Set by ``send_user_message_blocking`` when the cost-circuit
+    # breaker fires on the most recent turn — ``None`` for turns that
+    # completed under budget. The chat route reads this to enrich the
+    # UsageEvent metadata so trips are auditable in analytics.
+    last_turn_circuit_trip: CircuitTripInfo | None = field(
+        default=None, repr=False, compare=False
+    )
     # Wall-clock of the most recent turn. Used by the sidebar to render
     # "2m ago" / "yesterday" — the in-memory store has no other notion
     # of recency, and the DB-backed store overwrites this on load with
@@ -135,6 +149,7 @@ class ChatSession:
             gateway,
             request=request,
             handlers=self.tool_handlers,
+            token_budget=self.token_budget,
         )
 
         # Replace our message list with the full conversation the loop
@@ -148,6 +163,7 @@ class ChatSession:
         # we set so a turn with no reported usage clears the prior
         # value rather than carrying it forward.
         self.last_turn_usage = result.total_usage
+        self.last_turn_circuit_trip = result.circuit_trip
         self.updated_at = datetime.now(timezone.utc)
 
         # Fire the post-turn hook AFTER messages are settled. The

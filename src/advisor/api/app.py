@@ -475,19 +475,37 @@ def _patch_usage_event_tokens(
     Catches and logs any DB exception — failing here would otherwise
     propagate out of the SSE generator and surface to the client as a
     confusing 500 *after* the stream had already been delivered.
+
+    When the cost-circuit breaker fired on this turn,
+    ``chat_session.last_turn_circuit_trip`` carries the estimate and
+    budget; we attach those to ``metadata_json`` so the trip is
+    visible alongside the call it happened on. Tracking it on the
+    existing ``llm_call`` row (rather than a new ``cost_circuit_trip``
+    event_type) keeps the audit shape flat — analytics queries are
+    "events where metadata_json->>cost_circuit_trip = true".
     """
     if db_session_factory is None or usage_event_id is None:
         return
     usage = chat_session.last_turn_usage
-    if usage is None:
+    trip = chat_session.last_turn_circuit_trip
+    if usage is None and trip is None:
         return
+    metadata: dict | None = None
+    if trip is not None:
+        metadata = {
+            "cost_circuit_trip": True,
+            "estimated_input_tokens": trip.estimated_input_tokens,
+            "turn_input_token_budget": trip.budget,
+            "trip_iteration": trip.iteration,
+        }
     try:
         with db_session_factory() as db:
             update_usage_event_tokens(
                 db,
                 usage_event_id=usage_event_id,
-                tokens_input=usage.input_tokens,
-                tokens_output=usage.output_tokens,
+                tokens_input=usage.input_tokens if usage else 0,
+                tokens_output=usage.output_tokens if usage else 0,
+                metadata=metadata,
             )
     except Exception:  # noqa: BLE001 — last-mile audit update; don't fail the request
         logger.exception(
