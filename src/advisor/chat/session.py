@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from advisor.llm import (
     CompletionRequest,
     CompletionResponse,
+    ContentBlock,
     LLMGateway,
     LLMRole,
     Message,
@@ -48,6 +49,15 @@ from advisor.llm import (
 )
 from advisor.llm.mock import MockGateway
 from advisor.llm.tool_loop import ToolHandler, run_tool_loop
+
+# Anthropic supports up to 4 cache breakpoints per request. The chat
+# session spends two on the request-level shared prefix (system,
+# tools) and reserves the remaining two for stable conversation
+# milestones — the first one or two assistant turns. Those turns are
+# byte-stable for every subsequent turn in the session, so caching
+# them turns multi-turn conversations into long prompt-cache reads
+# instead of full-cost replays.
+_MAX_CONVERSATION_CACHE_MILESTONES = 2
 
 
 @dataclass
@@ -111,8 +121,15 @@ class ChatSession:
         request = CompletionRequest(
             model=self.model,
             system=self.system_prompt,
-            messages=list(self.messages),
+            messages=_mark_conversation_cache_milestones(self.messages),
             tools=list(self.tool_defs),
+            # The system prompt and tools array are byte-stable for the
+            # lifetime of the session — flip on prompt caching so the
+            # gateway places ``cache_control`` markers on them. On every
+            # call after the first, the provider reads those prefixes
+            # from cache at ~10% of the input-token rate.
+            cache_system=True,
+            cache_tools=True,
         )
         result = await run_tool_loop(
             gateway,
@@ -159,6 +176,48 @@ class ChatSession:
         # frontend can't tell the difference from a real stream.
         async for event in MockGateway._stream_from_response(final_response):
             yield event
+
+
+def _mark_conversation_cache_milestones(messages: list[Message]) -> list[Message]:
+    """Mark cache breakpoints on the first stable assistant turns.
+
+    The earliest assistant turns in a session are byte-stable for
+    every subsequent turn: once the assistant has answered turn 1,
+    that text never changes again, so caching it lets turn 2 onward
+    read a long prefix from the provider's prompt cache. We mark the
+    LAST block of each early assistant message (Anthropic caches up
+    to and including the marked block) and stop once we've placed
+    ``_MAX_CONVERSATION_CACHE_MILESTONES`` markers.
+
+    Skipped intentionally:
+    - User messages with plain-string content. Wrapping them in a
+      block list to add a cache flag would change the request shape
+      the rest of the chat layer observes (tests inspect raw
+      ``request.messages[i].content``) for marginal gain — short
+      user prompts contribute little to the cached prefix relative
+      to system + tools + assistant turns.
+    - Tool-result user turns. The tool loop rebuilds these per
+      iteration; marking them here doesn't carry through.
+
+    Returns a fresh list with fresh Message / block objects on the
+    marked positions; unmarked messages are reused by reference.
+    """
+    out: list[Message] = []
+    marked = 0
+    for msg in messages:
+        if (
+            marked < _MAX_CONVERSATION_CACHE_MILESTONES
+            and msg.role == LLMRole.ASSISTANT
+            and isinstance(msg.content, list)
+            and msg.content
+        ):
+            blocks: list[ContentBlock] = list(msg.content)
+            blocks[-1] = blocks[-1].model_copy(update={"cache": True})
+            out.append(msg.model_copy(update={"content": blocks}))
+            marked += 1
+        else:
+            out.append(msg)
+    return out
 
 
 def empty_assistant_message() -> Message:

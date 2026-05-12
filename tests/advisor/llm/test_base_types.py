@@ -97,3 +97,27 @@ def test_token_usage_cache_fields_default_to_zero():
 def test_invalid_role_rejected():
     with pytest.raises(ValueError):
         Message(role="system", content="oops")  # type: ignore[arg-type]
+
+
+def test_blocks_and_tools_carry_cache_flag_default_false():
+    """The provider-agnostic ``cache`` hint defaults to False so the
+    Anthropic backend can opt blocks into prompt-cache breakpoints
+    without callers having to wire the flag on every construction."""
+    assert TextBlock(text="x").cache is False
+    assert ToolUseBlock(id="tu_1", name="t").cache is False
+    assert ToolResultBlock(tool_use_id="tu_1", content="ok").cache is False
+    assert ToolDefinition(
+        name="t", description="d", input_schema={"type": "object"}
+    ).cache is False
+
+
+def test_completion_request_cache_flags_default_false():
+    """The session opts in to caching by flipping these flags; older
+    call sites that haven't been updated must keep the no-cache
+    behaviour they had before this lever existed."""
+    req = CompletionRequest(
+        model="claude-opus-4-5",
+        messages=[Message(role=LLMRole.USER, content="hi")],
+    )
+    assert req.cache_system is False
+    assert req.cache_tools is False

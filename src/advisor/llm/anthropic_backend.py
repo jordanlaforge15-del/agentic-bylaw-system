@@ -6,11 +6,13 @@ a 1:1 mapping because the unified types were modelled on Anthropic's
 content-block shapes; other providers will require more work.
 
 Notes for future maintenance:
-- Prompt caching: Anthropic supports cache breakpoints via
+- Prompt caching: cache breakpoints are written as
   ``cache_control={"type": "ephemeral"}`` on system / messages /
-  tools entries. Not yet wired through the unified types because the
-  chat backend hasn't decided cache strategy. Add a ``cache=True``
-  flag on individual blocks/tools when needed.
+  tools entries. The unified-types layer carries provider-agnostic
+  ``cache`` flags (per block / tool) and ``cache_system`` /
+  ``cache_tools`` flags on the request; the translation in this
+  module is where they become Anthropic-specific markers. Caller
+  policy (where to place breakpoints) lives in the chat layer.
 - Vision: image blocks aren't in the unified types yet. When we add
   them, mirror Anthropic's ``image`` block shape.
 - Web search / computer use: provider-specific tools that don't fit
@@ -45,6 +47,12 @@ from advisor.llm.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Single shared cache_control payload. Anthropic's "ephemeral" tier is
+# the only one the API supports today; we don't expose tier choice on
+# the unified types because providers vary too much for a single knob
+# to be useful.
+_EPHEMERAL_CACHE: dict[str, str] = {"type": "ephemeral"}
 
 
 class AnthropicGateway:
@@ -86,9 +94,30 @@ class AnthropicGateway:
             "temperature": request.temperature,
         }
         if request.system:
-            params["system"] = request.system
+            # When the caller flagged the system prompt as cacheable we
+            # send it as Anthropic's block-list shape so we can attach
+            # cache_control; otherwise pass the plain string the SDK
+            # accepts unchanged.
+            if request.cache_system:
+                params["system"] = [
+                    {
+                        "type": "text",
+                        "text": request.system,
+                        "cache_control": _EPHEMERAL_CACHE,
+                    }
+                ]
+            else:
+                params["system"] = request.system
         if request.tools:
-            params["tools"] = [self._to_anthropic_tool(t) for t in request.tools]
+            tool_dicts = [self._to_anthropic_tool(t) for t in request.tools]
+            # A single cache breakpoint on the LAST tool caches the
+            # whole tools array (Anthropic caches the prefix up to and
+            # including the breakpoint). Per-tool ``tool.cache`` flags
+            # set in _to_anthropic_tool stack on top of this if any
+            # caller asks for finer control.
+            if request.cache_tools and tool_dicts:
+                tool_dicts[-1] = {**tool_dicts[-1], "cache_control": _EPHEMERAL_CACHE}
+            params["tools"] = tool_dicts
         if request.stop_sequences:
             params["stop_sequences"] = request.stop_sequences
         if request.metadata:
@@ -111,38 +140,45 @@ class AnthropicGateway:
 
     @staticmethod
     def _to_anthropic_block(block: ContentBlock) -> dict[str, Any]:
+        payload: dict[str, Any]
         if isinstance(block, TextBlock):
-            return {"type": "text", "text": block.text}
-        if isinstance(block, ToolUseBlock):
-            return {
+            payload = {"type": "text", "text": block.text}
+        elif isinstance(block, ToolUseBlock):
+            payload = {
                 "type": "tool_use",
                 "id": block.id,
                 "name": block.name,
                 "input": block.input,
             }
-        if isinstance(block, ToolResultBlock):
+        elif isinstance(block, ToolResultBlock):
             content: Any
             if isinstance(block.content, str):
                 content = block.content
             else:
                 content = [AnthropicGateway._to_anthropic_block(c) for c in block.content]
-            payload: dict[str, Any] = {
+            payload = {
                 "type": "tool_result",
                 "tool_use_id": block.tool_use_id,
                 "content": content,
             }
             if block.is_error:
                 payload["is_error"] = True
-            return payload
-        raise TypeError(f"unknown content block type: {type(block).__name__}")
+        else:
+            raise TypeError(f"unknown content block type: {type(block).__name__}")
+        if block.cache:
+            payload["cache_control"] = _EPHEMERAL_CACHE
+        return payload
 
     @staticmethod
     def _to_anthropic_tool(tool: ToolDefinition) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "name": tool.name,
             "description": tool.description,
             "input_schema": tool.input_schema,
         }
+        if tool.cache:
+            payload["cache_control"] = _EPHEMERAL_CACHE
+        return payload
 
     # -- response translation -----------------------------------------------
 
