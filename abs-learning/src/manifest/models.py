@@ -122,6 +122,7 @@ class CityIntakeManifest(BaseModel):
     manifest_version: str
     status: ManifestStatus
     pipeline_ready: bool
+    flags: list[str] = []
 
     @field_validator("sources")
     @classmethod
