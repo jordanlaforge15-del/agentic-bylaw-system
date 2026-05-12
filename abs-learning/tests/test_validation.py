@@ -88,7 +88,10 @@ def test_t7b_zone_completeness_detects_missing_codes(monkeypatch, tmp_path):
     in_tax = [f"Z{chr(ord('A') + i)}-1" for i in range(20)]   # 20 codes
     out_of_tax = [f"Y{chr(ord('A') + i)}-1" for i in range(5)]  # 5 extras
 
-    pages_text = " ".join(in_tax + out_of_tax)
+    # Each code is repeated so it clears the min-occurrence filter — this
+    # asserts the "ratio of distinct codes in taxonomy / distinct codes
+    # found" semantics, not the noise-filtering behaviour (covered elsewhere).
+    pages_text = " ".join((in_tax + out_of_tax) * 5)
     pages = {1: pages_text, 2: "", 3: ""}
     monkeypatch.setattr(
         "agents.validation.PdfBootstrapReader", _stub_reader(pages, (1, 3))
@@ -103,6 +106,28 @@ def test_t7b_zone_completeness_detects_missing_codes(monkeypatch, tmp_path):
     assert len(flags) == 5
     flagged_codes = {f["zone_code"] for f in flags}
     assert flagged_codes == set(out_of_tax)
+
+
+def test_zone_completeness_filters_low_occurrence_noise(monkeypatch, tmp_path):
+    """One-off matches must not count as zone codes."""
+    taxonomy_codes = ["ZA-1", "ZB-1"]
+    # Each taxonomy code appears 10 times; noise appears once.
+    pages = {
+        1: " ".join(taxonomy_codes * 10) + " " + "F-4 CH-7 E-5 DN-1",
+    }
+    monkeypatch.setattr(
+        "agents.validation.PdfBootstrapReader", _stub_reader(pages, (1, 1))
+    )
+
+    agent = ValidationAgent(MagicMock())
+    source_doc = _stub_source_doc(tmp_path)
+    taxonomy = _make_taxonomy(taxonomy_codes)
+
+    completeness, flags = agent._check_zone_completeness(source_doc, taxonomy)
+    # F-4, CH-7, E-5, DN-1 each occur once and are below the min-count
+    # threshold; they must be filtered out (not flagged as missing).
+    assert completeness == pytest.approx(1.0)
+    assert flags == []
 
 
 # ----------------------------------------------------------------------- T7-C

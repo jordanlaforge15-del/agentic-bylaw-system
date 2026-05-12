@@ -22,15 +22,31 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
-for _path in (str(ROOT), str(SRC)):
+# Parent repo (agentic-bylaw-system) provides the retrieval service used by
+# the Phase 2 ValidationAgent integration tests.
+_PARENT_REPO = ROOT.parents[3]
+_PARENT_SRC = _PARENT_REPO / "src"
+_PARENT_MCP = _PARENT_REPO / "mcp"
+
+for _path in (
+    str(ROOT),
+    str(SRC),
+    str(_PARENT_SRC),
+    str(_PARENT_MCP),
+):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
 
 @pytest.fixture(scope="session")
 def api_call_budget():
-    """Shared counter + ceiling for the integration session."""
-    return {"count": 0, "limit": 8}
+    """Shared counter + ceiling for the integration session.
+
+    Phase 1's three control tests use ~5 calls; the Phase 2 control tests
+    share a single full-pipeline run via ``halifax_full_run`` for ~20 calls.
+    The limit of 30 leaves headroom for retries on transient errors.
+    """
+    return {"count": 0, "limit": 30}
 
 
 @pytest.fixture(scope="session")

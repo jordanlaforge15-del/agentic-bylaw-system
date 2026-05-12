@@ -15,6 +15,7 @@ import os
 import random
 import re
 import tempfile
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -32,6 +33,12 @@ from manifest.models import (
 _HYPHENATED_CODE_REGEX = re.compile(r"\b[A-Z]{1,4}-\d\b")
 _PATTERN_SAMPLE_SIZE = 60
 _PATTERN_SAMPLE_SEED = 17
+# Codes that appear fewer than this many times across the full document are
+# treated as incidental (figure refs, typos, one-off precinct mentions) rather
+# than zone codes. A real zone code in a substantial bylaw appears dozens of
+# times; calibrated against Halifax where the cutoff cleanly separates real
+# zones (>=25 mentions) from incidental matches (1-3 mentions).
+_MIN_CODE_OCCURRENCES = 5
 
 _PASS_CITATION_THRESHOLD = 0.80
 _PASS_ZONE_THRESHOLD = 0.85
@@ -135,11 +142,19 @@ class ValidationAgent:
     ) -> Tuple[float, List[Dict[str, Any]]]:
         pages, _ = self._load_pdf_state(source_doc)
 
-        # Hyphenated codes anywhere in the document.
-        found: set[str] = set()
+        # Hyphenated codes anywhere in the document, filtered by minimum
+        # occurrence count so that incidental matches (figure references like
+        # "F-4", appendix labels like "CH-7", single-mention precinct strings)
+        # don't get treated as missing zone codes.
+        hyphenated_counts: Counter = Counter()
         for text in pages.values():
             for code in _HYPHENATED_CODE_REGEX.findall(text):
-                found.add(code)
+                hyphenated_counts[code] += 1
+        found: set[str] = {
+            code
+            for code, count in hyphenated_counts.items()
+            if count >= _MIN_CODE_OCCURRENCES
+        }
 
         taxonomy_codes = {z.code for z in taxonomy.zone_designations}
 
