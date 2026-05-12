@@ -57,6 +57,10 @@ type Props = {
   onSelect: (id: string) => void;
   activeSessionId: string | null;
   refreshTrigger: number;
+  // When `true`, the sidebar drops the fixed width and right border —
+  // the parent (Drawer) supplies them. Mobile uses this; desktop
+  // renders the sidebar in its default in-flow shape.
+  inDrawer?: boolean;
 };
 
 export function Sidebar({
@@ -64,6 +68,7 @@ export function Sidebar({
   onSelect,
   activeSessionId,
   refreshTrigger,
+  inDrawer,
 }: Props) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [q, setQ] = useState("");
@@ -104,8 +109,11 @@ export function Sidebar({
 
   return (
     <aside
-      className="border-r border-hair bg-surface flex flex-col min-h-0"
-      style={{ width: 280 }}
+      className={
+        inDrawer
+          ? "bg-surface flex flex-col min-h-0 h-full w-full"
+          : "border-r border-hair bg-surface flex flex-col min-h-0 w-[280px] flex-shrink-0"
+      }
     >
       <div className="border-b border-hair p-4 flex flex-col gap-3">
         <Btn variant="primary" size="sm" onClick={onNew} className="w-full">

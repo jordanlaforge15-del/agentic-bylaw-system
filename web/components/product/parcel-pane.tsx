@@ -17,13 +17,19 @@ import type { ParcelContext } from "@/lib/parcel";
 
 type Props = {
   parcel: ParcelContext | null;
+  // When `true`, the pane drops its fixed width and left border — the
+  // parent (Sheet on mobile, side overlay on tablet) supplies them.
+  inSheet?: boolean;
 };
 
-export function ParcelPane({ parcel }: Props) {
+export function ParcelPane({ parcel, inSheet }: Props) {
   return (
     <aside
-      className="border-l border-hair bg-surface-alt flex flex-col min-h-0 overflow-auto"
-      style={{ width: 340 }}
+      className={
+        inSheet
+          ? "bg-surface-alt flex flex-col min-h-0 overflow-auto h-full w-full"
+          : "border-l border-hair bg-surface-alt flex flex-col min-h-0 overflow-auto w-[340px] flex-shrink-0"
+      }
     >
       <div className="border-b border-hair px-5 py-4 flex justify-between items-center">
         <Mono muted>PARCEL</Mono>

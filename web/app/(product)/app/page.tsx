@@ -21,6 +21,12 @@ import { Sidebar } from "@/components/product/sidebar";
 import { ChatThread } from "@/components/product/chat-thread";
 import { Composer } from "@/components/product/composer";
 import { ParcelPane } from "@/components/product/parcel-pane";
+import { AddressPill } from "@/components/product/address-pill";
+import { ParcelFab } from "@/components/product/parcel-fab";
+import { Drawer } from "@/components/drawer";
+import { Sheet } from "@/components/sheet";
+import { useKeyboardInset } from "@/lib/use-keyboard-inset";
+import { useMediaQuery, BREAKPOINTS } from "@/lib/use-media-query";
 import type { AgentMessage, Message } from "@/lib/mock";
 import {
   extractParcelContext,
@@ -75,6 +81,29 @@ export default function ProductAppPage() {
   // has no address-bearing question yet.
   const [parcel, setParcel] = useState<ParcelContext | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Mobile/tablet overlay state. Both default closed; opening one
+  // doesn't close the other (parcel sheet on mobile sits above the
+  // chat which sits behind the sidebar drawer when both happen, but
+  // in practice only one is open at a time because each click is the
+  // user's explicit choice).
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [parcelOpen, setParcelOpen] = useState(false);
+
+  // Viewport gates. We render the Sheet/Drawer overlay components
+  // conditionally rather than via CSS `display: none`, so their
+  // useScrollLock/useEffect mount-side-effects never fire on the
+  // wrong breakpoint. Both return false during SSR and on first
+  // client render — neither overlay is open at first paint anyway,
+  // so this can't cause a flash.
+  const isDesktop = useMediaQuery(BREAKPOINTS.lg);
+  const isTabletOrMobile = !isDesktop;
+  const isMobile = !useMediaQuery(BREAKPOINTS.sm);
+  const isTablet = isTabletOrMobile && !isMobile;
+
+  // iOS soft-keyboard tracking. Writes --abs-keyboard-inset on <body>;
+  // the Composer reads it and translates above the keyboard. Only runs
+  // below 1024px — desktops never trigger this.
+  useKeyboardInset(true);
 
   // Re-pull the active session and snap our local state to the
   // server's authoritative copy. Two outputs:
@@ -332,18 +361,41 @@ export default function ProductAppPage() {
     setThinkLabel("Reading bylaw…");
     setError(null);
     setParcel(null);
+    setSidebarOpen(false);
+  };
+
+  // Drawer-aware versions of the sidebar callbacks. Selecting a
+  // session or starting a new one on mobile should auto-close the
+  // drawer so the user lands back in the chat thread.
+  const onSelectFromDrawer = (id: string) => {
+    setSidebarOpen(false);
+    void selectSession(id);
   };
 
   return (
-    <div className="h-screen flex flex-col bg-surface text-text overflow-hidden">
-      <AppHeader reading={READING} />
-      <div className="flex-1 flex min-h-0">
-        <Sidebar
-          onNew={onNew}
-          onSelect={selectSession}
-          activeSessionId={activeSessionId}
-          refreshTrigger={sidebarRefresh}
-        />
+    // dvh tracks the iOS dynamic viewport so the composer doesn't
+    // disappear behind the URL bar collapse/expand. overflow-hidden
+    // keeps the chat thread's scroll contained.
+    <div className="h-dvh flex flex-col bg-surface text-text overflow-hidden">
+      <AppHeader
+        reading={READING}
+        onMenuClick={() => setSidebarOpen(true)}
+      />
+      {/* AddressPill is mobile-only; renders nothing once lg or once
+       * there's no parcel. */}
+      <AddressPill parcel={parcel} onClick={() => setParcelOpen(true)} />
+      <div className="flex-1 flex min-h-0 relative">
+        {/* Desktop sidebar (lg+ only). Below lg the sidebar lives
+         * inside the Drawer below. */}
+        <div className="hidden lg:contents">
+          <Sidebar
+            onNew={onNew}
+            onSelect={selectSession}
+            activeSessionId={activeSessionId}
+            refreshTrigger={sidebarRefresh}
+          />
+        </div>
+
         <main className="flex-1 flex flex-col min-w-0 bg-surface">
           <ChatThread
             messages={messages}
@@ -353,8 +405,73 @@ export default function ProductAppPage() {
           />
           <Composer onSend={send} disabled={thinking} />
         </main>
-        <ParcelPane parcel={parcel} />
+
+        {/* Desktop parcel pane (lg+ only). Below lg the pane shows
+         * inside Sheet (mobile) or as a side overlay (tablet). */}
+        <div className="hidden lg:contents">
+          <ParcelPane parcel={parcel} />
+        </div>
+
+        <ParcelFab
+          onClick={() => setParcelOpen((o) => !o)}
+          active={parcelOpen}
+        />
       </div>
+
+      {/* Mobile + tablet sidebar drawer. Desktop renders the sidebar
+       * inline above and never opens this drawer. */}
+      {isTabletOrMobile && (
+        <Drawer
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          side="left"
+          width={300}
+          ariaLabel="Recent readings"
+        >
+          <Sidebar
+            onNew={onNew}
+            onSelect={onSelectFromDrawer}
+            activeSessionId={activeSessionId}
+            refreshTrigger={sidebarRefresh}
+            inDrawer
+          />
+        </Drawer>
+      )}
+
+      {/*
+       * Parcel surface — three variants depending on viewport:
+       *   - Mobile: bottom sheet (per design spec — anchored to bottom,
+       *     drag handle, 80% max height).
+       *   - Tablet: right-side drawer (320px, slides in from right).
+       *     The design spec also calls for an in-flow side pane that
+       *     pushes the chat narrower; we use an overlay instead so the
+       *     chat width doesn't jump and the existing single-flex
+       *     layout stays simple. This is a deliberate v1 trade-off —
+       *     revisit if usage shows people want the chat width to
+       *     adapt.
+       *   - Desktop: handled inline above (always-on right pane).
+       */}
+      {isMobile && (
+        <Sheet
+          open={parcelOpen}
+          onClose={() => setParcelOpen(false)}
+          maxHeightPct={80}
+          ariaLabel="Parcel details"
+        >
+          <ParcelPane parcel={parcel} inSheet />
+        </Sheet>
+      )}
+      {isTablet && (
+        <Drawer
+          open={parcelOpen}
+          onClose={() => setParcelOpen(false)}
+          side="right"
+          width={320}
+          ariaLabel="Parcel details"
+        >
+          <ParcelPane parcel={parcel} inSheet />
+        </Drawer>
+      )}
     </div>
   );
 }
