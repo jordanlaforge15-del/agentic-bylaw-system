@@ -13,6 +13,14 @@ COPY . .
 # project doesn't ship a public/ directory yet.
 RUN mkdir -p public
 ENV NEXT_TELEMETRY_DISABLED=1
+# NEXT_PUBLIC_* env vars are inlined into the client bundle by Next.js
+# at build time. Any client component that reads
+# process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY (e.g. top-nav.tsx's
+# CLERK_ENABLED check) sees `undefined` unless this is set during
+# `npm run build`. Pass it as a docker build-arg:
+#   docker build --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
 RUN npm run build
 
 FROM node:22-alpine AS runner
