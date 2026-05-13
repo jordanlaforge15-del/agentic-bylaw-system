@@ -127,18 +127,23 @@ export function TopNav() {
         )}
         {showSignedOutCtas && (
           <>
-            {CLERK_ENABLED && (
-              <Link href="/sign-in" className="hidden sm:inline-flex items-center">
-                <span className="text-[13px] text-text-muted hover:text-text mr-2">
-                  Log in
-                </span>
-              </Link>
-            )}
+            {/* Sign-in is primary for approved invitees — that's the
+                action a returning user takes. "Get an invite" is the
+                secondary CTA for new visitors who don't yet have an
+                allowlisted email. Order matters: primary on the
+                outside (right edge) per typical web nav convention. */}
             <Link href="/signup" className="hidden sm:contents">
-              <Btn variant="primary" size="sm">
-                Get an invite →
+              <Btn variant="ghost" size="sm">
+                Get an invite
               </Btn>
             </Link>
+            {CLERK_ENABLED && (
+              <Link href="/sign-in" className="hidden sm:contents">
+                <Btn variant="primary" size="sm">
+                  Sign in →
+                </Btn>
+              </Link>
+            )}
           </>
         )}
         {/* Mobile-only hamburger. */}
@@ -227,8 +232,8 @@ export function TopNav() {
                   onClick={() => setDrawerOpen(false)}
                   className="contents"
                 >
-                  <Btn variant="ghost" size="md" className="w-full">
-                    Log in
+                  <Btn variant="accent" size="md" className="w-full">
+                    Sign in →
                   </Btn>
                 </Link>
               )}
@@ -237,8 +242,8 @@ export function TopNav() {
                 onClick={() => setDrawerOpen(false)}
                 className="contents"
               >
-                <Btn variant="accent" size="md" className="w-full">
-                  Get an invite →
+                <Btn variant="ghost" size="md" className="w-full">
+                  Get an invite
                 </Btn>
               </Link>
             </>
