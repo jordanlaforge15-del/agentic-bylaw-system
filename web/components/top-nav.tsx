@@ -56,8 +56,13 @@ export function TopNav() {
   // still returns a no-op shape so the hook call is safe; we just
   // skip the conditional and render the signed-out CTAs.
   const { isLoaded, isSignedIn } = useAuth();
+  // SSR + first paint: useAuth hasn't loaded yet (isLoaded=false). We
+  // optimistically show signed-out CTAs in that window so the public
+  // homepage isn't blank between server render and client hydration.
+  // If the user is actually signed in, the swap to signed-in CTAs
+  // happens once Clerk's SDK resolves — typically <100ms.
   const showSignedInCtas = CLERK_ENABLED && isLoaded && isSignedIn;
-  const showSignedOutCtas = !CLERK_ENABLED || (isLoaded && !isSignedIn);
+  const showSignedOutCtas = !showSignedInCtas;
 
   return (
     <header className="sticky top-0 z-30 bg-surface border-b border-hair px-5 sm:px-8 py-3 sm:py-3.5 flex items-center justify-between backdrop-blur safe-pt">
