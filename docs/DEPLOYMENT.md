@@ -446,7 +446,34 @@ The shared-password gate is enabled whenever Clerk isn't configured — includin
 
 1. **Move production `docker-compose.yml` into the repo** (perhaps as `compose.prod.yml`) so server config is also version-controlled.
 2. **Automate backups** — cron + Hetzner Storage Box upload, encrypted with `age` or `gpg`.
-3. **Switch to real Clerk auth** before any public trial-user launch. Step-by-step runbook lives under [Enabling real Clerk auth](#enabling-real-clerk-auth-operator-runbook) — needs only env-var changes + a docker compose up, no code work.
+3. **Switch to real Clerk auth** — DONE. Live at `pk_test_` dev instance (`stunning-goshawk-55.clerk.accounts.dev`). Flip to a Production instance before public launch (no code work — same env-var swap as the runbook).
+
+### Invite-only access flow
+
+How a new user goes from request → approved → signed in:
+
+1. **Request.** Anyone hits `/signup`, fills the form, and the request lands in `invite_request` with `status='pending'`. The form is public — no auth required.
+2. **Admin review.** Admin (Clerk userId in `ADVISOR_ADMIN_CLERK_USER_IDS`) opens `/admin/invites`. The page lists every request, pending first. Click Approve to open the inline cap-override form (queries/mo, input tokens/mo, output tokens/mo, RPM — defaults are 100 / 500k / 100k / 6). Click Reject to mark as rejected.
+3. **Approval side-effects.** The approve handler calls Clerk's Backend API to add the email to the allowlist (which is what makes Clerk's sign-up flow actually accept the email — see [Restrictions setting](#enabling-real-clerk-auth-operator-runbook) for the underlying gate). It also stamps `expires_at = now + 14 days` on the row.
+4. **User signs in.** Approved user goes to `/sign-in` and authenticates with Google or Apple. Clerk lets them through because their email is on the allowlist. They land at `/app`.
+5. **First chat call.** The advisor's `resolve_or_create_user` looks up the user's email in `invite_request`. If `status='approved'`, it copies the `granted_*` caps onto the new `advisor_user` row and stamps `redeemed_at`. The invite is now "consumed."
+6. **Expiry sweep.** Approved invites that never get redeemed (i.e. user didn't sign in within 14 days) are cleaned up: their email is removed from Clerk's allowlist and the row flips to `status='expired'`. Two trigger paths:
+   - **Lazy:** the admin page POSTs to `/api/admin/invites/sweep-expired` on mount.
+   - **Cron:** any process can call the same endpoint with header `X-Sweep-Token: $CLERK_SWEEP_TOKEN`. Set `CLERK_SWEEP_TOKEN` to a random string in `/srv/bylaw/.env` to enable this path.
+
+Required env on the server (added to `/srv/bylaw/.env`):
+
+```
+ADVISOR_ADMIN_CLERK_USER_IDS=user_3DfTVYRZvyMIAKsVn43o8PnYO3F   # comma-separated for multiple admins
+CLERK_SWEEP_TOKEN=<random-string-or-leave-empty>                # optional, cron-mode only
+```
+
+Per-user caps enforced by the advisor at chat time:
+- `monthly_query_limit` — count of requests.
+- `monthly_input_token_limit` / `monthly_output_token_limit` — separate caps because the price ratio between Anthropic's input and output tokens differs by ~4x.
+- `requests_per_minute_limit` — sliding-window rate cap, counts both successful and rate-limited calls so a flood doesn't reset the window.
+
+All four return a 429 with a `kind` field identifying which limit fired, so the frontend can show targeted messaging.
 4. **Schedule security upgrades**: unattended-upgrades is enabled (security-only). Verify nightly. The advisor's per-user quota (100 / month) is the only cost ceiling once the gate is cracked — combine with rate limiting at Caddy.
 5. **CI/CD**: no automation yet. Builds and deploys are operator-driven from the laptop. GitHub Actions to build + push images on main would be the obvious next step.
 6. **Persona.md and alembic version_num fixes** (see "Known issues") were spawned as separate tasks at deploy time.

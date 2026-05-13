@@ -46,6 +46,10 @@ services:
       # uvicorn (running outside Docker) instead of trying 127.0.0.1
       # inside its own network namespace.
       ADVISOR_API_URL: http://host.docker.internal:8000
+      # Local web → local postgres (the postgres service in this
+      # compose) for the invite_request table. Override in .env.local
+      # if pointing at the production DB.
+      DATABASE_URL: postgresql://layer1:layer1@postgres:5432/layer1
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
