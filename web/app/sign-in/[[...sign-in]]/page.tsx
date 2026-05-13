@@ -35,7 +35,13 @@ export default function SignInPage() {
         <p className="text-[14px] text-text-muted leading-[1.5] m-0 mb-7">
           Sign in to continue your reading.
         </p>
-        <SignIn appearance={absClerkAppearance} />
+        {/* signUpUrl overrides the ClerkProvider default for the
+            "Don't have an account?" footer link only. During private
+            beta we send unauthenticated visitors to /signup (the
+            invite-request form), not to /sign-up (Clerk's create-
+            account widget — which is gated dashboard-side anyway).
+            Drop this prop when self-serve signup goes live. */}
+        <SignIn appearance={absClerkAppearance} signUpUrl="/signup" />
       </div>
     </main>
   );

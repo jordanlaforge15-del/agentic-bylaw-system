@@ -29,6 +29,29 @@ services:
       timeout: 5s
       retries: 10
 
+  web:
+    # Local-dev Next.js. Uses node:22-alpine directly (not web/Dockerfile,
+    # which is the optimised production build) so NEXT_PUBLIC_* vars are
+    # read at runtime — no rebuild needed when you change keys. Mounts
+    # web/ as a volume so hot-reload works against your editor.
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install --no-audit --no-fund && npm run dev -- --hostname 0.0.0.0"
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./web/.env.local
+    environment:
+      # Override ADVISOR_API_URL so the web container reaches the host
+      # uvicorn (running outside Docker) instead of trying 127.0.0.1
+      # inside its own network namespace.
+      ADVISOR_API_URL: http://host.docker.internal:8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./web:/app
+      - web-node-modules:/app/node_modules
+
   codex:
     build:
       context: .
@@ -58,3 +81,4 @@ volumes:
   layer1-postgres:
   codex-home:
   codex-cache:
+  web-node-modules:

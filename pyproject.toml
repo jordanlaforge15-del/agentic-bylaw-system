@@ -34,6 +34,7 @@ advisor = [
   "sse-starlette>=2.0",
   "pyjwt[crypto]>=2.8",
   "stripe>=10.0",
+  "svix>=1.40",
 ]
 ingest = [
   "docling>=2.0",

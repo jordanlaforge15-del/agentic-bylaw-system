@@ -158,10 +158,29 @@ def build_app() -> FastAPI:
     billing_kwargs = _build_billing_kwargs(
         verifier=verifier, billing_settings=billing_settings
     )
+    webhook_secret = os.environ.get("CLERK_WEBHOOK_SECRET") or None
+    if verifier is None and webhook_secret:
+        # Mounting the webhook without the JWT verifier is weird but
+        # not unsafe — webhooks authenticate via svix signature, not
+        # Bearer tokens — so we only log here, not raise.
+        logger.warning(
+            "CLERK_WEBHOOK_SECRET is set but CLERK_JWKS_URL is not. "
+            "Webhook delivery will still work, but the chat API is "
+            "running in the X-Test-User-Id fallback. Set CLERK_JWKS_URL "
+            "before any public traffic hits /v1/chat."
+        )
+    elif verifier is not None and not webhook_secret:
+        logger.warning(
+            "CLERK_JWKS_URL is set but CLERK_WEBHOOK_SECRET is not — "
+            "Clerk user lifecycle events (user.created / .updated / "
+            ".deleted) will not be synced. Set CLERK_WEBHOOK_SECRET "
+            "and configure the endpoint in your Clerk dashboard."
+        )
     return create_app(
         gateway=gateway,
         verifier=verifier,
         db_session_factory=session_scope,
+        clerk_webhook_secret=webhook_secret,
         **billing_kwargs,
     )
 

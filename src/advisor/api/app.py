@@ -141,6 +141,7 @@ def create_app(
     persona_text: str | None = None,
     verifier: ClerkVerifier | None = None,
     db_session_factory: DbSessionFactory | None = None,
+    clerk_webhook_secret: str | None = None,
     billing_settings: Any | None = None,
     stripe_client_factory: Callable[[], Any] | None = None,
     billing_db_session_factory: Callable[[], Any] | None = None,
@@ -175,6 +176,13 @@ def create_app(
       enforcement on ``/v1/chat``. Independent from ``verifier``: a
       test can wire DB persistence without real auth (test-header
       fallback handles user identity), and production wires both.
+    * ``clerk_webhook_secret`` — when provided alongside
+      ``db_session_factory``, mounts ``POST /v1/webhooks/clerk`` which
+      handles user lifecycle events from Clerk (created/updated/deleted)
+      and keeps the ``advisor_user`` table in sync. The endpoint is
+      signature-verified via svix using this secret; without it we
+      skip mounting the route entirely rather than expose an unsigned
+      remote-write hole.
     * Billing kwargs (``billing_settings``, ``stripe_client_factory``,
       ``billing_db_session_factory``, ``billing_user_dependency``,
       ``billing_user_resolver``) — wire the Stripe billing router.
@@ -255,6 +263,24 @@ def create_app(
         )
     else:
         app.include_router(build_dormant_billing_router())
+
+    # Clerk webhook router. Only mounted when both the secret and a DB
+    # factory are wired — the route needs a real DB to write user-row
+    # changes against, and without the secret we have no way to verify
+    # signatures (an unsigned endpoint here would be a remote-write
+    # hole). Tests that don't care about webhooks simply omit the
+    # secret and the route stays unmounted.
+    if clerk_webhook_secret and db_session_factory is not None:
+        from advisor.auth.router import (  # noqa: PLC0415 — lazy import
+            build_clerk_webhook_router,
+        )
+
+        app.include_router(
+            build_clerk_webhook_router(
+                webhook_secret=clerk_webhook_secret,
+                db_session_factory=db_session_factory,
+            )
+        )
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
