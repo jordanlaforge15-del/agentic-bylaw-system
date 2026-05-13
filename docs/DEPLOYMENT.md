@@ -148,7 +148,9 @@ Old image layers stay on disk until you `docker image prune`, so rollback is fas
 
 ## Configuration & secrets
 
-`/srv/bylaw/.env` is the single source of truth. Loaded by `docker-compose.yml` via `env_file:` (postgres) or explicit `environment:` entries (web, advisor). Never check this file into git.
+`/srv/bylaw/.env` is the single source of truth. Loaded by `docker-compose.yml` via `env_file: .env` on the `postgres` and `advisor` services. (`web` uses an explicit `environment:` list because its Next.js build bakes `NEXT_PUBLIC_*` values at image-build time, so server-side env additions for the web service still need a compose edit. Postgres and advisor pick up new `.env` keys on the next `docker compose up -d`.)
+
+Never check `.env` into git.
 
 Currently populated keys:
 
@@ -161,6 +163,14 @@ ADVISOR_LLM_PROVIDER=anthropic, ADVISOR_LLM_MODEL=claude-opus-4-5, ANTHROPIC_API
 
 # Layer 2 retrieval defaults
 LAYER2_PROMPT_VERSION, LAYER2_RETRIEVAL_VERSION, LAYER2_TOKEN_BUDGET, LAYER2_TOP_K
+
+# Google Maps geocoder (civic-address fallback)
+GOOGLE_MAPS_API_KEY
+GOOGLE_MAPS_COMPONENTS=country:CA|administrative_area:NS|locality:Halifax
+# The components filter is a hard constraint, not a hint. Narrowing to
+# NS+Halifax prevents Google from routing ambiguous queries like
+# "5245 Smith St" to other Canadian cities (Winnipeg's Smith St used to
+# win with just country:CA). See src/layer2/retrieval/google_geocoder.py.
 
 # Advisor server bind
 ADVISOR_HOST=0.0.0.0, ADVISOR_PORT=8000
@@ -177,11 +187,11 @@ DEMO_PASSWORD=$$<password>    # NB: literal $ in value must be escaped as $$ for
 
 Values referenced from the YAML as `${VAR}` are interpolated from `.env`. **Any literal `$` in a value must be escaped as `$$`** or compose will try to substitute it as a variable name and silently set it to an empty string. Diagnosed once during the original deploy when a strong password starting with `$` came through as `""`.
 
-### Adding a new env var to web or advisor
+### Adding a new env var
 
 1. Add to `/srv/bylaw/.env`.
-2. Update the service's `environment:` block in `/srv/bylaw/docker-compose.yml` (web/advisor use explicit lists, not `env_file:`, so this is needed).
-3. Restart the service.
+2. **Advisor / postgres:** nothing else to do — both use `env_file: .env`. `docker compose up -d advisor` recreates the container with the new var. (Note: editing `.env` causes compose to also recreate `postgres` on the next `up -d` because it shares the same `env_file`. Postgres data lives in a named volume, so there's no data loss, but expect a brief DB restart.)
+3. **Web:** add to the `environment:` block in `/srv/bylaw/docker-compose.yml` *and* rebuild the image if it's a `NEXT_PUBLIC_*` value (those are baked at build time). Server-only web env vars only need a `docker compose up -d web`.
 
 ## Database operations
 
