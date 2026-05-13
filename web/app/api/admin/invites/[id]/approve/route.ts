@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
 import { addToAllowlist } from "@/lib/clerk-admin";
 import { approveInvite, getInvite } from "@/lib/invites";
+import { sendApprovalEmail } from "@/lib/mail";
 
 export const runtime = "nodejs";
 
@@ -78,7 +79,27 @@ export async function POST(
       { status: 409 },
     );
   }
-  return NextResponse.json({ invite: row });
+
+  // Send approval email. Non-fatal — the invite is already approved
+  // in the DB and Clerk; admin can copy the sign-in link manually if
+  // the email fails. We surface the outcome to the admin UI via
+  // ``emailSent``/``emailError`` so they can retry / fall back.
+  const emailResult = await sendApprovalEmail({
+    to: row.email,
+    name: row.name,
+    inviteId: row.id,
+  });
+  if (!emailResult.sent) {
+    console.warn(
+      `approval email NOT sent to ${row.email}: ${emailResult.reason}`,
+    );
+  }
+
+  return NextResponse.json({
+    invite: row,
+    emailSent: emailResult.sent,
+    emailError: emailResult.sent ? null : emailResult.reason,
+  });
 }
 
 function toIntOr<T>(v: unknown, fallback: T): number | T {

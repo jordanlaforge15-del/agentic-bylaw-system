@@ -11,6 +11,7 @@
   "dependencies": {
     "@clerk/nextjs": "^7.3.2",
     "next": "16.2.5",
+    "nodemailer": "^6.9.16",
     "pg": "^8.13.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/nodemailer": "^6.4.17",
     "@types/pg": "^8.11.10",
     "@types/react": "^19",
     "@types/react-dom": "^19",

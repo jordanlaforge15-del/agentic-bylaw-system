@@ -87,10 +87,23 @@ export function InvitesTable({
         }));
         return;
       }
-      const data = (await res.json()) as { invite: InviteRequestRow };
+      const data = (await res.json()) as {
+        invite: InviteRequestRow;
+        emailSent?: boolean;
+        emailError?: string | null;
+      };
       setInvites((prev) =>
         prev.map((inv) => (inv.id === id ? data.invite : inv)),
       );
+      // Surface email-send failure on the row — invite is approved
+      // but the user didn't get notified, so the admin needs to act
+      // (copy the sign-in URL manually, or fix SMTP and retry).
+      if (action === "approve" && data.emailSent === false) {
+        setRowError((m) => ({
+          ...m,
+          [id]: `Approved, but approval email failed: ${data.emailError || "unknown"}`,
+        }));
+      }
       setExpandedId(null);
     } catch (e) {
       setRowError((m) => ({
