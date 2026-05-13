@@ -14,6 +14,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { UserButton, useAuth } from "@clerk/nextjs";
 import { ABSLogo } from "./abs-logo";
 import { Btn } from "./btn";
 import { Drawer } from "./drawer";
@@ -26,18 +27,37 @@ type NavItem = {
   label: string;
 };
 
+// Inlined at build time. We use this to decide whether to render
+// Clerk's <SignedIn>/<SignedOut> components at all — when Clerk is
+// in fallback mode (no real publishable key) those components have
+// no provider context and would render their default "signed out"
+// branch on every render, which is misleading. The same shape lives
+// in components/product/sidebar.tsx — keep them in sync.
+const _PK = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ?? "";
+const CLERK_ENABLED =
+  /^pk_(test|live)_/.test(_PK) && _PK.length > 40 && !_PK.includes("replace");
+
+// Always-visible nav items. We hide /sign-in and /signup conditionally
+// below depending on auth state — those are auth CTAs, not navigation.
 const NAV: NavItem[] = [
   { href: "/", label: "Home" },
   { href: "/pricing", label: "Pricing" },
   { href: "/app", label: "App" },
-  { href: "/sign-in", label: "Log in" },
-  { href: "/signup", label: "Get an invite" },
   { href: "/billing", label: "Billing" },
 ];
 
 export function TopNav() {
   const pathname = usePathname() || "/";
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // @clerk/nextjs v7 unified <SignedIn>/<SignedOut> into <Show>
+  // (a server component). In this client TopNav we use the
+  // useAuth() hook instead; isLoaded gates against the SSR flash
+  // before Clerk hydrates. When Clerk isn't configured, useAuth
+  // still returns a no-op shape so the hook call is safe; we just
+  // skip the conditional and render the signed-out CTAs.
+  const { isLoaded, isSignedIn } = useAuth();
+  const showSignedInCtas = CLERK_ENABLED && isLoaded && isSignedIn;
+  const showSignedOutCtas = !CLERK_ENABLED || (isLoaded && !isSignedIn);
 
   return (
     <header className="sticky top-0 z-30 bg-surface border-b border-hair px-5 sm:px-8 py-3 sm:py-3.5 flex items-center justify-between backdrop-blur safe-pt">
@@ -81,11 +101,46 @@ export function TopNav() {
 
       <div className="flex items-center gap-2 sm:gap-3">
         <ThemeToggle />
-        <Link href="/signup" className="hidden sm:contents">
-          <Btn variant="primary" size="sm">
-            Get an invite →
-          </Btn>
-        </Link>
+        {/* Signed-in: "Open app →" + UserButton (avatar with menu).
+            Signed-out: "Log in" link + "Get an invite" CTA (private
+            beta — self-serve signup is intentionally not offered).
+            During the brief pre-hydration window neither branch
+            renders, which keeps the bar from flashing the wrong
+            shape before useAuth() resolves. */}
+        {showSignedInCtas && (
+          <>
+            <Link href="/app" className="hidden sm:contents">
+              <Btn variant="primary" size="sm">
+                Open app →
+              </Btn>
+            </Link>
+            <div className="hidden sm:inline-flex">
+              <UserButton
+                appearance={{
+                  elements: {
+                    avatarBox: "w-8 h-8 rounded-none",
+                  },
+                }}
+              />
+            </div>
+          </>
+        )}
+        {showSignedOutCtas && (
+          <>
+            {CLERK_ENABLED && (
+              <Link href="/sign-in" className="hidden sm:inline-flex items-center">
+                <span className="text-[13px] text-text-muted hover:text-text mr-2">
+                  Log in
+                </span>
+              </Link>
+            )}
+            <Link href="/signup" className="hidden sm:contents">
+              <Btn variant="primary" size="sm">
+                Get an invite →
+              </Btn>
+            </Link>
+          </>
+        )}
         {/* Mobile-only hamburger. */}
         <button
           type="button"
@@ -150,16 +205,44 @@ export function TopNav() {
             );
           })}
         </nav>
-        <div className="border-t border-hair p-5">
-          <Link
-            href="/signup"
-            onClick={() => setDrawerOpen(false)}
-            className="contents"
-          >
-            <Btn variant="accent" size="md" className="w-full">
-              Get an invite →
-            </Btn>
-          </Link>
+        <div className="border-t border-hair p-5 flex flex-col gap-3">
+          {/* Mobile drawer auth CTAs. Same auth-state branching as
+              the desktop bar above, stacked. */}
+          {showSignedInCtas && (
+            <Link
+              href="/app"
+              onClick={() => setDrawerOpen(false)}
+              className="contents"
+            >
+              <Btn variant="accent" size="md" className="w-full">
+                Open app →
+              </Btn>
+            </Link>
+          )}
+          {showSignedOutCtas && (
+            <>
+              {CLERK_ENABLED && (
+                <Link
+                  href="/sign-in"
+                  onClick={() => setDrawerOpen(false)}
+                  className="contents"
+                >
+                  <Btn variant="ghost" size="md" className="w-full">
+                    Log in
+                  </Btn>
+                </Link>
+              )}
+              <Link
+                href="/signup"
+                onClick={() => setDrawerOpen(false)}
+                className="contents"
+              >
+                <Btn variant="accent" size="md" className="w-full">
+                  Get an invite →
+                </Btn>
+              </Link>
+            </>
+          )}
         </div>
       </Drawer>
     </header>

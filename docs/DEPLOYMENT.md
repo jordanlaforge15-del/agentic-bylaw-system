@@ -259,6 +259,114 @@ The advisor + web together support two auth modes, switched by env var presence:
 
 Switching from fallback to Clerk is "set the Clerk env vars and restart." No code change.
 
+### Enabling real Clerk auth (operator runbook)
+
+This is the checklist for going from the shared-password fallback (current state) to real Clerk auth. Do it once, in this order:
+
+#### 1. Create the Clerk instance
+
+1. Sign up at <https://clerk.com> if you don't have an account.
+2. Create a new application. When prompted, pick **Email + password** (and Google OAuth if you want it). You can change this later.
+3. Clerk now provisions two "instances": a **Development** instance keyed off a `clerk.accounts.dev` hostname, and a **Production** instance for your real domain. Toggle to Production in the Clerk dashboard's top-left selector before grabbing the keys below — dev keys won't work for the public deployment.
+
+#### 2. Configure restricted signups (private beta)
+
+In Clerk dashboard → **User & Authentication → Restrictions**:
+
+- Turn **"Restrict sign-ups to allowlist"** ON.
+- Add the email addresses you've already shared `DEMO_PASSWORD` with to the allowlist. Existing users (if any) are migrated as you add them.
+- Anyone hitting `/sign-up` without an allowlisted email gets a Clerk-side error; they have no way around it. The marketing site already routes unauthenticated visitors to `/signup` (invite request) instead of `/sign-up`, so this is belt-and-suspenders.
+
+You can flip this off later when you're ready for public signups — no code change required.
+
+#### 3. Configure the JWT template
+
+In Clerk dashboard → **JWT Templates**:
+
+- Click **+ New template** and pick the "Blank" preset.
+- Name: `advisor` (or anything you like — the backend doesn't check the name, only the JWKS public keys).
+- Set the **Lifetime** to 60 seconds. Clerk's hosted sessions refresh continuously; a short JWT lifetime caps the blast radius if a token leaks.
+- Leave the **Claims** at the defaults — `sub`, `iat`, `exp`, `sid` are required; `email` is convenient but optional (the backend has a fallback path).
+
+Copy the **Issuer URL** and **JWKS Endpoint** from the template page — you'll paste these into env vars.
+
+#### 4. Configure allowed redirect URLs
+
+In Clerk dashboard → **Paths**:
+
+- **Sign-in URL**: `/sign-in`
+- **Sign-up URL**: `/sign-up`
+- **After sign-in URL**: `/app`
+- **After sign-up URL**: `/app`
+
+Match what we set on `<ClerkProvider>` in [web/app/layout.tsx](../web/app/layout.tsx).
+
+In Clerk dashboard → **Domains**, add `agenticbylawsystems.com` (and `localhost:3000` if you also want local dev to use Clerk).
+
+#### 5. Configure the webhook
+
+In Clerk dashboard → **Webhooks → + Add Endpoint**:
+
+- **Endpoint URL**: `https://api.agenticbylawsystems.com/v1/webhooks/clerk`
+- **Subscribe to events**:
+  - `user.created`
+  - `user.updated`
+  - `user.deleted`
+- After saving, copy the **Signing Secret** (starts with `whsec_…`). This goes into `CLERK_WEBHOOK_SECRET` below.
+
+If you skip the webhook, the advisor still works — the backend creates / refreshes user rows lazily on first chat. But profile changes (email, name) made in Clerk's UserButton menu won't sync until the next chat, and `user.deleted` events won't remove the row at all. The webhook closes those gaps.
+
+#### 6. Populate env vars
+
+Edit `/srv/bylaw/.env` on the server. Add these (values from the Clerk dashboard):
+
+```
+# Frontend
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_...
+CLERK_SECRET_KEY=sk_live_...
+
+# Backend — from the JWT template page
+CLERK_JWKS_URL=https://clerk.agenticbylawsystems.com/.well-known/jwks.json
+CLERK_AUDIENCE=https://clerk.agenticbylawsystems.com
+CLERK_ISSUER=https://clerk.agenticbylawsystems.com
+
+# Backend — from the Webhooks page
+CLERK_WEBHOOK_SECRET=whsec_...
+```
+
+Update both `web` and `advisor` `environment:` blocks in `/srv/bylaw/docker-compose.yml` so they pick the new vars up. The webhook secret is only needed on the advisor side (the webhook endpoint is mounted by FastAPI).
+
+#### 7. Restart and verify
+
+```bash
+ssh bylaw-prod "cd /srv/bylaw && docker compose up -d web advisor"
+
+# Verify advisor mounted the Clerk dependency (no fallback warning)
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml logs --tail 30 advisor" | grep -i clerk
+
+# Verify the webhook route is mounted
+ssh bylaw-prod "curl -s -o /dev/null -w '%{http_code}\n' \
+  https://api.agenticbylawsystems.com/v1/webhooks/clerk -X POST"
+# Expect: 400 (missing signature). 404 means the route didn't mount —
+# usually because CLERK_WEBHOOK_SECRET was empty.
+
+# Verify the frontend treats /app as gated by Clerk (not the cookie gate)
+curl -sI https://agenticbylawsystems.com/app | grep -i location
+# Expect: location: https://clerk.agenticbylawsystems.com/sign-in?... or
+# location: /sign-in. NOT /access — that's the cookie-gate fallback.
+```
+
+Trigger a test delivery in Clerk dashboard → **Webhooks → your endpoint → Testing**: pick `user.created` and send. The advisor logs should show `clerk webhook: ignoring unhandled event type ...` or `created` depending on the payload.
+
+#### 8. Remove the password gate (optional, after Clerk is healthy)
+
+The shared-password gate stays compiled in as a fallback. Once Clerk is verified working end-to-end you can:
+
+- Leave it in place (zero-cost insurance; the `isClerkConfigured()` check skips it when Clerk keys are real).
+- OR remove the `DEMO_PASSWORD` / `ADMIN_PASSWORD` env vars and let `/api/access` return 503 to anyone who hits it. The `/access` page becomes unreachable through normal nav.
+
+Either is fine. We've been recommending "leave it in" so a Clerk outage isn't a full site outage — flip `CLERK_JWKS_URL` back off and the fallback resumes.
+
 ## Rate limiting
 
 Production Caddy is built with the [caddy-ratelimit plugin](https://github.com/mholt/caddy-ratelimit) compiled in. Three zones in production today:
@@ -338,7 +446,7 @@ The shared-password gate is enabled whenever Clerk isn't configured — includin
 
 1. **Move production `docker-compose.yml` into the repo** (perhaps as `compose.prod.yml`) so server config is also version-controlled.
 2. **Automate backups** — cron + Hetzner Storage Box upload, encrypted with `age` or `gpg`.
-3. **Switch to real Clerk auth** before any public trial-user launch.
+3. **Switch to real Clerk auth** before any public trial-user launch. Step-by-step runbook lives under [Enabling real Clerk auth](#enabling-real-clerk-auth-operator-runbook) — needs only env-var changes + a docker compose up, no code work.
 4. **Schedule security upgrades**: unattended-upgrades is enabled (security-only). Verify nightly. The advisor's per-user quota (100 / month) is the only cost ceiling once the gate is cracked — combine with rate limiting at Caddy.
 5. **CI/CD**: no automation yet. Builds and deploys are operator-driven from the laptop. GitHub Actions to build + push images on main would be the obvious next step.
 6. **Persona.md and alembic version_num fixes** (see "Known issues") were spawned as separate tasks at deploy time.
