@@ -17,7 +17,13 @@ Public surface re-exported here:
 - Quota helpers: ``get_monthly_quota``, ``record_query``,
   ``QuotaExceeded``.
 """
-from advisor.db.models import ChatMessage, ChatSession, UsageEvent, User
+from advisor.db.models import (
+    ChatMessage,
+    ChatSession,
+    InviteRequest,
+    UsageEvent,
+    User,
+)
 from advisor.db.quota import QuotaExceeded, get_monthly_quota, record_query
 from advisor.db.schemas import (
     ChatMessageCreate,
@@ -35,6 +41,7 @@ __all__ = [
     # Models
     "ChatMessage",
     "ChatSession",
+    "InviteRequest",
     "UsageEvent",
     "User",
     # Schemas

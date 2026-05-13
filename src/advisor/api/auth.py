@@ -46,7 +46,7 @@ from sqlalchemy.orm import Session
 from advisor.auth.clerk import ClerkVerifier
 from advisor.auth.fastapi import clerk_session_dependency
 from advisor.auth.session import ClerkSession
-from advisor.db.models import User
+from advisor.db.models import InviteRequest, User
 from layer1.db.base import utcnow
 
 
@@ -84,6 +84,33 @@ def resolve_or_create_user(db: Session, clerk_session: ClerkSession) -> User:
             email=email,
             full_name=full_name,
         )
+        # Apply invite-granted caps if this user came in via an
+        # approved invite_request row. Lookup is by email
+        # case-insensitively — Clerk hands us whatever case the user
+        # registered with, the invite_request was inserted via the
+        # public form so casing is whatever was typed there. Treat
+        # the invite as redeemed in the same transaction so the
+        # expiry sweep stops considering it for cleanup.
+        if email:
+            invite = (
+                db.query(InviteRequest)
+                .filter(
+                    InviteRequest.email.ilike(email),
+                    InviteRequest.status == "approved",
+                )
+                .one_or_none()
+            )
+            if invite is not None:
+                user.monthly_query_limit = invite.granted_query_limit
+                user.monthly_input_token_limit = (
+                    invite.granted_monthly_input_tokens
+                )
+                user.monthly_output_token_limit = (
+                    invite.granted_monthly_output_tokens
+                )
+                user.requests_per_minute_limit = invite.granted_rpm
+                invite.redeemed_at = utcnow()
+                db.add(invite)
         db.add(user)
         # Flush so ``user.id`` is populated for the caller. The commit
         # is left to the caller (see module docstring).

@@ -73,23 +73,51 @@ def enforce_and_record_query(
             cost_estimate_cents=cost_estimate_cents,
         )
     except QuotaExceeded as exc:
-        # Commit the staged ``monthly_quota_exceeded`` event before we
-        # raise — otherwise the audit trail of the rejection is lost
-        # when the request handler unwinds. ``record_query`` only
-        # stages; we do the commit here because we own the response.
+        # Commit the staged exceedance event before we raise —
+        # otherwise the audit trail of the rejection is lost when
+        # the request handler unwinds. ``record_query`` only stages;
+        # we do the commit here because we own the response.
         db.commit()
         raise HTTPException(
             status_code=429,
             detail={
-                "code": "monthly_quota_exceeded",
+                "code": _CODE_BY_KIND[exc.kind],
+                "kind": exc.kind,
                 "limit": exc.limit,
                 "used": exc.used,
-                "message": (
-                    f"Monthly query limit reached ({exc.used}/{exc.limit}). "
-                    "Upgrade your plan or wait for the next billing cycle."
+                "message": _MESSAGE_BY_KIND[exc.kind].format(
+                    used=exc.used, limit=exc.limit
                 ),
             },
         ) from exc
+
+
+_CODE_BY_KIND: dict[str, str] = {
+    "queries": "monthly_quota_exceeded",
+    "input_tokens": "monthly_input_token_limit_exceeded",
+    "output_tokens": "monthly_output_token_limit_exceeded",
+    "rpm": "rate_limit_exceeded",
+}
+
+
+_MESSAGE_BY_KIND: dict[str, str] = {
+    "queries": (
+        "Monthly query limit reached ({used}/{limit}). Wait for the next "
+        "billing cycle or ask your admin to raise your cap."
+    ),
+    "input_tokens": (
+        "Monthly input-token limit reached ({used}/{limit}). Wait for the "
+        "next billing cycle or ask your admin to raise your cap."
+    ),
+    "output_tokens": (
+        "Monthly output-token limit reached ({used}/{limit}). Wait for the "
+        "next billing cycle or ask your admin to raise your cap."
+    ),
+    "rpm": (
+        "Too many requests ({used}/{limit} per minute). Slow down and try "
+        "again in a moment."
+    ),
+}
 
 
 def update_usage_event_tokens(
@@ -119,6 +147,13 @@ def update_usage_event_tokens(
     row = db.get(UsageEvent, usage_event_id)
     if row is None:
         return
+    # Track the delta so we can bump the user's denormalised counters
+    # by the same amount. ``enforce_and_record_query`` was called
+    # up-front with (0, 0) most of the time, so the delta equals the
+    # new values — but if the caller later patches a row twice, the
+    # delta logic keeps the user counter consistent.
+    delta_input = tokens_input - (row.tokens_input or 0)
+    delta_output = tokens_output - (row.tokens_output or 0)
     row.tokens_input = tokens_input
     row.tokens_output = tokens_output
     if metadata:
@@ -128,3 +163,15 @@ def update_usage_event_tokens(
         existing = row.metadata_json or {}
         existing.update(metadata)
         row.metadata_json = existing
+
+    if delta_input or delta_output:
+        user = db.get(User, row.user_id)
+        if user is not None:
+            if delta_input:
+                user.monthly_input_tokens_used = max(
+                    0, user.monthly_input_tokens_used + delta_input
+                )
+            if delta_output:
+                user.monthly_output_tokens_used = max(
+                    0, user.monthly_output_tokens_used + delta_output
+                )
