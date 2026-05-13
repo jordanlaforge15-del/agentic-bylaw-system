@@ -16,11 +16,13 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import (
+    BigInteger,
     Date,
     DateTime,
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.ext.mutable import MutableDict, MutableList
@@ -74,6 +76,21 @@ class User(Base):
     )
     monthly_queries_used: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
+    )
+    monthly_input_token_limit: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=500_000
+    )
+    monthly_output_token_limit: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=100_000
+    )
+    monthly_input_tokens_used: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    monthly_output_tokens_used: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    requests_per_minute_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=6
     )
     month_started_at: Mapped[date] = mapped_column(
         Date, nullable=False, default=_today
@@ -241,3 +258,65 @@ class UsageEvent(Base):
     user: Mapped[User] = relationship(back_populates="usage_events")
     # Intentionally NOT cascade — see class docstring.
     session: Mapped[ChatSession | None] = relationship()
+
+class InviteRequest(Base):
+    """A pending / decided invite request to the private-beta product.
+
+    Replaces the old web/data/invites.jsonl file. The web frontend's
+    /api/invite route creates rows with status='pending';
+    /admin/invites flips them to approved / rejected.
+
+    When approved, the admin handler ALSO calls Clerk's Backend API
+    to add the email to the allowlist (so Clerk's own sign-up flow
+    will accept that email). The returned allowlist-identifier id is
+    stored in clerk_allowlist_id; we need it to delete the
+    allowlist entry when an invite expires unredeemed.
+
+    Caps fields (granted_*) are copied onto advisor_user at
+    first sign-in by resolve_or_create_user. Hot-path quota checks
+    read the user row, never this row.
+
+    Expiry: when admin approves, expires_at is set to
+    decided_at + 14 days. A daily sweep finds approved-but-
+    unredeemed-and-expired rows, removes them from Clerk's allowlist,
+    and flips status to 'expired'. Redeemed invites (redeemed_at
+    set) survive the sweep — once the user has signed in, they keep
+    their access regardless of the invite expiry.
+    """
+
+    __tablename__ = "invite_request"
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    email: Mapped[str] = mapped_column(
+        String(320), nullable=False, unique=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    role: Mapped[str | None] = mapped_column(String(200))
+    project: Mapped[str | None] = mapped_column(Text())
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(320))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    redeemed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    clerk_allowlist_id: Mapped[str | None] = mapped_column(String(64))
+    granted_query_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=100
+    )
+    granted_monthly_input_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=500_000
+    )
+    granted_monthly_output_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=100_000
+    )
+    granted_rpm: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=6
+    )
+    ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
+    notes: Mapped[str | None] = mapped_column(Text())
+

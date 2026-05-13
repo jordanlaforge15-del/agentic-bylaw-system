@@ -32,6 +32,18 @@ import { NextResponse } from "next/server";
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
 const isProtectedRoute = createRouteMatcher(["/app(.*)", "/admin(.*)"]);
+const isAdminRoute = createRouteMatcher(["/admin(.*)"]);
+
+// Comma-separated list of Clerk userIds (e.g. "user_2abc,user_2def")
+// allowed into /admin/*. Read once at module load; restart the
+// container to add an admin. Empty list = nobody is admin (fail
+// closed).
+const ADMIN_USER_IDS: ReadonlySet<string> = new Set(
+  (process.env.ADVISOR_ADMIN_CLERK_USER_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
 
 // True only when the Clerk publishable key is set AND looks real.
 // The example file ships placeholders like "pk_test_replace-me" — if
@@ -49,27 +61,39 @@ function isClerkConfigured(): boolean {
 
 const handler = isClerkConfigured()
   ? clerkMiddleware(async (auth, req) => {
-      if (isProtectedRoute(req)) {
-        await auth.protect();
+      if (!isProtectedRoute(req)) return;
+      // All protected routes require an authenticated Clerk session.
+      // auth.protect() redirects to /sign-in for HTML requests and
+      // returns 404 for API requests — exactly what we want here.
+      await auth.protect();
+      // /admin/* additionally requires the signed-in user to be on
+      // the operator allowlist. We re-check userId AFTER protect()
+      // so we know the session is valid. Non-admins get a 404 — same
+      // shape an unprotected URL miss would have, so this doesn't
+      // leak the existence of /admin to random signed-in users.
+      if (isAdminRoute(req)) {
+        const { userId } = await auth();
+        if (!userId || !ADMIN_USER_IDS.has(userId)) {
+          return new NextResponse("Not found", { status: 404 });
+        }
       }
     })
   : // Clerk-not-configured fallback: reuse the legacy shared-password
-    // gate. /app/* requires the abs_demo cookie, /admin/* requires
-    // abs_admin. Missing cookie redirects to /access with the right
-    // gate query param. Set DEMO_PASSWORD (and optionally
-    // ADMIN_PASSWORD) env vars for /api/access to validate against.
-    // Chat proxy routes still send X-Test-User-Id upstream.
+    // gate for local dev. Production must run Clerk-on; the fallback
+    // is here so `npm run dev` against the dev backend keeps working
+    // without Clerk keys. /admin/* uses the abs_admin cookie path
+    // here too — there's no Clerk-based admin check without Clerk.
     (req: NextRequest) => {
       if (!isProtectedRoute(req)) return NextResponse.next();
       const path = req.nextUrl.pathname;
-      const isAdminRoute = path.startsWith("/admin");
-      const cookieName = isAdminRoute ? "abs_admin" : "abs_demo";
+      const isAdmin = path.startsWith("/admin");
+      const cookieName = isAdmin ? "abs_admin" : "abs_demo";
       if (req.cookies.get(cookieName)?.value === "1") {
         return NextResponse.next();
       }
       const url = new URL("/access", req.url);
       url.searchParams.set("from", path);
-      if (isAdminRoute) url.searchParams.set("gate", "admin");
+      if (isAdmin) url.searchParams.set("gate", "admin");
       return NextResponse.redirect(url);
     };
 
