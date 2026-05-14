@@ -14,11 +14,12 @@ import type { InviteRequestRow } from "@/lib/invites";
 import { Mono } from "@/components/mono";
 import { Btn } from "@/components/btn";
 
+// Default starter-credit gift on invite approval. Admin can leave at
+// 0 (no gift) or override per-invite. Larger admin grants happen
+// later via /admin/credits once the user has signed in.
 const DEFAULTS = {
-  queryLimit: 100,
-  monthlyInputTokens: 500_000,
-  monthlyOutputTokens: 100_000,
-  rpm: 6,
+  starterCredits: 0,
+  starterTier: "standard" as const,
 };
 
 export function InvitesTable({
@@ -144,7 +145,7 @@ function InviteCard({
   expanded: boolean;
   onExpand: () => void;
   onCollapse: () => void;
-  onApprove: (overrides: Record<string, number>) => void;
+  onApprove: (overrides: Record<string, unknown>) => void;
   onReject: () => void;
   error: string | null;
 }) {
@@ -253,20 +254,42 @@ function ApproveForm({
   onSubmit,
   onCancel,
 }: {
-  onSubmit: (overrides: Record<string, number>) => void;
+  onSubmit: (overrides: Record<string, unknown>) => void;
   onCancel: () => void;
 }) {
-  const [q, setQ] = useState(String(DEFAULTS.queryLimit));
-  const [tin, setTin] = useState(String(DEFAULTS.monthlyInputTokens));
-  const [tout, setTout] = useState(String(DEFAULTS.monthlyOutputTokens));
-  const [rpm, setRpm] = useState(String(DEFAULTS.rpm));
+  const [credits, setCredits] = useState(String(DEFAULTS.starterCredits));
+  const [tier, setTier] = useState<"quick" | "standard" | "complex">(
+    DEFAULTS.starterTier,
+  );
   return (
     <div className="flex flex-col gap-3 bg-surface border border-hair p-3">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <CapInput label="QUERIES / MO" value={q} onChange={setQ} />
-        <CapInput label="INPUT TOKENS / MO" value={tin} onChange={setTin} />
-        <CapInput label="OUTPUT TOKENS / MO" value={tout} onChange={setTout} />
-        <CapInput label="REQUESTS / MIN" value={rpm} onChange={setRpm} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <CapInput
+          label="STARTER CREDITS"
+          value={credits}
+          onChange={setCredits}
+        />
+        <label className="flex flex-col gap-1">
+          <span className="font-mono uppercase text-[10px] tracking-[0.14em] text-text-muted">
+            STARTER TIER
+          </span>
+          <select
+            value={tier}
+            onChange={(e) =>
+              setTier(e.target.value as "quick" | "standard" | "complex")
+            }
+            className="bg-surface border border-hair px-3 py-2 text-[13.5px]"
+          >
+            <option value="quick">Quick Lookup</option>
+            <option value="standard">Standard Case</option>
+            <option value="complex">Complex File</option>
+          </select>
+        </label>
+      </div>
+      <div className="text-[11.5px] text-text-muted">
+        These credits are gifted on first sign-in. Leave at 0 to skip
+        the gift; you can still grant credits later from{" "}
+        <code>/admin/credits</code>.
       </div>
       <div className="flex gap-2">
         <Btn
@@ -274,10 +297,8 @@ function ApproveForm({
           size="sm"
           onClick={() =>
             onSubmit({
-              queryLimit: parseInt(q, 10),
-              monthlyInputTokens: parseInt(tin, 10),
-              monthlyOutputTokens: parseInt(tout, 10),
-              rpm: parseInt(rpm, 10),
+              starterCredits: parseInt(credits, 10),
+              starterTier: tier,
             })
           }
         >
