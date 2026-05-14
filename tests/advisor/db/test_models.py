@@ -7,7 +7,6 @@ production Postgres applies natively.
 """
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 
 import pytest
@@ -66,10 +65,6 @@ def _new_user(**overrides) -> User:
         clerk_user_id="clerk_user_1",
         email="user@example.com",
         full_name="Example User",
-        plan_tier="free",
-        monthly_query_limit=100,
-        monthly_queries_used=0,
-        month_started_at=date(2026, 5, 1),
     )
     base.update(overrides)
     return User(**base)

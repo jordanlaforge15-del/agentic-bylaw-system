@@ -1,94 +1,78 @@
-// /pricing — three tiers (Drafter / Practice / Developer), Practice
-// flagged as recommended (inverted, accent "MOST POPULAR" tab). Below
-// the tier grid: a 4-card FAQ block on surfaceAlt.
+// /pricing — case-credit pack matrix.
+//
+// Three tiers (Quick / Standard / Complex) × four pack SKUs (PAYG /
+// Starter / Pro / Enterprise) = 12 buy options. The catalog is fetched
+// from the backend so prices stay in lockstep with the Stripe-side
+// Price IDs (the backend's PackOffer.amount_due_cents is the source
+// of truth).
+//
+// "Standard" is the recommended middle tier — flagged with the same
+// inverted card treatment the v1 design used for "Practice".
 
-import Link from "next/link";
-import { Btn } from "@/components/btn";
+import { ADVISOR_API_URL } from "@/lib/api";
+import {
+  CatalogResponse,
+  Tier,
+  TIER_DISPLAY,
+  formatCurrency,
+  formatDiscount,
+  formatTokenBudget,
+} from "@/lib/cases";
 import { HighlightWord } from "@/components/highlight-word";
 import { Mono } from "@/components/mono";
+import { BuyPackButton } from "@/components/marketing/buy-pack-button";
 
-type Tier = {
-  name: string;
-  desc: string;
-  price: string;
-  cadence: string;
-  features: string[];
-  cta: string;
-  ctaHref: string;
-  featured?: boolean;
+export const dynamic = "force-dynamic";
+
+const TIER_BLURBS: Record<Tier, string> = {
+  quick:
+    "Single-property zoning lookups, permitted-use checks. ~4–6 retrieval rounds.",
+  standard:
+    "Variance research, multi-bylaw cross-references, development standards. ~12–18 retrieval rounds.",
+  complex:
+    "Rezoning, multi-overlay analysis, deep development-application files. ~35–50 retrieval rounds.",
 };
 
-const TIERS: Tier[] = [
-  {
-    name: "Drafter",
-    desc: "For homeowners and small projects.",
-    price: "$24",
-    cadence: "/ month",
-    features: [
-      "50 readings / month",
-      "1 saved parcel",
-      "Plain-language verdicts",
-      "Sourced citations",
-      "Email support",
-    ],
-    cta: "Start a project",
-    ctaHref: "/signup",
-  },
-  {
-    name: "Practice",
-    desc: "For architects and design firms.",
-    price: "$180",
-    cadence: "/ seat / month",
-    features: [
-      "Unlimited readings",
-      "Unlimited parcels",
-      "Permit-ready exports",
-      "Reading history & versioning",
-      "Team workspace (up to 10 seats)",
-      "Priority support",
-    ],
-    cta: "Get an invite",
-    ctaHref: "/signup",
-    featured: true,
-  },
-  {
-    name: "Developer",
-    desc: "For development teams and consultants.",
-    price: "Custom",
-    cadence: "",
-    features: [
-      "Everything in Practice",
-      "API access",
-      "Bulk parcel analysis",
-      "Custom reporting",
-      "SSO + audit logs",
-      "Dedicated planner liaison",
-    ],
-    cta: "Talk to us",
-    ctaHref: "mailto:hello@abs.app",
-  },
-];
+const TIER_ORDER: Tier[] = ["quick", "standard", "complex"];
 
 const FAQS = [
   {
-    q: "What counts as a reading?",
-    a: "One question against one parcel. Follow-ups in the same conversation are free.",
+    q: "What counts as a case?",
+    a: "A bylaw research inquiry tied to one specific property address, project reference, or development application. Follow-up questions in the same case don't cost extra.",
   },
   {
-    q: "Can I cancel anytime?",
-    a: "Yes. Monthly plans cancel with one click. No call, no email.",
+    q: "Do unused credits expire?",
+    a: "Pay-as-you-go and starter credits never expire. Pro and enterprise packs may carry a renewal window; check your invoice.",
+  },
+  {
+    q: "Can I upgrade a case mid-research?",
+    a: "Yes. If a case outgrows its tier the agent will surface an upgrade prompt; one click swaps the credit for a higher tier and the budget extends accordingly.",
   },
   {
     q: "What jurisdictions are supported?",
     a: "Halifax Regional Municipality only, during private beta. We're adding Atlantic Canada cities through 2026.",
   },
-  {
-    q: "Is this legal advice?",
-    a: "No. ABS° is research, not legal advice. Always verify with HRM Planning before submitting permits.",
-  },
 ];
 
-export default function PricingPage() {
+
+async function fetchCatalog(): Promise<CatalogResponse | null> {
+  // Server-side fetch — we hit the backend directly rather than going
+  // through our own /api proxy because this is a server component
+  // already on the server. Skips a round-trip.
+  try {
+    const r = await fetch(`${ADVISOR_API_URL}/v1/billing/catalog`, {
+      cache: "no-store",
+    });
+    if (!r.ok) return null;
+    return (await r.json()) as CatalogResponse;
+  } catch {
+    return null;
+  }
+}
+
+
+export default async function PricingPage() {
+  const catalog = await fetchCatalog();
   return (
     <div
       className="px-5 sm:px-8 py-10 sm:py-12 lg:py-14 mx-auto max-w-[1200px]"
@@ -96,42 +80,35 @@ export default function PricingPage() {
     >
       <header className="flex flex-col gap-3 sm:gap-3.5 pb-6 sm:pb-7 mb-7 sm:mb-9 lg:mb-10 border-b border-hair">
         <Mono muted size={11}>
-          PRICING · HRM PRIVATE BETA
+          PRICING · CASE CREDITS
         </Mono>
         <h1
           className="font-sans font-extrabold m-0 text-[36px] sm:text-[44px] lg:text-[56px] leading-[1] lg:leading-[0.98]"
           style={{ letterSpacing: "-0.04em" }}
         >
-          Three tiers. <HighlightWord>One agent.</HighlightWord>
+          One credit. <HighlightWord>One case.</HighlightWord>
         </h1>
-        <p className="text-[14px] sm:text-[16px] lg:text-[17px] text-text-muted leading-[1.45] m-0 max-w-[620px]">
-          Beta pricing. Locks for the first year on any plan started before
-          public launch. All prices in CAD.
+        <p className="text-[14px] sm:text-[16px] lg:text-[17px] text-text-muted leading-[1.45] m-0 max-w-[680px]">
+          Pay per file, not per seat. Pass it through to the client as a
+          disbursement. Pick the tier that matches the depth of the
+          inquiry — the agent will tell you mid-research if you've
+          undersized.
         </p>
       </header>
 
-      {/*
-       * Tier grid. Mobile stacks the cards top-to-bottom so the
-       * featured "Practice" card stays in the middle visually. At
-       * `sm` we move to two columns (Drafter + Practice up top,
-       * Developer beneath spanning both); at `lg` the original
-       * three-across returns.
-       */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-3.5">
-        {TIERS.map((tier, i) => (
-          <div
-            key={tier.name}
-            className={
-              // Span both columns at sm if it's the third (Developer)
-              // tier — keeps the visual hierarchy without orphaning a
-              // single card on the bottom row.
-              i === 2 ? "sm:col-span-2 lg:col-span-1" : ""
-            }
-          >
-            <TierCard tier={tier} />
-          </div>
-        ))}
-      </div>
+      {catalog === null ? (
+        <CatalogUnavailable />
+      ) : (
+        <div className="flex flex-col gap-10 sm:gap-12 lg:gap-14">
+          {TIER_ORDER.map((tierName) => (
+            <TierSection
+              key={tierName}
+              tierName={tierName}
+              catalog={catalog}
+            />
+          ))}
+        </div>
+      )}
 
       <div className="mt-9 sm:mt-12 lg:mt-14 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 lg:gap-[18px]">
         {FAQS.map((f) => (
@@ -155,121 +132,126 @@ export default function PricingPage() {
   );
 }
 
-function TierCard({ tier }: { tier: Tier }) {
-  const featured = tier.featured;
-  return (
-    <div
-      className="relative flex flex-col gap-5 sm:gap-[22px] p-6 sm:p-7 lg:p-7 min-h-[460px] sm:min-h-[500px] lg:min-h-[540px] h-full"
-      style={{
-        background: featured ? "var(--text)" : "var(--surface)",
-        color: featured ? "var(--surface)" : "var(--text)",
-        border: featured ? "none" : "1.5px solid var(--text)",
-      }}
-    >
-      {featured && (
-        <div
-          className="absolute font-mono"
-          style={{
-            top: 0,
-            right: 0,
-            background: "var(--accent)",
-            color: "var(--on-accent)",
-            padding: "6px 11px",
-            fontSize: 9.5,
-            letterSpacing: "0.14em",
-          }}
-        >
-          MOST POPULAR
-        </div>
-      )}
 
-      <div className="flex flex-col gap-2.5">
-        <Mono
-          size={11}
-          style={{
-            color: featured
-              ? "rgba(255,255,255,0.7)"
-              : "var(--text-muted)",
-          }}
-        >
-          TIER · {tier.name.toUpperCase()}
-        </Mono>
-        <div
-          className="font-sans font-bold text-[26px] sm:text-[28px] lg:text-[32px] leading-[1]"
-          style={{ letterSpacing: "-0.03em" }}
-        >
-          {tier.name}
+function CatalogUnavailable() {
+  return (
+    <div className="bg-surface-alt border border-hair p-8 text-center">
+      <div className="font-semibold mb-2">Pricing temporarily unavailable</div>
+      <div className="text-text-muted text-[13.5px]">
+        We couldn&apos;t load the live catalog. Refresh in a moment, or
+        contact us at{" "}
+        <a className="underline" href="mailto:hello@abs.app">
+          hello@abs.app
+        </a>{" "}
+        for direct pricing.
+      </div>
+    </div>
+  );
+}
+
+
+function TierSection({
+  tierName,
+  catalog,
+}: {
+  tierName: Tier;
+  catalog: CatalogResponse;
+}) {
+  const offers = catalog.offers.filter((o) => o.tier === tierName);
+  if (offers.length === 0) return null;
+  const sample = offers[0];
+  const featured = tierName === "standard";
+  return (
+    <section>
+      <div className="mb-4 sm:mb-5 flex flex-col gap-1.5">
+        <div className="flex items-baseline justify-between gap-3 flex-wrap">
+          <h2
+            className="font-sans font-extrabold m-0 text-[24px] sm:text-[28px] lg:text-[32px]"
+            style={{ letterSpacing: "-0.03em" }}
+          >
+            {sample.tier_display_name}
+            {featured && (
+              <span
+                className="ml-3 align-middle inline-block px-2 py-1 bg-accent text-on-accent text-[10px] font-mono uppercase"
+                style={{ letterSpacing: "0.06em" }}
+              >
+                Most popular
+              </span>
+            )}
+          </h2>
+          <Mono muted size={12}>
+            {formatTokenBudget(sample.tier_token_budget)} per case
+          </Mono>
         </div>
-        <div
-          className="text-[13.5px] leading-[1.4]"
-          style={{
-            color: featured
-              ? "rgba(255,255,255,0.65)"
-              : "var(--text-muted)",
-          }}
-        >
-          {tier.desc}
-        </div>
+        <p className="text-[13.5px] sm:text-[14px] text-text-muted m-0 max-w-[680px]">
+          {TIER_BLURBS[tierName]}
+        </p>
       </div>
 
-      <div
-        className="flex items-baseline gap-1.5 pb-[18px]"
-        style={{
-          borderBottom: featured
-            ? "1px solid rgba(255,255,255,0.15)"
-            : "1px solid var(--hair)",
-        }}
-      >
-        <span
-          className="font-sans font-extrabold text-[44px] sm:text-[48px] lg:text-[56px] leading-[1]"
-          style={{ letterSpacing: "-0.04em" }}
-        >
-          {tier.price}
-        </span>
-        {tier.cadence && (
-          <span
-            className="text-[14px]"
-            style={{
-              color: featured
-                ? "rgba(255,255,255,0.6)"
-                : "var(--text-muted)",
-            }}
-          >
-            {tier.cadence}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-3.5">
+        {offers.map((offer) => (
+          <PackCard
+            key={`${offer.tier}-${offer.pack_sku}`}
+            offer={offer}
+            currency={catalog.currency}
+            highlightTier={featured}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+
+function PackCard({
+  offer,
+  currency,
+  highlightTier,
+}: {
+  offer: CatalogResponse["offers"][number];
+  currency: string;
+  highlightTier: boolean;
+}) {
+  const featured = highlightTier && offer.pack_sku === "starter";
+  const tone = featured
+    ? "bg-text text-surface border-text"
+    : "bg-surface text-text border-hair";
+  return (
+    <div className={`${tone} border p-5 flex flex-col gap-3 min-h-[200px]`}>
+      <div className="flex items-baseline justify-between">
+        <Mono size={11} muted={!featured}>
+          {offer.pack_display_name.toUpperCase()}
+        </Mono>
+        {offer.discount_bps > 0 && (
+          <span className="text-[11px] font-mono uppercase">
+            {formatDiscount(offer.discount_bps)}
           </span>
         )}
       </div>
-
-      <ul className="list-none p-0 m-0 flex flex-col gap-2.5 flex-1">
-        {tier.features.map((f) => (
-          <li
-            key={f}
-            className="flex items-start gap-2.5 text-[13.5px] leading-[1.45]"
-          >
-            <span
-              className="font-mono"
-              style={{
-                color: featured ? "var(--accent)" : "var(--accent-ink)",
-                fontSize: 11,
-                paddingTop: 1,
-              }}
-            >
-              +
-            </span>
-            <span>{f}</span>
-          </li>
-        ))}
-      </ul>
-
-      <Link href={tier.ctaHref} className="contents">
-        <Btn
-          variant={featured ? "accent" : "primary"}
-          size="md"
-          className="w-full"
-        >
-          {tier.cta} →
-        </Btn>
-      </Link>
+      <div className="flex flex-col gap-0.5">
+        <div className="text-[28px] font-extrabold leading-none" style={{ letterSpacing: "-0.03em" }}>
+          {formatCurrency(offer.amount_due_cents, offer.currency || currency)}
+        </div>
+        <div className={`text-[12.5px] ${featured ? "opacity-70" : "text-text-muted"}`}>
+          {offer.quantity === 1
+            ? `1 ${offer.tier} credit`
+            : `${offer.quantity} × ${offer.tier} credits`}
+        </div>
+        {offer.discount_bps > 0 && (
+          <div className={`text-[11.5px] ${featured ? "opacity-50 line-through" : "text-text-muted line-through"}`}>
+            {formatCurrency(offer.list_price_cents, offer.currency || currency)}{" "}
+            list
+          </div>
+        )}
+      </div>
+      <div className="mt-auto pt-2">
+        <BuyPackButton
+          tier={offer.tier}
+          packSku={offer.pack_sku}
+          available={offer.available}
+          featured={featured}
+        />
+      </div>
     </div>
   );
 }

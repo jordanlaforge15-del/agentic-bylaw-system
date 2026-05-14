@@ -15,11 +15,14 @@
 
 "use client";
 
-import { useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { AppHeader } from "@/components/product/app-header";
 import { Sidebar } from "@/components/product/sidebar";
 import { ChatThread } from "@/components/product/chat-thread";
 import { Composer } from "@/components/product/composer";
+import { CaseHeaderStrip } from "@/components/product/case-header-strip";
+import { CaseUpgradePrompt } from "@/components/product/case-upgrade-prompt";
 import { ParcelPane } from "@/components/product/parcel-pane";
 import { AddressPill } from "@/components/product/address-pill";
 import { ParcelFab } from "@/components/product/parcel-fab";
@@ -56,7 +59,20 @@ const OPENING: Message = {
     "Ask about a specific HRM address or about the bylaw text directly.",
 };
 
+// Top-level page wraps the inner component in Suspense because
+// ``useSearchParams`` opts the tree into client-side rendering for
+// the params hook. Without the boundary, ``next build`` refuses to
+// prerender the route.
 export default function ProductAppPage() {
+  return (
+    <Suspense fallback={<div className="h-dvh bg-surface" />}>
+      <ProductAppPageInner />
+    </Suspense>
+  );
+}
+
+
+function ProductAppPageInner() {
   const [messages, setMessages] = useState<Message[]>([OPENING]);
   const [thinking, setThinking] = useState(false);
   // Honest indicator: starts as "Reading bylaw…" and updates to the
@@ -88,6 +104,50 @@ export default function ProductAppPage() {
   // user's explicit choice).
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [parcelOpen, setParcelOpen] = useState(false);
+
+  // Case-billing context. ``caseId`` is taken from the URL on mount
+  // (the /cases/new flow redirects with ``?case_id=N``) and from the
+  // backend's ``session`` SSE event on each turn. ``tier`` mirrors the
+  // active credit's tier so the header can show the badge. ``upgradeOffer``
+  // captures any in-flight ``case_upgrade_offer`` event the agent fired
+  // via the ``request_tier_upgrade`` tool. ``budgetWarning`` captures
+  // the ``case_budget_warning`` payload (Layer 1 nearing exhaustion).
+  const searchParams = useSearchParams();
+  const caseIdFromUrl = useMemo(() => {
+    const raw = searchParams.get("case_id");
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }, [searchParams]);
+  const [caseId, setCaseId] = useState<number | null>(caseIdFromUrl);
+  const caseIdRef = useRef<number | null>(caseIdFromUrl);
+  const setCaseIdBoth = (id: number | null) => {
+    caseIdRef.current = id;
+    setCaseId(id);
+  };
+  const [caseTier, setCaseTier] = useState<string | null>(null);
+  const [upgradeOffer, setUpgradeOffer] = useState<{
+    case_id: number;
+    current_tier: string;
+    recommended_tier: string;
+    reason: string;
+  } | null>(null);
+  const [budgetWarning, setBudgetWarning] = useState<{
+    case_id: number;
+    tier: string;
+    remaining_tokens: number;
+    tier_budget: number;
+  } | null>(null);
+  // Keep the URL-derived caseId in sync when the user navigates with
+  // a different ?case_id= without a full reload.
+  useEffect(() => {
+    if (caseIdFromUrl !== null && caseIdFromUrl !== caseIdRef.current) {
+      setCaseIdBoth(caseIdFromUrl);
+      // New case binding → discard prior session id; the next send()
+      // will mint a new session under this case.
+      setSessionId(null);
+    }
+  }, [caseIdFromUrl]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Viewport gates. We render the Sheet/Drawer overlay components
   // conditionally rather than via CSS `display: none`, so their
@@ -181,6 +241,7 @@ export default function ProductAppPage() {
         body: JSON.stringify({
           message: text,
           session_id: sessionIdRef.current,
+          case_id: caseIdRef.current,
         }),
         signal: ctrl.signal,
       });
@@ -220,10 +281,67 @@ export default function ProductAppPage() {
 
           if (ev.event === "session") {
             try {
-              const data = JSON.parse(ev.data) as { session_id?: string };
+              const data = JSON.parse(ev.data) as {
+                session_id?: string;
+                case_id?: number | null;
+                tier?: string | null;
+              };
               if (data.session_id) setSessionId(data.session_id);
+              if (typeof data.case_id === "number") {
+                setCaseIdBoth(data.case_id);
+              }
+              if (typeof data.tier === "string") {
+                setCaseTier(data.tier);
+              }
             } catch {
               // ignore malformed session event
+            }
+          } else if (ev.event === "case_upgrade_offer") {
+            try {
+              const data = JSON.parse(ev.data) as {
+                case_id?: number;
+                current_tier?: string;
+                recommended_tier?: string;
+                reason?: string;
+              };
+              if (
+                typeof data.case_id === "number" &&
+                typeof data.current_tier === "string" &&
+                typeof data.recommended_tier === "string"
+              ) {
+                setUpgradeOffer({
+                  case_id: data.case_id,
+                  current_tier: data.current_tier,
+                  recommended_tier: data.recommended_tier,
+                  reason: data.reason || "Additional research depth required.",
+                });
+              }
+            } catch {
+              // ignore malformed upgrade offer
+            }
+          } else if (ev.event === "case_budget_warning") {
+            try {
+              const data = JSON.parse(ev.data) as {
+                case_id?: number;
+                tier?: string;
+                remaining_tokens?: number;
+                tier_budget?: number;
+              };
+              if (
+                typeof data.case_id === "number" &&
+                typeof data.tier === "string" &&
+                typeof data.remaining_tokens === "number" &&
+                typeof data.tier_budget === "number"
+              ) {
+                setBudgetWarning({
+                  case_id: data.case_id,
+                  tier: data.tier,
+                  remaining_tokens: data.remaining_tokens,
+                  tier_budget: data.tier_budget,
+                });
+              }
+            } catch {
+              // ignore malformed budget warning
             }
           } else if (ev.event === "content_block_start") {
             // Tool-use blocks tell us what the agent is *actually*
@@ -403,6 +521,24 @@ export default function ProductAppPage() {
             thinkLabel={thinkLabel}
             error={error}
           />
+          {(caseTier || caseId !== null) && (
+            <CaseHeaderStrip
+              caseId={caseId}
+              tier={caseTier}
+              budgetWarning={budgetWarning}
+            />
+          )}
+          {upgradeOffer && (
+            <CaseUpgradePrompt
+              offer={upgradeOffer}
+              onClose={() => setUpgradeOffer(null)}
+              onAccepted={(newTier) => {
+                setCaseTier(newTier);
+                setUpgradeOffer(null);
+                setBudgetWarning(null);
+              }}
+            />
+          )}
           <Composer onSend={send} disabled={thinking} />
         </main>
 

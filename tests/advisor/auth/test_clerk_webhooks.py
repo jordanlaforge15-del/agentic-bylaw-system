@@ -23,9 +23,6 @@ def _make_user(s, **overrides) -> User:
         clerk_user_id="user_abc",
         email="user@example.com",
         full_name="Original Name",
-        plan_tier="free",
-        monthly_query_limit=100,
-        monthly_queries_used=0,
     )
     base.update(overrides)
     user = User(**base)

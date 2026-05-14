@@ -54,18 +54,21 @@ def seeded_service(tmp_path: Path):
     session_cm.__exit__(None, None, None)
 
 
-def test_build_bylaw_tools_returns_four_tools(seeded_service):
+def test_build_bylaw_tools_returns_full_tool_set(seeded_service):
     service, _ = seeded_service
     tool_defs, handlers = build_bylaw_tools(service)
     names = [t.name for t in tool_defs]
     # Order matters less than the exact set: callers can rely on
     # this set being complete because mismatched name <-> handler
-    # pairs would silently break tool dispatch.
+    # pairs would silently break tool dispatch. ``request_tier_upgrade``
+    # is the Layer-3 self-monitoring tool added with the case-credit
+    # billing model.
     assert set(names) == {
         "list_documents",
         "get_document_outline",
         "lookup_citation",
         "search_bylaw_evidence",
+        "request_tier_upgrade",
     }
     assert set(handlers.keys()) == set(names)
 

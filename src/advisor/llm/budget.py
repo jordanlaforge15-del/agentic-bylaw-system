@@ -95,6 +95,31 @@ class CircuitTripInfo:
     iteration: int
 
 
+def case_budget_for(tier: str) -> int:
+    """Return the per-case cumulative token budget for ``tier``.
+
+    Layer 1 of the case-credit enforcement model — the hard cap that
+    bounds total tokens (input + output) across every session sharing
+    the same case. Reads from the ``advisor.billing.packs`` catalog so
+    the source of truth stays in one place.
+
+    Returns the safety-net default for tiers we don't recognise (e.g.
+    a future tier added to the catalog but not yet plumbed through
+    the chat layer); this is a soft fallback rather than a crash so a
+    catalog change can land without immediately breaking chat.
+    """
+    # Lazy import: ``advisor.billing.packs`` would otherwise create a
+    # circular import path through ``advisor.billing.__init__``, which
+    # imports the router, which imports ``cases.py``, which imports
+    # this module's ``CircuitTripInfo``.
+    from advisor.billing.packs import TIERS  # noqa: PLC0415
+
+    tier_def = TIERS.get(tier)
+    if tier_def is None:
+        return _DEFAULT_TURN_INPUT_TOKEN_BUDGET
+    return tier_def.token_budget
+
+
 @lru_cache(maxsize=1)
 def default_token_budget() -> int:
     """Return the env-configured default turn budget.
