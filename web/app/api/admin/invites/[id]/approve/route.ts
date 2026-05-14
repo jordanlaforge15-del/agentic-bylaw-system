@@ -7,11 +7,13 @@
 //
 // Body (all optional — DB defaults apply when omitted):
 //   {
-//     "queryLimit": 100,
-//     "monthlyInputTokens": 500000,
-//     "monthlyOutputTokens": 100000,
-//     "rpm": 6
+//     "starterCredits": 3,
+//     "starterTier": "standard"
 //   }
+//
+// The starter-credit gift is handed out on first sign-in by the
+// advisor's resolve_or_create_user. If omitted, the user lands with
+// zero credits and the admin can grant them later via /admin/credits.
 //
 // We do Clerk first then DB. If Clerk fails, no DB change. If Clerk
 // succeeds and DB fails, we have an allowlist entry without a record
@@ -47,12 +49,13 @@ export async function POST(
   }
 
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-  const overrides = {
-    queryLimit: toIntOr(body.queryLimit, undefined),
-    monthlyInputTokens: toIntOr(body.monthlyInputTokens, undefined),
-    monthlyOutputTokens: toIntOr(body.monthlyOutputTokens, undefined),
-    rpm: toIntOr(body.rpm, undefined),
-  };
+  const starterCredits = toIntOr(body.starterCredits, undefined);
+  const rawTier =
+    typeof body.starterTier === "string" ? body.starterTier : undefined;
+  const starterTier =
+    rawTier === "quick" || rawTier === "standard" || rawTier === "complex"
+      ? rawTier
+      : undefined;
 
   let alid: string;
   try {
@@ -69,7 +72,8 @@ export async function POST(
     id,
     decidedBy: admin.email,
     clerkAllowlistId: alid,
-    ...overrides,
+    starterCredits,
+    starterTier,
   });
   if (!row) {
     // Race: someone else approved/rejected between getInvite and now.

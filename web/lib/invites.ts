@@ -27,10 +27,13 @@ export type InviteRequestRow = {
   expires_at: string | null;
   redeemed_at: string | null;
   clerk_allowlist_id: string | null;
-  granted_query_limit: number;
-  granted_monthly_input_tokens: number;
-  granted_monthly_output_tokens: number;
-  granted_rpm: number;
+  // Case-credit gifts handed out on first sign-in. The legacy
+  // ``granted_query_limit`` / ``granted_monthly_*`` / ``granted_rpm``
+  // fields were dropped by alembic 0012; admin-tooling for caps lives
+  // at /admin/credits now, and the invite-side surface only carries
+  // the optional starter-credit gift.
+  granted_starter_credits: number;
+  granted_starter_tier: string | null;
   ip: string | null;
   user_agent: string | null;
   notes: string | null;
@@ -74,14 +77,8 @@ function normalize(row: Record<string, unknown>): InviteRequestRow {
       ? (row.redeemed_at as Date).toISOString()
       : null,
     clerk_allowlist_id: (row.clerk_allowlist_id as string | null) ?? null,
-    granted_query_limit: bigintToNumber(row.granted_query_limit),
-    granted_monthly_input_tokens: bigintToNumber(
-      row.granted_monthly_input_tokens,
-    ),
-    granted_monthly_output_tokens: bigintToNumber(
-      row.granted_monthly_output_tokens,
-    ),
-    granted_rpm: bigintToNumber(row.granted_rpm),
+    granted_starter_credits: bigintToNumber(row.granted_starter_credits),
+    granted_starter_tier: (row.granted_starter_tier as string | null) ?? null,
     ip: (row.ip as string | null) ?? null,
     user_agent: (row.user_agent as string | null) ?? null,
     notes: (row.notes as string | null) ?? null,
@@ -176,12 +173,11 @@ export type ApproveInviteInput = {
   id: string;
   decidedBy: string;
   clerkAllowlistId: string;
-  // Optional per-invite cap overrides; if absent, the DB defaults
-  // (set by the migration) stay in place.
-  queryLimit?: number;
-  monthlyInputTokens?: number;
-  monthlyOutputTokens?: number;
-  rpm?: number;
+  // Optional starter-credit gift handed out on first sign-in.
+  // ``granted_starter_credits=0`` (the DB default) means no gift; the
+  // admin can still grant credits later via /admin/credits.
+  starterCredits?: number;
+  starterTier?: "quick" | "standard" | "complex";
 };
 
 // Flip a pending invite to approved + set expires_at = now + 14 days.
@@ -197,10 +193,8 @@ export async function approveInvite(
             decided_by = $2,
             clerk_allowlist_id = $3,
             expires_at = now() + INTERVAL '${INVITE_EXPIRY_DAYS} days',
-            granted_query_limit = COALESCE($4, granted_query_limit),
-            granted_monthly_input_tokens = COALESCE($5, granted_monthly_input_tokens),
-            granted_monthly_output_tokens = COALESCE($6, granted_monthly_output_tokens),
-            granted_rpm = COALESCE($7, granted_rpm)
+            granted_starter_credits = COALESCE($4, granted_starter_credits),
+            granted_starter_tier = COALESCE($5, granted_starter_tier)
       WHERE id = $1
         AND status = 'pending'
       RETURNING *`,
@@ -208,10 +202,8 @@ export async function approveInvite(
       input.id,
       input.decidedBy,
       input.clerkAllowlistId,
-      input.queryLimit ?? null,
-      input.monthlyInputTokens ?? null,
-      input.monthlyOutputTokens ?? null,
-      input.rpm ?? null,
+      input.starterCredits ?? null,
+      input.starterTier ?? null,
     ],
   );
   if (rows.length === 0) return null;
