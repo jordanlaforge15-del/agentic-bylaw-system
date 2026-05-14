@@ -72,6 +72,10 @@ COPY --chown=advisor:advisor alembic ./alembic
 # the file to where the resolver looks under a regular install. Tracked as
 # follow-up: replace with importlib.resources packaging.
 COPY --chown=advisor:advisor docs/agent/persona.md /opt/venv/lib/python3.11/docs/agent/persona.md
+# Same packaging workaround for the Layer-2 pre-screen classifier
+# persona; advisor/chat/persona.py:load_classifier_persona reads it
+# via the same Path(__file__).parents[3] resolver.
+COPY --chown=advisor:advisor docs/agent/classifier-persona.md /opt/venv/lib/python3.11/docs/agent/classifier-persona.md
 
 USER advisor
 
