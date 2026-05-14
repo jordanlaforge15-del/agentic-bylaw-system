@@ -89,10 +89,10 @@ export default async function PricingPage() {
           One credit. <HighlightWord>One case.</HighlightWord>
         </h1>
         <p className="text-[14px] sm:text-[16px] lg:text-[17px] text-text-muted leading-[1.45] m-0 max-w-[680px]">
-          Pay per file, not per seat. Pass it through to the client as a
-          disbursement. Pick the tier that matches the depth of the
-          inquiry — the agent will tell you mid-research if you've
-          undersized.
+          Pay per file, not per seat. Bill the credit to your client as a
+          disbursement on their invoice. Pick the tier that matches the
+          depth of the inquiry — the agent will tell you mid-research if
+          you've undersized.
         </p>
       </header>
 
