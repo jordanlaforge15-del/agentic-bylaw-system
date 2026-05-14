@@ -393,6 +393,11 @@ def create_app(
         usage_event_id: int | None = None
         case_id_for_session: int | None = None
         case_tier_for_session: str | None = None
+        # Mirrored onto the in-memory ChatSession alongside case_id / tier
+        # so the LLM's system prompt picks up the case anchor (see
+        # ``_compose_system_prompt`` in ``advisor.chat.session``).
+        case_anchor_label_for_session: str | None = None
+        case_anchor_kind_for_session: str | None = None
         if db_session_factory is not None and isinstance(store, DbSessionStore):
             with db_session_factory() as db:
                 try:
@@ -500,9 +505,23 @@ def create_app(
                     )
                     case_id_for_session = case_row.id
                     case_tier_for_session = credit.tier
+                    case_anchor_label_for_session = case_row.anchor_label
+                    case_anchor_kind_for_session = case_row.anchor_kind
                 else:
                     case_id_for_session = existing_credit.case_id
                     case_tier_for_session = existing_credit.tier
+                    # Resume path: load the case row to surface its anchor
+                    # to the LLM. The in-memory ChatSession is reconstituted
+                    # from the DB store on every turn, so we have to rebind
+                    # this each call (same pattern as case_id / tier above).
+                    resumed_case = (
+                        db.get(Case, existing_credit.case_id)
+                        if existing_credit.case_id is not None
+                        else None
+                    )
+                    if resumed_case is not None:
+                        case_anchor_label_for_session = resumed_case.anchor_label
+                        case_anchor_kind_for_session = resumed_case.anchor_kind
 
                 usage_event = record_llm_call(
                     db,
@@ -520,6 +539,8 @@ def create_app(
         if case_id_for_session is not None:
             session.case_id = case_id_for_session
             session.tier = case_tier_for_session
+            session.case_anchor_label = case_anchor_label_for_session
+            session.case_anchor_kind = case_anchor_kind_for_session
             if (
                 session.token_budget_remaining is None
                 and case_tier_for_session is not None

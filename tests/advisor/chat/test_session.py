@@ -568,3 +568,50 @@ async def test_user_message_appended_before_run():
         )
         for m in user_msgs
     )
+
+
+@pytest.mark.asyncio
+async def test_case_anchor_injected_into_system_prompt():
+    """When ``case_anchor_label`` is set on the session, the request's
+    system prompt must include the anchor block. Without this, the LLM
+    has no way to know the address the user opened the case for and
+    asks them to repeat it on every turn."""
+    session = _empty_session()
+    session.case_anchor_label = "1234 Main St, Halifax"
+    session.case_anchor_kind = "address"
+
+    seen_systems: list[str] = []
+
+    def capture(request):
+        seen_systems.append(request.system)
+        return text_response("ok")
+
+    gateway = MockGateway(callable_=capture)
+    await session.send_user_message_blocking(gateway, "What's the max height?")
+
+    assert len(seen_systems) == 1
+    system_text = seen_systems[0]
+    # Persona must still be present (we append, never replace).
+    assert "senior urban planner" in system_text
+    # Anchor block carries the label so the LLM can use it.
+    assert "1234 Main St, Halifax" in system_text
+    # And carries the kind label so the model knows it's an address.
+    assert "civic address" in system_text
+
+
+@pytest.mark.asyncio
+async def test_no_case_anchor_leaves_system_prompt_unchanged():
+    """Sessions without a case anchor (legacy / test path) must send
+    the persona unmodified — no surprise suffix."""
+    session = _empty_session()
+
+    seen_systems: list[str] = []
+
+    def capture(request):
+        seen_systems.append(request.system)
+        return text_response("ok")
+
+    gateway = MockGateway(callable_=capture)
+    await session.send_user_message_blocking(gateway, "anything")
+
+    assert seen_systems == ["You are a senior urban planner."]
