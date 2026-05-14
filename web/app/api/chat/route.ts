@@ -58,6 +58,13 @@ export async function POST(req: NextRequest) {
     body: JSON.stringify({
       message: body.message,
       session_id: typeof body.session_id === "string" ? body.session_id : null,
+      // case_id binds the new session to a previously-opened case
+      // (POST /v1/cases). Required for new sessions in the case-credit
+      // model; ignored when session_id is provided.
+      case_id:
+        typeof body.case_id === "number" && Number.isInteger(body.case_id)
+          ? body.case_id
+          : null,
     }),
     // Disable Next's response cache for this fetch — SSE streams must
     // not be cached.

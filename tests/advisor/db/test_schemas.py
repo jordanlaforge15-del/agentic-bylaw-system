@@ -1,7 +1,7 @@
 """Pydantic schemas: ORM-mode wiring and content-shape flexibility."""
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from advisor.db import (
@@ -40,10 +40,6 @@ def test_user_out_from_attributes(tmp_path: Path) -> None:
             clerk_user_id="clerk_attrs",
             email="attrs@example.com",
             full_name="Attr User",
-            plan_tier="pro",
-            monthly_query_limit=500,
-            monthly_queries_used=12,
-            month_started_at=date(2026, 5, 1),
         )
         s.add(user)
         s.flush()
@@ -52,9 +48,6 @@ def test_user_out_from_attributes(tmp_path: Path) -> None:
         out = UserOut.model_validate(user)
         assert out.id == user.id
         assert out.clerk_user_id == "clerk_attrs"
-        assert out.plan_tier == "pro"
-        assert out.monthly_query_limit == 500
-        assert out.monthly_queries_used == 12
         assert isinstance(out.created_at, datetime)
 
 
@@ -66,7 +59,6 @@ def test_chat_message_out_accepts_string_content(tmp_path: Path) -> None:
         user = User(
             clerk_user_id="clerk_msg_str",
             email="m@example.com",
-            month_started_at=date(2026, 5, 1),
         )
         s.add(user)
         s.flush()
@@ -94,7 +86,6 @@ def test_chat_message_out_accepts_block_list_content(tmp_path: Path) -> None:
         user = User(
             clerk_user_id="clerk_msg_blocks",
             email="m2@example.com",
-            month_started_at=date(2026, 5, 1),
         )
         s.add(user)
         s.flush()
@@ -134,7 +125,6 @@ def test_chat_session_out_from_attributes(tmp_path: Path) -> None:
         user = User(
             clerk_user_id="clerk_session_out",
             email="s@example.com",
-            month_started_at=date(2026, 5, 1),
         )
         s.add(user)
         s.flush()
@@ -146,6 +136,10 @@ def test_chat_session_out_from_attributes(tmp_path: Path) -> None:
         assert out.id == chat.id
         assert out.title == "A title"
         assert out.user_id == user.id
+        # Case fields default to None on a chat session not attached
+        # to a case (legacy / non-billed path).
+        assert out.case_id is None
+        assert out.tier is None
 
 
 def test_usage_event_out_from_attributes(tmp_path: Path) -> None:
@@ -156,7 +150,6 @@ def test_usage_event_out_from_attributes(tmp_path: Path) -> None:
         user = User(
             clerk_user_id="clerk_event_out",
             email="e@example.com",
-            month_started_at=date(2026, 5, 1),
         )
         s.add(user)
         s.flush()
@@ -175,3 +168,4 @@ def test_usage_event_out_from_attributes(tmp_path: Path) -> None:
         assert out.event_type == "llm_call"
         assert out.cost_estimate_cents == 5
         assert out.session_id is None
+        assert out.case_id is None

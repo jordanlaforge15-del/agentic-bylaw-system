@@ -1,29 +1,24 @@
-"""FastAPI router for the billing endpoints.
+"""FastAPI router for the billing endpoints — case-credit model.
 
-Three endpoints:
+Five endpoints replace the v1 subscription-style trio:
 
-* ``POST /v1/billing/checkout`` — auth-required. Creates a Stripe
-  Checkout session and returns its URL.
+* ``GET /v1/billing/catalog`` — auth-required. Returns the 12-SKU
+  matrix (tier × pack) with prices and which SKUs have a Stripe Price
+  ID configured. The pricing page renders this.
+* ``POST /v1/billing/checkout/pack`` — auth-required. Creates a Stripe
+  Checkout session for one (tier, pack) combination and returns its
+  URL.
 * ``POST /v1/billing/webhook`` — no auth; verified via
-  ``Stripe-Signature``. Applies the event to the database.
-* ``GET /v1/billing/me`` — auth-required. Reads the current plan
-  state for the frontend's account / billing page.
+  ``Stripe-Signature``. Applies the event to the database (inserts
+  per-credit rows on ``checkout.session.completed``).
+* ``GET /v1/billing/me`` — auth-required. Returns the user's credit
+  balance grouped by tier, plus their stripe_customer_id and the
+  enabled flag.
+* ``GET /v1/billing/purchases`` — auth-required. Returns the user's
+  purchase history newest-first.
 
-Every endpoint short-circuits to HTTP 503 when
-``settings.enabled is False``. That's the dormant-by-default safety:
-the FastAPI app boots and serves /healthz, the frontend can probe
-``/v1/billing/me`` without crashing, but no Stripe code path runs
-until an operator flips the flag.
-
-The ``build_billing_router`` factory takes the dependencies (settings,
-client factory, db session factory, user dependency) so:
-
-* Tests inject a ``MockStripeClient`` and an in-memory db.
-* Production wires the ``LiveStripeClient`` factory and the real
-  ``session_scope`` from layer1.
-* The user dependency comes from ``advisor.auth`` in production but
-  can be a stub in tests, so we don't need a working Clerk JWKS
-  endpoint to test billing.
+Every endpoint short-circuits to HTTP 503 when ``settings.enabled`` is
+False — same dormant-by-default safety as v1.
 """
 from __future__ import annotations
 
@@ -34,25 +29,37 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from advisor.billing.checkout import (
-    FreeTierCheckoutError,
     PriceNotConfiguredError,
-    UnknownTierError,
-    start_checkout,
+    UnknownOfferError,
+    start_pack_checkout,
 )
 from advisor.billing.client import StripeClient
+from advisor.billing.packs import all_offers
+from advisor.billing.pricing import get_pricing_settings
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.billing.webhooks import handle_event
-from advisor.db.models import User
+from advisor.db.cases import credit_balance_for
+from advisor.db.models import CasePurchase, User
 
 logger = logging.getLogger(__name__)
 
 
-class CheckoutRequest(BaseModel):
-    target_tier: str = Field(
-        ..., description="Target plan tier (e.g. 'pro', 'team')."
+# -- Request / response models ---------------------------------------------
+
+
+class CheckoutPackRequest(BaseModel):
+    """Body of ``POST /v1/billing/checkout/pack``."""
+
+    tier: str = Field(
+        ..., description="Case tier identifier (quick / standard / complex)."
+    )
+    pack_sku: str = Field(
+        ...,
+        description="Pack identifier (payg / starter / pro / enterprise).",
     )
 
 
@@ -60,25 +67,76 @@ class CheckoutResponse(BaseModel):
     url: str = Field(..., description="Stripe Checkout redirect URL.")
 
 
-class BillingMeResponse(BaseModel):
-    plan_tier: str
-    monthly_query_limit: int
-    monthly_queries_used: int
-    stripe_customer_id: str | None
-    subscription_status: str | None
-    enabled: bool = Field(
+class CatalogOffer(BaseModel):
+    """One (tier, pack) offer for the public pricing page."""
+
+    tier: str
+    tier_display_name: str
+    tier_token_budget: int
+    pack_sku: str
+    pack_display_name: str
+    quantity: int
+    discount_bps: int
+    list_price_cents: int
+    amount_due_cents: int
+    currency: str = "CAD"
+    available: bool = Field(
         ...,
         description=(
-            "Whether the backend has billing enabled at all. When False "
-            "the frontend should hide upgrade CTAs."
+            "True iff the Stripe Price ID for this offer is configured. "
+            "Disabled offers render as 'coming soon' on the pricing page."
         ),
     )
 
 
-# Resolver type: the auth dependency yields some session object; the
-# user resolver maps that to a ``User`` row. Production passes a real
-# Clerk session through; tests can pass any object type that the
-# resolver knows how to handle.
+class CatalogResponse(BaseModel):
+    """Body of ``GET /v1/billing/catalog``."""
+
+    enabled: bool
+    currency: str = "CAD"
+    cad_per_usd: float = Field(
+        ...,
+        description=(
+            "FX rate for displaying USD equivalents on marketing pages "
+            "targeted at US audiences. CAD is authoritative."
+        ),
+    )
+    offers: list[CatalogOffer]
+
+
+class TierBalance(BaseModel):
+    tier: str
+    available: int
+    reserved: int
+    consumed: int
+
+
+class BillingMeResponse(BaseModel):
+    enabled: bool
+    stripe_customer_id: str | None
+    tier_balances: list[TierBalance]
+    total_available_credits: int
+
+
+class PurchaseSummary(BaseModel):
+    """One row in the purchase-history list."""
+
+    id: int
+    tier: str
+    pack_sku: str
+    quantity: int
+    amount_paid_cents: int
+    currency: str
+    created_at: str
+
+
+class PurchaseHistoryResponse(BaseModel):
+    purchases: list[PurchaseSummary]
+
+
+# -- Router factory ---------------------------------------------------------
+
+
 UserResolver = Callable[[Any, Session], User]
 
 
@@ -90,17 +148,7 @@ def build_billing_router(
     user_dependency: Callable[..., Any],
     user_resolver: UserResolver,
 ) -> APIRouter:
-    """Assemble the billing router.
-
-    ``client_factory`` may be ``None`` when ``settings.enabled`` is
-    False — we never instantiate a client in that case.
-    ``db_session_factory`` is a callable that yields a ``Session``;
-    we accept either a context manager or a plain factory and adapt.
-    ``user_dependency`` is a FastAPI ``Depends`` callable that
-    yields whatever the auth layer produces (a ``ClerkSession`` in
-    production). ``user_resolver`` turns that opaque session value
-    into a ``User`` row, given a db ``Session``.
-    """
+    """Assemble the billing router."""
     router = APIRouter(prefix="/v1/billing", tags=["billing"])
 
     def _require_enabled() -> None:
@@ -131,16 +179,49 @@ def build_billing_router(
                 if callable(close):
                     close()
 
-    @router.post("/checkout", response_model=CheckoutResponse)
-    def post_checkout(
-        body: CheckoutRequest,
+    @router.get("/catalog", response_model=CatalogResponse)
+    def get_catalog() -> CatalogResponse:
+        """Return the full 12-SKU pack matrix.
+
+        Unauth-accessible by design: the pricing page is public and
+        wants to show prices to anonymous visitors. The ``enabled``
+        flag tells the frontend whether checkout will actually work.
+        """
+        pricing = get_pricing_settings()
+        offers = []
+        for offer in all_offers():
+            price_id = getattr(
+                settings, offer.stripe_price_env_var.lower(), None
+            )
+            offers.append(
+                CatalogOffer(
+                    tier=offer.tier.name,
+                    tier_display_name=offer.tier.display_name,
+                    tier_token_budget=offer.tier.token_budget,
+                    pack_sku=offer.pack.sku,
+                    pack_display_name=offer.pack.display_name,
+                    quantity=offer.pack.quantity,
+                    discount_bps=offer.pack.discount_bps,
+                    list_price_cents=offer.list_price_cents,
+                    amount_due_cents=offer.amount_due_cents,
+                    currency=pricing.display_currency,
+                    available=bool(price_id) and settings.enabled,
+                )
+            )
+        return CatalogResponse(
+            enabled=settings.enabled,
+            currency=pricing.display_currency,
+            cad_per_usd=pricing.cad_per_usd,
+            offers=offers,
+        )
+
+    @router.post("/checkout/pack", response_model=CheckoutResponse)
+    def post_checkout_pack(
+        body: CheckoutPackRequest,
         auth_session: Any = Depends(user_dependency),
     ) -> CheckoutResponse:
         _require_enabled()
         if client_factory is None:
-            # Defensive: enabled=True without a client_factory is a
-            # wiring bug. Fail loud rather than silently returning a
-            # broken URL.
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
@@ -151,18 +232,19 @@ def build_billing_router(
         with _open_db() as db:
             user = user_resolver(auth_session, db)
             try:
-                url = start_checkout(
+                url = start_pack_checkout(
                     db,
                     user,
-                    target_tier=body.target_tier,
+                    tier=body.tier,
+                    pack_sku=body.pack_sku,
                     client=client_factory(),
                     settings=settings,
                 )
-            except (UnknownTierError, FreeTierCheckoutError) as exc:
+            except UnknownOfferError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
-                        "code": "invalid_target_tier",
+                        "code": "unknown_offer",
                         "message": str(exc),
                     },
                 ) from exc
@@ -239,27 +321,67 @@ def build_billing_router(
         _require_enabled()
         with _open_db() as db:
             user = user_resolver(auth_session, db)
+            balances = credit_balance_for(db, user_id=user.id)
+            tier_balances = [
+                TierBalance(
+                    tier=b.tier,
+                    available=b.available,
+                    reserved=b.reserved,
+                    consumed=b.consumed,
+                )
+                for b in balances
+            ]
             return BillingMeResponse(
-                plan_tier=user.plan_tier,
-                monthly_query_limit=user.monthly_query_limit,
-                monthly_queries_used=user.monthly_queries_used,
-                stripe_customer_id=user.stripe_customer_id,
-                subscription_status=user.subscription_status,
                 enabled=settings.enabled,
+                stripe_customer_id=user.stripe_customer_id,
+                tier_balances=tier_balances,
+                total_available_credits=sum(
+                    b.available for b in tier_balances
+                ),
+            )
+
+    @router.get("/purchases", response_model=PurchaseHistoryResponse)
+    def get_purchases(
+        auth_session: Any = Depends(user_dependency),
+    ) -> PurchaseHistoryResponse:
+        _require_enabled()
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            rows = (
+                db.execute(
+                    select(CasePurchase)
+                    .where(CasePurchase.user_id == user.id)
+                    .order_by(CasePurchase.created_at.desc())
+                    .limit(100)
+                )
+                .scalars()
+                .all()
+            )
+            return PurchaseHistoryResponse(
+                purchases=[
+                    PurchaseSummary(
+                        id=r.id,
+                        tier=r.tier,
+                        pack_sku=r.pack_sku,
+                        quantity=r.quantity,
+                        amount_paid_cents=r.amount_paid_cents,
+                        currency=r.currency,
+                        created_at=r.created_at.isoformat(),
+                    )
+                    for r in rows
+                ]
             )
 
     return router
 
 
 def build_dormant_billing_router() -> APIRouter:
-    """Mount a stub router that returns 503 on every billing path.
-
-    Used by ``create_app`` when no billing settings are wired (or
-    when ``settings.enabled`` is False AND the operator hasn't
-    configured the dependencies). Lets the frontend probe the
-    billing endpoints without the backend exploding.
-    """
+    """Mount a stub router that returns 503 on every billing path
+    except ``GET /catalog``, which still serves the price list so the
+    pricing page renders during the pre-Stripe phase (with
+    ``enabled=False`` so the frontend hides "Buy" buttons)."""
     router = APIRouter(prefix="/v1/billing", tags=["billing"])
+    pricing = get_pricing_settings()
 
     detail = {
         "code": "billing_disabled",
@@ -269,7 +391,35 @@ def build_dormant_billing_router() -> APIRouter:
         ),
     }
 
-    @router.post("/checkout")
+    @router.get("/catalog", response_model=CatalogResponse)
+    def get_catalog_disabled() -> CatalogResponse:
+        # The catalog can render without Stripe configured — every
+        # offer's ``available`` flag is False so the frontend renders
+        # the SKU but disables the "Buy" button.
+        offers = [
+            CatalogOffer(
+                tier=offer.tier.name,
+                tier_display_name=offer.tier.display_name,
+                tier_token_budget=offer.tier.token_budget,
+                pack_sku=offer.pack.sku,
+                pack_display_name=offer.pack.display_name,
+                quantity=offer.pack.quantity,
+                discount_bps=offer.pack.discount_bps,
+                list_price_cents=offer.list_price_cents,
+                amount_due_cents=offer.amount_due_cents,
+                currency=pricing.display_currency,
+                available=False,
+            )
+            for offer in all_offers()
+        ]
+        return CatalogResponse(
+            enabled=False,
+            currency=pricing.display_currency,
+            cad_per_usd=pricing.cad_per_usd,
+            offers=offers,
+        )
+
+    @router.post("/checkout/pack")
     def post_checkout_disabled() -> Any:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
@@ -283,6 +433,12 @@ def build_dormant_billing_router() -> APIRouter:
 
     @router.get("/me")
     def get_me_disabled() -> Any:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
+        )
+
+    @router.get("/purchases")
+    def get_purchases_disabled() -> Any:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
         )

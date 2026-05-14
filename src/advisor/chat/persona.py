@@ -21,6 +21,9 @@ from pathlib import Path
 # ``Path.cwd()`` because pytest runs with arbitrary working dirs.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_PERSONA_PATH = _REPO_ROOT / "docs" / "agent" / "persona.md"
+_DEFAULT_CLASSIFIER_PERSONA_PATH = (
+    _REPO_ROOT / "docs" / "agent" / "classifier-persona.md"
+)
 
 # Sentinel used to split install instructions from the system prompt.
 # Must match a line that is exactly ``---`` (no surrounding whitespace
@@ -47,6 +50,31 @@ def load_persona(path: Path | None = None) -> str:
             f"Persona file not found at {persona_path}. The chat backend "
             "requires this file to populate the system prompt; create it "
             "or override the path via load_persona(path=...)."
+        )
+
+    raw = persona_path.read_text(encoding="utf-8")
+    body = _strip_install_preamble(raw)
+    return body.strip()
+
+
+@lru_cache(maxsize=1)
+def load_classifier_persona(path: Path | None = None) -> str:
+    """Return the system-prompt portion of the classifier persona file.
+
+    Mirror of ``load_persona`` for the Layer-2 pre-flight tier
+    classifier. Same divider convention (everything before ``---`` is
+    engineering preamble; everything after is what the model sees).
+    Cached for the same lifecycle reasons as the main persona — restart
+    the server after editing.
+    """
+    persona_path = (
+        Path(path) if path is not None else _DEFAULT_CLASSIFIER_PERSONA_PATH
+    )
+    if not persona_path.exists():
+        raise FileNotFoundError(
+            f"Classifier persona file not found at {persona_path}. The "
+            "Layer-2 classifier requires this file; create it or "
+            "override the path via load_classifier_persona(path=...)."
         )
 
     raw = persona_path.read_text(encoding="utf-8")

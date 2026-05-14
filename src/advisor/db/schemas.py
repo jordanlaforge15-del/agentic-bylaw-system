@@ -11,10 +11,16 @@ string (for simple user turns) or the structured content-block list
 (for assistant turns produced by ``advisor.llm``). The API layer is
 the right place to enforce a tighter shape if a particular endpoint
 needs one.
+
+Quota fields previously living on ``UserOut`` (``plan_tier``,
+``monthly_query_limit``, ``monthly_queries_used``) have been removed;
+billing is now per-case-credit, not per-month-of-access. The
+``CaseCredit*`` and ``Case*`` schemas below are the new shape that the
+billing / cases endpoints return.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,12 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class UserCreate(BaseModel):
-    """Fields the API accepts on first-touch user provisioning.
-
-    Quota / plan fields aren't accepted on create — they default to the
-    free tier and are mutated only by billing webhooks or admin
-    endpoints, never by the user themselves.
-    """
+    """Fields the API accepts on first-touch user provisioning."""
 
     clerk_user_id: str = Field(min_length=1, max_length=255)
     # Plain str rather than EmailStr to avoid the email-validator dep —
@@ -48,9 +49,6 @@ class UserOut(BaseModel):
     clerk_user_id: str
     email: str
     full_name: str | None = None
-    plan_tier: str
-    monthly_query_limit: int
-    monthly_queries_used: int
     created_at: datetime
 
 
@@ -61,6 +59,7 @@ class ChatSessionCreate(BaseModel):
     """Caller may seed a title; usually omitted and generated lazily."""
 
     title: str | None = Field(default=None, max_length=500)
+    case_id: int | None = Field(default=None)
     metadata_json: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -69,6 +68,9 @@ class ChatSessionOut(BaseModel):
 
     id: int
     user_id: int
+    case_id: int | None = None
+    tier: str | None = None
+    token_budget_remaining: int | None = None
     title: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -79,19 +81,10 @@ class ChatSessionOut(BaseModel):
 
 
 class ChatMessageCreate(BaseModel):
-    """One turn that the chat backend wants to persist.
-
-    ``sequence`` is caller-assigned — the chat backend tracks the
-    next-sequence-per-session in memory and writes it through. Doing
-    it server-side via a subquery would be a hot point of contention;
-    the ``UniqueConstraint(session_id, sequence)`` is the
-    correctness backstop.
-    """
+    """One turn that the chat backend wants to persist."""
 
     sequence: int = Field(ge=0)
     role: str = Field(pattern=r"^(user|assistant|system)$")
-    # Permissive: assistant turns are list[ContentBlock]-shaped dicts;
-    # user turns may be plain strings; system turns may be either.
     content_json: str | list[Any] | dict[str, Any]
     tool_calls_json: list[Any] = Field(default_factory=list)
     tokens_input: int = Field(default=0, ge=0)
@@ -116,12 +109,13 @@ class ChatMessageOut(BaseModel):
 
 
 class UsageEventCreate(BaseModel):
-    """Telemetry record. Mostly written by ``advisor.db.quota`` and
+    """Telemetry record. Mostly written by ``advisor.db.cases`` and
     the chat backend; the API surface for creating these by hand is
     primarily for tests and admin tooling."""
 
     event_type: str = Field(max_length=64)
     session_id: int | None = None
+    case_id: int | None = None
     provider: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=128)
     tokens_input: int = Field(default=0, ge=0)
@@ -136,6 +130,7 @@ class UsageEventOut(BaseModel):
     id: int
     user_id: int
     session_id: int | None = None
+    case_id: int | None = None
     event_type: str
     provider: str | None = None
     model: str | None = None
@@ -146,18 +141,56 @@ class UsageEventOut(BaseModel):
     created_at: datetime
 
 
-# -- Quota ------------------------------------------------------------
+# -- Case -------------------------------------------------------------
 
 
-class MonthlyQuota(BaseModel):
-    """Snapshot of a user's monthly query allowance.
+class CaseOut(BaseModel):
+    """Shape returned for a single case (case browser, header)."""
 
-    ``window_start`` is the first day of the current monthly window —
-    i.e. the value of ``user.month_started_at`` after any pending
-    rollover has been applied.
-    """
+    model_config = ConfigDict(from_attributes=True)
 
-    limit: int
-    used: int
-    remaining: int
-    window_start: date
+    id: int
+    user_id: int
+    anchor_label: str
+    anchor_kind: str
+    status: str
+    current_tier: str | None = None
+    tokens_consumed: int
+    opened_at: datetime
+    last_activity_at: datetime
+    closed_at: datetime | None = None
+
+
+class CaseCreditOut(BaseModel):
+    """Shape returned for a single credit (admin tooling, billing page)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    purchase_id: int
+    tier: str
+    source: str
+    state: str
+    case_id: int | None = None
+    session_id: int | None = None
+    upgraded_from_tier: str | None = None
+    purchased_at: datetime
+    consumed_at: datetime | None = None
+
+
+class CreditBalanceEntry(BaseModel):
+    """Aggregated credit balance for a single (tier, state) combination."""
+
+    tier: str
+    state: str
+    count: int
+
+
+class CreditBalanceSummary(BaseModel):
+    """Per-tier breakdown returned by ``GET /v1/billing/me``."""
+
+    tier: str
+    available: int
+    reserved: int
+    consumed: int

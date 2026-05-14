@@ -84,13 +84,18 @@ def resolve_or_create_user(db: Session, clerk_session: ClerkSession) -> User:
             email=email,
             full_name=full_name,
         )
-        # Apply invite-granted caps if this user came in via an
-        # approved invite_request row. Lookup is by email
-        # case-insensitively — Clerk hands us whatever case the user
-        # registered with, the invite_request was inserted via the
-        # public form so casing is whatever was typed there. Treat
-        # the invite as redeemed in the same transaction so the
-        # expiry sweep stops considering it for cleanup.
+        db.add(user)
+        # Flush so ``user.id`` is populated for the caller. The commit
+        # is left to the caller (see module docstring).
+        db.flush()
+        # If this user came in via an approved invite_request row with
+        # ``granted_starter_credits > 0``, gift those credits now.
+        # Lookup is by email case-insensitively. Treat the invite as
+        # redeemed in the same transaction so the expiry sweep stops
+        # considering it for cleanup. Importing inside the branch
+        # avoids the case-service module being a hard dependency of
+        # the auth module — tests that don't exercise invites don't
+        # need to wire ``advisor.db.cases``.
         if email:
             invite = (
                 db.query(InviteRequest)
@@ -101,20 +106,18 @@ def resolve_or_create_user(db: Session, clerk_session: ClerkSession) -> User:
                 .one_or_none()
             )
             if invite is not None:
-                user.monthly_query_limit = invite.granted_query_limit
-                user.monthly_input_token_limit = (
-                    invite.granted_monthly_input_tokens
-                )
-                user.monthly_output_token_limit = (
-                    invite.granted_monthly_output_tokens
-                )
-                user.requests_per_minute_limit = invite.granted_rpm
+                if invite.granted_starter_credits > 0 and invite.granted_starter_tier:
+                    from advisor.db.cases import grant_admin_credits  # noqa: PLC0415
+
+                    grant_admin_credits(
+                        db,
+                        user=user,
+                        tier=invite.granted_starter_tier,
+                        quantity=invite.granted_starter_credits,
+                        reason=f"invite_redemption:{invite.id}",
+                    )
                 invite.redeemed_at = utcnow()
                 db.add(invite)
-        db.add(user)
-        # Flush so ``user.id`` is populated for the caller. The commit
-        # is left to the caller (see module docstring).
-        db.flush()
         return user
 
     # Refresh the mutable profile fields if Clerk has new values. We

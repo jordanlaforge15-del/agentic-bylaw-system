@@ -1,89 +1,87 @@
-"""Checkout-session creation helper.
+"""Pack-checkout helper — replaces the v1 subscription checkout.
 
-The router calls into here when a user clicks "upgrade". The helper
-resolves the target plan, looks up the configured Stripe Price ID,
-and asks the ``StripeClient`` to mint a Checkout session with the
-metadata we need to resolve the resulting webhook back to our user.
+The router calls into here when a user clicks "Buy [tier] [pack]". The
+helper resolves the offer (a tier × pack combination), looks up the
+configured Stripe Price ID, and asks the ``StripeClient`` to mint a
+Checkout session in ``payment`` mode (one-time charge, not a
+subscription).
 
-Why ``advisor_user_id`` is in metadata: Stripe lets us put arbitrary
-key/value pairs on a Checkout session and (via
-``subscription_data.metadata``) on the resulting subscription. We use
-that to round-trip our internal user id, so the webhook handler
-doesn't have to guess from email which Clerk user owns this customer
-(emails change; clerk_user_id is also stable but adds a join step).
+We round-trip the user id, tier, and pack SKU in metadata so the
+webhook can resolve back to our schema and insert the correct
+``CasePurchase`` + N ``CaseCredit`` rows.
 """
 from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
 from advisor.billing.client import StripeClient
-from advisor.billing.plans import PLAN_FREE, PLANS_BY_TIER
+from advisor.billing.packs import PACKS, TIERS, PackOffer, offer_for
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.db.models import User
 
 
-class UnknownTierError(ValueError):
-    """Raised when the caller asks for a tier that isn't in the
-    catalog. The router translates this to HTTP 400."""
-
-
-class FreeTierCheckoutError(ValueError):
-    """Raised when the caller asks for the free tier — there's no
-    Stripe price to charge against. The router translates to 400."""
+class UnknownOfferError(ValueError):
+    """Raised when ``(tier, pack_sku)`` is not in the catalog. Router
+    translates to HTTP 400."""
 
 
 class PriceNotConfiguredError(RuntimeError):
-    """Raised when the requested tier has no configured Stripe Price
-    ID on settings. Distinct from UnknownTierError because this is an
-    operator-misconfiguration error, not a user error. Router maps to
-    HTTP 503 — the operator must finish wiring billing before this
-    tier becomes purchasable."""
+    """Raised when the requested offer has no configured Stripe Price
+    ID on settings. Distinct from ``UnknownOfferError`` because this
+    is an operator-misconfiguration error, not a user error. Router
+    maps to HTTP 503 — the operator must finish wiring billing before
+    this offer becomes purchasable."""
 
 
-def start_checkout(
+def start_pack_checkout(
     db: Session,
     user: User,
     *,
-    target_tier: str,
+    tier: str,
+    pack_sku: str,
     client: StripeClient,
     settings: AdvisorBillingSettings,
 ) -> str:
-    """Create a Stripe Checkout session and return the redirect URL.
+    """Create a Stripe Checkout session for a pack purchase.
 
-    Side effects: none on the database. The user record is updated
-    only after we receive the ``checkout.session.completed`` webhook
-    — that way an abandoned checkout doesn't leave the user record in
-    a half-upgraded state.
+    Side effects: none on the database. The ``CasePurchase`` /
+    ``CaseCredit`` rows are inserted only after we receive the
+    ``checkout.session.completed`` webhook — that way an abandoned
+    checkout doesn't leave dangling credits.
 
-    The metadata dict we send to Stripe (``advisor_user_id`` +
-    ``target_tier``) is what the webhook reads back to apply the
-    upgrade. We deliberately don't rely on ``customer_email`` for
-    user resolution because emails are mutable and not unique in
-    Clerk.
+    Metadata round-tripped through Stripe:
+      * ``advisor_user_id`` — internal numeric id; webhook reads this
+        rather than ``customer_email`` because emails are mutable.
+      * ``tier`` — the tier identifier (``quick``/``standard``/``complex``).
+      * ``pack_sku`` — the pack identifier
+        (``payg``/``starter``/``pro``/``enterprise``).
+      * ``quantity`` — credit count for the pack; mirrored from the
+        catalog so a webhook-time catalog change doesn't change the
+        in-flight purchase.
     """
-    plan = PLANS_BY_TIER.get(target_tier)
-    if plan is None:
-        raise UnknownTierError(
-            f"unknown plan tier {target_tier!r}; valid: "
-            f"{sorted(PLANS_BY_TIER)}"
+    if tier not in TIERS:
+        raise UnknownOfferError(
+            f"unknown tier {tier!r}; valid: {sorted(TIERS)}"
         )
-    if plan is PLAN_FREE:
-        raise FreeTierCheckoutError(
-            "cannot start checkout for the free tier; there is no Stripe "
-            "price. Use the subscription-cancellation flow to downgrade "
-            "an existing subscription."
+    if pack_sku not in PACKS:
+        raise UnknownOfferError(
+            f"unknown pack_sku {pack_sku!r}; valid: {sorted(PACKS)}"
         )
+    offer = offer_for(tier, pack_sku)
 
-    price_id = _resolve_price_id(plan.stripe_price_env_var, settings)
+    price_id = _resolve_price_id(offer, settings)
     if not price_id:
         raise PriceNotConfiguredError(
-            f"no Stripe Price ID configured for tier {plan.tier!r}; set "
-            f"{plan.stripe_price_env_var} in the environment."
+            f"no Stripe Price ID configured for offer "
+            f"({tier!r}, {pack_sku!r}); set "
+            f"{offer.stripe_price_env_var} in the environment."
         )
 
     metadata = {
         "advisor_user_id": str(user.id),
-        "target_tier": plan.tier,
+        "tier": tier,
+        "pack_sku": pack_sku,
+        "quantity": str(offer.pack.quantity),
     }
     result = client.create_checkout_session(
         customer_id=user.stripe_customer_id,
@@ -92,15 +90,17 @@ def start_checkout(
         success_url=settings.success_url,
         cancel_url=settings.cancel_url,
         metadata=metadata,
+        mode="payment",
     )
     return result.url
 
 
 def _resolve_price_id(
-    env_var: str | None, settings: AdvisorBillingSettings
+    offer: PackOffer, settings: AdvisorBillingSettings
 ) -> str | None:
-    if env_var is None:
-        return None
-    # Match the alias-to-attribute convention from the settings model:
-    # STRIPE_PRICE_PRO -> stripe_price_pro.
-    return getattr(settings, env_var.lower(), None)
+    """Look up the Stripe Price ID for an offer on settings.
+
+    Convention: the env var ``STRIPE_PRICE_<TIER>_<PACK>`` maps to the
+    settings attribute ``stripe_price_<tier>_<pack>`` (lowercased).
+    """
+    return getattr(settings, offer.stripe_price_env_var.lower(), None)

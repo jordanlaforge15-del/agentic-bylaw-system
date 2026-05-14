@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date
 from pathlib import Path
 
 from sqlalchemy import create_engine, func, select
@@ -67,10 +66,6 @@ def _seed_user(
             clerk_user_id=clerk_user_id,
             email=email,
             full_name="Test User",
-            plan_tier="free",
-            monthly_query_limit=100,
-            monthly_queries_used=0,
-            month_started_at=date(2026, 5, 1),
         )
         s.add(user)
         s.commit()

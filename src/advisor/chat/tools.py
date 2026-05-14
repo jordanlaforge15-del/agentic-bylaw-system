@@ -206,6 +206,53 @@ _SCHEMA_SEARCH_BYLAW_EVIDENCE: dict[str, Any] = {
 }
 
 
+# Tier-upgrade tool — the agent calls this when it self-detects that
+# the user's question outgrew the purchased tier. Distinct from a
+# text-only convention because a structured tool call gives the
+# frontend a deterministic SSE event to render the upgrade modal
+# against (no NLP on the assistant's prose).
+_DESC_REQUEST_TIER_UPGRADE = (
+    "Ask the user to upgrade the active case to a higher tier when you "
+    "have determined that completing thorough research will require more "
+    "retrieval rounds or token budget than the current tier allows.\n\n"
+    "Call this tool when:\n"
+    "* You have called retrieval tools four or more times on a single "
+    "  sub-question and still feel uncertain.\n"
+    "* You see that remaining token budget will not cover the additional "
+    "  retrieval rounds the question still needs.\n"
+    "* The user's question has expanded mid-conversation in a way that "
+    "  changes the tier classification (e.g. a new property was "
+    "  introduced, an overlay zone surfaced).\n\n"
+    "After calling this tool, STOP your investigation and return a brief "
+    "summary of what you've found so far. Do NOT bluff completion."
+)
+
+_SCHEMA_REQUEST_TIER_UPGRADE = {
+    "type": "object",
+    "properties": {
+        "recommended_tier": {
+            "type": "string",
+            "enum": ["standard", "complex"],
+            "description": (
+                "The tier you believe the user should upgrade to. Only "
+                "'standard' or 'complex' are valid — there is no upgrade "
+                "below the user's current tier."
+            ),
+        },
+        "reason": {
+            "type": "string",
+            "description": (
+                "One short paragraph explaining what the additional tier "
+                "budget would let you investigate. Surfaced verbatim to "
+                "the user in the upgrade modal."
+            ),
+        },
+    },
+    "required": ["recommended_tier", "reason"],
+    "additionalProperties": False,
+}
+
+
 # A simple factory protocol for tests: ``service`` is callable so tests
 # can inject a single live RetrievalService bound to a sqlite session,
 # while production injects a callable that opens a fresh session per
@@ -318,6 +365,36 @@ def build_bylaw_tools(
             response = service.search(request)
             return json.dumps(compact_search_response(response))
 
+    async def request_tier_upgrade_handler(payload: dict[str, Any]) -> str:
+        """Surface a tier-upgrade prompt to the user and pause the agent.
+
+        Returns a tool-result string the agent reads as a cue to halt
+        the current investigation. The actual UI prompt is delivered
+        via a side-channel: the chat session's ``last_turn_upgrade_request``
+        attribute is populated, and the API layer translates that into
+        a ``case_upgrade_offer`` SSE event the frontend listens for.
+
+        We never raise from this handler — a malformed payload still
+        produces a tool_result the agent can read, just with a
+        explanatory message rather than the structured prompt.
+        """
+        recommended_tier = str(payload.get("recommended_tier") or "standard")
+        if recommended_tier not in {"standard", "complex"}:
+            recommended_tier = "standard"
+        reason = str(payload.get("reason") or "Additional research depth required.")
+        # Stash the offer on a module-level callable so the chat session
+        # picks it up via its ``on_tool_call`` style hook. We attach via
+        # the ``ChatSession.metadata`` field through a custom attribute
+        # set by the route. See chat/session.py for the consumer.
+        _LAST_UPGRADE_REQUEST.append(
+            {"recommended_tier": recommended_tier, "reason": reason}
+        )
+        return (
+            "Upgrade prompt surfaced to the user. Pause this "
+            "investigation, summarise findings to date, and wait for "
+            "the user's decision before continuing."
+        )
+
     tool_defs = [
         ToolDefinition(
             name="list_documents",
@@ -339,6 +416,11 @@ def build_bylaw_tools(
             description=_DESC_SEARCH_BYLAW_EVIDENCE,
             input_schema=_SCHEMA_SEARCH_BYLAW_EVIDENCE,
         ),
+        ToolDefinition(
+            name="request_tier_upgrade",
+            description=_DESC_REQUEST_TIER_UPGRADE,
+            input_schema=_SCHEMA_REQUEST_TIER_UPGRADE,
+        ),
     ]
 
     handlers: dict[str, ToolHandler] = {
@@ -346,6 +428,27 @@ def build_bylaw_tools(
         "get_document_outline": get_document_outline_handler,
         "lookup_citation": lookup_citation_handler,
         "search_bylaw_evidence": search_bylaw_evidence_handler,
+        "request_tier_upgrade": request_tier_upgrade_handler,
     }
 
     return tool_defs, handlers
+
+
+# Per-process buffer of in-flight upgrade requests. ``ChatSession``
+# drains this after each turn so the chat route can emit a
+# ``case_upgrade_offer`` SSE event. Bounded by drain frequency: every
+# turn empties it, so it never exceeds a handful of entries.
+_LAST_UPGRADE_REQUEST: list[dict[str, str]] = []
+
+
+def drain_upgrade_requests() -> list[dict[str, str]]:
+    """Atomically take and clear pending upgrade requests.
+
+    Called from ``ChatSession.send_user_message_blocking`` after the
+    tool loop returns. Returns the list of requests fired during this
+    turn (usually 0 or 1; multiple are possible if the agent calls the
+    tool more than once but the frontend only renders the first).
+    """
+    drained = list(_LAST_UPGRADE_REQUEST)
+    _LAST_UPGRADE_REQUEST.clear()
+    return drained

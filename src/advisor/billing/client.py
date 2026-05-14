@@ -113,8 +113,15 @@ class StripeClient(Protocol):
         success_url: str,
         cancel_url: str,
         metadata: dict[str, str],
+        mode: str = "payment",
     ) -> CheckoutSessionResult:
-        """Create a Stripe Checkout session for a subscription buy.
+        """Create a Stripe Checkout session.
+
+        ``mode`` is ``"payment"`` for one-time pack purchases (the
+        case-credit model) and ``"subscription"`` for the legacy plan
+        flow. Defaults to one-time because subscriptions have been
+        removed from the user-facing surface, but the parameter is
+        kept so a future restore would be a one-line change.
 
         ``customer_id`` may be ``None`` for first-time customers;
         Stripe will create the customer record and the webhook will
@@ -186,19 +193,23 @@ class LiveStripeClient:
         success_url: str,
         cancel_url: str,
         metadata: dict[str, str],
+        mode: str = "payment",
     ) -> CheckoutSessionResult:
         params: dict[str, Any] = {
-            "mode": "subscription",
+            "mode": mode,
             "line_items": [{"price": price_id, "quantity": 1}],
             "success_url": success_url,
             "cancel_url": cancel_url,
             "metadata": dict(metadata),
-            # Mirror the metadata onto the subscription itself so it
-            # survives the lifecycle events we care about (the
-            # ``customer.subscription.*`` events don't carry the
-            # checkout session's metadata).
-            "subscription_data": {"metadata": dict(metadata)},
         }
+        # The legacy subscription flow needs the metadata mirrored
+        # onto the subscription itself so it survives the
+        # ``customer.subscription.*`` lifecycle events. One-time
+        # ``payment`` mode produces a payment_intent + the metadata
+        # round-trips through the checkout.session.completed event
+        # directly, so no mirroring is needed.
+        if mode == "subscription":
+            params["subscription_data"] = {"metadata": dict(metadata)}
         if customer_id:
             params["customer"] = customer_id
         else:
@@ -253,6 +264,7 @@ class _CheckoutCall:
     success_url: str
     cancel_url: str
     metadata: dict[str, str]
+    mode: str = "payment"
 
 
 @dataclass
@@ -305,6 +317,7 @@ class MockStripeClient:
         success_url: str,
         cancel_url: str,
         metadata: dict[str, str],
+        mode: str = "payment",
     ) -> CheckoutSessionResult:
         self.checkout_calls.append(
             _CheckoutCall(
@@ -314,6 +327,7 @@ class MockStripeClient:
                 success_url=success_url,
                 cancel_url=cancel_url,
                 metadata=dict(metadata),
+                mode=mode,
             )
         )
         if not self._checkout_results:

@@ -119,6 +119,24 @@ class ChatSession:
     # of recency, and the DB-backed store overwrites this on load with
     # the row's ``updated_at`` so both paths surface a consistent value.
     updated_at: datetime | None = field(default=None, compare=False)
+    # Case-billing context. Set by the chat route at session-create time
+    # from the active ``advisor_case_credit`` row; read by the chat
+    # route after each turn to drive Layer-1 budget decisions and
+    # Layer-3 upgrade prompts. ``None`` means this session isn't
+    # case-billed (legacy / test path).
+    case_id: int | None = field(default=None, compare=False)
+    tier: str | None = field(default=None, compare=False)
+    # Per-case cumulative budget remaining (input + output tokens).
+    # Decremented in ``send_user_message_blocking`` after the tool loop
+    # returns; the chat route surfaces a budget-warning SSE when this
+    # crosses 25% of the tier budget.
+    token_budget_remaining: int | None = field(default=None, compare=False)
+    # Drained per-turn from ``advisor.chat.tools._LAST_UPGRADE_REQUEST``
+    # so the chat route can emit a ``case_upgrade_offer`` SSE event
+    # without having to know about the tool registry's internals.
+    last_turn_upgrade_requests: list[dict[str, str]] = field(
+        default_factory=list, repr=False, compare=False
+    )
     # How many recent user-prompt turns to keep intact when compacting
     # history for LLM submission. ``None`` defers to the
     # ``ADVISOR_CHAT_COMPACT_KEEP_RECENT`` env var (default 2). Older
@@ -196,6 +214,28 @@ class ChatSession:
         self.last_turn_usage = result.total_usage
         self.last_turn_circuit_trip = result.circuit_trip
         self.updated_at = datetime.now(timezone.utc)
+        # Drain any tier-upgrade requests fired by the
+        # ``request_tier_upgrade`` tool during this turn. The chat
+        # route reads this and emits one ``case_upgrade_offer`` SSE
+        # event per request. Done unconditionally so a turn that
+        # didn't fire one still clears any stale state from a previous
+        # turn that happened to share the process. Lazy import avoids
+        # a circular dep through ``advisor.chat.tools``.
+        from advisor.chat.tools import drain_upgrade_requests  # noqa: PLC0415
+
+        self.last_turn_upgrade_requests = drain_upgrade_requests()
+        # Decrement the per-case token budget by what this turn
+        # consumed. The chat route mirrors this back to
+        # ``advisor_case.tokens_consumed`` so the next turn's pre-flight
+        # budget read sees the up-to-date ledger.
+        if self.token_budget_remaining is not None and result.total_usage:
+            spent = (
+                result.total_usage.input_tokens
+                + result.total_usage.output_tokens
+            )
+            self.token_budget_remaining = max(
+                0, self.token_budget_remaining - spent
+            )
 
         # Fire the post-turn hook AFTER messages are settled. The
         # callback receives ``self`` so it can read the new message
