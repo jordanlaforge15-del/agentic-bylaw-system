@@ -118,6 +118,16 @@ def resolve_or_create_user(db: Session, clerk_session: ClerkSession) -> User:
                     )
                 invite.redeemed_at = utcnow()
                 db.add(invite)
+        # Safety net: every brand-new user gets the default trial pack
+        # if nothing upstream (invite redemption, admin grant) already
+        # gave them credits. Without this, users created outside the
+        # invite flow — and users whose invite carried 0 starter
+        # credits — would land on /app with no way to open a case.
+        from advisor.db.cases import (  # noqa: PLC0415
+            grant_starter_credits_if_needed,
+        )
+
+        grant_starter_credits_if_needed(db, user=user)
         return user
 
     # Refresh the mutable profile fields if Clerk has new values. We
@@ -134,6 +144,15 @@ def resolve_or_create_user(db: Session, clerk_session: ClerkSession) -> User:
     if changed:
         user.updated_at = utcnow()
         db.flush()
+    # Self-heal existing users who pre-date the starter-grant logic
+    # (or whose account was created via a code path that skipped it).
+    # The helper is a no-op when the user already has any credits in
+    # any state, so this is safe to call on every authenticated request.
+    from advisor.db.cases import (  # noqa: PLC0415
+        grant_starter_credits_if_needed,
+    )
+
+    grant_starter_credits_if_needed(db, user=user)
     return user
 
 

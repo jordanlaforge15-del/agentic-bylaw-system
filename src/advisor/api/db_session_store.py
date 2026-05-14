@@ -196,6 +196,14 @@ class DbSessionStore:
                 tool_defs=list(tool_defs),
                 tool_handlers=dict(tool_handlers),
                 updated_at=row.updated_at,
+                # Mirror case-billing context off the DB row so resumed
+                # sessions don't lose their case attachment. The chat
+                # route reads ``case_id`` to skip re-asking the client
+                # for it on the resume path, and ``GET /v1/chat/sessions/{id}``
+                # surfaces it so the frontend can rehydrate caseIdRef.
+                case_id=row.case_id,
+                tier=row.tier,
+                token_budget_remaining=row.token_budget_remaining,
             )
 
             # Track how many messages we've already persisted so the

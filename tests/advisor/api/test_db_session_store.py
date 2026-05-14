@@ -152,6 +152,80 @@ def test_get_loads_messages_in_sequence_order(tmp_path: Path) -> None:
     assert contents == ["first", "second", "third"]
 
 
+def test_get_hydrates_case_billing_context(tmp_path: Path) -> None:
+    """``case_id`` / ``tier`` / ``token_budget_remaining`` ride back from the DB.
+
+    The chat resume path reads ``session.case_id`` to skip re-asking the
+    client for it; ``GET /v1/chat/sessions/{id}`` reads it to drive the
+    frontend's composer gate. Both depend on this hydration step.
+    """
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    db_session_factory, factory = _build_factory(db_url)
+    user_id = _seed_user(factory, clerk_user_id="clerk_case_hydrate")
+
+    s = factory()
+    try:
+        chat_row = DbChatSession(
+            user_id=user_id,
+            case_id=None,
+            tier="standard",
+            token_budget_remaining=12_345,
+        )
+        s.add(chat_row)
+        s.flush()
+        chat_pk = chat_row.id
+        # case_id is set via raw assignment since we don't have a Case
+        # FK seeded here — sqlite doesn't enforce the FK at insert time
+        # without PRAGMA, which keeps this test focused on hydration.
+        chat_row.case_id = 42
+        s.commit()
+    finally:
+        s.close()
+
+    store = DbSessionStore(
+        db_session_factory=db_session_factory,
+        tool_defs_handler_factory=_empty_tool_factory,
+    )
+    loaded = store.get(str(chat_pk))
+    assert loaded is not None
+    assert loaded.case_id == 42
+    assert loaded.tier == "standard"
+    assert loaded.token_budget_remaining == 12_345
+
+
+def test_get_hydrates_null_case_billing_context(tmp_path: Path) -> None:
+    """Legacy sessions (pre-migration) hydrate with ``case_id is None``.
+
+    Surfaces this so the chat handler can fall through to its
+    ``case_id_required`` error and the frontend can show its
+    legacy-session notice instead of letting users hit the 400.
+    """
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    db_session_factory, factory = _build_factory(db_url)
+    user_id = _seed_user(factory, clerk_user_id="clerk_legacy")
+
+    s = factory()
+    try:
+        chat_row = DbChatSession(user_id=user_id)
+        s.add(chat_row)
+        s.commit()
+        chat_pk = chat_row.id
+    finally:
+        s.close()
+
+    store = DbSessionStore(
+        db_session_factory=db_session_factory,
+        tool_defs_handler_factory=_empty_tool_factory,
+    )
+    loaded = store.get(str(chat_pk))
+    assert loaded is not None
+    assert loaded.case_id is None
+    assert loaded.tier is None
+    assert loaded.token_budget_remaining is None
+
+
 def test_get_returns_none_for_unknown_session(tmp_path: Path) -> None:
     """A nonexistent session id yields None, not an exception."""
     db_url = _db_url(tmp_path)

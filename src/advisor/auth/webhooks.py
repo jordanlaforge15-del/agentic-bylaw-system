@@ -257,6 +257,19 @@ def _handle_user_created(
         )
         db.add(user)
         db.flush()
+        # Issue the default trial credit pack so a webhook-created user
+        # can open a case immediately. Idempotent — re-deliveries of
+        # this event would find the row already present and never reach
+        # this branch. We deliberately don't run the invite-redemption
+        # check here; that lives in resolve_or_create_user and fires
+        # the first time the user actually authenticates against the
+        # API. If both fire, the starter helper is a no-op the second
+        # time because credits already exist.
+        from advisor.db.cases import (  # noqa: PLC0415
+            grant_starter_credits_if_needed,
+        )
+
+        grant_starter_credits_if_needed(db, user=user)
         return WebhookResult(
             handled=True,
             event_type=event.type,

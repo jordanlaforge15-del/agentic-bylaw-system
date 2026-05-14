@@ -612,6 +612,43 @@ def grant_admin_credits(
     return credits
 
 
+# Default trial allocation for any newly-created user that doesn't
+# arrive with invite-driven starter credits. Mirrors the 3-standard
+# gift the 0012_case_based_billing migration applied to pre-existing
+# active users so the on-ramp is consistent across migration cohorts.
+STARTER_GRANT_TIER = "standard"
+STARTER_GRANT_QUANTITY = 3
+
+
+def grant_starter_credits_if_needed(db: Session, *, user: User) -> bool:
+    """Issue the default trial credit pack to a user with no credits yet.
+
+    Idempotent by construction: we only grant when the user has zero
+    ``CaseCredit`` rows of any state. Invite redemptions (which run
+    earlier in the user-creation flow) leave behind ``available``
+    credits, so invited users with starter packs are correctly skipped.
+
+    Returns ``True`` if credits were granted, ``False`` if the user
+    already had credits and the call was a no-op.
+    """
+    has_any_credit = (
+        db.query(CaseCredit.id)
+        .filter(CaseCredit.user_id == user.id)
+        .first()
+        is not None
+    )
+    if has_any_credit:
+        return False
+    grant_admin_credits(
+        db,
+        user=user,
+        tier=STARTER_GRANT_TIER,
+        quantity=STARTER_GRANT_QUANTITY,
+        reason="signup_starter_grant",
+    )
+    return True
+
+
 def issue_credits_from_pack_purchase(
     db: Session,
     *,
@@ -898,6 +935,9 @@ __all__: Iterable[str] = (
     "add_tokens_to_case",
     "upgrade_case_credit",
     "grant_admin_credits",
+    "grant_starter_credits_if_needed",
+    "STARTER_GRANT_TIER",
+    "STARTER_GRANT_QUANTITY",
     "issue_credits_from_pack_purchase",
     "credit_balance_for",
     "list_user_cases",
