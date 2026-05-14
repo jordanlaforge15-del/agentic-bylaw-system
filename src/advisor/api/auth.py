@@ -36,21 +36,30 @@ Why we commit before the route handler runs:
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import Any
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from advisor.auth.clerk import ClerkVerifier
+from advisor.auth.clerk_backend import ClerkBackendClient, ClerkBackendError
 from advisor.auth.fastapi import clerk_session_dependency
 from advisor.auth.session import ClerkSession
 from advisor.db.models import InviteRequest, User
 from layer1.db.base import utcnow
 
+logger = logging.getLogger(__name__)
 
-def resolve_or_create_user(db: Session, clerk_session: ClerkSession) -> User:
+
+def resolve_or_create_user(
+    db: Session,
+    clerk_session: ClerkSession,
+    *,
+    backend_client: ClerkBackendClient | None = None,
+) -> User:
     """Return the ``User`` row for ``clerk_session`` or create one.
 
     Lookup is by the unique ``clerk_user_id`` index. If the row exists
@@ -65,11 +74,25 @@ def resolve_or_create_user(db: Session, clerk_session: ClerkSession) -> User:
     Args:
         db: Open SQLAlchemy session bound to the advisor schema.
         clerk_session: Already-verified Clerk session.
+        backend_client: Optional Clerk Backend API client used to fill
+            ``email``/``full_name`` when the JWT didn't supply them.
+            Pass ``None`` to construct a default client that reads
+            ``CLERK_SECRET_KEY`` from the environment. The fallback
+            only triggers when ``clerk_session.email`` is empty AND
+            we're inserting a brand-new row — committing ``""`` to a
+            NOT NULL column defeats the constraint.
 
     Returns:
         The persistent ``User`` (newly added or fetched). The row is
         flushed so ``.id`` is populated; the caller's commit makes the
         row visible to other sessions.
+
+    Raises:
+        HTTPException(503): When we need to insert a new row but
+            neither the JWT nor the Backend API yields an email. The
+            request fails loudly instead of silently writing ``""`` —
+            an operator-visible signal that the JWT template or
+            backend key needs attention.
     """
     clerk_user_id = clerk_session.user_id
     email = clerk_session.email or ""
@@ -79,6 +102,15 @@ def resolve_or_create_user(db: Session, clerk_session: ClerkSession) -> User:
         db.query(User).filter(User.clerk_user_id == clerk_user_id).one_or_none()
     )
     if user is None:
+        if not email:
+            # JWT didn't carry the email claim (default Clerk template
+            # omits it). Ask Clerk's Backend API once, on first sign-in,
+            # so this user lands with a real email instead of "".
+            email, full_name = _fetch_profile_for_insert(
+                clerk_user_id=clerk_user_id,
+                fallback_full_name=full_name,
+                backend_client=backend_client,
+            )
         user = User(
             clerk_user_id=clerk_user_id,
             email=email,
@@ -156,9 +188,73 @@ def resolve_or_create_user(db: Session, clerk_session: ClerkSession) -> User:
     return user
 
 
+def _fetch_profile_for_insert(
+    *,
+    clerk_user_id: str,
+    fallback_full_name: str | None,
+    backend_client: ClerkBackendClient | None,
+) -> tuple[str, str | None]:
+    """Resolve ``(email, full_name)`` for a fresh ``User`` insert.
+
+    The JWT didn't carry ``email`` — usually because Clerk's default
+    session-token template omits it. We try the Backend API once. A
+    transient error or a still-empty result is fatal: the alternative
+    is writing ``""`` to a NOT NULL column, which is exactly the bug
+    we're fixing.
+    """
+    client = backend_client or ClerkBackendClient()
+    if not client.configured:
+        logger.warning(
+            "jit user create: no email in JWT and CLERK_SECRET_KEY unset; "
+            "refusing to insert clerk_user_id=%s with blank email",
+            clerk_user_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "email_unavailable",
+                "message": (
+                    "Could not determine email for new user. Configure the "
+                    "Clerk JWT template to include 'email' or set "
+                    "CLERK_SECRET_KEY for Backend API lookup."
+                ),
+            },
+        )
+    try:
+        profile = client.fetch_user(clerk_user_id)
+    except ClerkBackendError as exc:
+        logger.warning(
+            "jit user create: clerk backend lookup failed for %s: %s",
+            clerk_user_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "email_unavailable",
+                "message": "Clerk Backend API lookup failed.",
+            },
+        ) from exc
+    if not profile.email:
+        logger.warning(
+            "jit user create: clerk backend returned no email for %s",
+            clerk_user_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "email_unavailable",
+                "message": "Clerk user has no primary email address.",
+            },
+        )
+    return profile.email, profile.full_name or fallback_full_name
+
+
 def current_user_dependency(
     verifier: ClerkVerifier,
     db_session_factory: Callable[[], AbstractContextManager[Session]],
+    *,
+    backend_client: ClerkBackendClient | None = None,
 ) -> Callable[..., User]:
     """Build a FastAPI dependency that returns the current ``User``.
 
@@ -186,7 +282,9 @@ def current_user_dependency(
         clerk_session: ClerkSession = Depends(require_clerk_session),
     ) -> User:
         with db_session_factory() as db:
-            user = resolve_or_create_user(db, clerk_session)
+            user = resolve_or_create_user(
+                db, clerk_session, backend_client=backend_client
+            )
             # Commit explicitly so the row is visible to any other
             # sessions opened later in the request (chat-store writers,
             # usage-event recorders, etc.). See module docstring.

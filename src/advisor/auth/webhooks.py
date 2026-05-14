@@ -41,6 +41,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from advisor.auth.email_extract import full_name as _primary_full_name
+from advisor.auth.email_extract import primary_email as _primary_email_address
 from advisor.db.models import UsageEvent, User
 from layer1.db.base import utcnow
 
@@ -250,9 +252,29 @@ def _handle_user_created(
         db.query(User).filter(User.clerk_user_id == clerk_user_id).one_or_none()
     )
     if user is None:
+        if not email:
+            # Clerk delivered a user.created with no email_addresses
+            # entry (phone-only sign-up, dashboard-created test
+            # fixture, or a race where the email isn't verified yet).
+            # Skipping the insert is safer than writing "" to the
+            # NOT NULL column — the JIT path (with Backend API
+            # fallback) or a later user.updated event will create the
+            # row with a real email.
+            logger.info(
+                "clerk webhook: user.created has no primary email for %s; "
+                "skipping insert (id=%s)",
+                clerk_user_id,
+                event.id,
+            )
+            return WebhookResult(
+                handled=True,
+                event_type=event.type,
+                event_id=event.id,
+                note="missing_email",
+            )
         user = User(
             clerk_user_id=clerk_user_id,
-            email=email or "",
+            email=email,
             full_name=full_name,
         )
         db.add(user)
@@ -460,56 +482,8 @@ def _record_processed_event(
     )
 
 
-def _primary_email(data: dict[str, Any]) -> str | None:
-    """Pull the primary email from a Clerk user payload.
-
-    Clerk's payload shape:
-        {
-          "primary_email_address_id": "idn_...",
-          "email_addresses": [
-            {"id": "idn_...", "email_address": "user@example.com", ...},
-            ...
-          ],
-        }
-
-    We prefer the entry whose ``id`` matches ``primary_email_address_id``;
-    if Clerk didn't mark one as primary (rare) we fall back to the
-    first entry.
-    """
-    addrs = data.get("email_addresses")
-    if not isinstance(addrs, list) or not addrs:
-        # Some Clerk event shapes flatten this to a top-level
-        # ``email_address`` string. Try that as a fallback.
-        email = data.get("email_address")
-        return email if isinstance(email, str) and email else None
-
-    primary_id = data.get("primary_email_address_id")
-    if isinstance(primary_id, str):
-        for entry in addrs:
-            if isinstance(entry, dict) and entry.get("id") == primary_id:
-                email = entry.get("email_address")
-                if isinstance(email, str) and email:
-                    return email
-    first = addrs[0]
-    if isinstance(first, dict):
-        email = first.get("email_address")
-        if isinstance(email, str) and email:
-            return email
-    return None
-
-
-def _full_name(data: dict[str, Any]) -> str | None:
-    """Build a display name from Clerk's first_name / last_name fields.
-
-    Returns ``None`` if both are missing — callers treat ``None`` as
-    "leave the existing value alone" rather than "blank the field."
-    """
-    first = data.get("first_name")
-    last = data.get("last_name")
-    parts = [p for p in (first, last) if isinstance(p, str) and p.strip()]
-    if not parts:
-        return None
-    return " ".join(p.strip() for p in parts)
+_primary_email = _primary_email_address
+_full_name = _primary_full_name
 
 
 def _string(value: Any) -> str | None:

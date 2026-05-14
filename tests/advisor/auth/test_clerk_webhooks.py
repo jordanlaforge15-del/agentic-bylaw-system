@@ -61,6 +61,38 @@ def test_user_created_inserts_new_row(tmp_path: Path) -> None:
         assert user.full_name == "Alex Doe"
 
 
+def test_user_created_missing_email_skips_insert(tmp_path: Path) -> None:
+    """Empty email_addresses must NOT insert a row with email="".
+
+    Repro of the prod bug: writing "" to a NOT NULL VARCHAR(320) lets
+    junk land instead of failing loudly. The handler should skip the
+    insert and let the JIT path (with Backend API fallback) or a later
+    user.updated event create the row with a real email.
+    """
+    create_all(_db_url(tmp_path))
+    with session_scope(_db_url(tmp_path)) as s:
+        event = ClerkWebhookEvent(
+            id="msg_no_email",
+            type="user.created",
+            data={
+                "id": "user_phone_only",
+                "email_addresses": [],
+                "first_name": "John",
+                "last_name": "Doe",
+            },
+        )
+        result = handle_event(s, event)
+        s.commit()
+        assert result.handled is True
+        assert result.note == "missing_email"
+        assert (
+            s.query(User)
+            .filter(User.clerk_user_id == "user_phone_only")
+            .one_or_none()
+            is None
+        )
+
+
 def test_user_created_grants_starter_credits(tmp_path: Path) -> None:
     """A brand-new user gets the default trial credit pack on user.created.
 
