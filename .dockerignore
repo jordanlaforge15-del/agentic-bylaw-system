@@ -39,6 +39,7 @@ docs/*
 !docs/agent
 docs/agent/*
 !docs/agent/persona.md
+!docs/agent/classifier-persona.md
 tests
 evals
 examples
