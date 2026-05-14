@@ -126,6 +126,17 @@ class ChatSession:
     # case-billed (legacy / test path).
     case_id: int | None = field(default=None, compare=False)
     tier: str | None = field(default=None, compare=False)
+    # Active case anchor (the address / project ref / DA the case was
+    # opened against). Mirrored onto the in-memory session by the chat
+    # route on every turn — the in-memory ChatSession is reconstituted
+    # from the DB store on each request, so transient fields don't
+    # survive between turns. Used by ``send_user_message_blocking`` to
+    # stitch a one-paragraph anchor block onto the system prompt so the
+    # LLM treats the anchor as the implicit subject of every question
+    # in the conversation. ``None`` means no active case anchor (legacy
+    # / test path); the system prompt is sent unmodified.
+    case_anchor_label: str | None = field(default=None, compare=False)
+    case_anchor_kind: str | None = field(default=None, compare=False)
     # Per-case cumulative budget remaining (input + output tokens).
     # Decremented in ``send_user_message_blocking`` after the tool loop
     # returns; the chat route surfaces a budget-warning SSE when this
@@ -178,7 +189,11 @@ class ChatSession:
 
         request = CompletionRequest(
             model=self.model,
-            system=self.system_prompt,
+            system=_compose_system_prompt(
+                self.system_prompt,
+                anchor_label=self.case_anchor_label,
+                anchor_kind=self.case_anchor_kind,
+            ),
             messages=_mark_conversation_cache_milestones(submission_messages),
             tools=list(self.tool_defs),
             # The system prompt and tools array are byte-stable for the
@@ -263,6 +278,44 @@ class ChatSession:
         # frontend can't tell the difference from a real stream.
         async for event in MockGateway._stream_from_response(final_response):
             yield event
+
+
+_ANCHOR_KIND_LABELS = {
+    "address": "civic address",
+    "project_ref": "project reference",
+    "development_application": "development application number",
+}
+
+
+def _compose_system_prompt(
+    persona: str,
+    *,
+    anchor_label: str | None,
+    anchor_kind: str | None,
+) -> str:
+    """Stitch the active-case anchor onto the persona prompt.
+
+    Returns ``persona`` unchanged when no anchor is set (legacy / test
+    path). Otherwise appends a short block telling the LLM the case's
+    implicit subject — the agent then populates ``search_bylaw_evidence``'s
+    structured ``location`` slot from this anchor instead of asking the
+    user to repeat the address on every turn.
+    """
+    if not anchor_label:
+        return persona
+    kind_label = _ANCHOR_KIND_LABELS.get(anchor_kind or "", "anchor")
+    return (
+        f"{persona}\n\n"
+        "## Active case\n\n"
+        f"The user has opened a case for the following {kind_label}: "
+        f"{anchor_label}\n\n"
+        "Treat this anchor as the implicit subject of every question in "
+        "this conversation unless the user explicitly changes the "
+        "subject. When you call ``search_bylaw_evidence`` about this "
+        "property, parse the anchor into the structured ``location`` "
+        "slot (civic_number + street for addresses) rather than asking "
+        "the user to repeat it."
+    )
 
 
 def _mark_conversation_cache_milestones(messages: list[Message]) -> list[Message]:

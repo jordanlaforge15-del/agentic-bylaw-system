@@ -16,7 +16,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AppHeader } from "@/components/product/app-header";
 import { Sidebar } from "@/components/product/sidebar";
 import { ChatThread } from "@/components/product/chat-thread";
@@ -113,6 +113,8 @@ function ProductAppPageInner() {
   // via the ``request_tier_upgrade`` tool. ``budgetWarning`` captures
   // the ``case_budget_warning`` payload (Layer 1 nearing exhaustion).
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const caseIdFromUrl = useMemo(() => {
     const raw = searchParams.get("case_id");
     if (!raw) return null;
@@ -148,6 +150,27 @@ function ProductAppPageInner() {
       setSessionId(null);
     }
   }, [caseIdFromUrl]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-send the first message that the case-open form passed via
+  // ``?first_message=...``. Runs once: a ref guard handles React Strict
+  // Mode's double-mount, and we strip the param via ``router.replace``
+  // before awaiting send() so a refresh mid-stream doesn't replay it.
+  // We require ``caseId`` to be set first — sending without one would
+  // hit the no-active-case banner and 400 the chat call.
+  const autoSentFirstMessageRef = useRef(false);
+  useEffect(() => {
+    if (autoSentFirstMessageRef.current) return;
+    if (caseIdFromUrl === null) return;
+    const firstMessage = searchParams.get("first_message");
+    if (!firstMessage) return;
+    autoSentFirstMessageRef.current = true;
+    const cleaned = new URLSearchParams(searchParams.toString());
+    cleaned.delete("first_message");
+    const nextUrl =
+      cleaned.size > 0 ? `${pathname}?${cleaned.toString()}` : pathname;
+    router.replace(nextUrl, { scroll: false });
+    void send(firstMessage);
+  }, [caseIdFromUrl, searchParams, pathname, router]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Viewport gates. We render the Sheet/Drawer overlay components
   // conditionally rather than via CSS `display: none`, so their
