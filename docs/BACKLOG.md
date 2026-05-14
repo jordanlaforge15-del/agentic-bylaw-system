@@ -85,45 +85,32 @@ pass deferred.
   (accept a `defaultValue` prop). Small UX win; skipped during the
   velocity pass to keep the chat page's surface area bounded.
 
-## Auth surface (opened 2026-05-14)
+## Auth surface (resolved 2026-05-14 in web:0.6.1)
 
-Two related top-nav / auth-affordance bugs observed after the
-`web:0.6.0` deploy. Probably share a root cause: `proxy.ts:isClerkConfigured()`
-reads `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` which Next inlines at build
-time, and the 0.6.0 build was run without `--build-arg
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=…` (already-known footgun, see commit
-`07bb755 [web] Top-nav: Sign in as primary CTA + fix CLERK_ENABLED
-build-arg`). The same key drives `CLERK_ENABLED` in the top-nav, so a
-build with the arg missing simultaneously breaks (a) the proxy's
-detection of Clerk-configured state and (b) the top-nav's
-sign-in/avatar affordance.
+Two related top-nav / auth-affordance bugs observed after `web:0.6.0`
+deploy:
+1. No Sign-in / Sign-up CTA on `/` or marketing pages while
+   unauthenticated.
+2. `/admin/invites` redirected to `/access?gate=admin` (legacy
+   cookie-gate fallback) instead of Clerk's `/sign-in`.
 
-- [ ] **Sign-in menu missing from public pages.** Hitting `/` or any
-  marketing page while unauthenticated shows no Sign-in / Sign-up CTA
-  in the top-nav. Same root cause as below — when `CLERK_ENABLED` is
-  inlined as `undefined`, `web/components/top-nav.tsx` renders the
-  signed-out branch with the legacy cookie-gate copy (or hides the
-  auth chrome entirely) instead of Clerk's `<SignInButton>`. Verify
-  by rebuilding with the build-arg and re-checking; if the affordance
-  still doesn't render after that, dig into top-nav's signed-out
-  branch.
+Both shared one root cause: `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is
+inlined by Next.js at build time, and `web:0.6.0` was built without
+`--build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=…` — so every
+`process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` read in the bundle
+resolved to `undefined` in production.
 
-- [ ] **Proxy falls through to `/access?gate=admin` despite Clerk
-  being configured.** `curl -I https://agenticbylawsystems.com/admin/invites`
-  returns `307 → /access?gate=admin&from=/admin/invites` (the legacy
-  cookie-gate fallback) instead of redirecting to `/sign-in`. The
-  `isClerkConfigured()` function in `web/proxy.ts` returns false at
-  request time because Next inlined the build-time-undefined
-  `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Two fix options:
-  - **Quick**: rebuild web 0.6.1 with `--build-arg
-    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_…` and redeploy.
-  - **Robust**: change `isClerkConfigured()` to read `CLERK_SECRET_KEY`
-    instead (no `NEXT_PUBLIC_` prefix → read at runtime, immune to
-    the inlining trap). One-line code change.
-  Recommend doing both — the code fix prevents future builds from
-  hitting the same trap.
+Fixed by two changes shipped together in `web:0.6.1`:
+- **`isClerkConfigured()` in `web/proxy.ts` and `web/lib/advisor-auth.ts`
+  now reads `CLERK_SECRET_KEY`** (no `NEXT_PUBLIC_` prefix → resolved
+  at runtime from container env, immune to the inlining trap). The
+  client-side `CLERK_ENABLED` checks in `top-nav.tsx` and
+  `sidebar.tsx` still read the publishable key — they have to, since
+  they run in the browser.
+- **`web/Dockerfile` build-arg is now documented as required** in
+  `docs/DEPLOYMENT.md` so future builds don't hit the same footgun.
 
-  The `/access` page and `abs_demo` / `abs_admin` cookie gate are
-  NOT dead code — they remain the fallback for unconfigured-Clerk
-  deployments (local dev, future Clerk outages). The bug is reaching
-  them in production when Clerk IS configured, not their existence.
+The `/access` page and `abs_demo` / `abs_admin` cookie gate remain
+in the codebase as the fallback for unconfigured-Clerk deployments
+(local dev, future Clerk outages). Production no longer reaches them
+when Clerk is configured.

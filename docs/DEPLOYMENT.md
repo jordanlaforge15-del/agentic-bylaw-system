@@ -62,6 +62,7 @@ The PAT needs `write:packages` scope. Credentials persist in `~/.docker/config.j
 caffeinate -i -s docker buildx build \
   --platform linux/amd64 \
   -f web/Dockerfile \
+  --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_... \
   -t ghcr.io/jordanlaforge15-del/bylaw-web:X.Y.Z \
   --push \
   web/
@@ -71,6 +72,7 @@ caffeinate -i -s docker buildx build \
 - `caffeinate -i -s` prevents macOS sleep during the long upload (residential upstream is slow).
 - **Always bump the version tag**. Never deploy `:latest` to production.
 - Final image is ~120 MB.
+- **`--build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=...` is required.** Next.js inlines `NEXT_PUBLIC_*` env vars at build time. Client components (`top-nav.tsx`, `sidebar.tsx`) read the publishable key to decide whether to render Clerk's signed-in/out UI; if the build-arg is missing they bake in `undefined` and silently hide the sign-in CTA in production. The server-side `proxy.ts` no longer depends on this (it reads `CLERK_SECRET_KEY` at runtime instead) but the client components have no choice — they run in the browser. Pull the value from `/srv/bylaw/.env` on prod for parity.
 
 ### Advisor image
 
