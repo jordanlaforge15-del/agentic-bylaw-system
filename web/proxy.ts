@@ -45,18 +45,27 @@ const ADMIN_USER_IDS: ReadonlySet<string> = new Set(
     .filter(Boolean),
 );
 
-// True only when the Clerk publishable key is set AND looks real.
-// The example file ships placeholders like "pk_test_replace-me" — if
+// True only when the Clerk secret key is set AND looks real.
+// We deliberately read CLERK_SECRET_KEY (no NEXT_PUBLIC_ prefix) so
+// the value is resolved at runtime from the container env. The
+// publishable key would be inlined at build time by Next.js, which
+// caused a production footgun: an image built without
+// `--build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=...` ended up with
+// `undefined` baked into the bundled proxy, making this function
+// return false at request time and falling through to the legacy
+// cookie gate even though Clerk was correctly configured at runtime.
+// CLERK_SECRET_KEY is server-only so Next never inlines it.
+//
+// The example file ships placeholders like "sk_test_replace-me" — if
 // someone copies the example without filling in real keys, Clerk's
-// backend rejects them at request time with "Missing publishableKey".
-// Detecting the placeholder shape here lets us fall back to the dev
-// path cleanly instead of crashing every page render. Real Clerk keys
-// are >40 chars; placeholders are short.
+// backend rejects them at request time. Detecting the placeholder
+// shape here lets us fall back to the dev path cleanly instead of
+// crashing every page render. Real Clerk keys are >40 chars.
 function isClerkConfigured(): boolean {
-  const k = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+  const k = process.env.CLERK_SECRET_KEY;
   if (!k) return false;
   if (k.includes("replace")) return false;
-  return /^pk_(test|live)_/.test(k) && k.length > 40;
+  return /^sk_(test|live)_/.test(k) && k.length > 40;
 }
 
 const handler = isClerkConfigured()

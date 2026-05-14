@@ -18,17 +18,23 @@ import { auth } from "@clerk/nextjs/server";
 
 const DEMO_USER_ID = process.env.ADVISOR_DEMO_USER_ID || "demo-user-1";
 
-// True only when both Clerk keys are set AND look like real values.
+// True only when the Clerk secret key is set AND looks real.
+// We deliberately only check CLERK_SECRET_KEY (no NEXT_PUBLIC_ prefix)
+// so the value is resolved at runtime from the container env. The
+// publishable key would be inlined at build time by Next.js, which
+// caused a production footgun: an image built without the
+// `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` build-arg ended up with
+// `undefined` baked into bundles, making detection return false at
+// request time even when Clerk was correctly configured at runtime.
 // The example .env file ships placeholders like "sk_test_replace-me";
 // if someone copies it without filling in real keys, calling auth()
 // would crash @clerk/backend at request time. Falling back to the
 // dev path here keeps things working until real keys land.
 function isClerkConfigured(): boolean {
   const sk = process.env.CLERK_SECRET_KEY;
-  const pk = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
-  if (!sk || !pk) return false;
-  if (sk.includes("replace") || pk.includes("replace")) return false;
-  return /^sk_(test|live)_/.test(sk) && /^pk_(test|live)_/.test(pk);
+  if (!sk) return false;
+  if (sk.includes("replace")) return false;
+  return /^sk_(test|live)_/.test(sk) && sk.length > 40;
 }
 
 export async function buildAdvisorAuthHeaders(): Promise<
