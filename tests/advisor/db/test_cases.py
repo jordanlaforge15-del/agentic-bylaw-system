@@ -9,11 +9,14 @@ import pytest
 from advisor.db.cases import (
     NoAvailableCreditError,
     REOPEN_WINDOW,
+    STARTER_GRANT_QUANTITY,
+    STARTER_GRANT_TIER,
     UnknownTierError,
     close_case,
     commit_credit_for_session,
     credit_balance_for,
     grant_admin_credits,
+    grant_starter_credits_if_needed,
     list_user_cases,
     match_case,
     normalise_anchor,
@@ -503,6 +506,55 @@ def test_open_case_records_open_event(tmp_path: Path) -> None:
 
 
 # ---------- pack purchase issues N credits --------------------------------
+
+
+# ---------- grant_starter_credits_if_needed -------------------------------
+
+
+def test_grant_starter_credits_grants_default_pack_to_new_user(
+    tmp_path: Path,
+) -> None:
+    """A user with no credits gets the default starter pack."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        granted = grant_starter_credits_if_needed(s, user=s.get(User, user_id))
+        assert granted is True
+
+    with session_scope(db_url) as s:
+        credits = list(s.query(CaseCredit).filter(CaseCredit.user_id == user_id))
+        assert len(credits) == STARTER_GRANT_QUANTITY
+        assert all(c.tier == STARTER_GRANT_TIER for c in credits)
+        assert all(c.state == "available" for c in credits)
+        assert all(c.source == "admin_grant" for c in credits)
+
+
+def test_grant_starter_credits_is_noop_when_user_already_has_credits(
+    tmp_path: Path,
+) -> None:
+    """Existing credits — in any state — block a second starter grant."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        grant_admin_credits(
+            s,
+            user=s.get(User, user_id),
+            tier="quick",
+            quantity=1,
+            reason="test_seed",
+        )
+
+    with session_scope(db_url) as s:
+        granted = grant_starter_credits_if_needed(s, user=s.get(User, user_id))
+        assert granted is False
+
+    with session_scope(db_url) as s:
+        credits = list(s.query(CaseCredit).filter(CaseCredit.user_id == user_id))
+        # Only the seeded credit — no starter pack on top.
+        assert len(credits) == 1
+        assert credits[0].tier == "quick"
 
 
 def test_grant_admin_credits_creates_one_row_per_credit(tmp_path: Path) -> None:

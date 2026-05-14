@@ -10,6 +10,8 @@ from advisor.auth.webhooks import (
     verify_signature,
 )
 from advisor.db import UsageEvent, User
+from advisor.db.cases import STARTER_GRANT_QUANTITY, STARTER_GRANT_TIER
+from advisor.db.models import CaseCredit
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
 
@@ -57,6 +59,38 @@ def test_user_created_inserts_new_row(tmp_path: Path) -> None:
         user = s.query(User).filter(User.clerk_user_id == "user_new").one()
         assert user.email == "new@example.com"
         assert user.full_name == "Alex Doe"
+
+
+def test_user_created_grants_starter_credits(tmp_path: Path) -> None:
+    """A brand-new user gets the default trial credit pack on user.created.
+
+    Without this grant the user lands on /app with no credits and can't
+    open a case — the whole product is unusable for them.
+    """
+    create_all(_db_url(tmp_path))
+    with session_scope(_db_url(tmp_path)) as s:
+        event = ClerkWebhookEvent(
+            id="msg_starter",
+            type="user.created",
+            data={
+                "id": "user_starter",
+                "primary_email_address_id": "idn_s",
+                "email_addresses": [
+                    {"id": "idn_s", "email_address": "starter@example.com"},
+                ],
+                "first_name": "Star",
+                "last_name": "Ter",
+            },
+        )
+        handle_event(s, event)
+        s.commit()
+
+    with session_scope(_db_url(tmp_path)) as s:
+        user = s.query(User).filter(User.clerk_user_id == "user_starter").one()
+        credits = list(s.query(CaseCredit).filter(CaseCredit.user_id == user.id))
+        assert len(credits) == STARTER_GRANT_QUANTITY
+        assert all(c.tier == STARTER_GRANT_TIER for c in credits)
+        assert all(c.state == "available" for c in credits)
 
 
 def test_user_created_existing_row_updates_drift(tmp_path: Path) -> None:

@@ -205,9 +205,22 @@ function ProductAppPageInner() {
         );
         return;
       }
-      const data = (await res.json()) as { messages: BackendMessage[] };
+      const data = (await res.json()) as {
+        messages: BackendMessage[];
+        case_id?: number | null;
+        tier?: string | null;
+      };
       setParcel(extractParcelContext(data.messages));
       setMessages(translateHistory(data.messages));
+      // Keep the case-billing context aligned with the authoritative
+      // server state — covers the case where the resume fallback
+      // attached a case mid-turn that the SSE stream didn't surface.
+      if (typeof data.case_id === "number") {
+        setCaseIdBoth(data.case_id);
+      }
+      if (typeof data.tier === "string") {
+        setCaseTier(data.tier);
+      }
     } catch (e) {
       // Network blip. Same "don't overwrite stream errors" rule.
       if (sessionIdRef.current !== sessionId) return;
@@ -447,9 +460,21 @@ function ProductAppPageInner() {
         setError(`Couldn't load that reading (HTTP ${res.status}).`);
         return;
       }
-      const data = (await res.json()) as { messages: BackendMessage[] };
+      const data = (await res.json()) as {
+        messages: BackendMessage[];
+        case_id?: number | null;
+        tier?: string | null;
+      };
       setMessages(translateHistory(data.messages));
       setSessionId(id);
+      // Rehydrate the case-billing context from the server. The /v1/chat
+      // resume path can fall back to the session's stored case_id, but
+      // the UI also needs it to drive the header strip and (when null
+      // on a session with prior turns) the legacy-session composer gate.
+      setCaseIdBoth(
+        typeof data.case_id === "number" ? data.case_id : null,
+      );
+      setCaseTier(typeof data.tier === "string" ? data.tier : null);
       setParcel(extractParcelContext(data.messages));
     } catch (e) {
       setError(`Couldn't load that reading: ${(e as Error).message}`);
@@ -539,7 +564,22 @@ function ProductAppPageInner() {
               }}
             />
           )}
-          <Composer onSend={send} disabled={thinking} />
+          {activeSessionId !== null && caseId === null ? (
+            // Legacy session — predates the case-credit model and has
+            // no case attached, so /v1/chat will reject every turn with
+            // case_id_required. Replace the composer with a one-way
+            // exit so users can't waste a question on it.
+            <div className="border-t border-hair px-4 py-3 bg-surface-alt text-[13px] text-text-muted">
+              This conversation predates our new case-based billing and
+              can&rsquo;t be continued.{" "}
+              <a href="/cases/new" className="underline text-text">
+                Start a new case
+              </a>{" "}
+              to ask another question.
+            </div>
+          ) : (
+            <Composer onSend={send} disabled={thinking} />
+          )}
         </main>
 
         {/* Desktop parcel pane (lg+ only). Below lg the pane shows

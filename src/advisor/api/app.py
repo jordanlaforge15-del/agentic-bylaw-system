@@ -122,6 +122,12 @@ class ChatSessionResponse(BaseModel):
     user_id: str
     model: str
     messages: list[Message]
+    # Case-billing context. ``None`` for legacy sessions that predate
+    # the case-credit model — the frontend uses this to gate the
+    # composer (a null ``case_id`` means the conversation can't be
+    # resumed and the user must start a new case).
+    case_id: int | None = None
+    tier: str | None = None
 
 
 class ChatSessionSummary(BaseModel):
@@ -431,7 +437,18 @@ def create_app(
                     .one_or_none()
                 )
                 if existing_credit is None:
-                    if body.case_id is None:
+                    # Resume-path safety net: if the session is already
+                    # attached to a case in the DB but the live credit
+                    # got refunded / expired (or the client just didn't
+                    # bother sending case_id on a follow-up turn), fall
+                    # back to the session's stored case_id rather than
+                    # forcing the client to re-supply it.
+                    effective_case_id = (
+                        body.case_id
+                        if body.case_id is not None
+                        else db_chat_session.case_id
+                    )
+                    if effective_case_id is None:
                         raise HTTPException(
                             status_code=400,
                             detail={
@@ -443,7 +460,7 @@ def create_app(
                                 ),
                             },
                         )
-                    case_row = db.get(Case, body.case_id)
+                    case_row = db.get(Case, effective_case_id)
                     if case_row is None or case_row.user_id != db_user.id:
                         raise HTTPException(
                             status_code=404, detail={"code": "case_not_found"}
@@ -631,6 +648,8 @@ def create_app(
             user_id=session.user_id,
             model=session.model,
             messages=session.messages,
+            case_id=session.case_id,
+            tier=session.tier,
         )
 
     return app
