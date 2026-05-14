@@ -564,18 +564,35 @@ function ProductAppPageInner() {
               }}
             />
           )}
-          {activeSessionId !== null && caseId === null ? (
-            // Legacy session — predates the case-credit model and has
-            // no case attached, so /v1/chat will reject every turn with
-            // case_id_required. Replace the composer with a one-way
-            // exit so users can't waste a question on it.
+          {caseId === null ? (
+            // No active case → /v1/chat would 400 case_id_required.
+            // Two sub-states share this gate:
+            //   - activeSessionId !== null: a legacy session loaded
+            //     from the sidebar that predates the case-credit model.
+            //   - activeSessionId === null: user landed on /app with
+            //     no ?case_id= in the URL (direct nav / bookmark /
+            //     post-signin redirect). Either way, the entry point
+            //     for billable chat is /cases/new.
             <div className="border-t border-hair px-4 py-3 bg-surface-alt text-[13px] text-text-muted">
-              This conversation predates our new case-based billing and
-              can&rsquo;t be continued.{" "}
-              <a href="/cases/new" className="underline text-text">
-                Start a new case
-              </a>{" "}
-              to ask another question.
+              {activeSessionId !== null ? (
+                <>
+                  This conversation predates our new case-based billing
+                  and can&rsquo;t be continued.{" "}
+                  <a href="/cases/new" className="underline text-text">
+                    Start a new case
+                  </a>{" "}
+                  to ask another question.
+                </>
+              ) : (
+                <>
+                  To start a new reading,{" "}
+                  <a href="/cases/new" className="underline text-text">
+                    open a case
+                  </a>{" "}
+                  first — pick the address, project, or DA you&rsquo;re
+                  asking about.
+                </>
+              )}
             </div>
           ) : (
             <Composer onSend={send} disabled={thinking} />
