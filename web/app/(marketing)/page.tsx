@@ -60,9 +60,10 @@ function HeroSafe() {
             <HighlightWord>workflow.</HighlightWord>
           </h1>
           <p className="text-text-muted m-0 text-[15px] sm:text-[17px] lg:text-[19px] leading-[1.45] lg:leading-[1.4] max-w-[520px]">
-            ABS reads the Halifax Regional Municipality Land Use By-law,
+            ABS reads the Halifax Regional Centre Land Use By-law,
             applied to your specific parcel. Ask in plain English. Get a
-            sourced answer in seconds.
+            sourced answer in seconds. More HRM bylaws coming through
+            2026.
           </p>
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-2.5 mt-1 sm:mt-1.5">
             <Link href="/signup" className="contents">
@@ -98,7 +99,7 @@ function HowItWorks() {
     {
       n: "02",
       t: "ABS reads",
-      d: "The agent locates your parcel, opens the relevant sections of the HRM Land Use By-law, and works the math.",
+      d: "The agent locates your parcel, opens the relevant sections of the Regional Centre Land Use By-law, and works the math.",
     },
     {
       n: "03",
@@ -259,8 +260,9 @@ function ClosingCTA() {
             className="text-[14px] sm:text-[16px] leading-[1.5] mt-3 sm:mt-4 max-w-[440px]"
             style={{ color: "var(--text-muted)" }}
           >
-            Currently invite-only while we deepen HRM coverage. Tell us about
-            your project and we&apos;ll get you in.
+            Currently invite-only. The Regional Centre Plan is live;
+            more HRM bylaws are on the way. Tell us about your project
+            and we&apos;ll get you in.
           </p>
         </div>
         <div className="flex flex-col gap-2.5 sm:gap-3">

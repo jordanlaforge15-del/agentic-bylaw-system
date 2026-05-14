@@ -28,7 +28,7 @@ const TIER_BLURBS: Record<Tier, string> = {
   quick:
     "Single-property zoning lookups, permitted-use checks. ~4–6 retrieval rounds.",
   standard:
-    "Variance research, multi-bylaw cross-references, development standards. ~12–18 retrieval rounds.",
+    "Variance research, multi-section cross-references, development standards. ~12–18 retrieval rounds.",
   complex:
     "Rezoning, multi-overlay analysis, deep development-application files. ~35–50 retrieval rounds.",
 };
@@ -50,7 +50,7 @@ const FAQS = [
   },
   {
     q: "What jurisdictions are supported?",
-    a: "Halifax Regional Municipality only, during private beta. We're adding Atlantic Canada cities through 2026.",
+    a: "Halifax Regional Centre (the urban core of HRM, governed by the Regional Centre Land Use By-law) during private beta. We're adding the rest of HRM and other Atlantic Canada jurisdictions through 2026.",
   },
 ];
 

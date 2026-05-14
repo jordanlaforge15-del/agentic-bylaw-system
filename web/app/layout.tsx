@@ -20,7 +20,7 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "ABS° — Agentic Bylaw System",
   description:
-    "An expert planner integrated into your workflow. ABS° reads the Halifax Regional Municipality Land Use By-law, applied to your specific parcel.",
+    "An expert planner integrated into your workflow. ABS° reads the Halifax Regional Centre Land Use By-law, applied to your specific parcel. More HRM bylaws coming.",
 };
 
 // Mobile-first viewport. `viewportFit: "cover"` lets the page paint into
