@@ -520,14 +520,16 @@ function ProductAppPageInner() {
   }
 
   const onNew = () => {
+    // "+ New reading" routes through the full case-open flow so the
+    // user supplies an anchor + first message rather than silently
+    // continuing the current case (the old local-reset body left
+    // ``caseId`` from the URL bound, so a click looked like "fresh
+    // chat" but actually kept billing on the prior case). Abort any
+    // in-flight stream so it doesn't keep mutating state after we
+    // navigate; the next /app mount starts fresh.
     abortRef.current?.abort();
-    setSessionId(null);
-    setMessages([OPENING]);
-    setThinking(false);
-    setThinkLabel("Reading bylaw…");
-    setError(null);
-    setParcel(null);
     setSidebarOpen(false);
+    router.push("/cases/new");
   };
 
   // Drawer-aware versions of the sidebar callbacks. Selecting a
