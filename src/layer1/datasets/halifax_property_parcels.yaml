@@ -1,14 +1,14 @@
 name: halifax_property_parcels
 publisher: Halifax Regional Municipality
 format: geojson
-# HRM publishes parcel polygons as an ArcGIS REST FeatureServer layer on
-# the same host as the other Halifax datasets. The parser handles
-# pagination via the existing ArcGIS REST path. outSR=4326 asks the
-# server to reproject from EPSG:3857 (the layer's native CRS) so the
-# parser receives a CRS-clean payload. Verify the service name against
-# the current HRM open data catalogue before first ingest — Halifax has
-# republished parcel layers under slightly different names in the past.
-source_url: https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/Parcels/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=geojson
+# HRM publishes parcel polygons under "Parcel Account and Assessments"
+# on the same ArcGIS host as the zoning, height, FAR, heritage, bonus
+# and shadow datasets. Native CRS is EPSG:3857; outSR=4326 asks the
+# server to reproject to WGS-84 so the parser gets a CRS-clean payload
+# without needing pyproj on the client. ArcGIS pagination (max 2000
+# rows/page per the layer metadata) is handled transparently by the
+# existing ingest pipeline.
+source_url: https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/HRM_Parcel_Polygon_with_Accounts/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=geojson
 crs: EPSG:4326
 
 # role=property_parcels lets the case-open spatial extractor find the
@@ -18,17 +18,24 @@ crs: EPSG:4326
 role: property_parcels
 
 attributes:
-  # HRM's parcel layer keys each feature on PID (Nova Scotia Parcel ID).
-  # If the actual layer uses a different feature key (e.g. OBJECTID),
-  # adjust this on first ingest and verify with --dry-run.
+  # PID is the 8-character Nova Scotia Parcel ID. It's also present on
+  # the civic-addresses dataset, which is what enables the address →
+  # parcel polygon join the extractor relies on.
   feature_key: PID
   canonical:
     parcel_id:
       from: PID
       type: string
   ignore:
+    # AAN (Assessment Account Number) and ASSESSMENT (assessed value)
+    # are deliberately not surfaced as canonical fields — the bylaw
+    # advisor doesn't reason about assessed value, and ignoring them
+    # keeps the canonical vocabulary focused. Raw values stay in
+    # external_dataset_feature.attributes_json if a downstream feature
+    # ever needs them.
+    - AAN
+    - ASSESSMENT
+    - AREAUNITS
     - OBJECTID
     - Shape__Area
     - Shape__Length
-    - FCODE
-    - SACC
