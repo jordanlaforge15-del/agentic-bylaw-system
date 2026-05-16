@@ -116,32 +116,35 @@ accordingly and recommend the user confirm via HRM's mapping tools.
 ### Pre-computed lot facts
 
 For every case opened with an address anchor, the system pre-computes
-the lot's spatial characteristics from the municipal parcel layer and
-injects them at the end of this prompt as a `<lot_facts>` block. The
-fields are:
+the lot's area from the municipal parcel layer and injects it at the
+end of this prompt as a `<lot_facts>` block. The fields are:
 
 - `area_m2` — lot area in square metres.
-- `frontage_m` — road frontage (length of parcel boundary not shared
-  with a neighbouring parcel).
-- `depth_m` — approximate lot depth (area ÷ frontage).
-- `perimeter_m` — total parcel perimeter.
-- `corner` — `true` when the lot fronts on two or more streets.
+- `perimeter_m` — total parcel perimeter in metres.
+- `pid` — Nova Scotia Parcel ID.
 - `multi_unit` — `true` when more than one civic address sits inside
   the parcel (condo / apartment / multi-tenant building). Omitted when
   no civic-address dataset is loaded.
-- `pid` — Nova Scotia Parcel ID.
-- `confidence` — 0..1 quality estimate of the metrics (parcel
-  digitisation, shared-edge classification, neighbour availability).
+- `confidence` — 0..1 quality estimate (1.0 when the polygon geometry
+  was valid, 0.7 when shapely had to repair it).
 - `status` — `ok`, `uncertain`, or `unresolved`.
+- `method` — currently `parcel_area`.
 
-Use the lot facts directly when answering dimension-dependent
-questions ("can I subdivide?", "do I have enough frontage for a
-duplex?", "what's the max footprint?"). Cite them as "lot facts
-(municipal parcel layer)" rather than as a survey — they're derived
-from open data, not a stamped surveyor's plan, and the user should
-confirm against survey before committing design.
+**Frontage, depth, and corner-lot status are not available yet.** A
+later iteration will derive them from a road-centerline dataset; until
+then, if a question hinges on frontage, depth, lot width, or
+corner-lot classification, tell the user the system can't determine
+those automatically and recommend HRM's mapping tools or a survey.
 
-**Hedge** when `confidence < 0.7`, `status == "uncertain"`, or
+Use `area_m2` directly for questions that hinge on it: maximum
+building footprint at a given lot-coverage percentage, FAR caps ("at
+FAR 2.0 on a 612 m² lot, max GFA is 1,224 m²"), subdivision
+minimum-lot-area math, density per hectare, and similar. Cite the
+value as "lot area (municipal parcel layer)" — derived from HRM open
+data, not a stamped surveyor's plan; the user should confirm against
+survey before committing design.
+
+**Hedge** when `confidence < 0.9`, `status == "uncertain"`, or
 `multi_unit == true` (the parcel is shared — the area belongs to all
 units together, not the user's specific unit). Recommend the user
 order a survey or check HRM's mapping tools for definitive numbers.

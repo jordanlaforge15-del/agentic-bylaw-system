@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -142,33 +141,45 @@ def _extract_inner(
             "geocoded point is not inside any parcel polygon",
         )
 
-    neighbours = _find_neighbour_parcels(
-        db, dataset_id=parcels_dataset_id, parcel_feature=parcel_feature
-    )
+    # Part 1 surfaces area + perimeter only. Frontage / depth / corner
+    # need a road centerline dataset (Part 2). The shared-edge heuristic
+    # fails on HRM's parcel layer because parcels tessellate edge-to-edge
+    # to the road centerline — every street-facing edge of a residential
+    # lot is ε-close to the parcel directly across the street, so the
+    # heuristic classifies it as "shared with a neighbour" and frontage
+    # collapses to zero. We skip the neighbour fetch entirely (one fewer
+    # spatial query per case open) and only compute what's reliable.
+    metrics = compute_lot_metrics(parcel_feature.geometry_geojson, [])
+    if metrics.status == "unresolved":
+        return _unresolved(base, metrics.reason or "lot metrics unresolved")
 
-    metrics = compute_lot_metrics(
-        parcel_feature.geometry_geojson,
-        [n.geometry_geojson for n in neighbours],
+    multi_unit = _detect_multi_unit(
+        db, parcel_geojson=parcel_feature.geometry_geojson
     )
-
-    if metrics.status != "unresolved":
-        multi_unit = _detect_multi_unit(
-            db,
-            parcel_geojson=parcel_feature.geometry_geojson,
-        )
-        if multi_unit is not None:
-            metrics = replace(metrics, multi_unit=multi_unit)
 
     pid = (parcel_feature.canonical_attributes_json or {}).get("parcel_id")
-    base.update(metrics.to_dict())
     base.update(
         {
+            "status": metrics.status,
+            "method": "parcel_area",
             "pid": pid,
             "parcel_feature_id": parcel_feature.id,
             "anchor_source": resolved.source,
             "anchor_confidence": resolved.confidence,
         }
     )
+    if metrics.area_m2 is not None:
+        base["area_m2"] = round(metrics.area_m2, 1)
+    if metrics.perimeter_m is not None:
+        base["perimeter_m"] = round(metrics.perimeter_m, 2)
+    # Confidence is 1.0 when the polygon was valid (area is a clean
+    # PostGIS ST_Area); compute_lot_metrics drops to "uncertain" only
+    # when shapely had to repair the geometry, which can leave the area
+    # slightly off. The shared-edge confidence (used to be 0.6 with no
+    # neighbours) is irrelevant for the area-only output.
+    base["confidence"] = 1.0 if metrics.status == "ok" else 0.7
+    if multi_unit is not None:
+        base["multi_unit"] = multi_unit
     return base
 
 
