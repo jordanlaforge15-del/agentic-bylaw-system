@@ -48,6 +48,7 @@ from advisor.db.cases import (
 from advisor.db.models import Case, User
 from advisor.db.schemas import CaseOut
 from advisor.llm import LLMGateway
+from layer2.spatial.extractor import extract_lot_facts
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +247,20 @@ def build_cases_router(
                         ),
                     },
                 ) from exc
+            # Compute lot spatial facts (area, frontage, depth, corner)
+            # and pin them to the case so every chat turn sees them
+            # without an extra tool call. Never blocks case creation:
+            # any failure is captured as ``{status: unresolved, reason}``
+            # so the model knows the facts aren't available rather
+            # than hallucinating numbers.
+            spatial_facts = extract_lot_facts(
+                db,
+                anchor_label=body.anchor_label,
+                anchor_kind=body.anchor_kind,
+            )
+            metadata = dict(case.metadata_json or {})
+            metadata["spatial_facts"] = spatial_facts
+            case.metadata_json = metadata
             commit = getattr(db, "commit", None)
             if callable(commit):
                 commit()
