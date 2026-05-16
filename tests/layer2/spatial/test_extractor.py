@@ -187,7 +187,7 @@ def test_no_parcels_dataset_returns_unresolved(tmp_path: Path) -> None:
     assert "parcels" in (facts.get("reason") or "")
 
 
-def test_happy_path_returns_full_facts(parcels_db) -> None:
+def test_happy_path_returns_area_only_facts(parcels_db) -> None:
     # Point the geocode cache at the anchor parcel's centroid so
     # ``_find_containing_parcel`` hits A001.
     _prime_geocode_cache_for_address(
@@ -207,16 +207,20 @@ def test_happy_path_returns_full_facts(parcels_db) -> None:
 
     assert facts["status"] == "ok"
     assert facts["pid"] == "A001"
-    assert facts["method"] == "shared_edge"
+    assert facts["method"] == "parcel_area"
     assert facts["area_m2"] == pytest.approx(400.0, rel=1e-3)
-    # Two sides shared (north+east), two sides frontage (south+west).
-    # Corner-touch buffer eats ~1 m near the (north+east) corner.
-    assert facts["frontage_m"] == pytest.approx(39.0, abs=1.5)
-    assert facts["corner"] is True
+    assert facts["perimeter_m"] == pytest.approx(80.0, abs=0.5)
+    # Confidence is 1.0 when the polygon was valid (no repair needed).
+    assert facts["confidence"] == pytest.approx(1.0)
+    # Frontage / depth / corner intentionally NOT surfaced in Part 1 —
+    # the shared-edge heuristic fails on HRM's tessellated-to-centerline
+    # parcels. Part 2 will bring them back via a road-centerline dataset.
+    assert "frontage_m" not in facts
+    assert "depth_m" not in facts
+    assert "corner" not in facts
     # No civic-address dataset loaded → multi_unit omitted, not False.
     assert "multi_unit" not in facts
     assert facts["anchor_source"] == "test_fixture"
-    assert facts["confidence"] > 0.9
     assert "computed_at" in facts
 
 
