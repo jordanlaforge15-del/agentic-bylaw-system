@@ -514,6 +514,36 @@ def create_app(
                 )
                 usage_event_id = usage_event.id
 
+                # Pull the case's persisted spatial facts so we can
+                # inject them into the system prompt suffix. Read happens
+                # inside the open transaction; the formatted block is
+                # carried out via ``case_spatial_facts``.
+                if case_id_for_session is not None:
+                    case_for_facts = db.get(Case, case_id_for_session)
+                    case_spatial_facts = (
+                        (case_for_facts.metadata_json or {}).get("spatial_facts")
+                        if case_for_facts is not None
+                        else None
+                    )
+                else:
+                    case_spatial_facts = None
+        else:
+            case_spatial_facts = None
+
+        # Append the lot-facts preamble to the system prompt. We
+        # recompute from the bare ``persona`` each turn (rather than
+        # appending to ``session.system_prompt``) because the session
+        # store persists the prompt — appending would compound the
+        # block across resumes.
+        if case_spatial_facts:
+            from layer2.spatial.extractor import (  # noqa: PLC0415
+                format_lot_facts_block,
+            )
+
+            facts_block = format_lot_facts_block(case_spatial_facts)
+            if facts_block:
+                session.system_prompt = persona + "\n\n" + facts_block
+
         # Mirror case context onto the in-memory ChatSession so
         # ``send_user_message_blocking`` can update the budget ledger
         # and surface the per-turn upgrade-request drain.
