@@ -294,9 +294,15 @@ def create_app(
     # Cases router — case-credit lifecycle (open / match / classify /
     # upgrade / close). Mounted whenever a DB factory is wired; the
     # classifier endpoint degrades gracefully when no classifier
-    # gateway factory is provided.
-    if db_session_factory is not None and verifier is not None:
+    # gateway factory is provided. The verifier may be None in the
+    # X-Test-User-Id fallback path used by ``advisor.api.e2e_server`` —
+    # ``_resolve_user_via_db`` handles both the real-User (Clerk) and
+    # synthetic-_TestUser (test header) shapes.
+    if db_session_factory is not None:
         from advisor.api.cases_router import build_cases_router  # noqa: PLC0415
+        from advisor.api.db_session_store import (  # noqa: PLC0415
+            default_resolve_user,
+        )
 
         # Default classifier gateway = same Anthropic gateway as chat,
         # since the gateway is model-agnostic and selects per-call.
@@ -309,13 +315,18 @@ def create_app(
         def _classifier_gateway_factory() -> LLMGateway:
             return gateway
 
+        def _resolve_user_via_db(auth_session: Any, db: Session) -> User:
+            if isinstance(auth_session, User):
+                return auth_session
+            return default_resolve_user(db, auth_session.clerk_user_id)
+
         app.include_router(
             build_cases_router(
                 classifier_gateway_factory=_classifier_gateway_factory,
                 classifier_model=llm_settings.classifier_model,
                 db_session_factory=db_session_factory,
                 user_dependency=require_user,
-                user_resolver=lambda u, _db: u,
+                user_resolver=_resolve_user_via_db,
             )
         )
 
@@ -329,7 +340,7 @@ def create_app(
             build_admin_router(
                 db_session_factory=db_session_factory,
                 user_dependency=require_user,
-                user_resolver=lambda u, _db: u,
+                user_resolver=_resolve_user_via_db,
             )
         )
 

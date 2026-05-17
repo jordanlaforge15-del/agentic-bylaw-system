@@ -1,4 +1,5 @@
 .env
+.venv
 .venv/
 __pycache__/
 *.py[cod]
@@ -29,3 +30,6 @@ tmp/
 .claude/
 .DS_Store
 *.swp
+
+# E2E test stack runtime state (PIDs, logs) — see scripts/e2e-up.sh.
+.e2e/

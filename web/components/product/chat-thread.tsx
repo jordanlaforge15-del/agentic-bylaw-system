@@ -42,6 +42,7 @@ export function ChatThread({
   return (
     <div
       ref={ref}
+      data-testid="chat-thread"
       className="flex-1 overflow-y-auto flex flex-col gap-4 sm:gap-[18px] px-4 sm:px-7 lg:px-9 py-4 sm:py-5 lg:py-6"
     >
       {messages.map((m, i) => {
