@@ -72,11 +72,20 @@ def reserve_credit_for_session(
     case: Case,
     tier: str,
 ) -> CaseCredit:
-    """Pre-flight: reserve one available credit at ``tier`` against the session.
+    """Pre-flight: reserve one credit at ``tier`` against the session.
 
     Idempotent: if a credit is already reserved for this session, it's
-    returned unchanged. Otherwise we claim the next FIFO ``available``
-    credit, attach it to the session, and write the audit event.
+    returned unchanged. Resolution order:
+
+    1. credit already attached to this session (resume path),
+    2. credit reserved against this case but not yet attached to a
+       session — the one ``open_case`` minted at ``POST /v1/cases`` time
+       (first-chat-turn-after-open path),
+    3. otherwise claim the next FIFO ``available`` credit at the tier.
+
+    Step 2 is the fix for ABS-9: without it the chat route claims a
+    second credit on the first turn after a case is opened, and 402s
+    when the user has none left.
 
     Raises:
         HTTPException(402): no available credit at the requested tier.
@@ -104,6 +113,44 @@ def reserve_credit_for_session(
             status_code=400,
             detail={"code": "unknown_tier", "message": str(exc), "tier": tier},
         ) from exc
+
+    # Adopt the case's pre-reserved credit if one exists. ``open_case``
+    # reserves a credit against the case at /v1/cases time with
+    # ``session_id`` NULL; the first /v1/chat turn for that case should
+    # bind it to the chat session rather than claim a fresh available
+    # credit (which would double-charge).
+    case_reserved = (
+        db.execute(
+            select(CaseCredit)
+            .where(
+                CaseCredit.case_id == case.id,
+                CaseCredit.session_id.is_(None),
+                CaseCredit.state == "reserved",
+                CaseCredit.tier == tier,
+            )
+            .order_by(CaseCredit.reserved_at)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        .scalar_one_or_none()
+    )
+    if case_reserved is not None:
+        case_reserved.session_id = session.id
+        case.last_activity_at = utcnow()
+        session.tier = case_reserved.tier
+        _record_event(
+            db,
+            case=case,
+            user=user,
+            credit=case_reserved,
+            event_type="credit_reserved",
+            payload={
+                "tier": case_reserved.tier,
+                "source": case_reserved.source,
+                "adopted_from_case": True,
+            },
+        )
+        return case_reserved
 
     credit = _claim_available_credit(db, user_id=user.id, tier=tier)
     if credit is None:
