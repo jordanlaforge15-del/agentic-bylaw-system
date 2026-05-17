@@ -244,10 +244,19 @@ def open_case(
     a fresh case (or reopens an in-window matching one), then reserves
     one credit of the requested tier against it.
 
+    Idempotency: if the matched case already has an active credit (state
+    in ``reserved`` or ``consumed``) at the requested tier, that credit
+    is returned and no fresh credit is claimed. This makes a duplicate
+    POST /v1/cases for the same anchor (double-click, page refresh,
+    network retry) safe — without this guard the second call would
+    claim a second available credit against the same case, leaving the
+    first orphaned in ``reserved`` (the ABS-11 / ABS-8 leak).
+
     Raises:
         UnknownTierError: ``tier`` is not in the catalog.
         NoAvailableCreditError: the user has zero available credits at
-            the requested tier.
+            the requested tier (and the matched case had no active
+            credit at the tier to reuse).
     """
     if tier not in TIERS:
         raise UnknownTierError(f"unknown tier {tier!r}")
@@ -296,6 +305,33 @@ def open_case(
             event_type="reopened",
             payload={"tier": tier},
         )
+    else:
+        # Matched an already-open in-window case. Idempotent re-open
+        # should not bump last_activity_at into a "freshly opened" lie
+        # for analytics, but we do touch it so the abandon sweep sees
+        # the user is still engaging with this case.
+        case.last_activity_at = now
+
+    # Idempotency guard: reuse an existing active credit at this tier.
+    # Tier-matched on purpose — a different-tier request on the same
+    # case is a tier change, handled by the upgrade endpoint, not by
+    # silently reusing a credit at a tier the caller didn't ask for.
+    existing = _existing_active_credit_for_case(
+        db, case_id=case.id, tier=tier
+    )
+    if existing is not None:
+        _record_event(
+            db,
+            case=case,
+            user=user,
+            credit=existing,
+            event_type="credit_reused",
+            payload={
+                "tier": existing.tier,
+                "credit_state": existing.state,
+            },
+        )
+        return case, existing
 
     credit = _claim_available_credit(db, user_id=user.id, tier=tier)
     if credit is None:
@@ -771,6 +807,64 @@ def close_expired_cases(db: Session) -> int:
     return len(expired)
 
 
+def refund_orphaned_case_reservations(db: Session) -> int:
+    """Refund credits stuck ``reserved`` on a case that already has a
+    sessioned active credit.
+
+    Recovers from the pre-ABS-9 / ABS-11 double-reservation bug:
+    ``open_case`` reserved a credit (``session_id`` NULL), then
+    chat-session start claimed a *second* credit and bound that one to
+    the session. The first reservation was left orphaned. The
+    abandon-sweep doesn't catch these because the case has activity
+    (from the second credit's session) — so the orphan would linger
+    until the user noticed they couldn't open a new case.
+
+    The refund is conservative: an orphan is only refunded when the
+    same case has another credit at the same tier with
+    ``session_id IS NOT NULL`` and state in ``reserved`` or
+    ``consumed``. That proves the user paid for the case via a
+    different credit, so this one is genuinely leaked. Cases with a
+    single ``reserved`` credit (legitimate in-flight open) are left
+    alone — those are caught by ``refund_abandoned_credits`` once the
+    24h grace elapses.
+
+    Returns the count refunded. Idempotent: re-running finds nothing
+    to refund.
+    """
+    orphans = (
+        db.execute(
+            select(CaseCredit)
+            .where(
+                CaseCredit.state == "reserved",
+                CaseCredit.session_id.is_(None),
+                CaseCredit.case_id.is_not(None),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        .scalars()
+        .all()
+    )
+    refunded = 0
+    for orphan in orphans:
+        sibling = db.execute(
+            select(CaseCredit.id).where(
+                CaseCredit.case_id == orphan.case_id,
+                CaseCredit.tier == orphan.tier,
+                CaseCredit.id != orphan.id,
+                CaseCredit.session_id.is_not(None),
+                CaseCredit.state.in_(["reserved", "consumed"]),
+            )
+            .limit(1)
+        ).scalar()
+        if sibling is None:
+            continue
+        _refund_credit(
+            db, credit=orphan, reason="orphaned_double_reservation_recovery"
+        )
+        refunded += 1
+    return refunded
+
+
 def refund_abandoned_credits(db: Session) -> int:
     """Refund credits whose session never produced a qualifying turn.
 
@@ -826,6 +920,37 @@ def _claim_available_credit(
             CaseCredit.state == "available",
         )
         .order_by(CaseCredit.purchased_at)
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def _existing_active_credit_for_case(
+    db: Session, *, case_id: int, tier: str
+) -> CaseCredit | None:
+    """Return the case's currently-active credit at ``tier`` if any.
+
+    Active = state in ``reserved`` or ``consumed``. The case-credit
+    invariant after the ABS-8 fix is "at most one active credit per
+    case per tier" — but we still ``order_by(reserved_at)`` so that
+    pre-fix orphan pairs (refunded later via
+    ``refund_orphaned_case_reservations``) return deterministically
+    until the cleanup runs.
+
+    Locks with ``skip_locked=True`` so a concurrent ``open_case`` for
+    the same anchor just sees "no existing credit" and falls through
+    to its own claim path — preventing both callers from binding to
+    the same row in a tight race.
+    """
+    stmt = (
+        select(CaseCredit)
+        .where(
+            CaseCredit.case_id == case_id,
+            CaseCredit.tier == tier,
+            CaseCredit.state.in_(["reserved", "consumed"]),
+        )
+        .order_by(CaseCredit.reserved_at)
         .limit(1)
         .with_for_update(skip_locked=True)
     )
@@ -943,4 +1068,5 @@ __all__: Iterable[str] = (
     "list_user_cases",
     "close_expired_cases",
     "refund_abandoned_credits",
+    "refund_orphaned_case_reservations",
 )
