@@ -116,15 +116,27 @@ export function CaseOpenForm() {
     setWorking("opening");
     setError(null);
     try {
-      const r = await fetch("/api/cases", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          anchor_label: anchorLabel,
-          anchor_kind: anchorKind,
-          tier,
-        }),
-      });
+      let r: Response;
+      try {
+        r = await fetch("/api/cases", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            anchor_label: anchorLabel,
+            anchor_kind: anchorKind,
+            tier,
+          }),
+        });
+      } catch (e) {
+        // fetch() rejected — DNS, TLS, connection drop, Safari "Load
+        // failed" etc. Without this catch the error vanished silently
+        // (no error message, button stuck on "Opening case…" until the
+        // finally fires). Now the user sees something actionable.
+        setError(
+          `Network error opening case: ${(e as Error).message}. Check your connection and try again.`,
+        );
+        return;
+      }
       if (r.status === 401) {
         router.push("/login?next=/cases/new");
         return;
