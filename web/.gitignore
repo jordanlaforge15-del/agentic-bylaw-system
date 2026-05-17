@@ -38,3 +38,10 @@ data/
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# Playwright runtime artifacts. The HTML report and per-failure
+# screenshots/videos/traces are large and only useful locally.
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

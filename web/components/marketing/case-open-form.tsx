@@ -169,6 +169,7 @@ export function CaseOpenForm() {
       <Field label="Anchor">
         <div className="flex gap-2">
           <select
+            aria-label="Anchor kind"
             value={anchorKind}
             onChange={(e) => {
               setAnchorKind(e.target.value as AnchorKind);
