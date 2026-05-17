@@ -224,12 +224,45 @@ Avoid rename-or-drop-in-one-step migrations — they break the rollback story.
 
 ### Data restore from local dev
 
-Workflow we used on initial deploy (still works for full reloads):
+All ingest happens **locally** (the production Dockerfile.advisor deliberately omits docling and the rest of the PDF tooling — running an ingest CLI inside a prod container will fail and is policy-banned anyway). The runbook is: ingest locally → dump → ship → restore on prod.
+
+#### Never overwrite user / billing / auth data
+
+Prod is the source of truth for any table that records a real user, a real payment, a real conversation, or a real invite. Local dev never has the production rows for these and a bulk reload from local would silently destroy them. Hard rule: every dump command and every restore script for production **MUST exclude or skip every table in this set:**
+
+| Table | Why |
+|---|---|
+| `advisor_user` | Real Clerk-keyed users; loss = signup work redone, billing orphaned |
+| `advisor_case` | Open cases tied to billed credits |
+| `advisor_case_credit` | One row per purchased credit — real money attached |
+| `advisor_case_purchase` | Stripe checkout records — accounting source of truth |
+| `advisor_case_event` | Append-only audit trail; needed for support diagnostics |
+| `advisor_chat_session` | User conversation threads |
+| `advisor_chat_message` | Individual turns within sessions |
+| `advisor_usage_event` | Per-call billing/audit events |
+| `invite_request` | Beta allowlist state, Clerk allowlist sync |
+| `alembic_version` | Schema-state pointer — drives migration replay |
+
+Replaceable (these are content / cache / derived data; restoring them from local is fine):
+
+- `document`, `source_fragment`, `page_block`, `source_table`, `source_table_cell`, `cross_reference` — bylaw content
+- `external_dataset`, `external_dataset_feature` — geo layers (zoning, heights, FAR, …, parcels)
+- `geocode_cache` — pure cache; regenerable from queries
+
+If you find yourself reaching for a destructive command (`TRUNCATE`, `DROP TABLE`, `pg_restore` without `--data-only --exclude-table` flags) against anything in the first table, **stop**. Take a `pg_dump` of that table before continuing and confirm with the operator. A surgical row-level `\COPY` of one specific feature's rows is fine; a wholesale data-only reload is not — it can drop hours of user-side activity that arrived since your local dump was taken.
+
+#### Full reload (initial deploy / disaster recovery)
 
 ```bash
-# 1. Local: pg_dump --data-only --exclude-table=alembic_version --exclude-table=advisor_user
-#    --exclude-table=advisor_chat_session ... (see deploy commit history for full list)
-#    Output to a gzipped file.
+# 1. Local: pg_dump --data-only with EVERY user/billing/auth table excluded:
+pg_dump --data-only \
+  --exclude-table=alembic_version \
+  --exclude-table=advisor_user --exclude-table=advisor_case \
+  --exclude-table=advisor_case_credit --exclude-table=advisor_case_purchase \
+  --exclude-table=advisor_case_event --exclude-table=advisor_chat_session \
+  --exclude-table=advisor_chat_message --exclude-table=advisor_usage_event \
+  --exclude-table=invite_request \
+  layer1 | gzip > /tmp/layer1-content-$(date +%F).sql.gz
 # 2. Strip pg_dump's \restrict and \unrestrict meta-commands (Postgres 16.13+ emits them;
 #    server psql 16.4 doesn't recognise them). Use Python, NOT grep — grep is not
 #    binary-safe against COPY data with embedded bytes.
@@ -238,7 +271,11 @@ Workflow we used on initial deploy (still works for full reloads):
 #    table has a self-referential FK that pg_dump can't fully linearise).
 ```
 
-See the commit `[advisor] Fix session-detail 404 caused by user_id format mismatch` and prior history for the exact `pg_dump` / restore commands. Don't reinvent them.
+See the commit `[advisor] Fix session-detail 404 caused by user_id format mismatch` and prior history for the exact restore script. Don't reinvent it.
+
+#### Surgical reload (one new dataset)
+
+Adding a single `external_dataset` (e.g. a new geo layer) doesn't need the full-reload sledgehammer. Use `psql \COPY (SELECT … WHERE external_dataset_id = N)` to scope the dump to just the new rows, then `\COPY … FROM` to insert on prod. After insert, re-derive the PostGIS `geometry` column with `UPDATE … SET geometry = ST_GeomFromGeoJSON(geometry_geojson::text)` — mirroring migration 0009's pattern. The two user/billing rules above still apply (a surgical insert never overwrites; a TRUNCATE-and-replace on `external_dataset_feature` would, so don't).
 
 ### Backups (manual, ~no automation yet)
 
