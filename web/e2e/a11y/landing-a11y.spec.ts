@@ -5,13 +5,14 @@
 // Each spec is independent so the report shows which page regressed.
 
 import AxeBuilder from "@axe-core/playwright";
+import type { Page } from "@playwright/test";
 import { expect, openCaseViaApi, test } from "../fixtures/test-env";
 
 // Strict gate: only `critical` violations fail the build. `serious`
 // (color-contrast, etc.) still surfaces in the report annotations so
 // the team can drive them down over time without blocking pushes.
-async function assertNoCriticalAxe(page: Parameters<typeof AxeBuilder>[0]) {
-  const results = await new AxeBuilder({ page } as { page: typeof page })
+async function assertNoCriticalAxe(page: Page) {
+  const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
   const critical = results.violations.filter((v) => v.impact === "critical");
