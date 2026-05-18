@@ -21,6 +21,9 @@ Endpoints:
 * ``GET /v1/admin/analytics/upgrade-funnel`` — counts of
   ``tier_recommended`` vs ``upgrade_offered`` vs ``upgrade_accepted``
   events. Surfaces classifier accuracy and conversion rate.
+* ``POST /v1/admin/maintenance/refund-orphaned-reservations`` — one-shot
+  cleanup of credits leaked by the pre-ABS-9 double-reservation bug
+  (ABS-8 / ABS-11). Idempotent; safe to call from a runbook.
 """
 from __future__ import annotations
 
@@ -39,6 +42,7 @@ from advisor.db.cases import (
     UnknownTierError,
     credit_balance_for,
     grant_admin_credits,
+    refund_orphaned_case_reservations,
 )
 from advisor.db.models import Case, CaseEvent, User
 from advisor.db.schemas import CaseOut
@@ -113,6 +117,10 @@ class UpgradeFunnelRow(BaseModel):
 
 class UpgradeFunnelResponse(BaseModel):
     rows: list[UpgradeFunnelRow]
+
+
+class RefundOrphanedReservationsResponse(BaseModel):
+    refunded: int
 
 
 # -- Router factory ---------------------------------------------------------
@@ -312,6 +320,34 @@ def build_admin_router(
                 ]
             )
 
+    @router.post(
+        "/maintenance/refund-orphaned-reservations",
+        response_model=RefundOrphanedReservationsResponse,
+    )
+    def post_refund_orphaned_reservations(
+        auth_session: Any = Depends(user_dependency),
+    ) -> RefundOrphanedReservationsResponse:
+        """Refund credits leaked by the pre-ABS-9 double-reservation bug.
+
+        Safe to call repeatedly: only credits with state ``reserved``,
+        ``session_id IS NULL``, and a sibling sessioned active credit on
+        the same case at the same tier are refunded. Returns the count
+        refunded so the caller can confirm the sweep took effect.
+        """
+        with _open_db() as db:
+            caller = user_resolver(auth_session, db)
+            _require_admin(caller)
+            count = refund_orphaned_case_reservations(db)
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                commit()
+            logger.info(
+                "admin: refunded %d orphaned reservations (caller=%s)",
+                count,
+                caller.clerk_user_id,
+            )
+            return RefundOrphanedReservationsResponse(refunded=count)
+
     return router
 
 
@@ -329,4 +365,9 @@ def build_dormant_admin_router() -> APIRouter:
     router.add_api_route("/cases", _disabled, methods=["GET"])
     router.add_api_route("/analytics/tier-distribution", _disabled, methods=["GET"])
     router.add_api_route("/analytics/upgrade-funnel", _disabled, methods=["GET"])
+    router.add_api_route(
+        "/maintenance/refund-orphaned-reservations",
+        _disabled,
+        methods=["POST"],
+    )
     return router

@@ -2,8 +2,8 @@
 
 ``extract_lot_facts`` is the orchestrator called from ``cases_router`` at
 ``POST /v1/cases``. It threads the existing geocoder, the parcels
-dataset, and ``compute_lot_metrics`` together, and returns a dict
-shaped for ``Case.metadata_json``.
+dataset, the road-centerlines dataset, and ``compute_lot_metrics``
+together, and returns a dict shaped for ``Case.metadata_json``.
 
 The function never raises: any failure (geocode miss, no parcel match,
 invalid geometry, slow ingest) returns ``{"status": "unresolved",
@@ -29,14 +29,28 @@ from layer1.db.base import ExternalDataset, ExternalDatasetFeature
 from layer2.retrieval.geocode import resolve_location
 from layer2.retrieval.location import extract_location_references
 from layer2.retrieval.spatial import ResolvedLocation
-from layer2.spatial.lot_metrics import LotMetrics, compute_lot_metrics
+from layer2.spatial.lot_metrics import DEFAULT_BUFFER_M, compute_lot_metrics
 
 logger = logging.getLogger(__name__)
 
 
-# Dataset role marker matching ``layer1.datasets.config.DatasetRole``.
+# Dataset role markers matching ``layer1.datasets.config.DatasetRole``.
 PARCELS_ROLE = "property_parcels"
 CIVIC_ADDRESS_ROLE = "civic_address"
+CENTERLINES_ROLE = "road_centerlines"
+
+# Bounding-box pad (degrees) around the parcel when fetching nearby
+# centerlines. At Halifax latitudes 1° ≈ 111 km, so 0.001° ≈ 110 m —
+# plenty to catch every centerline whose buffer could touch the parcel
+# (buffer_m defaults to 8 m), and small enough to keep the candidate set
+# tiny on the SQLite fallback path.
+CENTERLINE_BBOX_PAD_DEG: float = 0.001
+
+# Frontage quality threshold. When the buffered-intersection length is
+# less than this fraction of the parcel perimeter, we mark the result
+# uncertain — the centerline-buffer probably missed (parcel set further
+# back from the centerline than the buffer reaches, or sparse data).
+FRONTAGE_PERIMETER_RATIO_OK: float = 0.05
 
 
 def extract_lot_facts(
@@ -121,7 +135,7 @@ def _extract_inner(
     if resolved is None:
         return _unresolved(base, "geocoder could not resolve anchor")
 
-    parcels_dataset_id = _find_parcels_dataset_id(db)
+    parcels_dataset_id = _find_dataset_id(db, PARCELS_ROLE)
     if parcels_dataset_id is None:
         return _unresolved(
             base,
@@ -141,15 +155,26 @@ def _extract_inner(
             "geocoded point is not inside any parcel polygon",
         )
 
-    # Part 1 surfaces area + perimeter only. Frontage / depth / corner
-    # need a road centerline dataset (Part 2). The shared-edge heuristic
-    # fails on HRM's parcel layer because parcels tessellate edge-to-edge
-    # to the road centerline — every street-facing edge of a residential
-    # lot is ε-close to the parcel directly across the street, so the
-    # heuristic classifies it as "shared with a neighbour" and frontage
-    # collapses to zero. We skip the neighbour fetch entirely (one fewer
-    # spatial query per case open) and only compute what's reliable.
-    metrics = compute_lot_metrics(parcel_feature.geometry_geojson, [])
+    # Centerlines are optional at extraction time: if the dataset hasn't
+    # been ingested yet, we still report area + perimeter (the area-only
+    # behaviour of Part 1), just with frontage / depth / corner absent.
+    # An ingested-but-empty result (parcel in a rural area with no
+    # nearby centerline segments) takes the same path.
+    centerlines_dataset_id = _find_dataset_id(db, CENTERLINES_ROLE)
+    if centerlines_dataset_id is not None:
+        centerline_geojsons = _find_nearby_centerlines(
+            db,
+            dataset_id=centerlines_dataset_id,
+            parcel_feature=parcel_feature,
+        )
+    else:
+        centerline_geojsons = []
+
+    metrics = compute_lot_metrics(
+        parcel_feature.geometry_geojson,
+        centerline_geojsons,
+        buffer_m=DEFAULT_BUFFER_M,
+    )
     if metrics.status == "unresolved":
         return _unresolved(base, metrics.reason or "lot metrics unresolved")
 
@@ -161,7 +186,7 @@ def _extract_inner(
     base.update(
         {
             "status": metrics.status,
-            "method": "parcel_area",
+            "method": "centerline_buffer",
             "pid": pid,
             "parcel_feature_id": parcel_feature.id,
             "anchor_source": resolved.source,
@@ -172,12 +197,28 @@ def _extract_inner(
         base["area_m2"] = round(metrics.area_m2, 1)
     if metrics.perimeter_m is not None:
         base["perimeter_m"] = round(metrics.perimeter_m, 2)
-    # Confidence is 1.0 when the polygon was valid (area is a clean
-    # PostGIS ST_Area); compute_lot_metrics drops to "uncertain" only
-    # when shapely had to repair the geometry, which can leave the area
-    # slightly off. The shared-edge confidence (used to be 0.6 with no
-    # neighbours) is irrelevant for the area-only output.
-    base["confidence"] = 1.0 if metrics.status == "ok" else 0.7
+    if metrics.frontage_m is not None and metrics.frontage_m > 1.0:
+        base["frontage_m"] = round(metrics.frontage_m, 2)
+        if metrics.depth_m is not None:
+            base["depth_m"] = round(metrics.depth_m, 2)
+        if metrics.corner is not None:
+            base["corner"] = metrics.corner
+    # Confidence: 1.0 when the polygon was clean and the frontage looks
+    # plausible (at least 5% of perimeter). Drop to 0.7 when the buffer
+    # heuristic likely missed — e.g. centerlines dataset not ingested,
+    # parcel set back further than the buffer width, or no centerline
+    # segments near the parcel. The result is still usable; the model
+    # should hedge.
+    perim = metrics.perimeter_m or 0.0
+    frontage_ok = (
+        metrics.frontage_m is not None
+        and perim > 0
+        and (metrics.frontage_m / perim) >= FRONTAGE_PERIMETER_RATIO_OK
+    )
+    if metrics.status == "ok" and frontage_ok:
+        base["confidence"] = 1.0
+    else:
+        base["confidence"] = 0.7
     if multi_unit is not None:
         base["multi_unit"] = multi_unit
     return base
@@ -188,12 +229,13 @@ def _unresolved(base: dict[str, Any], reason: str) -> dict[str, Any]:
     return base
 
 
-def _find_parcels_dataset_id(db: Session) -> int | None:
+def _find_dataset_id(db: Session, role: str) -> int | None:
+    """Return the dataset id whose metadata_json.role matches ``role``."""
     rows = db.execute(
         select(ExternalDataset.id, ExternalDataset.metadata_json)
     ).all()
     for row in rows:
-        if (row.metadata_json or {}).get("role") == PARCELS_ROLE:
+        if (row.metadata_json or {}).get("role") == role:
             return int(row.id)
     return None
 
@@ -285,88 +327,76 @@ def _find_containing_parcel(
     return None
 
 
-def _find_neighbour_parcels(
+def _find_nearby_centerlines(
     db: Session,
     *,
     dataset_id: int,
     parcel_feature: ExternalDatasetFeature,
-) -> list[ExternalDatasetFeature]:
-    """Return parcels in the same dataset whose boundary touches ``parcel_feature``.
+) -> list[dict[str, Any]]:
+    """Return GeoJSON geometries of centerline segments near the parcel.
 
-    PostGIS uses ``ST_Touches`` (shared edge, disjoint interiors) plus
-    ``ST_Intersects`` on bbox for performance. The SQLite fallback
-    uses shapely's ``.touches()`` on the bbox-prefiltered candidate
-    set — adequate at test scale.
+    "Near" = the parcel's bbox padded by ``CENTERLINE_BBOX_PAD_DEG`` on
+    each side. The padding ensures we catch the centerline of a road
+    that sits a few metres outside the parcel's strict bbox; without
+    it, a parcel that hugs its bbox edge would miss the very centerline
+    its front edge runs along.
+
+    PostGIS uses ``&&`` (bbox intersect) for a fast spatial-index lookup;
+    SQLite falls back to a JSON-bbox scan. Either way we return the raw
+    geometry dicts that ``compute_lot_metrics`` can ingest directly.
     """
+    bbox = parcel_feature.geometry_bbox_json or {}
+    minx = float(bbox.get("minx", 0.0)) - CENTERLINE_BBOX_PAD_DEG
+    maxx = float(bbox.get("maxx", 0.0)) + CENTERLINE_BBOX_PAD_DEG
+    miny = float(bbox.get("miny", 0.0)) - CENTERLINE_BBOX_PAD_DEG
+    maxy = float(bbox.get("maxy", 0.0)) + CENTERLINE_BBOX_PAD_DEG
+
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         sql = text(
             """
-            SELECT other.id AS feature_id
-            FROM external_dataset_feature other
-            JOIN external_dataset_feature anchor
-              ON anchor.id = :anchor_id
-            WHERE other.external_dataset_id = :ds_id
-              AND other.id <> anchor.id
-              AND other.geometry IS NOT NULL
-              AND anchor.geometry IS NOT NULL
-              AND ST_Touches(anchor.geometry, other.geometry)
+            SELECT edf.geometry_geojson AS geometry_geojson
+            FROM external_dataset_feature edf
+            WHERE edf.external_dataset_id = :ds_id
+              AND edf.geometry IS NOT NULL
+              AND edf.geometry && ST_MakeEnvelope(
+                  :minx, :miny, :maxx, :maxy, 4326
+              )
             """
         )
         rows = db.execute(
-            sql, {"anchor_id": parcel_feature.id, "ds_id": dataset_id}
+            sql,
+            {
+                "ds_id": dataset_id,
+                "minx": minx,
+                "miny": miny,
+                "maxx": maxx,
+                "maxy": maxy,
+            },
         ).all()
-        if not rows:
-            return []
-        ids = [int(r.feature_id) for r in rows]
-        return list(
-            db.execute(
-                select(ExternalDatasetFeature).where(
-                    ExternalDatasetFeature.id.in_(ids)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        return [dict(row.geometry_geojson) for row in rows if row.geometry_geojson]
 
     # SQLite fallback.
-    try:
-        anchor_geom = shapely_shape(parcel_feature.geometry_geojson)
-    except (TypeError, ValueError, KeyError):
-        return []
-    if not anchor_geom.is_valid:
-        return []
-    a_bbox = parcel_feature.geometry_bbox_json or {}
-    a_minx = a_bbox.get("minx", float("-inf"))
-    a_maxx = a_bbox.get("maxx", float("inf"))
-    a_miny = a_bbox.get("miny", float("-inf"))
-    a_maxy = a_bbox.get("maxy", float("inf"))
-
-    candidates = (
+    features = (
         db.execute(
             select(ExternalDatasetFeature).where(
-                ExternalDatasetFeature.external_dataset_id == dataset_id,
-                ExternalDatasetFeature.id != parcel_feature.id,
+                ExternalDatasetFeature.external_dataset_id == dataset_id
             )
         )
         .scalars()
         .all()
     )
-    out: list[ExternalDatasetFeature] = []
-    for candidate in candidates:
-        c_bbox = candidate.geometry_bbox_json or {}
+    out: list[dict[str, Any]] = []
+    for feature in features:
+        c_bbox = feature.geometry_bbox_json or {}
         if (
-            c_bbox.get("maxx", float("inf")) < a_minx
-            or c_bbox.get("minx", float("-inf")) > a_maxx
-            or c_bbox.get("maxy", float("inf")) < a_miny
-            or c_bbox.get("miny", float("-inf")) > a_maxy
+            c_bbox.get("maxx", float("inf")) < minx
+            or c_bbox.get("minx", float("-inf")) > maxx
+            or c_bbox.get("maxy", float("inf")) < miny
+            or c_bbox.get("miny", float("-inf")) > maxy
         ):
             continue
-        try:
-            c_geom = shapely_shape(candidate.geometry_geojson)
-        except (TypeError, ValueError, KeyError):
-            continue
-        if c_geom.is_valid and anchor_geom.touches(c_geom):
-            out.append(candidate)
+        if feature.geometry_geojson:
+            out.append(dict(feature.geometry_geojson))
     return out
 
 

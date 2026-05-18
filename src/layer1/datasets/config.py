@@ -68,7 +68,7 @@ class LinksTo(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-DatasetRole = Literal["civic_address", "property_parcels"]
+DatasetRole = Literal["civic_address", "property_parcels", "road_centerlines"]
 
 
 class DatasetConfig(BaseModel):

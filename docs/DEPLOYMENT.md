@@ -108,8 +108,8 @@ Standard recipe for a code change to web or advisor:
 
 1. **Branch**: `git checkout -b fix/short-description` from main.
 2. **Code & test locally**:
-   - Web: edits + `npm run typecheck` in `web/`. Dev server (`npm run dev`) auto-reloads.
-   - Advisor: edits + `pytest tests/advisor/` (167+ tests, must all pass).
+   - Web: edits + `npm run typecheck` in `web/`. Run `npm install` first if `web/node_modules/` is stale or missing — typecheck depends on the dev deps (e.g. `@playwright/test`) being on disk, and will otherwise fail with cascading "implicit any" errors in `e2e/`. Dev server (`npm run dev`) auto-reloads.
+   - Advisor: edits + `pytest tests/advisor/` (must all pass).
 3. **Commit** with a real message. Co-Authored-By line if Claude was a contributor.
 4. **Build & push** with a bumped version tag (see "Image build & publish workflow" above).
 5. **Update server compose** to reference the new tag:
