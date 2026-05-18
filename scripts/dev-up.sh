@@ -50,6 +50,19 @@ if [[ -f .env ]]; then
   source .env
   set +a
 fi
+# Also load web/.env.local so the FastAPI side picks up CLERK_JWKS_URL
+# and CLERK_ISSUER (next dev reads this file natively; uvicorn doesn't).
+# Without this, the Next proxy switches to Clerk mode the moment
+# CLERK_SECRET_KEY is set and starts minting Bearer JWTs, while the
+# advisor backend stays in X-Test-User-Id fallback mode and 401s every
+# authed request. Sourcing here keeps both halves in the same auth
+# mode whether or not Clerk is configured.
+if [[ -f web/.env.local ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source web/.env.local
+  set +a
+fi
 DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://layer1:layer1@localhost:5432/layer1}"
 export DATABASE_URL
 
