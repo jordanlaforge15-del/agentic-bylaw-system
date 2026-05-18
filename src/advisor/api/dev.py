@@ -59,6 +59,7 @@ from advisor.api.app import create_app
 from advisor.auth.clerk import ClerkVerifier
 from advisor.auth.settings import build_verifier as build_clerk_verifier
 from advisor.llm.registry import build_gateway
+from layer1.db.session import session_scope
 
 logger = logging.getLogger(__name__)
 
@@ -80,17 +81,36 @@ def _maybe_build_verifier() -> ClerkVerifier | None:
 def build_dev_app() -> FastAPI:
     """Construct the dev FastAPI app.
 
-    No DB-backed session store, no quota — but real LLM and real
-    retrieval. Identity comes from either Clerk (when
-    ``CLERK_JWKS_URL`` is set) or ``X-Test-User-Id`` (default).
+    Two wirings, chosen by ``CLERK_JWKS_URL``:
+
+    * **Clerk mode (``CLERK_JWKS_URL`` set).** Real verifier + DB
+      session factory. ``app.create_app`` then takes the production
+      code path: Bearer JWT → ``ClerkVerifier`` → ``resolve_or_create_user``
+      → ``User`` row. Sessions are DB-backed and persist across
+      restarts. Required for hand-testing as a real Clerk user without
+      a 401 on every authed request.
+
+    * **Permissive mode (no ``CLERK_JWKS_URL``).** No verifier, no DB
+      session factory. The chat / cases routes fall back to the
+      ``X-Test-User-Id`` header path with an in-memory session store.
+      Fast iteration mode — no Clerk credentials required, but sessions
+      die on restart and quota enforcement is bypassed.
     """
     gateway = build_gateway()
     verifier = _maybe_build_verifier()
-    # Deliberately omit db_session_factory: that activates the
-    # in-memory store and skips quota. ``verifier`` is wired only when
-    # Clerk env is set; otherwise the X-Test-User-Id fallback path
-    # inside create_app stays active for fast local iteration.
-    app = create_app(gateway=gateway, verifier=verifier)
+    # When Clerk is on we want the full DB-backed user-resolution
+    # path; when it's off we keep the in-memory store so contributors
+    # who don't have Clerk credentials can still iterate. Conflating
+    # auth-mode with storage-mode is intentional — the two only make
+    # sense together: real Clerk JWTs need a DB row to bind to, and
+    # the X-Test-User-Id fallback is meaningless without an in-memory
+    # store to back it.
+    db_session_factory = session_scope if verifier is not None else None
+    app = create_app(
+        gateway=gateway,
+        verifier=verifier,
+        db_session_factory=db_session_factory,
+    )
 
     origins_env = os.environ.get(
         "ADVISOR_DEV_CORS_ORIGINS", "http://localhost:3000"
