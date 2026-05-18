@@ -10,6 +10,10 @@
 #   E2E_TEST_DB    — DB name to create/migrate (default ``layer1_test``)
 #   E2E_FASTAPI_PORT — port for the test FastAPI (default 8001)
 #   E2E_WEB_PORT    — port for the Next.js dev server (default 3001)
+#   PG_PORT         — host port that the postgres container publishes
+#                     (default 5432). Override per worktree to allow
+#                     parallel `make e2e` runs; the compose file reads
+#                     POSTGRES_HOST_PORT which this script exports below.
 #
 # State written:
 #   .e2e/pids/fastapi.pid  — uvicorn PID
@@ -34,6 +38,11 @@ PG_PORT="${PG_PORT:-5432}"
 
 DATABASE_URL_E2E="postgresql+psycopg://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${E2E_TEST_DB}"
 PSQL_BASE_URL="postgresql://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/postgres"
+
+# Compose reads this for the postgres `ports:` host-side binding. Keep
+# it aligned with PG_PORT so a worktree overriding one always overrides
+# the other consistently.
+export POSTGRES_HOST_PORT="$PG_PORT"
 
 STATE_DIR="${REPO_ROOT}/.e2e"
 PID_DIR="${STATE_DIR}/pids"
@@ -60,16 +69,29 @@ require_venv() {
   fi
 }
 
+ensure_compose_prereqs() {
+  # docker-compose.yml's `web` service declares env_file: ./web/.env.local.
+  # Compose validates the whole file on every command, so a missing
+  # .env.local makes `docker compose exec postgres ...` fail rc=1 with
+  # no postgres-related output — which previously surfaced as a silent
+  # 60s readiness timeout. Materialize the file before any compose call.
+  if [[ ! -f "${REPO_ROOT}/web/.env.local" ]]; then
+    log "Creating web/.env.local from example (required by docker-compose.yml)"
+    cp "${REPO_ROOT}/web/.env.local.example" "${REPO_ROOT}/web/.env.local"
+  fi
+}
+
 ensure_postgres() {
   log "Ensuring Postgres container is up"
   docker_compose up -d postgres
+  local last_err=""
   for _ in $(seq 1 60); do
-    if docker_compose exec -T postgres pg_isready -U "$PG_USER" -d postgres >/dev/null 2>&1; then
-      return 0
-    fi
+    last_err=$(docker_compose exec -T postgres pg_isready -U "$PG_USER" -d postgres 2>&1) && return 0
     sleep 1
   done
   echo "error: Postgres did not become ready" >&2
+  echo "last pg_isready output:" >&2
+  echo "$last_err" >&2
   exit 1
 }
 
@@ -140,6 +162,10 @@ start_fastapi() {
   # PYTHONPATH ensures we run the worktree's src/, not whatever the
   # venv's editable install points at — important when the venv was
   # provisioned against a sibling worktree (e.g. main).
+  # The subshell-level `</dev/null >>log 2>&1` is what prevents
+  # callers piping this script (e.g. `bash e2e-up.sh | tail`) from
+  # hanging: the subshell lingers as long as uvicorn runs, and would
+  # otherwise hold the caller's pipe open via its inherited stdout.
   ( cd "$REPO_ROOT" && \
     DATABASE_URL="$DATABASE_URL_E2E" \
     PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" \
@@ -147,10 +173,10 @@ start_fastapi() {
     ADVISOR_PORT="$E2E_FASTAPI_PORT" \
     ADVISOR_E2E_CORS_ORIGINS="http://localhost:${E2E_WEB_PORT}" \
     nohup "${REPO_ROOT}/.venv/bin/uvicorn" advisor.api.e2e_server:app \
-      --host 127.0.0.1 --port "$E2E_FASTAPI_PORT" \
-      >"${LOG_DIR}/fastapi.log" 2>&1 &
+      --host 127.0.0.1 --port "$E2E_FASTAPI_PORT" &
     echo $! >"${PID_DIR}/fastapi.pid"
-  )
+    disown
+  ) </dev/null >>"${LOG_DIR}/fastapi.log" 2>&1
   wait_for_port "$E2E_FASTAPI_PORT" "FastAPI"
 }
 
@@ -163,6 +189,7 @@ start_web() {
   # DEMO_PASSWORD must be set so the proxy.ts fallback gate has a
   # known shared password. Playwright fixtures POST to /api/access
   # with this value to mint the abs_demo cookie before each test.
+  # See start_fastapi for why the subshell redirection matters.
   ( cd "${REPO_ROOT}/web" && \
     ADVISOR_API_URL="http://127.0.0.1:${E2E_FASTAPI_PORT}" \
     ADVISOR_DEMO_USER_ID="$E2E_USER_ID" \
@@ -170,16 +197,17 @@ start_web() {
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="" \
     DEMO_PASSWORD="${E2E_DEMO_PASSWORD:-e2e-demo-pw}" \
     ADMIN_PASSWORD="${E2E_ADMIN_PASSWORD:-e2e-admin-pw}" \
-    nohup npx next dev -p "$E2E_WEB_PORT" \
-      >"${LOG_DIR}/web.log" 2>&1 &
+    nohup npx next dev -p "$E2E_WEB_PORT" &
     echo $! >"${PID_DIR}/web.pid"
-  )
+    disown
+  ) </dev/null >>"${LOG_DIR}/web.log" 2>&1
   # next dev takes longer to compile on first start; allow up to 90s.
   wait_for_port "$E2E_WEB_PORT" "Next.js" 90
 }
 
 main() {
   require_venv
+  ensure_compose_prereqs
   ensure_postgres
   ensure_test_db
   run_migrations

@@ -209,13 +209,32 @@ Two recommended trigger points:
 
 CI integration is left out of scope for now (the suite is local-first). `playwright.config.ts` already honours `process.env.CI` for retries and reporter switches — adding a `.github/workflows/e2e.yml` later is a small follow-up.
 
+## Parallel worktrees
+
+Each worktree has its own compose project (different project name → its own Postgres container and `layer1_test` DB), but the host-side ports collide by default. To run `make e2e` from two worktrees at the same time, override the port triplet in the second one before invoking the script:
+
+```bash
+PG_PORT=5433 \
+E2E_FASTAPI_PORT=8002 \
+E2E_WEB_PORT=3002 \
+E2E_API_URL=http://127.0.0.1:8002 \
+E2E_BASE_URL=http://localhost:3002 \
+  make e2e
+```
+
+`scripts/e2e-up.sh` derives `POSTGRES_HOST_PORT` from `PG_PORT` and exports it so `docker-compose.yml`'s `"${POSTGRES_HOST_PORT:-5432}:5432"` interpolation picks it up. `playwright.config.ts` already reads `E2E_BASE_URL` for `baseURL`, and `global-setup.ts` / `fixtures/test-env.ts` read `E2E_API_URL` for upstream calls.
+
+The first worktree (using all defaults) and the second (using the overrides above) can each run the full suite end-to-end without seeing each other.
+
+Note: the test database `layer1_test` lives inside each worktree's own Postgres container, so concurrent runs don't share state. The seeded demo user, credits, and synthetic bylaw are all per-container.
+
 ## Troubleshooting
 
-**`make e2e-up` says ports already in use.** A previous run didn't tear down cleanly. `pkill -9 -f advisor.api.e2e_server` and `pkill -9 -f "next dev -p 3001"`, then re-run.
+**`make e2e-up` says ports already in use.** A previous run didn't tear down cleanly. `pkill -9 -f advisor.api.e2e_server` and `pkill -9 -f "next dev -p 3001"`, then re-run. If another worktree is intentionally running e2e, use the override recipe in [Parallel worktrees](#parallel-worktrees) instead.
 
 **`alembic upgrade head` fails with `value too long for type character varying(32)`.** Revision id `0008_advisor_billing_subscription` is 33 chars and overflows the default `alembic_version.version_num`. `e2e-up.sh` pre-creates the table with `VARCHAR(255)` to work around this for fresh databases — confirm the pre-create ran by checking `\d alembic_version`.
 
-**FastAPI logs show `database "layer1_test" does not exist` even though it was created.** There may be two Postgres containers — one bound to `host:5432` (the main repo's) and a separate worktree-scoped one not bound to the host. Tests connect to whatever owns `5432`; create `layer1_test` on that container specifically. `lsof -iTCP:5432 -P -n` shows which docker container has the port. `docker ps | grep postgres` shows all running candidates.
+**FastAPI logs show `database "layer1_test" does not exist` even though it was created.** Symptom of two worktrees both trying to bind `host:5432` — one container ends up unpublished and the host-side alembic / uvicorn hit the wrong Postgres. Use the parallel-worktrees recipe to give each worktree its own host port, or tear down the stack of the worktree you're not actively using.
 
 **Tests hit 402 Payment Required.** Credits drained — `globalSetup` should be topping them up but didn't fire. Run `scripts/seed_e2e_user.py --credits-per-tier 200` manually with the right `DATABASE_URL`.
 

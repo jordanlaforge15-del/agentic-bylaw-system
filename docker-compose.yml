@@ -8,8 +8,11 @@ services:
       POSTGRES_DB: layer1
       POSTGRES_USER: layer1
       POSTGRES_PASSWORD: layer1
+    # Host port is parametrized so multiple worktrees can each `make e2e`
+    # without colliding on host:5432. Each worktree exports a unique
+    # POSTGRES_HOST_PORT (scripts/e2e-up.sh derives it from PG_PORT).
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - layer1-postgres:/var/lib/postgresql/data
     # Cap how long an idle-in-transaction or any single statement can
