@@ -291,6 +291,56 @@ def test_create_app_requires_gateway():
         create_app(persona_text="x")
 
 
+# ----- Sidebar title composition ----------------------------------------------
+
+
+def test_compose_title_combines_anchor_and_question():
+    """ABS-22: sidebar title summarises both the address and the question.
+
+    The case-open flow attaches an anchor (typically an address) when
+    the case is created, and the first user message carries the
+    question. The sidebar should read like "1234 Main St · Can I…".
+    Either piece alone is acceptable as a fallback, but "New reading"
+    is only correct when both are absent.
+    """
+    from advisor.api.app import _compose_session_title
+
+    assert (
+        _compose_session_title(
+            "1234 Main St, Halifax", "Can I build a 6-storey on this lot?"
+        )
+        == "1234 Main St, Halifax · Can I build a 6-storey on this lot?"
+    )
+    assert _compose_session_title("1234 Main St", None) == "1234 Main St"
+    assert (
+        _compose_session_title(None, "Standalone question")
+        == "Standalone question"
+    )
+    assert _compose_session_title(None, None) == "New reading"
+    # Whitespace-only inputs collapse to "absent" so a stray space
+    # doesn't keep the placeholder out of the fallback branch.
+    assert _compose_session_title("   ", None) == "New reading"
+
+
+def test_compose_title_truncates_long_inputs():
+    """Per-piece caps stop a runaway anchor / question from blowing past
+    the sidebar's two-line clamp. Truncation is suffixed with an ellipsis
+    so the user knows there's more content behind the row."""
+    from advisor.api.app import _compose_session_title
+
+    long_anchor = "1234 Some Very Extremely Long Street Name, Halifax NS"
+    long_question = (
+        "I have a question about the rezoning of this lot under the "
+        "Regional Centre Land Use Bylaw and whether the proposed setback…"
+    )
+    title = _compose_session_title(long_anchor, long_question)
+    anchor_part, _sep, question_part = title.partition(" · ")
+    assert anchor_part.endswith("…")
+    assert question_part.endswith("…")
+    assert len(anchor_part) <= 41  # 40 chars + ellipsis
+    assert len(question_part) <= 61
+
+
 # ----- Clerk auth integration -------------------------------------------------
 
 

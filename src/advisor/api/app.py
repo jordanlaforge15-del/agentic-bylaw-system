@@ -52,7 +52,11 @@ from advisor.api.quota import (
     reserve_credit_for_session,
     update_usage_event_tokens,
 )
-from advisor.api.sessions import InMemorySessionStore, SessionStore
+from advisor.api.sessions import (
+    InMemorySessionStore,
+    SessionListEntry,
+    SessionStore,
+)
 from advisor.auth.clerk import ClerkVerifier
 from advisor.chat.persona import load_persona
 from advisor.chat.session import ChatSession
@@ -680,9 +684,9 @@ def create_app(
         sorts above older ones from the same render.
         """
         user_id_str = user.clerk_user_id
-        sessions = store.list_for_user(user_id_str)
+        entries = store.list_summaries_for_user(user_id_str)
         ordered = sorted(
-            enumerate(sessions),
+            enumerate(entries),
             key=lambda pair: (
                 pair[1].updated_at.timestamp()
                 if pair[1].updated_at is not None
@@ -690,7 +694,7 @@ def create_app(
             ),
             reverse=True,
         )
-        summaries = [_summarise_session(s) for _, s in ordered]
+        summaries = [_summary_from_entry(e) for _, e in ordered]
         return ChatSessionList(sessions=summaries)
 
     @app.get("/v1/chat/sessions/{session_id}")
@@ -717,47 +721,75 @@ def create_app(
     return app
 
 
-def _summarise_session(session: ChatSession) -> ChatSessionSummary:
-    """Project a full ``ChatSession`` into the lightweight sidebar shape.
+def _summary_from_entry(entry: SessionListEntry) -> ChatSessionSummary:
+    """Project a ``SessionListEntry`` into the sidebar's API shape.
 
-    Title comes from the first user message in the conversation,
-    truncated. Tool-result intermediate user messages (whose ``content``
-    is a list of blocks rather than a string) are skipped. If no user
-    message has ever been sent, fall back to a placeholder.
+    Title composition combines the case's anchor (the address / project
+    ref / DA the case is opened against) and the first user message so
+    the sidebar reads "1234 Main St · Can I build a 6-storey?" instead
+    of either piece alone. Falls back to whichever piece is present, or
+    a placeholder when the session is brand new with neither.
 
-    ``message_count`` counts only the rounds a human would call a
-    "turn" — a user input or an assistant text reply — so a session
-    that ran a 3-tool-call loop and produced one final answer reads
-    as 2 messages, not 8.
+    ``message_count`` counts only the rounds a human would call a turn
+    — a user input or an assistant text reply — so a session that ran
+    a 3-tool-call loop and produced one final answer reads as 2
+    messages, not 8.
     """
-    title = "New reading"
-    user_count = 0
-    assistant_text_count = 0
-    for m in session.messages:
-        if m.role == LLMRole.USER:
-            if isinstance(m.content, str):
-                user_count += 1
-                if title == "New reading":
-                    title = m.content[:80] + ("…" if len(m.content) > 80 else "")
-            # else: tool_result intermediate, ignore
-        elif m.role == LLMRole.ASSISTANT and isinstance(m.content, list):
-            if any(
-                getattr(b, "type", None) == "text"
-                and getattr(b, "text", "").strip()
-                for b in m.content
-            ):
-                assistant_text_count += 1
     return ChatSessionSummary(
-        session_id=session.session_id,
-        model=session.model,
-        title=title,
-        message_count=user_count + assistant_text_count,
+        session_id=entry.session_id,
+        model=entry.model,
+        title=_compose_session_title(
+            entry.anchor_label, entry.first_user_message
+        ),
+        message_count=entry.user_message_count + entry.assistant_text_count,
         updated_at=(
-            session.updated_at.isoformat()
-            if session.updated_at is not None
+            entry.updated_at.isoformat()
+            if entry.updated_at is not None
             else None
         ),
     )
+
+
+# Per-piece caps tuned so the combined title fits comfortably in the
+# sidebar's two-line clamp (~100 chars worst case with the separator).
+# Anchors are usually short ("1234 Main St"); question excerpts get
+# the larger budget because they carry the disambiguating detail.
+_TITLE_ANCHOR_LIMIT = 40
+_TITLE_QUESTION_LIMIT = 60
+_TITLE_SEPARATOR = " · "
+
+
+def _compose_session_title(
+    anchor_label: str | None, first_user_message: str | None
+) -> str:
+    """Combine case anchor + first user message into a sidebar title.
+
+    Both pieces are stripped and individually capped. When both are
+    present they're joined with a middle dot. Empty / whitespace-only
+    inputs are treated as absent. The "New reading" placeholder is
+    reserved for the genuinely empty case — a session that exists but
+    has no anchor and no user turn yet.
+    """
+    anchor = _trim_title_part(anchor_label, _TITLE_ANCHOR_LIMIT)
+    question = _trim_title_part(first_user_message, _TITLE_QUESTION_LIMIT)
+    if anchor and question:
+        return f"{anchor}{_TITLE_SEPARATOR}{question}"
+    if anchor:
+        return anchor
+    if question:
+        return question
+    return "New reading"
+
+
+def _trim_title_part(value: str | None, limit: int) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rstrip() + "…"
 
 
 def _settle_case_credit(
