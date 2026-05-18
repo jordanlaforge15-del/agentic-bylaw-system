@@ -15,6 +15,11 @@ if [[ "${1:-}" == "--drop-db" ]]; then
 fi
 
 E2E_TEST_DB="${E2E_TEST_DB:-layer1_test}"
+# Match e2e-up.sh defaults so the lsof fallback in stop_pid targets the
+# right port when the pidfile is missing/stale. Worktrees that overrode
+# these on the e2e-up call must export the same values here.
+E2E_FASTAPI_PORT="${E2E_FASTAPI_PORT:-8001}"
+E2E_WEB_PORT="${E2E_WEB_PORT:-3001}"
 PG_USER="${PG_USER:-layer1}"
 STATE_DIR="${REPO_ROOT}/.e2e"
 PID_DIR="${STATE_DIR}/pids"
@@ -24,14 +29,25 @@ log() { printf '\n==> %s\n' "$1"; }
 stop_pid() {
   local pidfile="$1"
   local label="$2"
-  if [[ ! -f "$pidfile" ]]; then
-    echo "${label}: no pidfile (${pidfile})"
-    return 0
+  local fallback_port="${3:-}"
+  local pid=""
+  if [[ -f "$pidfile" ]]; then
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
   fi
-  local pid
-  pid="$(cat "$pidfile")"
+  # Fall back to lsof when the pidfile is missing/empty/stale. e2e-up.sh
+  # writes pidfiles on the "already listening" path now, but older runs
+  # (or external processes squatting on the port) won't have one — the
+  # lsof lookup ensures teardown still finds and kills the holder.
+  if { [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; } && [[ -n "$fallback_port" ]]; then
+    local lsof_pid
+    lsof_pid="$(lsof -iTCP:"$fallback_port" -sTCP:LISTEN -tnP 2>/dev/null | head -1)"
+    if [[ -n "$lsof_pid" ]]; then
+      echo "${label}: pidfile missing/stale — using :${fallback_port} holder PID ${lsof_pid}"
+      pid="$lsof_pid"
+    fi
+  fi
   if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-    echo "${label}: PID ${pid} not running"
+    echo "${label}: nothing to kill (pidfile=${pidfile}${fallback_port:+, port=${fallback_port}})"
     rm -f "$pidfile"
     return 0
   fi
@@ -57,10 +73,10 @@ stop_pid() {
 }
 
 log "Stopping Next.js"
-stop_pid "${PID_DIR}/web.pid" "web"
+stop_pid "${PID_DIR}/web.pid" "web" "$E2E_WEB_PORT"
 
 log "Stopping FastAPI"
-stop_pid "${PID_DIR}/fastapi.pid" "fastapi"
+stop_pid "${PID_DIR}/fastapi.pid" "fastapi" "$E2E_FASTAPI_PORT"
 
 if [[ "$DROP_DB" -eq 1 ]]; then
   log "Dropping test database ${E2E_TEST_DB}"
