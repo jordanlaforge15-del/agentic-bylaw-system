@@ -41,9 +41,16 @@ test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const seed = path.join(repoRoot, "scripts", "seed_e2e_user.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
+  // Honor PG_PORT so this spec seeds against the correct Postgres
+  // container when a worktree overrides it for parallel `make e2e`
+  // (see docs/E2E_TESTING.md#parallel-worktrees). Without this, the
+  // seed lands in the default :5432 instance while FastAPI on the
+  // worktree's overridden port queries a different DB — the user
+  // never appears and open_case returns 500.
+  const pgPort = process.env.PG_PORT || "5432";
   const databaseUrl =
     process.env.DATABASE_URL ||
-    "postgresql+psycopg://layer1:layer1@localhost:5432/layer1_test";
+    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
 
   execSync(
     `"${venvPython}" "${seed}" --user-id "${TEST_USER_ID}" ` +
