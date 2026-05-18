@@ -190,6 +190,12 @@ start_web() {
   # known shared password. Playwright fixtures POST to /api/access
   # with this value to mint the abs_demo cookie before each test.
   # See start_fastapi for why the subshell redirection matters.
+  #
+  # Clerk keys are explicitly blanked to keep the test stack on the
+  # legacy /access shared-password gate (what Playwright fixtures
+  # expect). If you want manual local testing with real Clerk sign-in,
+  # use scripts/dev-up.sh against the dev DB instead — do not try to
+  # repurpose this script.
   ( cd "${REPO_ROOT}/web" && \
     ADVISOR_API_URL="http://127.0.0.1:${E2E_FASTAPI_PORT}" \
     ADVISOR_DEMO_USER_ID="$E2E_USER_ID" \
