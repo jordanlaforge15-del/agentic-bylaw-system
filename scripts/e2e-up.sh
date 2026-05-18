@@ -10,6 +10,10 @@
 #   E2E_TEST_DB    — DB name to create/migrate (default ``layer1_test``)
 #   E2E_FASTAPI_PORT — port for the test FastAPI (default 8001)
 #   E2E_WEB_PORT    — port for the Next.js dev server (default 3001)
+#   PG_PORT         — host port that the postgres container publishes
+#                     (default 5432). Override per worktree to allow
+#                     parallel `make e2e` runs; the compose file reads
+#                     POSTGRES_HOST_PORT which this script exports below.
 #
 # State written:
 #   .e2e/pids/fastapi.pid  — uvicorn PID
@@ -34,6 +38,11 @@ PG_PORT="${PG_PORT:-5432}"
 
 DATABASE_URL_E2E="postgresql+psycopg://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${E2E_TEST_DB}"
 PSQL_BASE_URL="postgresql://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/postgres"
+
+# Compose reads this for the postgres `ports:` host-side binding. Keep
+# it aligned with PG_PORT so a worktree overriding one always overrides
+# the other consistently.
+export POSTGRES_HOST_PORT="$PG_PORT"
 
 STATE_DIR="${REPO_ROOT}/.e2e"
 PID_DIR="${STATE_DIR}/pids"
