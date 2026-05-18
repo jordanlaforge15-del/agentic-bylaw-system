@@ -138,6 +138,25 @@ is_listening() {
   lsof -iTCP:"$port" -sTCP:LISTEN -P -n >/dev/null 2>&1
 }
 
+record_existing_listener() {
+  # When idempotency bails ("already listening"), capture the listener
+  # PID into the pidfile so scripts/e2e-down.sh has a breadcrumb. Without
+  # this, an orphaned stack from a prior crashed/Ctrl+C'd run cannot be
+  # cleaned up by any future e2e-down — it just prints "no pidfile" and
+  # silently leaves the process running.
+  local port="$1"
+  local pidfile="$2"
+  local label="$3"
+  local existing_pid
+  existing_pid="$(lsof -iTCP:"$port" -sTCP:LISTEN -tnP 2>/dev/null | head -1)"
+  if [[ -n "$existing_pid" ]]; then
+    echo "$existing_pid" >"$pidfile"
+    echo "${label} already listening on :${port} (PID ${existing_pid}) — recorded for cleanup"
+  else
+    echo "${label} already listening on :${port} but PID lookup failed — manual kill may be needed"
+  fi
+}
+
 wait_for_port() {
   local port="$1"
   local label="$2"
@@ -155,7 +174,7 @@ wait_for_port() {
 
 start_fastapi() {
   if is_listening "$E2E_FASTAPI_PORT"; then
-    echo "fastapi already listening on :${E2E_FASTAPI_PORT} — leaving it"
+    record_existing_listener "$E2E_FASTAPI_PORT" "${PID_DIR}/fastapi.pid" "fastapi"
     return 0
   fi
   log "Starting FastAPI test server (advisor.api.e2e_server) on :${E2E_FASTAPI_PORT}"
@@ -182,7 +201,7 @@ start_fastapi() {
 
 start_web() {
   if is_listening "$E2E_WEB_PORT"; then
-    echo "next dev already listening on :${E2E_WEB_PORT} — leaving it"
+    record_existing_listener "$E2E_WEB_PORT" "${PID_DIR}/web.pid" "next dev"
     return 0
   fi
   log "Starting Next.js dev server on :${E2E_WEB_PORT}"
