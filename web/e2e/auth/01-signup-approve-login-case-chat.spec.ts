@@ -21,6 +21,7 @@
 // build on the identity this one mints.
 
 import {
+  acceptCurrentTermsAs,
   approveInviteForEmail,
   expect,
   mintTestIdentity,
@@ -60,6 +61,11 @@ test("sign-up → approve → login → case → chat", async ({
   //    user-dependency, which JIT-inserts the advisor_user row and
   //    redeems the approved invite.
   await signInAs(context, identity);
+
+  // Clear the T&C click-wrap gate (ABS-18) so /app renders the chat
+  // shell instead of redirecting to /app/terms. The UI flow is
+  // covered separately by terms-acceptance-gate.spec.ts.
+  await acceptCurrentTermsAs(context, identity);
 
   // 4. Open a case via the marketing form so the spec covers the
   //    UI seam too. Unique anchor to avoid collisions with parallel

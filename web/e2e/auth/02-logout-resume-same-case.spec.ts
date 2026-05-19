@@ -26,6 +26,7 @@
 //     re-list /v1/chat/sessions as the original identity.
 
 import {
+  acceptCurrentTermsAs,
   approveInviteForEmail,
   E2E_API_URL,
   expect,
@@ -56,6 +57,11 @@ test("logout / login keeps the same case usable for a new turn", async ({
 
   // First login.
   await signInAs(context, identity);
+
+  // Clear the T&C click-wrap gate (ABS-18) for this identity. One
+  // acceptance row carries across the sign-out / sign-in cycle below
+  // because both sessions resolve to the same advisor_user row.
+  await acceptCurrentTermsAs(context, identity);
 
   // Open a case via API to bypass the form. The post hits the e2e
   // backend with this identity's headers, triggering JIT-create +
