@@ -1,24 +1,30 @@
-// Functional regression: ABS-7 lot_facts Part 2 — centerline-buffer
-// frontage, depth, and corner detection.
+// Functional regression: lot_facts centerline-buffer frontage, depth,
+// and corner detection — ABS-7 (introduction) + ABS-23 (corner-lot fix).
 //
-// Pre-fix (ABS-7 Part 1) the case-open extractor surfaced area + perimeter
-// only because the shared-edge frontage heuristic collapsed to 0 m on
-// HRM's tessellated parcel layer. Part 2 replaces that heuristic with a
-// centerline-buffer algorithm:
+// ABS-7 introduced the centerline-buffer algorithm:
 //   frontage = ST_Length(ST_Intersection(parcel_boundary,
 //                                        ST_Buffer(centerline_union,
 //                                                  buffer_m)))
-// and re-surfaces frontage / depth / corner alongside the existing area.
-// See ``src/layer2/spatial/lot_metrics.py`` for the algorithm details.
+// and surfaced frontage / depth / corner on case-open.
 //
-// This spec drives the regression end-to-end through the running FastAPI:
+// ABS-23 fixed corner / multi-frontage lots: widened the default buffer
+// to 12 m (real HRM parcels are inset 7–15 m from centerlines for the
+// road allowance, not zero as the original code assumed) and added
+// per-street grouping via STR_NAME so multiple centerline segments of
+// the same road collapse to one "street". Corner = ≥2 distinct streets
+// contribute; depth is omitted for corner lots.
 //
-//   beforeAll  -> scripts/seed_e2e_parcels.py inserts a 15×30 m parcel,
-//                 an east-west centerline along its south edge, and a
-//                 geocode-cache row for "100 Test Street".
-//   test       -> POST /v1/cases with anchor_label="100 Test Street".
-//                 The extractor inside open_case computes spatial_facts
-//                 and persists them on advisor_case.metadata_json.
+// This spec drives both code paths end-to-end through the running
+// FastAPI:
+//
+//   beforeAll  -> scripts/seed_e2e_parcels.py inserts a 15×30 m mid-block
+//                 parcel + east-west centerline ("100 Test Street") AND
+//                 a 30×40 m corner parcel + two perpendicular centerlines
+//                 with distinct STR_NAME ("200 Corner Street"), plus
+//                 geocode-cache rows for both addresses.
+//   tests      -> POST /v1/cases for each address. The extractor inside
+//                 open_case computes spatial_facts and persists them on
+//                 advisor_case.metadata_json.
 //   assertion  -> scripts/inspect_case_metadata.py reads that row and
 //                 prints the JSON; we assert the spatial_facts shape.
 //
@@ -39,16 +45,24 @@ import {
 } from "../fixtures/test-env";
 
 
-// Expected frontage for the seed parcel: the south 15 m edge is fully
-// inside the 8 m buffer (parcel sits on the centerline — HRM tessellation
-// pattern). Each perpendicular side edge contributes ~buffer_m of
-// "artifact" length where it crosses the buffer near the parcel's
-// road-facing corners. Total: 15 + 2 × 8 = 31 m. Documented in
-// ``lot_metrics.compute_lot_metrics`` and the unit-test fixtures.
-const EXPECTED_AREA_M2 = 450.0;
-const EXPECTED_PERIMETER_M = 90.0;
-const EXPECTED_FRONTAGE_M = 31.0;
-const EXPECTED_DEPTH_M = 14.5; // 450 / 31
+// Mid-block expected values: 15 m south edge fully inside the 12 m
+// buffer (parcel sits on the centerline — HRM tessellation worst case).
+// Each perpendicular side edge contributes ~12 m of "artifact" length
+// where it crosses the buffer near the parcel's road-facing corners.
+// Total: 15 + 2 × 12 = 39 m. Depth = area / frontage = 450 / 39 ≈ 11.5 m.
+const MIDBLOCK_AREA_M2 = 450.0;
+const MIDBLOCK_PERIMETER_M = 90.0;
+const MIDBLOCK_FRONTAGE_M = 39.0;
+const MIDBLOCK_DEPTH_M = 11.5;
+
+// Corner-lot expected values: 30 m south edge + 40 m east edge both
+// inside their respective street buffers + ~12 m artifact on each of
+// the two non-road-facing perpendicular edges ≈ 94 m total frontage.
+// area = 1,200 m². Depth must NOT be surfaced (geometrically undefined
+// for multi-frontage lots). street_count = 2.
+const CORNER_AREA_M2 = 1200.0;
+const CORNER_FRONTAGE_M = 94.0;
+const CORNER_FRONTAGE_TOLERANCE_M = 2.0;
 
 
 type OpenCaseResponseShape = {
@@ -103,25 +117,21 @@ function readCaseMetadata(caseId: number): Record<string, unknown> {
 }
 
 
-test.beforeAll(() => {
-  runSeed();
-});
-
-
-test("open_case for a seeded address persists centerline-buffer lot facts", async ({
-  request,
-}) => {
-  // Unique anchor variation per run so parallel workers (and re-runs
+async function openCaseAndReadFacts(
+  request: import("@playwright/test").APIRequestContext,
+  baseAnchorLabel: string,
+): Promise<Record<string, unknown>> {
+  // Unique anchor suffix per run so parallel workers (and re-runs
   // inside the 30-day case-match window) don't collide. The seeded
-  // geocode-cache row keys on the literal "100 Test Street" address;
-  // appending a per-run suffix changes the anchor_label but the
-  // extractor still resolves to the seeded geometry via the regex
-  // pattern that pulls "100 Test Street" out of any longer string.
-  // (See ``layer2.retrieval.location._CIVIC_PATTERN``.)
+  // geocode-cache row keys on the literal address; appending a per-run
+  // suffix changes the anchor_label but the extractor still resolves
+  // to the seeded geometry via the regex pattern that pulls
+  // "<number> <street>" out of any longer string. (See
+  // ``layer2.retrieval.location._CIVIC_PATTERN``.)
   const anchorSuffix = `${Date.now()}-${Math.random()
     .toString(36)
     .slice(2, 8)}`;
-  const anchorLabel = `100 Test Street #${anchorSuffix}`;
+  const anchorLabel = `${baseAnchorLabel} #${anchorSuffix}`;
 
   const openRes = await request.post(`${E2E_API_URL}/v1/cases`, {
     headers: { "X-Test-User-Id": DEMO_USER_ID },
@@ -144,27 +154,75 @@ test("open_case for a seeded address persists centerline-buffer lot facts", asyn
     facts,
     `case ${caseId}: metadata_json.spatial_facts missing — extractor didn't run`,
   ).toBeDefined();
-  if (!facts) return; // narrow for TS — guarded by the expect above
+  return facts!;
+}
 
-  // Status / method / provenance.
+
+test.beforeAll(() => {
+  runSeed();
+});
+
+
+test("mid-block lot returns single-street frontage + depth", async ({
+  request,
+}) => {
+  const facts = await openCaseAndReadFacts(request, "100 Test Street");
+
   expect(facts.status).toBe("ok");
   expect(facts.method).toBe("centerline_buffer");
   expect(facts.pid).toBe("E2E00001");
   expect(facts.anchor_source).toBe("e2e_seed");
 
-  // Geometry: 15 × 30 m parcel at Halifax → 450 m² area, 90 m perimeter.
-  expect(facts.area_m2).toBeCloseTo(EXPECTED_AREA_M2, 1);
-  expect(facts.perimeter_m).toBeCloseTo(EXPECTED_PERIMETER_M, 1);
-
-  // Centerline-buffer frontage: south edge + perpendicular-edge artifact
-  // at each corner. Tolerance covers projection precision (~0.1 m).
-  expect(facts.frontage_m).toBeGreaterThan(EXPECTED_FRONTAGE_M - 0.5);
-  expect(facts.frontage_m).toBeLessThan(EXPECTED_FRONTAGE_M + 0.5);
-  expect(facts.depth_m).toBeCloseTo(EXPECTED_DEPTH_M, 0); // ±0.5 m
+  expect(facts.area_m2).toBeCloseTo(MIDBLOCK_AREA_M2, 1);
+  expect(facts.perimeter_m).toBeCloseTo(MIDBLOCK_PERIMETER_M, 1);
+  // Centerline-buffer frontage with the 12 m default buffer.
+  expect(facts.frontage_m).toBeGreaterThan(MIDBLOCK_FRONTAGE_M - 0.5);
+  expect(facts.frontage_m).toBeLessThan(MIDBLOCK_FRONTAGE_M + 0.5);
+  expect(facts.depth_m).toBeCloseTo(MIDBLOCK_DEPTH_M, 0); // ±0.5 m
   expect(facts.corner).toBe(false);
+  expect(facts.street_count).toBe(1);
 
-  // Confidence stays at 1.0 because frontage is well above the 5%-of-
-  // perimeter floor (31 / 90 ≈ 34%). A future regression that lets
-  // frontage collapse would drop this to 0.7 and the assertion catches it.
+  // Frontage is well above the 5%-of-perimeter floor (39 / 90 ≈ 43%)
+  // and street_count is below the irregular-frontage threshold (3+) →
+  // confidence stays at 1.0. Drift here is the early-warning signal
+  // for a regression on the confidence-policy code in extractor.py.
+  expect(facts.confidence).toBe(1.0);
+});
+
+
+test("ABS-23: corner lot returns frontage spanning two streets, omits depth", async ({
+  request,
+}) => {
+  // 200 Corner Street: 30 × 40 m parcel at the intersection of two
+  // perpendicular centerlines named "CORNER" and "CROSS". Pre-ABS-23
+  // this case returned corner=false and a bogus depth because the 8 m
+  // buffer reached at most one centerline. After ABS-23: corner=true,
+  // street_count=2, depth omitted, frontage sums both edges.
+  const facts = await openCaseAndReadFacts(request, "200 Corner Street");
+
+  expect(facts.status).toBe("ok");
+  expect(facts.pid).toBe("E2E00002");
+  expect(facts.area_m2).toBeCloseTo(CORNER_AREA_M2, 1);
+
+  expect(facts.street_count).toBe(2);
+  expect(facts.corner).toBe(true);
+
+  // 30 + 40 m main edges + ~12 m artifact on each of the two
+  // perpendicular non-frontage edges ≈ 94 m. Tolerance covers
+  // projection precision (~0.5 m at Halifax latitudes).
+  expect(facts.frontage_m).toBeGreaterThan(
+    CORNER_FRONTAGE_M - CORNER_FRONTAGE_TOLERANCE_M,
+  );
+  expect(facts.frontage_m).toBeLessThan(
+    CORNER_FRONTAGE_M + CORNER_FRONTAGE_TOLERANCE_M,
+  );
+
+  // Depth is geometrically undefined for multi-frontage parcels —
+  // omitted from the persisted facts entirely. A regression that
+  // re-introduces `area / frontage` for corner lots will fail this.
+  expect(facts.depth_m).toBeUndefined();
+
+  // 2 streets is still "normal" residential corner; confidence stays
+  // at 1.0. (3+ streets → irregular → 0.7; 4+ → city-block → suppress.)
   expect(facts.confidence).toBe(1.0);
 });
