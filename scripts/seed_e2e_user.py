@@ -31,7 +31,8 @@ import sys
 from sqlalchemy import select
 
 from advisor.db.cases import grant_admin_credits
-from advisor.db.models import CaseCredit, User
+from advisor.db.models import CaseCredit, TermsAcceptance, User
+from advisor.legal import get_current_terms
 from layer1.db.session import session_scope
 
 
@@ -112,6 +113,39 @@ def main() -> int:
                     f"{tier} credit(s); nothing to grant"
                 )
             _ = available  # touch to satisfy linter — we use count above
+
+        # Ensure the demo user has accepted the current T&C version so
+        # the gate at /app doesn't redirect existing chat/case specs to
+        # /app/terms. The acceptance is idempotent on
+        # (user_id, version_hash); inserting one we already have is a
+        # no-op via the unique constraint.
+        current = get_current_terms()
+        already = (
+            db.query(TermsAcceptance)
+            .filter(
+                TermsAcceptance.user_id == user.id,
+                TermsAcceptance.version_hash == current.version_hash,
+            )
+            .first()
+        )
+        if already is None:
+            db.add(
+                TermsAcceptance(
+                    user_id=user.id,
+                    version_hash=current.version_hash,
+                    ip="127.0.0.1",
+                    user_agent="seed_e2e_user.py",
+                )
+            )
+            print(
+                f"seeded TermsAcceptance for user {user.id} "
+                f"version={current.version_hash[:16]}…"
+            )
+        else:
+            print(
+                f"user {user.id} already accepted current T&C version "
+                f"{current.version_hash[:16]}…"
+            )
 
     return 0
 

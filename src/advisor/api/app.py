@@ -348,6 +348,22 @@ def create_app(
             )
         )
 
+        # Terms-and-conditions router — the click-wrap gate. Mounted
+        # whenever a DB factory is wired (the acceptance row needs a
+        # real DB). The router itself doesn't require Clerk to be
+        # configured; the user dependency falls back to the
+        # X-Test-User-Id header for tests, just like the other routers
+        # in this block.
+        from advisor.api.terms_router import build_terms_router  # noqa: PLC0415
+
+        app.include_router(
+            build_terms_router(
+                db_session_factory=db_session_factory,
+                user_dependency=require_user,
+                user_resolver=_resolve_user_via_db,
+            )
+        )
+
     # Clerk webhook router. Only mounted when both the secret and a DB
     # factory are wired — the route needs a real DB to write user-row
     # changes against, and without the secret we have no way to verify
@@ -423,6 +439,32 @@ def create_app(
                     ) from exc
 
                 enforce_request_rate(db, db_user)
+
+                # Click-wrap gate. The Next.js layout redirects
+                # unsigned users to /app/terms, but a direct API caller
+                # would otherwise bypass that — refuse the turn here
+                # with the same 412 the require_accepted_current_terms
+                # dependency raises on future endpoints (/v1/keys etc.).
+                # Kept inline (rather than as a Depends) because the
+                # chat route already opens its own db session above and
+                # the dependency would open a second one.
+                from advisor.legal import (  # noqa: PLC0415 — lazy to keep import graph flat
+                    user_has_accepted_current_terms,
+                )
+
+                if not user_has_accepted_current_terms(db, db_user):
+                    raise HTTPException(
+                        status_code=412,
+                        detail={
+                            "code": "terms_not_accepted",
+                            "message": (
+                                "Accept the current Terms and Conditions "
+                                "before using the chat. Navigate to "
+                                "/app/terms in the web UI, or call "
+                                "POST /v1/terms/accept from your client."
+                            ),
+                        },
+                    )
 
                 try:
                     db_session_pk = int(session.session_id)
