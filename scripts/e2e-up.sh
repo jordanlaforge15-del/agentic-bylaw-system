@@ -37,6 +37,12 @@ PG_HOST="${PG_HOST:-localhost}"
 PG_PORT="${PG_PORT:-5432}"
 
 DATABASE_URL_E2E="postgresql+psycopg://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${E2E_TEST_DB}"
+# The node ``pg`` client doesn't grok SQLAlchemy's ``+psycopg`` suffix
+# (it parses the URL with whatwg URL semantics and bails on the
+# unrecognised scheme). Build a separate pg-friendly URL for the
+# Next.js dev server so route handlers that talk to Postgres directly
+# (e.g. ``/api/invite`` → ``invite_request``) can reach the test DB.
+DATABASE_URL_E2E_PG="postgresql://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${E2E_TEST_DB}"
 PSQL_BASE_URL="postgresql://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/postgres"
 
 # Compose reads this for the postgres `ports:` host-side binding. Keep
@@ -222,6 +228,7 @@ start_web() {
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="" \
     DEMO_PASSWORD="${E2E_DEMO_PASSWORD:-e2e-demo-pw}" \
     ADMIN_PASSWORD="${E2E_ADMIN_PASSWORD:-e2e-admin-pw}" \
+    DATABASE_URL="$DATABASE_URL_E2E_PG" \
     nohup npx next dev -p "$E2E_WEB_PORT" &
     echo $! >"${PID_DIR}/web.pid"
     disown
