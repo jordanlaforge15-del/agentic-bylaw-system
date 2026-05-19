@@ -45,13 +45,13 @@ def test_all_offers_yields_twelve_combinations() -> None:
 
 
 def test_pack_offer_discount_math() -> None:
-    # Standard tier ($65 / credit) × Pro pack (20 credits, 15% off):
-    # list = 65 * 20 = $1,300 = 130_000 cents
-    # discount = 130_000 * 0.15 = 19_500 cents
-    # due = 110_500 cents
+    # Standard tier ($32.50 / credit) × Pro pack (20 credits, 15% off):
+    # list = 32.50 * 20 = $650 = 65_000 cents
+    # discount = 65_000 * 0.15 = 9_750 cents
+    # due = 55_250 cents
     offer = offer_for(TIER_STANDARD, PACK_PRO)
-    assert offer.list_price_cents == 130_000
-    assert offer.amount_due_cents == 110_500
+    assert offer.list_price_cents == 65_000
+    assert offer.amount_due_cents == 55_250
 
 
 def test_payg_has_no_discount() -> None:
