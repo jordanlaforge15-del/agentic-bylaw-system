@@ -304,6 +304,53 @@ export async function openCaseAsIdentity(
   return { caseId: data.case.id };
 }
 
+/** Accept the current Terms and Conditions on behalf of the supplied
+ * identity. The /app gate (ABS-18) redirects any user who hasn't
+ * accepted the live T&C version to /app/terms, which masks the chat
+ * composer the auth specs assert on. The full T&C UI flow is covered
+ * separately by web/e2e/functional/terms-acceptance-gate.spec.ts —
+ * here we just clear the gate via the JSON API so the auth specs
+ * stay focused on the identity / case / chat lifecycle.
+ *
+ * Idempotent: re-accepting an already-recorded version is a no-op
+ * thanks to the (user_id, version_hash) unique constraint inside
+ * record_acceptance. The backend JIT-creates the advisor_user row on
+ * GET /v1/terms/current, so this helper safely runs before the first
+ * /v1/cases request. */
+export async function acceptCurrentTermsAs(
+  context: BrowserContext,
+  identity: TestIdentity,
+): Promise<void> {
+  const headers = {
+    "X-Test-User-Id": identity.subUserId,
+    "X-Test-User-Email": identity.email,
+    "X-Test-User-Full-Name": identity.fullName,
+  };
+  const currentRes = await context.request.get(
+    `${E2E_API_URL}/v1/terms/current`,
+    { headers },
+  );
+  if (!currentRes.ok()) {
+    throw new Error(
+      `acceptCurrentTermsAs: GET /v1/terms/current failed: HTTP ${currentRes.status()} ${await currentRes.text()}`,
+    );
+  }
+  const current = (await currentRes.json()) as { version: string; accepted: boolean };
+  if (current.accepted) return;
+  const acceptRes = await context.request.post(
+    `${E2E_API_URL}/v1/terms/accept`,
+    {
+      headers: { ...headers, "Content-Type": "application/json" },
+      data: { version: current.version },
+    },
+  );
+  if (!acceptRes.ok()) {
+    throw new Error(
+      `acceptCurrentTermsAs: POST /v1/terms/accept failed: HTTP ${acceptRes.status()} ${await acceptRes.text()}`,
+    );
+  }
+}
+
 /** Wait for an assistant message containing the expected text in the
  * chat thread. Matches ``waitForAssistantText`` from the legacy
  * fixture but lives here so auth specs don't have to import from
