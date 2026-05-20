@@ -1,0 +1,462 @@
+"""Coverage for the LLM-assisted attribute_tags enrichment pass.
+
+Tests use a deterministic ``FakeTagger`` so the suite never depends on
+network or API keys. The Anthropic-backed implementation is exercised
+in production runs against Halifax, not in CI.
+
+Pinned behaviours:
+
+* Prefilter pre-filters — clauses with no keyword hits and no parent
+  hit aren't sent to the LLM.
+* Parent-inherited prefilter — a clause whose own text doesn't match
+  but whose parent does still gets sent.
+* Hedge filter — proposals containing hedge words ("may", "could")
+  are discarded into ``attribute_tag_discards``.
+* Invalid attribute ids are discarded.
+* Audit trail is written: ``attribute_tag_audit`` carries taxonomy
+  version + model + timestamp, ``attribute_tag_rationales`` carries
+  the accepted proposals.
+* Idempotency — second run with the same model + taxonomy + result
+  is a no-op (``unchanged_skipped`` increments).
+* Re-run with a *different* model writes a new audit row and
+  preserves the old one in ``attribute_tag_history``.
+* Dry-run doesn't touch the DB.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Iterable
+
+from layer1.db.base import Document, SourceFragment
+from layer1.db.init_db import create_all
+from layer1.db.session import session_scope
+from layer1.models.enums import FragmentType, ParseStatus
+from layer2.compliance.taxonomy import Taxonomy, load_taxonomy
+from layer2.semantic.enrich_attribute_tags import (
+    PROMPT_VERSION,
+    EnrichStats,
+    LLMTagger,
+    TagProposal,
+    enrich_document,
+)
+
+
+class FakeTagger:
+    """Deterministic tagger driven by a hard-coded clause→proposals map.
+
+    The map is keyed on a stable substring of the clause text so
+    tests can be written without juggling fragment ids.
+    """
+
+    name = "fake-tagger"
+
+    def __init__(
+        self,
+        responses: dict[str, list[TagProposal]],
+        *,
+        model: str = "fake-model-1",
+        raise_on: Iterable[str] = (),
+    ) -> None:
+        self._responses = responses
+        self._raise_on = tuple(raise_on)
+        self.model = model
+        self.calls: list[tuple[str, list[str]]] = []
+
+    def propose_tags(
+        self,
+        *,
+        clause_text: str,
+        citation_context: str,
+        taxonomy: Taxonomy,
+        candidate_ids: list[str],
+    ) -> list[TagProposal]:
+        self.calls.append((clause_text, candidate_ids))
+        for fragment_text, proposals in self._responses.items():
+            if fragment_text in clause_text:
+                for raise_keyword in self._raise_on:
+                    if raise_keyword in clause_text:
+                        raise RuntimeError(f"fake LLM error for {raise_keyword!r}")
+                return proposals
+        return []
+
+
+def _make_db(tmp_path: Path) -> str:
+    db_url = f"sqlite:///{tmp_path / 'enrich.db'}"
+    create_all(db_url)
+    return db_url
+
+
+def _seed_document(session) -> tuple[int, dict[str, int]]:
+    document = Document(
+        municipality="HRM",
+        bylaw_name="Test Bylaw",
+        source_path="t.pdf",
+        file_hash="h",
+        mime_type="application/pdf",
+        page_count=1,
+        parser_version="test",
+    )
+    session.add(document)
+    session.flush()
+
+    setbacks_heading = SourceFragment(
+        document_id=document.id,
+        fragment_type=FragmentType.SECTION,
+        citation_label="4",
+        citation_path="4",
+        parent_fragment_id=None,
+        page_start=1,
+        page_end=1,
+        reading_order_start=1,
+        # Parent text mentions "front yard" so the prefilter on the
+        # parent inherits to children that don't carry the keyword
+        # in their own text (e.g. just "the dimension specified
+        # shall be X metres").
+        text="4. Front yard requirements. Every dwelling must satisfy the rules below.",
+        parse_status=ParseStatus.PARSED,
+        confidence=1.0,
+    )
+    session.add(setbacks_heading)
+    session.flush()
+
+    front_clause = SourceFragment(
+        document_id=document.id,
+        fragment_type=FragmentType.CLAUSE,
+        citation_label="4.1",
+        citation_path="4.1",
+        parent_fragment_id=setbacks_heading.id,
+        page_start=1,
+        page_end=1,
+        reading_order_start=2,
+        text="The minimum front yard shall be 4.5 metres.",
+        parse_status=ParseStatus.PARSED,
+        confidence=1.0,
+    )
+    bare_clause = SourceFragment(
+        document_id=document.id,
+        fragment_type=FragmentType.CLAUSE,
+        citation_label="4.2",
+        citation_path="4.2",
+        parent_fragment_id=setbacks_heading.id,
+        page_start=1,
+        page_end=1,
+        reading_order_start=3,
+        text="The dimension specified shall be 6.0 metres.",
+        parse_status=ParseStatus.PARSED,
+        confidence=1.0,
+    )
+    definitions = SourceFragment(
+        document_id=document.id,
+        fragment_type=FragmentType.SECTION,
+        citation_label="5",
+        citation_path="5",
+        parent_fragment_id=None,
+        page_start=2,
+        page_end=2,
+        reading_order_start=1,
+        text="Definitions of building, lot, and yard apply across this bylaw.",
+        parse_status=ParseStatus.PARSED,
+        confidence=1.0,
+    )
+    unrelated_clause = SourceFragment(
+        document_id=document.id,
+        fragment_type=FragmentType.CLAUSE,
+        citation_label="6.1",
+        citation_path="6.1",
+        parent_fragment_id=None,
+        page_start=3,
+        page_end=3,
+        reading_order_start=1,
+        text="The mayor shall publish notices in the city gazette.",
+        parse_status=ParseStatus.PARSED,
+        confidence=1.0,
+    )
+    session.add_all([front_clause, bare_clause, definitions, unrelated_clause])
+    session.flush()
+    return document.id, {
+        "heading": setbacks_heading.id,
+        "front": front_clause.id,
+        "bare": bare_clause.id,
+        "definitions": definitions.id,
+        "unrelated": unrelated_clause.id,
+    }
+
+
+def test_prefilter_skips_clauses_with_no_keyword_hit(tmp_path: Path) -> None:
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document_id, _ids = _seed_document(session)
+
+    tagger = FakeTagger({})
+    with session_scope(db_url) as session:
+        stats = enrich_document(session, document_id=document_id, tagger=tagger)
+
+    # The unrelated 6.1 clause never touches an attribute keyword and
+    # its parent is None — must not reach the LLM.
+    sent_texts = {clause_text for clause_text, _candidates in tagger.calls}
+    assert all("mayor" not in text for text in sent_texts)
+    assert stats.fragments_prefiltered_out >= 1
+
+
+def test_parent_keyword_inherits_to_children(tmp_path: Path) -> None:
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document_id, _ids = _seed_document(session)
+
+    tagger = FakeTagger(
+        {
+            "Front yard requirements.": [],
+            "minimum front yard": [
+                TagProposal(
+                    attribute_id="front_setback_m",
+                    rationale="Clause sets the minimum front yard distance.",
+                )
+            ],
+            "dimension specified shall be 6.0": [
+                TagProposal(
+                    attribute_id="front_setback_m",
+                    rationale="Inherits from the Front yard requirements heading.",
+                )
+            ],
+        }
+    )
+    with session_scope(db_url) as session:
+        enrich_document(session, document_id=document_id, tagger=tagger)
+
+    # The 4.2 clause's own text mentions "metres" and "dimension"
+    # but not "setback"/"yard"; its parent (4. Setbacks) does, so
+    # it should still be sent.
+    sent_texts = {clause_text for clause_text, _candidates in tagger.calls}
+    assert any("dimension specified" in t for t in sent_texts)
+
+    with session_scope(db_url) as session:
+        fragment = (
+            session.query(SourceFragment)
+            .filter(SourceFragment.citation_path == "4.2")
+            .one()
+        )
+        assert "front_setback_m" in fragment.attribute_tags
+
+
+def test_hedged_proposals_are_discarded(tmp_path: Path) -> None:
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document_id, ids = _seed_document(session)
+
+    tagger = FakeTagger(
+        {
+            "Front yard requirements.": [],
+            "minimum front yard": [
+                TagProposal(
+                    attribute_id="front_setback_m",
+                    rationale="Clause sets the minimum front yard distance.",
+                ),
+                TagProposal(
+                    attribute_id="lot_coverage_percent",
+                    rationale="May indirectly affect lot coverage on small lots.",
+                ),
+            ],
+        }
+    )
+    with session_scope(db_url) as session:
+        stats = enrich_document(session, document_id=document_id, tagger=tagger)
+    assert stats.hedge_discards == 1
+
+    with session_scope(db_url) as session:
+        fragment = session.get(SourceFragment, ids["front"])
+        assert "front_setback_m" in fragment.attribute_tags
+        # lot_coverage_percent must NOT be tagged because the
+        # rationale contained "may".
+        assert "lot_coverage_percent" not in fragment.attribute_tags
+        # Discards land in the audit metadata for spot-check.
+        discards = fragment.metadata_json.get("attribute_tag_discards") or []
+        assert any(d["attribute_id"] == "lot_coverage_percent" for d in discards)
+
+
+def test_invalid_attribute_ids_are_discarded(tmp_path: Path) -> None:
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document_id, ids = _seed_document(session)
+
+    tagger = FakeTagger(
+        {
+            "minimum front yard": [
+                TagProposal(
+                    attribute_id="front_setback_m",
+                    rationale="Sets the minimum front yard distance.",
+                ),
+                TagProposal(
+                    attribute_id="totally_invented_attribute",
+                    rationale="Hallucinated id; must be dropped.",
+                ),
+            ],
+        }
+    )
+    with session_scope(db_url) as session:
+        enrich_document(session, document_id=document_id, tagger=tagger)
+
+    with session_scope(db_url) as session:
+        fragment = session.get(SourceFragment, ids["front"])
+        assert fragment.attribute_tags == ["front_setback_m"]
+
+
+def test_audit_trail_is_written(tmp_path: Path) -> None:
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document_id, ids = _seed_document(session)
+
+    tagger = FakeTagger(
+        {
+            "minimum front yard": [
+                TagProposal(
+                    attribute_id="front_setback_m",
+                    rationale="Sets the front yard minimum.",
+                )
+            ]
+        }
+    )
+    with session_scope(db_url) as session:
+        enrich_document(session, document_id=document_id, tagger=tagger)
+
+    taxonomy = load_taxonomy()
+    with session_scope(db_url) as session:
+        fragment = session.get(SourceFragment, ids["front"])
+        audit = fragment.metadata_json["attribute_tag_audit"]
+        assert audit["taxonomy_version"] == taxonomy.version
+        assert audit["model"] == "fake-model-1"
+        assert audit["prompt_version"] == PROMPT_VERSION
+        assert audit["tag_count"] == 1
+        rationales = fragment.metadata_json["attribute_tag_rationales"]
+        assert rationales == [
+            {
+                "attribute_id": "front_setback_m",
+                "rationale": "Sets the front yard minimum.",
+            }
+        ]
+
+
+def test_idempotent_rerun_is_noop(tmp_path: Path) -> None:
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document_id, _ids = _seed_document(session)
+
+    responses = {
+        "minimum front yard": [
+            TagProposal(
+                attribute_id="front_setback_m",
+                rationale="Sets the front yard minimum.",
+            )
+        ]
+    }
+    with session_scope(db_url) as session:
+        first = enrich_document(
+            session, document_id=document_id, tagger=FakeTagger(responses)
+        )
+
+    with session_scope(db_url) as session:
+        second = enrich_document(
+            session, document_id=document_id, tagger=FakeTagger(responses)
+        )
+    assert second.tags_assigned == 0
+    assert second.unchanged_skipped >= first.fragments_with_tags
+
+
+def test_rerun_with_different_model_preserves_history(tmp_path: Path) -> None:
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document_id, ids = _seed_document(session)
+
+    with session_scope(db_url) as session:
+        enrich_document(
+            session,
+            document_id=document_id,
+            tagger=FakeTagger(
+                {
+                    "minimum front yard": [
+                        TagProposal(
+                            attribute_id="front_setback_m",
+                            rationale="model-1 rationale",
+                        )
+                    ]
+                },
+                model="fake-model-1",
+            ),
+        )
+
+    with session_scope(db_url) as session:
+        enrich_document(
+            session,
+            document_id=document_id,
+            tagger=FakeTagger(
+                {
+                    "minimum front yard": [
+                        TagProposal(
+                            attribute_id="front_setback_m",
+                            rationale="model-2 rationale",
+                        )
+                    ]
+                },
+                model="fake-model-2",
+            ),
+        )
+
+    with session_scope(db_url) as session:
+        fragment = session.get(SourceFragment, ids["front"])
+        history = fragment.metadata_json["attribute_tag_history"]
+        assert len(history) == 1
+        assert history[0]["model"] == "fake-model-1"
+        current = fragment.metadata_json["attribute_tag_audit"]
+        assert current["model"] == "fake-model-2"
+
+
+def test_dry_run_does_not_persist(tmp_path: Path) -> None:
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document_id, ids = _seed_document(session)
+
+    tagger = FakeTagger(
+        {
+            "minimum front yard": [
+                TagProposal(
+                    attribute_id="front_setback_m",
+                    rationale="Sets the minimum front yard distance.",
+                )
+            ]
+        }
+    )
+    with session_scope(db_url) as session:
+        stats = enrich_document(
+            session, document_id=document_id, tagger=tagger, dry_run=True
+        )
+    assert stats.fragments_with_tags >= 1
+
+    with session_scope(db_url) as session:
+        fragment = session.get(SourceFragment, ids["front"])
+        assert fragment.attribute_tags == []
+        assert "attribute_tag_audit" not in (fragment.metadata_json or {})
+
+
+def test_llm_failure_does_not_abort_run(tmp_path: Path) -> None:
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document_id, ids = _seed_document(session)
+
+    tagger = FakeTagger(
+        {
+            "minimum front yard": [
+                TagProposal(
+                    attribute_id="front_setback_m",
+                    rationale="Sets the minimum front yard distance.",
+                )
+            ],
+            "dimension specified shall be 6.0": [],
+        },
+        raise_on=("dimension specified",),
+    )
+    with session_scope(db_url) as session:
+        stats = enrich_document(session, document_id=document_id, tagger=tagger)
+    assert stats.llm_errors == 1
+    # Front-yard clause still got tagged despite the unrelated failure.
+    with session_scope(db_url) as session:
+        fragment = session.get(SourceFragment, ids["front"])
+        assert "front_setback_m" in fragment.attribute_tags
