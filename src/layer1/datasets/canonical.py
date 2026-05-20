@@ -24,9 +24,16 @@ CANONICAL_FIELDS: dict[str, str] = {
     # layer where each polygon assigns a zone code (e.g. "ER-3", "DD") to
     # a geographic area. The bylaw_area_id is the numeric LUB identifier
     # that lets a downstream filter restrict to a single bylaw's zones.
+    # bylaw_area_code is the publisher-prefixed short code ("hrm:HMAIN")
+    # — globally unique across jurisdictions so two cities' code "9" won't
+    # collide. bylaw_area_name is the human-readable form ("Halifax Mainland
+    # Land Use By-law") that the chat agent should quote verbatim instead of
+    # hallucinating a name from the bare integer id.
     "zone_code": "string",
     "zone_description": "string",
     "bylaw_area_id": "int",
+    "bylaw_area_code": "string",
+    "bylaw_area_name": "string",
     # Built-form precinct fields surfaced by additional schedule datasets.
     # Each is populated only by the dataset(s) where the value is meaningful;
     # the API consumer disambiguates via the linked dataset's name.

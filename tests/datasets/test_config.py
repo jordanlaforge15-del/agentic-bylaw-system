@@ -75,6 +75,37 @@ def test_unsupported_type_rejected(tmp_path: Path):
         load_dataset_config(_write(tmp_path, body))
 
 
+def test_rejects_lookup_without_lookup_field(tmp_path: Path):
+    body = VALID_YAML.replace(
+        "max_height_m: { from: HEIGHT, type: float }",
+        "max_height_m: { from: HEIGHT, type: float, lookup: subs }",
+    )
+    body += "lookups:\n  subs:\n    1: { name: x }\n"
+    with pytest.raises(Exception):
+        load_dataset_config(_write(tmp_path, body))
+
+
+def test_rejects_lookup_referencing_undefined_table(tmp_path: Path):
+    body = VALID_YAML.replace(
+        "max_height_m: { from: HEIGHT, type: float }",
+        (
+            "max_height_m: { from: HEIGHT, type: float, lookup: missing,"
+            " lookup_field: name }"
+        ),
+    )
+    with pytest.raises(Exception):
+        load_dataset_config(_write(tmp_path, body))
+
+
+def test_rejects_lookup_field_without_lookup(tmp_path: Path):
+    body = VALID_YAML.replace(
+        "max_height_m: { from: HEIGHT, type: float }",
+        "max_height_m: { from: HEIGHT, type: float, lookup_field: name }",
+    )
+    with pytest.raises(Exception):
+        load_dataset_config(_write(tmp_path, body))
+
+
 def test_real_halifax_config_loads():
     cfg = load_dataset_config(
         Path("src/layer1/datasets/halifax_height_precincts.yaml")
