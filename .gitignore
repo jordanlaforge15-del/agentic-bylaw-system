@@ -27,7 +27,9 @@ data/.cache/
 
 # Local scratch — never committed
 tmp/
-.claude/
+.claude/*
+# …except shared skills, which ship with the repo.
+!.claude/skills/
 .DS_Store
 *.swp
 
