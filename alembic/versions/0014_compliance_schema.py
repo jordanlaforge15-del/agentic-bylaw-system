@@ -146,36 +146,15 @@ def upgrade() -> None:
     )
 
     # ----- submission -----------------------------------------------------
-    submission_status = sa.Enum(
-        "draft",
-        "evaluating",
-        "evaluated",
-        "archived",
-        name="submission_status",
-    )
-    submission_source_type = sa.Enum(
-        "manual",
-        "ifc",
-        "rvt_aps",
-        "pdf",
-        "speckle",
-        name="submission_source_type",
-    )
-    submission_attribute_source = sa.Enum(
-        "manual",
-        "extracted",
-        "derived",
-        "override",
-        name="submission_attribute_source",
-    )
-    # Enums need explicit creation on postgres so the same DDL can be
-    # referenced by multiple columns / future migrations. Sqlite stores
-    # the string variant transparently.
-    if is_postgres:
-        submission_status.create(bind, checkfirst=True)
-        submission_source_type.create(bind, checkfirst=True)
-        submission_attribute_source.create(bind, checkfirst=True)
-
+    # Enum types are created inline by the first column reference. We
+    # don't pre-create with ``.create(checkfirst=True)`` and then use
+    # ``create_type=False`` on the column — SQLAlchemy 2.0.49's
+    # ``_on_table_create`` ignores ``create_type=False`` on inline
+    # enums that aren't bound to ``MetaData``, which produces a
+    # ``DuplicateObject`` error against real Postgres (caught by
+    # ABS-46's ``make e2e`` run). Letting the first inline reference
+    # do the CREATE TYPE matches the pattern migration 0001 used for
+    # the layer-1 enums and works on both sqlite and Postgres.
     op.create_table(
         "submission",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -194,7 +173,6 @@ def upgrade() -> None:
                 "evaluated",
                 "archived",
                 name="submission_status",
-                create_type=False,
             ),
             nullable=False,
             server_default="draft",
@@ -208,7 +186,6 @@ def upgrade() -> None:
                 "pdf",
                 "speckle",
                 name="submission_source_type",
-                create_type=False,
             ),
             nullable=False,
             server_default="manual",
@@ -262,7 +239,6 @@ def upgrade() -> None:
                 "derived",
                 "override",
                 name="submission_attribute_source",
-                create_type=False,
             ),
             nullable=False,
             server_default="manual",

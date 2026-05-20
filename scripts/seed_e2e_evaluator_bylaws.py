@@ -99,12 +99,47 @@ def _centroid_geojson() -> dict[str, Any]:
 
 
 def seed(session) -> dict[str, int]:
-    """Insert (or re-insert) the evaluator e2e fixture rows.
+    """Insert (or reuse) the evaluator e2e fixture rows.
 
-    Returns the new ids for document, parcel, and each fragment so the
-    Playwright spec can later assert on citation_path -> fragment_id
-    mappings if needed.
+    Concurrency-safe: Playwright runs the smoke spec across four
+    viewport projects in parallel, so the seed gets invoked four
+    times concurrently in ``beforeAll``. On Postgres we acquire a
+    transaction-scoped advisory lock keyed by a stable arbitrary
+    integer so only one worker mutates state at a time; the others
+    wait, then find the rows already present and no-op.
+
+    The data is static — there's nothing to update between runs — so
+    "exists → skip" is the right semantics. Each component is
+    upserted by its stable unique key.
     """
+    if session.bind.dialect.name == "postgresql":
+        # Arbitrary 64-bit constant — must be stable across processes,
+        # unique among seed scripts on this DB. The number is just the
+        # ASCII codepoint sum of "abs46-evaluator" scaled to a 32-bit
+        # range; any fixed integer works.
+        from sqlalchemy import text as sa_text
+
+        session.execute(sa_text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601146))
+
+    document = _get_or_create_document(session)
+    _ensure_fragments(session, document_id=document.id)
+    parcel = _get_or_create_parcel(session)
+    dataset = _get_or_create_dataset(session)
+    _ensure_dataset_feature(session, dataset_id=dataset.id, parcel_id=parcel.id)
+    _ensure_geocode_cache(session)
+    session.flush()
+
+    front_id, height_id, corner_id = _fragment_ids(session, document_id=document.id)
+    return {
+        "document_id": document.id,
+        "parcel_id": parcel.id,
+        "front_clause_id": front_id,
+        "height_clause_id": height_id,
+        "corner_clause_id": corner_id,
+    }
+
+
+def _get_or_create_document(session) -> Document:
     document = (
         session.execute(
             select(Document).where(Document.file_hash == DOCUMENT_FILE_HASH)
@@ -113,42 +148,7 @@ def seed(session) -> dict[str, int]:
         .first()
     )
     if document is not None:
-        # Drop fragments + parcel + dataset to make the re-seed clean.
-        session.query(SourceFragment).filter(
-            SourceFragment.document_id == document.id
-        ).delete(synchronize_session=False)
-        session.delete(document)
-    parcel = (
-        session.execute(
-            select(Parcel).where(
-                Parcel.jurisdiction == "HRM",
-                Parcel.parcel_identifier == TEST_PID,
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if parcel is not None:
-        session.delete(parcel)
-    dataset = (
-        session.execute(
-            select(ExternalDataset).where(
-                ExternalDataset.name == PARCELS_DATASET_NAME
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if dataset is not None:
-        session.query(ExternalDatasetFeature).filter(
-            ExternalDatasetFeature.external_dataset_id == dataset.id
-        ).delete(synchronize_session=False)
-        session.delete(dataset)
-    session.query(GeocodeCache).filter(
-        GeocodeCache.normalized_text == TEST_ADDRESS_NORMALIZED
-    ).delete(synchronize_session=False)
-    session.flush()
-
+        return document
     document = Document(
         municipality=DOCUMENT_MUNICIPALITY,
         bylaw_name=DOCUMENT_BYLAW_NAME,
@@ -161,54 +161,86 @@ def seed(session) -> dict[str, int]:
     )
     session.add(document)
     session.flush()
+    return document
 
-    front_clause = SourceFragment(
-        document_id=document.id,
-        fragment_type=FragmentType.CLAUSE,
-        citation_label="4.2.1",
-        citation_path="4.2.1",
-        parent_fragment_id=None,
-        page_start=1,
-        page_end=1,
-        reading_order_start=1,
-        text="The minimum front yard shall not be less than 4.5 metres.",
-        parse_status=ParseStatus.PARSED,
-        confidence=1.0,
-        attribute_tags=["front_setback_m"],
-    )
-    height_clause = SourceFragment(
-        document_id=document.id,
-        fragment_type=FragmentType.CLAUSE,
-        citation_label="4.3.1",
-        citation_path="4.3.1",
-        parent_fragment_id=None,
-        page_start=2,
-        page_end=2,
-        reading_order_start=2,
-        text="The maximum building height shall not exceed 11 metres.",
-        parse_status=ParseStatus.PARSED,
-        confidence=1.0,
-        attribute_tags=["building_height_m"],
-    )
-    corner_clause = SourceFragment(
-        document_id=document.id,
-        fragment_type=FragmentType.CLAUSE,
-        citation_label="4.4.1",
-        citation_path="4.4.1",
-        parent_fragment_id=None,
-        page_start=3,
-        page_end=3,
-        reading_order_start=3,
-        text=(
-            "On a corner lot the minimum front yard shall be 6.0 metres "
-            "instead of the value otherwise required by §4.2.1."
+
+def _ensure_fragments(session, *, document_id: int) -> None:
+    """Ensure the three tagged clauses exist on the document.
+
+    Each clause is keyed by ``(document_id, citation_path)`` — the
+    same unique constraint the layer-1 schema enforces — so an INSERT
+    that races with a peer worker hits the unique constraint and
+    is treated as "already present".
+    """
+    fragments = [
+        dict(
+            citation_label="4.2.1",
+            citation_path="4.2.1",
+            page_start=1,
+            reading_order_start=1,
+            text="The minimum front yard shall not be less than 4.5 metres.",
+            attribute_tags=["front_setback_m"],
         ),
-        parse_status=ParseStatus.PARSED,
-        confidence=1.0,
-        attribute_tags=["corner_lot_boolean", "front_setback_m"],
-    )
-    session.add_all([front_clause, height_clause, corner_clause])
+        dict(
+            citation_label="4.3.1",
+            citation_path="4.3.1",
+            page_start=2,
+            reading_order_start=2,
+            text="The maximum building height shall not exceed 11 metres.",
+            attribute_tags=["building_height_m"],
+        ),
+        dict(
+            citation_label="4.4.1",
+            citation_path="4.4.1",
+            page_start=3,
+            reading_order_start=3,
+            text=(
+                "On a corner lot the minimum front yard shall be 6.0 metres "
+                "instead of the value otherwise required by §4.2.1."
+            ),
+            attribute_tags=["corner_lot_boolean", "front_setback_m"],
+        ),
+    ]
+    for fragment in fragments:
+        existing = session.execute(
+            select(SourceFragment).where(
+                SourceFragment.document_id == document_id,
+                SourceFragment.citation_path == fragment["citation_path"],
+            )
+        ).scalars().first()
+        if existing is not None:
+            continue
+        session.add(
+            SourceFragment(
+                document_id=document_id,
+                fragment_type=FragmentType.CLAUSE,
+                citation_label=fragment["citation_label"],
+                citation_path=fragment["citation_path"],
+                parent_fragment_id=None,
+                page_start=fragment["page_start"],
+                page_end=fragment["page_start"],
+                reading_order_start=fragment["reading_order_start"],
+                text=fragment["text"],
+                parse_status=ParseStatus.PARSED,
+                confidence=1.0,
+                attribute_tags=list(fragment["attribute_tags"]),
+            )
+        )
 
+
+def _get_or_create_parcel(session) -> Parcel:
+    parcel = (
+        session.execute(
+            select(Parcel).where(
+                Parcel.jurisdiction == "HRM",
+                Parcel.parcel_identifier == TEST_PID,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if parcel is not None:
+        return parcel
     parcel = Parcel(
         jurisdiction="HRM",
         parcel_identifier=TEST_PID,
@@ -220,7 +252,21 @@ def seed(session) -> dict[str, int]:
     )
     session.add(parcel)
     session.flush()
+    return parcel
 
+
+def _get_or_create_dataset(session) -> ExternalDataset:
+    dataset = (
+        session.execute(
+            select(ExternalDataset).where(
+                ExternalDataset.name == PARCELS_DATASET_NAME
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if dataset is not None:
+        return dataset
     dataset = ExternalDataset(
         name=PARCELS_DATASET_NAME,
         publisher="HRM",
@@ -234,41 +280,65 @@ def seed(session) -> dict[str, int]:
     )
     session.add(dataset)
     session.flush()
-    feature = ExternalDatasetFeature(
-        external_dataset_id=dataset.id,
-        feature_key=TEST_PID,
-        attributes_json={"PID": TEST_PID},
-        canonical_attributes_json={"parcel_id": TEST_PID},
-        geometry_geojson=_polygon(),
-        geometry_bbox_json=_bbox(),
-        parse_status=ParseStatus.PARSED,
-        metadata_json={},
-        parcel_id=parcel.id,
-    )
-    session.add(feature)
+    return dataset
 
-    # Geocode cache row so the address resolves without Google.
-    cache = GeocodeCache(
-        normalized_text=TEST_ADDRESS_NORMALIZED,
-        raw_text=TEST_ADDRESS_RAW,
-        kind="civic_address",
-        status="resolved",
-        resolver="e2e_seed",
-        geometry_geojson=_centroid_geojson(),
-        confidence=1.0,
-        detail="seeded for evaluator e2e",
-        metadata_json={},
-    )
-    session.add(cache)
-    session.flush()
 
-    return {
-        "document_id": document.id,
-        "parcel_id": parcel.id,
-        "front_clause_id": front_clause.id,
-        "height_clause_id": height_clause.id,
-        "corner_clause_id": corner_clause.id,
-    }
+def _ensure_dataset_feature(session, *, dataset_id: int, parcel_id: int) -> None:
+    existing = session.execute(
+        select(ExternalDatasetFeature).where(
+            ExternalDatasetFeature.external_dataset_id == dataset_id,
+            ExternalDatasetFeature.feature_key == TEST_PID,
+        )
+    ).scalars().first()
+    if existing is not None:
+        return
+    session.add(
+        ExternalDatasetFeature(
+            external_dataset_id=dataset_id,
+            feature_key=TEST_PID,
+            attributes_json={"PID": TEST_PID},
+            canonical_attributes_json={"parcel_id": TEST_PID},
+            geometry_geojson=_polygon(),
+            geometry_bbox_json=_bbox(),
+            parse_status=ParseStatus.PARSED,
+            metadata_json={},
+            parcel_id=parcel_id,
+        )
+    )
+
+
+def _ensure_geocode_cache(session) -> None:
+    existing = session.execute(
+        select(GeocodeCache).where(
+            GeocodeCache.normalized_text == TEST_ADDRESS_NORMALIZED
+        )
+    ).scalars().first()
+    if existing is not None:
+        return
+    session.add(
+        GeocodeCache(
+            normalized_text=TEST_ADDRESS_NORMALIZED,
+            raw_text=TEST_ADDRESS_RAW,
+            kind="civic_address",
+            status="resolved",
+            resolver="e2e_seed",
+            geometry_geojson=_centroid_geojson(),
+            confidence=1.0,
+            detail="seeded for evaluator e2e",
+            metadata_json={},
+        )
+    )
+
+
+def _fragment_ids(session, *, document_id: int) -> tuple[int, int, int]:
+    rows = session.execute(
+        select(SourceFragment.citation_path, SourceFragment.id).where(
+            SourceFragment.document_id == document_id,
+            SourceFragment.citation_path.in_(["4.2.1", "4.3.1", "4.4.1"]),
+        )
+    ).all()
+    by_path = {row.citation_path: row.id for row in rows}
+    return by_path["4.2.1"], by_path["4.3.1"], by_path["4.4.1"]
 
 
 def main() -> int:

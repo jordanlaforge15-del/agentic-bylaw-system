@@ -4,8 +4,8 @@ import re
 from collections import defaultdict
 from typing import Callable
 
-from sqlalchemy import Select, Text, cast, desc, or_, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Select, String, Text, bindparam, cast, desc, or_, select
+from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, JSONB
 from sqlalchemy.orm import Session
 
 from bylaw_retrieval.retrieval.schemas import (
@@ -790,7 +790,22 @@ def _attribute_tag_filter_clause(attribute_tags: list[str], *, dialect_name: str
         raise ValueError("attribute_tag_filter must be non-empty")
     column = SourceFragment.attribute_tags
     if dialect_name == "postgresql":
-        return cast(column, JSONB).op("?|")(list(attribute_tags))
+        # ``?|`` expects ``text[]`` on the RHS. Without an explicit
+        # ARRAY(String) bind type, psycopg serialises a Python list
+        # as JSONB and Postgres rejects the operator with
+        # "operator does not exist: jsonb ?| jsonb" (caught during
+        # ABS-46's real-stack e2e run).
+        # ``bindparam(None, ...)`` autogenerates a unique parameter
+        # name so the helper can be called multiple times in the same
+        # statement (it isn't today, but a future caller might) without
+        # colliding on bind key.
+        return cast(column, JSONB).op("?|")(
+            bindparam(
+                None,
+                list(attribute_tags),
+                type_=PG_ARRAY(String),
+            )
+        )
     # sqlite + anything else: LIKE-match each quoted attribute id.
     return or_(*(column.cast(Text).like(f'%"{tag}"%') for tag in attribute_tags))
 
