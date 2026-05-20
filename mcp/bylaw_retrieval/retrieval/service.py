@@ -4,7 +4,8 @@ import re
 from collections import defaultdict
 from typing import Callable
 
-from sqlalchemy import Select, desc, select
+from sqlalchemy import Select, Text, cast, desc, or_, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from bylaw_retrieval.retrieval.schemas import (
@@ -88,6 +89,16 @@ class RetrievalService:
         if self._default_document_id_resolver is None:
             return None
         return self._default_document_id_resolver(self.session)
+
+    def _dialect_name(self) -> str:
+        """Return the bound engine's dialect name (e.g. 'postgresql', 'sqlite').
+
+        Used by the attribute-tag filter clause builder so it can pick
+        the indexed JSONB operator on postgres or the LIKE fallback on
+        sqlite without crashing the test path.
+        """
+        bind = self.session.get_bind()
+        return bind.dialect.name
 
     def list_documents(
         self,
@@ -361,8 +372,39 @@ class RetrievalService:
         datasets = self.session.execute(dataset_stmt).scalars().all()
 
         scored: dict[int, float] = {}
+        # When the caller restricts to a specific attribute, the
+        # linked-fragment hit only counts if that fragment is itself
+        # tagged with the attribute. Without this, a spatial hit on
+        # the zoning schedule would surface for every attribute query
+        # ("the zone schedule fragment is linked to the parcel polygon"
+        # ≠ "the zone schedule fragment regulates building height").
+        allowed_linked_fragment_ids: set[int] | None = None
+        if request.attribute_tag_filter:
+            linked_ids = [
+                d.linked_fragment_id for d in datasets if d.linked_fragment_id is not None
+            ]
+            if linked_ids:
+                allowed_linked_fragment_ids = set(
+                    self.session.execute(
+                        select(SourceFragment.id)
+                        .where(SourceFragment.id.in_(linked_ids))
+                        .where(
+                            _attribute_tag_filter_clause(
+                                request.attribute_tag_filter,
+                                dialect_name=self._dialect_name(),
+                            )
+                        )
+                    ).scalars().all()
+                )
+            else:
+                allowed_linked_fragment_ids = set()
         for dataset in datasets:
             assert dataset.linked_fragment_id is not None  # narrowed by query above
+            if (
+                allowed_linked_fragment_ids is not None
+                and dataset.linked_fragment_id not in allowed_linked_fragment_ids
+            ):
+                continue
             for match in query_features(
                 self.session, dataset_id=dataset.id, location=location
             ):
@@ -468,6 +510,13 @@ class RetrievalService:
             stmt = stmt.where(SourceFragment.page_end >= request.page_start)
         if request.page_end is not None:
             stmt = stmt.where(SourceFragment.page_start <= request.page_end)
+        if request.attribute_tag_filter:
+            stmt = stmt.where(
+                _attribute_tag_filter_clause(
+                    request.attribute_tag_filter,
+                    dialect_name=self._dialect_name(),
+                )
+            )
         return stmt
 
     def _build_match(
@@ -718,6 +767,32 @@ class RetrievalService:
         else:
             score -= 2.0
         return score
+
+
+def _attribute_tag_filter_clause(attribute_tags: list[str], *, dialect_name: str):
+    """Build the dialect-appropriate clause for the attribute_tag filter.
+
+    Postgres path: ``attribute_tags ?| ARRAY[...]`` — the JSONB ``?|``
+    operator, which uses the GIN index added by migration 0014. This
+    is the indexed hot path the issue calls out.
+
+    Sqlite path (test only): no JSONB operators exist, so we fall back
+    to LIKE-matching the JSON text representation of the array. The
+    column stores ``["front_setback_m", ...]`` as a literal JSON
+    string on sqlite, so ``LIKE '%"front_setback_m"%'`` is a sound
+    containment check as long as attribute ids never contain quote
+    characters — which the taxonomy enforces.
+
+    Empty input is rejected — empty would degrade silently into an
+    always-false (or always-true with OR over no clauses) condition.
+    """
+    if not attribute_tags:
+        raise ValueError("attribute_tag_filter must be non-empty")
+    column = SourceFragment.attribute_tags
+    if dialect_name == "postgresql":
+        return cast(column, JSONB).op("?|")(list(attribute_tags))
+    # sqlite + anything else: LIKE-match each quoted attribute id.
+    return or_(*(column.cast(Text).like(f'%"{tag}"%') for tag in attribute_tags))
 
 
 def _tokenize(text: str) -> list[str]:
