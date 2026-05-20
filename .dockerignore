@@ -35,11 +35,16 @@ web/out
 node_modules
 
 # --- Docs and tests not needed in the image ---
+# Runtime markdown that advisor reads via Path(__file__).parents[3]
+# must be re-included after the docs/* exclude — buildx silently drops
+# it from the context otherwise (ABS-67). Pair every re-include here
+# with a matching COPY line in Dockerfile.advisor.
 docs/*
 !docs/agent
 docs/agent/*
 !docs/agent/persona.md
 !docs/agent/classifier-persona.md
+!docs/TERMS_AND_CONDITIONS.md
 tests
 evals
 examples

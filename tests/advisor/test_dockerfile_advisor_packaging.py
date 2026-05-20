@@ -10,19 +10,25 @@ using a ``Path(__file__).parents[3] / "docs" / ...`` resolver:
 
 Under an editable install the resolver lands at the repo root; under
 the production non-editable install in ``Dockerfile.advisor`` it
-lands at ``/opt/venv/lib/python3.11/docs/...`` instead. The
-Dockerfile compensates with explicit ``COPY`` lines for each file.
+lands at ``/opt/venv/lib/python3.11/docs/...`` instead. Two things
+have to be true for the file to actually arrive in the runtime image:
 
-ABS-67 happened because the COPY line for ``TERMS_AND_CONDITIONS.md``
-was omitted when the T&C gate (ABS-18) shipped — every prod first-
-login 500s with ``RuntimeError: Terms document not found ...``.
-``make e2e`` does not catch this because the local Playwright stack
-boots FastAPI from source, not from the built image.
+1. ``Dockerfile.advisor`` has a ``COPY --chown=advisor:advisor
+   <src> <dest>`` line for it.
+2. ``.dockerignore`` does *not* silently drop the source from the
+   build context. ``docs/*`` excludes everything under ``docs/``, so
+   each runtime doc needs an explicit ``!<src>`` re-include.
 
-This test enumerates the runtime-required docs and asserts each one
-has a matching ``COPY`` line that lands it at the resolver's target
-path. The next time someone adds a docs/*.md file backed by the same
-workaround, this test fails until the Dockerfile is updated.
+ABS-67 was caused by missing #1 (and we discovered missing #2 while
+deploying the fix — the rebuild errored with "docs/TERMS_AND_CONDITIONS.md
+not found" because ``docs/*`` had filtered it out before the COPY ran).
+``make e2e`` cannot catch either failure because the local Playwright
+stack boots FastAPI from source rather than from the built image.
+
+This test enumerates the runtime-required docs and asserts both
+invariants for each one. The next time someone adds a docs/*.md file
+backed by the same workaround, this test fails until both files are
+updated.
 """
 from __future__ import annotations
 
@@ -57,6 +63,12 @@ def dockerfile_text() -> str:
     return (_REPO_ROOT / "Dockerfile.advisor").read_text(encoding="utf-8")
 
 
+@pytest.fixture(scope="module")
+def dockerignore_lines() -> list[str]:
+    text = (_REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
+    return [line.strip() for line in text.splitlines()]
+
+
 @pytest.mark.parametrize("src,dest", _RUNTIME_DOCS)
 def test_runtime_doc_is_copied_into_advisor_image(
     dockerfile_text: str, src: str, dest: str
@@ -70,4 +82,25 @@ def test_runtime_doc_is_copied_into_advisor_image(
         f"Dockerfile.advisor is missing a COPY for {src}. Add:\n  "
         f"{expected}\nor the running container will 500 the moment "
         "the resolver tries to read this file."
+    )
+
+
+@pytest.mark.parametrize("src,_dest", _RUNTIME_DOCS)
+def test_runtime_doc_is_reincluded_in_dockerignore(
+    dockerignore_lines: list[str], src: str, _dest: str
+) -> None:
+    """``.dockerignore`` must re-include each runtime doc explicitly.
+
+    The ``docs/*`` exclude on line ~38 filters everything under
+    ``docs/`` before buildx even sees the context. Without a matching
+    ``!<src>`` line the COPY directive in Dockerfile.advisor errors
+    with ``failed to compute cache key: ... not found`` at build time.
+    A COPY line without a re-include is silently broken, so we assert
+    both together.
+    """
+    expected = f"!{src}"
+    assert expected in dockerignore_lines, (
+        f".dockerignore does not re-include {src}. Add:\n  {expected}\n"
+        "after the docs/* exclude, or `docker buildx build` will fail "
+        "to find the file in the build context."
     )
