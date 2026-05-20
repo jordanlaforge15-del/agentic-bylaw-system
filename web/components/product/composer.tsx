@@ -14,7 +14,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Mono } from "@/components/mono";
 import { SUGGESTED_PROMPTS } from "@/lib/mock";
 
@@ -26,11 +26,17 @@ type Props = {
 export function Composer({ onSend, disabled }: Props) {
   const [val, setVal] = useState("");
   const [focused, setFocused] = useState(false);
+  // Source-of-truth for the submitted text is the DOM, not React state.
+  // Mobile-WebKit (and any environment where keydown can race ahead of a
+  // pending input-state commit) would otherwise read a stale empty `val`
+  // from the closure and silently drop the send — see ABS-26.
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const submit = (e?: React.FormEvent) => {
+  const submit = (e?: React.FormEvent | React.KeyboardEvent) => {
     e?.preventDefault();
-    if (val.trim() && !disabled) {
-      onSend(val);
+    const text = textareaRef.current?.value ?? val;
+    if (text.trim() && !disabled) {
+      onSend(text);
       setVal("");
     }
   };
@@ -74,6 +80,7 @@ export function Composer({ onSend, disabled }: Props) {
         style={{ border: "1.5px solid var(--text)" }}
       >
         <textarea
+          ref={textareaRef}
           value={val}
           onChange={(e) => setVal(e.target.value)}
           onFocus={() => setFocused(true)}
