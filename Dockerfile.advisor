@@ -76,6 +76,11 @@ COPY --chown=advisor:advisor docs/agent/persona.md /opt/venv/lib/python3.11/docs
 # persona; advisor/chat/persona.py:load_classifier_persona reads it
 # via the same Path(__file__).parents[3] resolver.
 COPY --chown=advisor:advisor docs/agent/classifier-persona.md /opt/venv/lib/python3.11/docs/agent/classifier-persona.md
+# Same packaging workaround for the Terms & Conditions document;
+# advisor/legal/__init__.py:_load_terms reads it via the same
+# Path(__file__).parents[3] resolver. Missing this file 500s every
+# first-login on /v1/terms/current (ABS-67).
+COPY --chown=advisor:advisor docs/TERMS_AND_CONDITIONS.md /opt/venv/lib/python3.11/docs/TERMS_AND_CONDITIONS.md
 
 USER advisor
 
