@@ -46,6 +46,13 @@ from bylaw_retrieval.retrieval import (
     RetrievalRequest,
     RetrievalService,
 )
+from layer2.compliance.db.models import SubmissionAttributeSource
+from layer2.compliance.evaluator import (
+    DocumentFilters,
+    EvaluationRequest,
+    EvaluatorService,
+    SubmissionAttributeInput,
+)
 
 
 # Description copied verbatim from ``mcp/bylaw_retrieval/openai_tools.py``
@@ -202,6 +209,113 @@ _SCHEMA_SEARCH_BYLAW_EVIDENCE: dict[str, Any] = {
         "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 8},
     },
     "required": ["query"],
+    "additionalProperties": False,
+}
+
+
+# --- evaluate_submission_against_bylaws ----------------------------------
+#
+# Description copied verbatim from the MCP server's tool docstring so
+# the LLM sees the same wording across the MCP server and the
+# in-process advisor path. Keep the two in sync — divergence will
+# surface as inconsistent agent behaviour between the two surfaces.
+_DESC_EVALUATE_SUBMISSION = (
+    "Evaluate a development submission's attributes against the "
+    "applicable bylaw clauses for a given location. Returns a "
+    "structured compliance matrix: per-attribute applicable clauses, "
+    "computed deltas, and pass/fail/uncertain verdicts. Output is "
+    "ADVISORY — never present a verdict without the citing clause.\n\n"
+    "USE THIS when the user has stated specific proposed values "
+    "(height, setbacks, use class, parking, etc.) AND a location. If "
+    "only one of attributes or location is provided, fall back to "
+    "search_bylaw_evidence instead.\n\n"
+    "Always populate 'location' — same rule as search_bylaw_evidence. "
+    "An evaluation without a location skips spatial filtering and may "
+    "surface clauses from the wrong zone.\n\n"
+    "If overall_status is 'incomplete', the next turn should ASK the "
+    "user for the attributes listed in 'unevaluated_attributes' rather "
+    "than guessing values."
+)
+
+_SCHEMA_EVALUATE_SUBMISSION: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "attributes": {
+            "type": "array",
+            "description": (
+                "List of submitted attribute values. attribute_key MUST "
+                "be a valid ID from the Phase-1 taxonomy (e.g. "
+                "'front_setback_m', 'building_height_m', 'zone_code')."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "attribute_key": {"type": "string"},
+                    "value": {
+                        "description": (
+                            "Submitted value — number, integer, string, "
+                            "or boolean per the attribute's value_type."
+                        )
+                    },
+                    "unit": {"type": "string"},
+                    "source": {
+                        "type": "string",
+                        "enum": ["manual", "extracted", "derived", "override"],
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                    },
+                },
+                "required": ["attribute_key"],
+                "additionalProperties": False,
+            },
+        },
+        "location": {
+            "type": "object",
+            "description": (
+                "Same LocationSlot shape used by search_bylaw_evidence. "
+                "Use civic_number + street for street addresses; "
+                "parcel_id for known parcels; intersection_streets for "
+                "intersections; named_place for landmarks; geometry for "
+                "caller-supplied GeoJSON Point/Polygon in EPSG:4326."
+            ),
+            "properties": {
+                "civic_number": {"type": "string"},
+                "street": {"type": "string"},
+                "unit": {"type": "string"},
+                "parcel_id": {"type": "string"},
+                "named_place": {"type": "string"},
+                "intersection_streets": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "geometry": {"type": "object"},
+            },
+            "additionalProperties": False,
+        },
+        "document_filters": {
+            "type": "object",
+            "properties": {
+                "municipality": {"type": "string"},
+                "bylaw_name": {"type": "string"},
+                "citation_path_prefix": {"type": "string"},
+                "document_id": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+        "taxonomy_version": {"type": "string"},
+        "per_attribute_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "default": 8,
+        },
+        "submission_id": {"type": "integer"},
+        "persist_decision": {"type": "boolean", "default": False},
+    },
+    "required": ["attributes"],
     "additionalProperties": False,
 }
 
@@ -365,6 +479,65 @@ def build_bylaw_tools(
             response = service.search(request)
             return json.dumps(compact_search_response(response))
 
+    async def evaluate_submission_handler(payload: dict[str, Any]) -> str:
+        """Run the compliance evaluator against the supplied attributes + location.
+
+        The evaluator reuses whatever RetrievalService the chat backend
+        is already bound to (via ``_resolve_cm``), so the same
+        --latest-only / document-id scope rules apply automatically.
+        """
+        location_payload = payload.get("location")
+        location = (
+            LocationSlot.model_validate(location_payload)
+            if location_payload is not None
+            else None
+        )
+        attribute_inputs: list[SubmissionAttributeInput] = []
+        for entry in payload.get("attributes") or []:
+            attr_key = entry.get("attribute_key")
+            if not isinstance(attr_key, str) or not attr_key:
+                continue
+            source_token = entry.get("source") or "manual"
+            try:
+                source = SubmissionAttributeSource(source_token)
+            except ValueError:
+                source = SubmissionAttributeSource.MANUAL
+            attribute_inputs.append(
+                SubmissionAttributeInput(
+                    attribute_key=attr_key,
+                    value=entry.get("value"),
+                    unit=entry.get("unit"),
+                    source=source,
+                    confidence=float(entry.get("confidence", 1.0)),
+                )
+            )
+        filters_payload = payload.get("document_filters")
+        filters = (
+            DocumentFilters(
+                municipality=filters_payload.get("municipality"),
+                bylaw_name=filters_payload.get("bylaw_name"),
+                citation_path_prefix=filters_payload.get("citation_path_prefix"),
+                document_id=filters_payload.get("document_id"),
+            )
+            if filters_payload
+            else None
+        )
+        request = EvaluationRequest(
+            attributes=attribute_inputs,
+            location=location,
+            document_filters=filters,
+            taxonomy_version=payload.get("taxonomy_version"),
+            per_attribute_limit=int(payload.get("per_attribute_limit", 8)),
+            submission_id=payload.get("submission_id"),
+            persist_decision=bool(payload.get("persist_decision", False)),
+        )
+        with _resolve_cm() as service:
+            evaluator = EvaluatorService(
+                service.session, retrieval_service=service
+            )
+            response = evaluator.evaluate(request)
+            return json.dumps(response.to_json())
+
     async def request_tier_upgrade_handler(payload: dict[str, Any]) -> str:
         """Surface a tier-upgrade prompt to the user and pause the agent.
 
@@ -417,6 +590,11 @@ def build_bylaw_tools(
             input_schema=_SCHEMA_SEARCH_BYLAW_EVIDENCE,
         ),
         ToolDefinition(
+            name="evaluate_submission_against_bylaws",
+            description=_DESC_EVALUATE_SUBMISSION,
+            input_schema=_SCHEMA_EVALUATE_SUBMISSION,
+        ),
+        ToolDefinition(
             name="request_tier_upgrade",
             description=_DESC_REQUEST_TIER_UPGRADE,
             input_schema=_SCHEMA_REQUEST_TIER_UPGRADE,
@@ -428,6 +606,7 @@ def build_bylaw_tools(
         "get_document_outline": get_document_outline_handler,
         "lookup_citation": lookup_citation_handler,
         "search_bylaw_evidence": search_bylaw_evidence_handler,
+        "evaluate_submission_against_bylaws": evaluate_submission_handler,
         "request_tier_upgrade": request_tier_upgrade_handler,
     }
 
