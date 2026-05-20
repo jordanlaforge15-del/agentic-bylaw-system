@@ -68,8 +68,9 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
+from advisor.api.sessions import SessionListEntry
 from advisor.chat.session import ChatSession
 from advisor.db.models import ChatMessage as DbChatMessage
 from advisor.db.models import ChatSession as DbChatSession
@@ -285,6 +286,54 @@ class DbSessionStore:
                 for r in rows
             ]
 
+    def list_summaries_for_user(self, user_id: str) -> list[SessionListEntry]:
+        """Sidebar-shaped projection: case anchor + first user message.
+
+        Eager-loads ``messages`` and the attached ``case`` so the route
+        can render the sidebar in two queries instead of N. The
+        sidebar's title generator wants both the case anchor (so the
+        row reads "1234 Main St · Can I build…") and the first user
+        message; the bare ``list_for_user`` returns neither, which is
+        why this lives in its own method.
+        """
+        with self._db_session_factory() as db:
+            try:
+                user = self._resolve_user(db, user_id)
+            except LookupError:
+                return []
+            rows = (
+                db.query(DbChatSession)
+                .options(
+                    selectinload(DbChatSession.case),
+                    selectinload(DbChatSession.messages),
+                )
+                .filter(DbChatSession.user_id == user.id)
+                .order_by(DbChatSession.updated_at.desc())
+                .all()
+            )
+            entries: list[SessionListEntry] = []
+            for r in rows:
+                first_user, user_count, assistant_text_count = (
+                    _scan_db_messages_for_summary(r.messages)
+                )
+                anchor_label = r.case.anchor_label if r.case is not None else None
+                entries.append(
+                    SessionListEntry(
+                        session_id=str(r.id),
+                        # The DB row doesn't carry the gateway model
+                        # string (we don't store it per-session yet),
+                        # so surface the ChatSession dataclass default
+                        # so the sidebar shape stays stable.
+                        model=ChatSession.__dataclass_fields__["model"].default,
+                        first_user_message=first_user,
+                        anchor_label=anchor_label,
+                        user_message_count=user_count,
+                        assistant_text_count=assistant_text_count,
+                        updated_at=r.updated_at,
+                    )
+                )
+            return entries
+
     # -- internals --------------------------------------------------------
 
     def _make_persist_hook(self) -> Callable[[ChatSession], None]:
@@ -377,6 +426,44 @@ def _message_content_to_json(message: Message) -> Any:
     if isinstance(message.content, str):
         return message.content
     return [block.model_dump(mode="json") for block in message.content]
+
+
+def _scan_db_messages_for_summary(
+    messages: list[DbChatMessage],
+) -> tuple[str | None, int, int]:
+    """Sidebar-shaped scan over raw DB message rows.
+
+    Walks rows in stored ``sequence`` order (the relationship's
+    ``order_by`` already does this, but we re-sort defensively because
+    a future query without that ordering would otherwise silently break
+    title generation). Picks the first plain-string user content as the
+    title seed, and counts user / assistant-with-text turns the same
+    way the in-memory path does — so both stores produce the same
+    ``message_count`` value.
+    """
+    first_user: str | None = None
+    user_count = 0
+    assistant_text_count = 0
+    for m in sorted(messages, key=lambda x: x.sequence):
+        if m.role == "user":
+            if isinstance(m.content_json, str):
+                user_count += 1
+                if first_user is None:
+                    first_user = m.content_json
+            # else: tool_result intermediate (list payload) — skip
+        elif m.role == "assistant":
+            content = m.content_json
+            if isinstance(content, list) and any(
+                isinstance(b, dict)
+                and b.get("type") == "text"
+                and (b.get("text") or "").strip()
+                for b in content
+            ):
+                assistant_text_count += 1
+            elif isinstance(content, str) and content.strip():
+                # Defensive: future provider might collapse to string.
+                assistant_text_count += 1
+    return first_user, user_count, assistant_text_count
 
 
 def _row_to_message(row: DbChatMessage) -> Message:

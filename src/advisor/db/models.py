@@ -109,6 +109,9 @@ class User(Base):
     case_credits: Mapped[list["CaseCredit"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    terms_acceptances: Mapped[list["TermsAcceptance"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class Case(Base):
@@ -616,3 +619,59 @@ class InviteRequest(Base):
     ip: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(String(500))
     notes: Mapped[str | None] = mapped_column(Text())
+
+
+class TermsAcceptance(Base):
+    """One row per (user, terms version) the user has clicked I Agree on.
+
+    Click-wrap enforceability hinges on this row existing: it is the
+    evidence that a specific user, from a specific client, at a specific
+    time, agreed to a specific version of the document. Without it the
+    T&C is a document the user may or may not have read; with it, the
+    record can be replayed in a dispute.
+
+    ``version_hash`` is the sha256 hex of the live
+    ``docs/TERMS_AND_CONDITIONS.md`` body the user agreed to —
+    ``advisor.legal.get_current_terms()`` computes the hash at import
+    and reads it from this column to decide whether the user needs to
+    re-accept. Editing the document → new hash → existing rows no
+    longer match the current version → all users are re-prompted on
+    their next login.
+
+    ``ip`` and ``user_agent`` are captured from the HTTP request that
+    POSTed the acceptance. The Next.js proxy forwards
+    ``x-forwarded-for`` and ``user-agent``; the FastAPI router reads
+    them. Both nullable because a misconfigured upstream may not set
+    them, and a missing audit field is better than a refused
+    acceptance.
+
+    Unique on ``(user_id, version_hash)`` — accepting the same version
+    twice is a no-op. The router catches the IntegrityError on the
+    second insert and returns the existing row.
+    """
+
+    __tablename__ = "advisor_terms_acceptance"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "version_hash", name="uq_advisor_terms_user_version"
+        ),
+        Index(
+            "ix_advisor_terms_user_accepted_at",
+            "user_id",
+            "accepted_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    accepted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
+
+    user: Mapped[User] = relationship(back_populates="terms_acceptances")

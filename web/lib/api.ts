@@ -21,6 +21,12 @@ export type ApiInit = {
   // /v1/billing/catalog endpoint, which renders for anonymous
   // pricing-page visitors).
   skipAuth?: boolean;
+  // Extra request headers to forward upstream. Useful for proxies
+  // that need to pass evidentiary headers (x-forwarded-for,
+  // user-agent) onto the FastAPI side so the recorded row reflects
+  // the real client rather than the Next.js server's loopback hop.
+  // Caller-supplied values override defaults set by callBackend.
+  forwardHeaders?: Record<string, string>;
 };
 
 export async function callBackend(
@@ -49,6 +55,10 @@ export async function callBackend(
       });
     }
     Object.assign(headers, auth);
+  }
+
+  if (init.forwardHeaders) {
+    Object.assign(headers, init.forwardHeaders);
   }
 
   return fetch(url.toString(), {

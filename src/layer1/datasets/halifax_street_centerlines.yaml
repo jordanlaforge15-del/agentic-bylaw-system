@@ -1,0 +1,30 @@
+name: halifax_street_centerlines
+publisher: Halifax Regional Municipality
+format: geojson
+# HRM publishes street centrelines under the "StreetNetwork" service on the
+# same ArcGIS host as the parcels layer. Geometry is esriGeometryPolyline,
+# one row per street segment, with ASSETID as a stable per-segment id. We
+# request outSR=4326 so the parser gets WGS-84 directly without a client-
+# side reproject step. The ArcGIS pagination (max 2000 rows/page) is
+# handled transparently by the ingest pipeline.
+source_url: https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/StreetNetwork/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=geojson
+crs: EPSG:4326
+
+# role=road_centerlines lets the case-open spatial extractor find this
+# dataset for the centerline-buffer frontage algorithm without hard-coding
+# its numeric id. Like property_parcels, road_centerlines is base geography
+# (not a bylaw fragment) so links_to is omitted.
+role: road_centerlines
+
+attributes:
+  # ASSETID is HRM's stable per-segment identifier. OBJECTID changes on
+  # full reloads of the layer; ASSETID survives them, which keeps re-ingest
+  # idempotent for downstream consumers that key off feature_key.
+  feature_key: ASSETID
+  # No canonical attributes — the centerlines exist purely as geometry
+  # for the frontage intersection. Street name, classification, etc. are
+  # retained in attributes_json (the raw passthrough) for diagnostic use
+  # but aren't surfaced through the canonical retrieval API.
+  ignore:
+    - OBJECTID
+    - Shape__Length

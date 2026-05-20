@@ -298,6 +298,85 @@ def current_user_dependency(
     return dependency
 
 
+def require_accepted_current_terms(
+    db_session_factory: Callable[[], AbstractContextManager[Session]],
+    user_dependency: Callable[..., Any],
+) -> Callable[..., User]:
+    """Build a FastAPI dependency that 412s if the caller hasn't accepted T&C.
+
+    Composed on top of an existing user-yielding dependency: it first
+    resolves the user (delegating to ``user_dependency``), then opens
+    a fresh DB session to check ``advisor_terms_acceptance``. Returns
+    the resolved ``User`` on success so handlers can use this as a
+    drop-in replacement for the plain user dep.
+
+    Wire onto endpoints that must not run before click-wrap acceptance
+    — e.g. ``/v1/chat`` (already guarded inline; this is for
+    future endpoints like API/MCP key issuance) — by doing::
+
+        require_user_with_terms = require_accepted_current_terms(
+            db_session_factory, require_user
+        )
+
+        @router.post("/v1/keys/issue")
+        def issue_key(user: User = Depends(require_user_with_terms)) -> ...:
+            ...
+
+    Returns 412 (Precondition Failed) with ``{"code": "terms_not_accepted"}``;
+    the frontend redirects to ``/app/terms`` on this code.
+    """
+    # Local import to avoid a circular: ``advisor.legal`` imports from
+    # ``advisor.db.models``, which doesn't depend on this module, but
+    # keeping the import lazy here lets callers import this module
+    # without dragging the legal subpackage into the import graph if
+    # the dep isn't used.
+    from advisor.legal import user_has_accepted_current_terms  # noqa: PLC0415
+
+    def dependency(
+        resolved_user: Any = Depends(user_dependency),
+    ) -> User:
+        # The dependency contract is "yields a User" — if the upstream
+        # dep yields a _TestUser shim instead (the X-Test-User-Id
+        # fallback), we still need a real DB row to query against.
+        # Resolve through the same path the chat router uses.
+        with db_session_factory() as db:
+            user_obj = resolved_user
+            if not isinstance(resolved_user, User):
+                # Test shim: look up by clerk_user_id (stored as the
+                # header value).
+                user_obj = (
+                    db.query(User)
+                    .filter(User.clerk_user_id == resolved_user.clerk_user_id)
+                    .one_or_none()
+                )
+                if user_obj is None:
+                    # No DB row yet → cannot have accepted.
+                    raise HTTPException(
+                        status_code=412,
+                        detail={
+                            "code": "terms_not_accepted",
+                            "message": (
+                                "Accept the current Terms and Conditions "
+                                "before calling this endpoint."
+                            ),
+                        },
+                    )
+            if not user_has_accepted_current_terms(db, user_obj):
+                raise HTTPException(
+                    status_code=412,
+                    detail={
+                        "code": "terms_not_accepted",
+                        "message": (
+                            "Accept the current Terms and Conditions "
+                            "before calling this endpoint."
+                        ),
+                    },
+                )
+            return user_obj
+
+    return dependency
+
+
 def _extract_full_name(claims: dict[str, Any]) -> str | None:
     """Pull a display name out of Clerk's claim shapes.
 

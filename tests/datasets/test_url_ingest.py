@@ -231,6 +231,65 @@ def test_ingest_geo_dataset_via_url_end_to_end(tmp_path: Path):
         assert sample.canonical_attributes_json.get("effective_date") == "2026-04-13"
 
 
+def test_ingest_resolves_bylaw_area_lookup_into_canonical_attributes(tmp_path: Path):
+    """ABS-66 regression: features whose raw BYLAW_ID matches a row in the
+    YAML's ``lookups.bylaw_area_subtypes`` table get the resolved
+    ``bylaw_area_code`` and ``bylaw_area_name`` baked into
+    ``canonical_attributes_json``. The chat agent reads those instead of
+    guessing a bylaw name from the bare integer.
+    """
+    db_url = f"sqlite:///{tmp_path / 'lookup.db'}"
+    create_all(db_url)
+
+    payload = {
+        "type": "FeatureCollection",
+        "features": [
+            # idx 0 → BYLAW_ID=9 (Halifax Mainland — the ABS-66 anchor)
+            _override_bylaw_id(_make_feature(0, zone="R-1"), 9),
+            # idx 1 → BYLAW_ID=23 (Regional Centre — RCLUB)
+            _override_bylaw_id(_make_feature(1, zone="ER-3"), 23),
+            # idx 2 → BYLAW_ID=99 (unknown subtype — should be omitted, not crash)
+            _override_bylaw_id(_make_feature(2, zone="ER-3"), 99),
+        ],
+    }
+
+    def http_get(url: str, *, timeout: float):
+        return _Response(payload)
+
+    cfg_path = tmp_path / "lookup_dataset.yaml"
+    cfg_path.write_text(_zoning_yaml_with_lookups())
+
+    with session_scope(db_url) as session:
+        result = ingest_geo_dataset(
+            session,
+            cfg_path,
+            cache_dir=tmp_path / "cache",
+            http_get=http_get,
+        )
+        dataset_id = result.dataset.id
+
+    with session_scope(db_url) as session:
+        features = (
+            session.query(ExternalDatasetFeature)
+            .filter_by(external_dataset_id=dataset_id)
+            .order_by(ExternalDatasetFeature.feature_key)
+            .all()
+        )
+        by_bylaw = {
+            f.canonical_attributes_json.get("bylaw_area_id"): f.canonical_attributes_json
+            for f in features
+        }
+        assert by_bylaw[9]["bylaw_area_code"] == "hrm:HMAIN"
+        assert by_bylaw[9]["bylaw_area_name"] == "Halifax Mainland Land Use By-law"
+        assert by_bylaw[23]["bylaw_area_code"] == "hrm:RC"
+        assert by_bylaw[23]["bylaw_area_name"] == "Regional Centre Land Use By-law"
+        # Unknown subtype keeps bylaw_area_id but omits code/name (the
+        # mapping is optional). Crucially the feature still ingests so a
+        # one-off upstream subtype doesn't break the whole pipeline.
+        assert "bylaw_area_code" not in by_bylaw[99]
+        assert "bylaw_area_name" not in by_bylaw[99]
+
+
 def test_fetch_retries_on_transient_remote_protocol_error(tmp_path: Path):
     """A RemoteProtocolError on the first attempt should retry and succeed
     on the second. ArcGIS endpoints drop heavy queries mid-payload often
@@ -283,6 +342,29 @@ def test_real_halifax_zoning_yaml_loads():
     assert "zone_code" in canonical
     assert canonical["zone_code"].from_field == "ZONE"
     assert "bylaw_area_id" in canonical
+    # ABS-66: the YAML now resolves BYLAW_ID to a publisher-prefixed code
+    # + human name so the agent doesn't hallucinate a bylaw name from
+    # the bare integer. The lookup table is co-located with the dataset.
+    assert "bylaw_area_code" in canonical
+    assert canonical["bylaw_area_code"].lookup == "bylaw_area_subtypes"
+    assert canonical["bylaw_area_code"].lookup_field == "code"
+    assert "bylaw_area_name" in canonical
+    assert canonical["bylaw_area_name"].lookup == "bylaw_area_subtypes"
+    assert canonical["bylaw_area_name"].lookup_field == "name"
+    table = cfg.lookups["bylaw_area_subtypes"]
+    # The two ABS-66 anchors plus the RCLUB code we'll filter on downstream.
+    assert table[9] == {
+        "code": "hrm:HMAIN",
+        "name": "Halifax Mainland Land Use By-law",
+    }
+    assert table[10] == {
+        "code": "hrm:HPEN",
+        "name": "Halifax Peninsula Land Use By-law",
+    }
+    assert table[23] == {
+        "code": "hrm:RC",
+        "name": "Regional Centre Land Use By-law",
+    }
 
 
 @pytest.mark.parametrize(
@@ -346,6 +428,52 @@ def _zoning_yaml() -> str:
         "    bylaw_area_id: { from: BYLAW_ID, type: int, optional: true }\n"
         "    effective_date: { from: SDATE, type: rfc2822_date, optional: true }\n"
     )
+
+
+def _zoning_yaml_with_lookups() -> str:
+    """A YAML config that exercises the per-dataset lookup table mechanism.
+
+    Two canonical fields (``bylaw_area_code`` and ``bylaw_area_name``)
+    resolve through the same ``bylaw_area_subtypes`` lookup so a feature's
+    BYLAW_ID integer drives a publisher-prefixed code and a human-readable
+    name without the chat agent having to guess.
+    """
+    return (
+        "name: test_url_zoning_lookup\n"
+        "publisher: Test\n"
+        "format: geojson\n"
+        "source_url: https://example.invalid/arcgis/rest/services/X/FeatureServer/0/query\n"
+        "crs: EPSG:4326\n"
+        "links_to:\n"
+        "  document_match: { municipality: HRM, bylaw_name: Test }\n"
+        "  fragment_citation: Zoning Schedule\n"
+        "attributes:\n"
+        "  feature_key: GLOBALID\n"
+        "  canonical:\n"
+        "    zone_code: { from: ZONE, type: string }\n"
+        "    bylaw_area_id: { from: BYLAW_ID, type: int, optional: true }\n"
+        "    bylaw_area_code:\n"
+        "      from: BYLAW_ID\n"
+        "      type: string\n"
+        "      optional: true\n"
+        "      lookup: bylaw_area_subtypes\n"
+        "      lookup_field: code\n"
+        "    bylaw_area_name:\n"
+        "      from: BYLAW_ID\n"
+        "      type: string\n"
+        "      optional: true\n"
+        "      lookup: bylaw_area_subtypes\n"
+        "      lookup_field: name\n"
+        "lookups:\n"
+        "  bylaw_area_subtypes:\n"
+        "    9:  { code: \"hrm:HMAIN\", name: \"Halifax Mainland Land Use By-law\" }\n"
+        "    23: { code: \"hrm:RC\",    name: \"Regional Centre Land Use By-law\" }\n"
+    )
+
+
+def _override_bylaw_id(feature: dict[str, Any], bylaw_id: int) -> dict[str, Any]:
+    feature["properties"] = {**feature["properties"], "BYLAW_ID": bylaw_id}
+    return feature
 
 
 def _tiny_config(tmp_path: Path, *, source_path: str) -> Path:

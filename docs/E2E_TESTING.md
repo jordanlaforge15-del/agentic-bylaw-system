@@ -186,12 +186,43 @@ The seed (`scripts/seed_e2e_user.py`) provisions:
 - `advisor_user` with `clerk_user_id="demo-user-1"`, `requests_per_minute_limit=600` (raised from the prod default of 6 to survive 6-worker parallel load).
 - 200 available credits per tier (`quick`, `standard`, `complex`). `globalSetup` tops this up before every Playwright run, so a long suite doesn't drain into 402s.
 
+### Sign-up / approval / logout lifecycle (auth specs)
+
+`web/e2e/auth/` covers the Clerk lifecycle (sign-up → admin approval → login → logout/login) without hosting Clerk in tests. Three pieces let the suite simulate the journey:
+
+1. **JIT user resolution in the test backend.** `advisor.api.e2e_server` mounts a header-auth user-dependency that — when a `db_session_factory` is wired (which the e2e entrypoint always does) — creates an `advisor_user` row on first sight of an unknown `X-Test-User-Id`, matches any approved `InviteRequest` by `X-Test-User-Email`, and gifts the row's `granted_starter_credits`. This mirrors `advisor.api.auth.resolve_or_create_user` so the post-Clerk invite-redemption code path is actually exercised.
+2. **Test-only invite endpoint.** `POST /v1/_test/invite-approve` writes a row directly into `invite_request` in the `approved` state, bypassing the Clerk allowlist API that the production `/api/admin/invites/{id}/approve` route calls. Companion endpoint `POST /v1/_test/reset-user` deletes a test user (FK cascades clean up cases, credits, chat sessions).
+3. **Per-context identity cookies.** `web/lib/advisor-auth.ts` honours three cookies in fallback mode:
+
+   | Cookie | Forwarded as | Used by |
+   |---|---|---|
+   | `abs_test_sub_user_id` | `X-Test-User-Id` | clerk_user_id lookup + JIT-create |
+   | `abs_test_sub_email` | `X-Test-User-Email` | invite redemption match |
+   | `abs_test_sub_full_name` | `X-Test-User-Full-Name` | `advisor_user.full_name` |
+
+   The `signInAs` fixture mints these alongside `abs_demo`; `signOut` clears all four. After sign-out a navigation to `/app` redirects through `/access`, matching the user-visible behaviour of Clerk's sign-out under the password-gate fallback.
+
+Spec layout:
+
+- `auth/01-signup-approve-login-case-chat.spec.ts` — flow 1 from the issue: invite via the `/signup` form, approve via the test endpoint, sign in as a fresh identity, open a case from `/cases/new`, get a streamed SSE reply. Exercises the JIT-create + redemption path end-to-end.
+- `auth/02-logout-resume-same-case.spec.ts` — flow 2: same identity, first turn, sign out, navigate to `/app` (asserts the `/access` redirect), sign back in, open the existing case URL, send a second turn. Guards the `user_id`-mismatch class of bugs called out in `functional/multi-turn.spec.ts`.
+- `auth/03-logout-resume-new-case.spec.ts` — flow 3: after logout/login, opening a *second* case must surface both rows on `/cases` for the same user.
+
+Run them in isolation:
+
+```bash
+cd web
+npx playwright test e2e/auth
+```
+
+The specs use unique synthetic identities (`auth-<slug>@e2e.test`) per run, so they don't share state with each other or with `demo-user-1`. Identity uniqueness keeps parallel workers from colliding on the `invite_request.email` UNIQUE constraint; the test endpoint also drops prior rows for the same email defensively.
+
 ## Test seams — what's mocked, what's real
 
 | Layer | In production | In the e2e suite | Why |
 |---|---|---|---|
 | Anthropic LLM | `AnthropicGateway` | `MockGateway(callable_=build_dispatcher())` | Determinism, speed, no API key. |
-| Clerk auth | JWT verifier | `verifier=None` + `X-Test-User-Id` header | Avoids Clerk dev-tenant flakiness. |
+| Clerk auth | JWT verifier + allowlist API | `verifier=None` + `X-Test-User-Id/-Email/-Full-Name` headers + `/v1/_test/invite-approve` | Avoids Clerk dev-tenant flakiness; the JIT-create code path still exercises the `resolve_or_create_user` + invite-redemption logic. |
 | Postgres | Real | Real, separate DB (`layer1_test`) | Migrations, FKs, credit-reservation logic are part of what we test. |
 | Retrieval (pgvector) | Real | Real, seeded synthetic bylaw on demand | Reuses `scripts/seed_synthetic_fragment.py`. |
 | Google Geocoder | Optional | Disabled by `tests/conftest.py` default | Off in tests; opt-in only. |
@@ -209,13 +240,32 @@ Two recommended trigger points:
 
 CI integration is left out of scope for now (the suite is local-first). `playwright.config.ts` already honours `process.env.CI` for retries and reporter switches — adding a `.github/workflows/e2e.yml` later is a small follow-up.
 
+## Parallel worktrees
+
+Each worktree has its own compose project (different project name → its own Postgres container and `layer1_test` DB), but the host-side ports collide by default. To run `make e2e` from two worktrees at the same time, override the port triplet in the second one before invoking the script:
+
+```bash
+PG_PORT=5433 \
+E2E_FASTAPI_PORT=8002 \
+E2E_WEB_PORT=3002 \
+E2E_API_URL=http://127.0.0.1:8002 \
+E2E_BASE_URL=http://localhost:3002 \
+  make e2e
+```
+
+`scripts/e2e-up.sh` derives `POSTGRES_HOST_PORT` from `PG_PORT` and exports it so `docker-compose.yml`'s `"${POSTGRES_HOST_PORT:-5432}:5432"` interpolation picks it up. `playwright.config.ts` already reads `E2E_BASE_URL` for `baseURL`, and `global-setup.ts` / `fixtures/test-env.ts` read `E2E_API_URL` for upstream calls.
+
+The first worktree (using all defaults) and the second (using the overrides above) can each run the full suite end-to-end without seeing each other.
+
+Note: the test database `layer1_test` lives inside each worktree's own Postgres container, so concurrent runs don't share state. The seeded demo user, credits, and synthetic bylaw are all per-container.
+
 ## Troubleshooting
 
-**`make e2e-up` says ports already in use.** A previous run didn't tear down cleanly. `pkill -9 -f advisor.api.e2e_server` and `pkill -9 -f "next dev -p 3001"`, then re-run.
+**`make e2e-up` says ports already in use.** A previous run didn't tear down cleanly. `pkill -9 -f advisor.api.e2e_server` and `pkill -9 -f "next dev -p 3001"`, then re-run. If another worktree is intentionally running e2e, use the override recipe in [Parallel worktrees](#parallel-worktrees) instead.
 
 **`alembic upgrade head` fails with `value too long for type character varying(32)`.** Revision id `0008_advisor_billing_subscription` is 33 chars and overflows the default `alembic_version.version_num`. `e2e-up.sh` pre-creates the table with `VARCHAR(255)` to work around this for fresh databases — confirm the pre-create ran by checking `\d alembic_version`.
 
-**FastAPI logs show `database "layer1_test" does not exist` even though it was created.** There may be two Postgres containers — one bound to `host:5432` (the main repo's) and a separate worktree-scoped one not bound to the host. Tests connect to whatever owns `5432`; create `layer1_test` on that container specifically. `lsof -iTCP:5432 -P -n` shows which docker container has the port. `docker ps | grep postgres` shows all running candidates.
+**FastAPI logs show `database "layer1_test" does not exist` even though it was created.** Symptom of two worktrees both trying to bind `host:5432` — one container ends up unpublished and the host-side alembic / uvicorn hit the wrong Postgres. Use the parallel-worktrees recipe to give each worktree its own host port, or tear down the stack of the worktree you're not actively using.
 
 **Tests hit 402 Payment Required.** Credits drained — `globalSetup` should be topping them up but didn't fire. Run `scripts/seed_e2e_user.py --credits-per-tier 200` manually with the right `DATABASE_URL`.
 

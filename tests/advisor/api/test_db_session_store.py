@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from advisor.api.db_session_store import DbSessionStore
 from advisor.chat.session import ChatSession
+from advisor.db.models import Case as DbCase
 from advisor.db.models import ChatMessage as DbChatMessage
 from advisor.db.models import ChatSession as DbChatSession
 from advisor.db.models import User
@@ -499,3 +500,148 @@ def test_list_for_user_returns_user_sessions_only(tmp_path: Path) -> None:
 
     b_sessions = store.list_for_user(str(b_id))
     assert len(b_sessions) == 1
+
+
+def test_list_summaries_for_user_carries_anchor_and_first_message(
+    tmp_path: Path,
+) -> None:
+    """Sidebar list joins the case + first user message off the DB.
+
+    Regression for ABS-22: before, the listing returned lightweight
+    ChatSession objects with empty ``messages``, so the sidebar title
+    fell through to "New reading" no matter what. The new method must
+    surface both the case anchor (for the address piece of the title)
+    and the first user message (for the question piece).
+    """
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    db_session_factory, factory = _build_factory(db_url)
+    user_id = _seed_user(factory, clerk_user_id="clerk_summary", email="s@x.com")
+
+    s = factory()
+    try:
+        case = DbCase(
+            user_id=user_id,
+            anchor_label="1234 Main St, Halifax",
+            anchor_key="1234 main st halifax",
+            anchor_kind="address",
+        )
+        s.add(case)
+        s.flush()
+        chat_row = DbChatSession(user_id=user_id, case_id=case.id)
+        s.add(chat_row)
+        s.flush()
+        s.add(
+            DbChatMessage(
+                session_id=chat_row.id,
+                sequence=0,
+                role="user",
+                content_json="Can I build a 6-storey on this lot?",
+            )
+        )
+        s.add(
+            DbChatMessage(
+                session_id=chat_row.id,
+                sequence=1,
+                role="assistant",
+                content_json=[
+                    {"type": "text", "text": "Maximum height in RC-LUB is…"}
+                ],
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    store = DbSessionStore(
+        db_session_factory=db_session_factory,
+        tool_defs_handler_factory=_empty_tool_factory,
+    )
+    entries = store.list_summaries_for_user(str(user_id))
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.anchor_label == "1234 Main St, Halifax"
+    assert entry.first_user_message == "Can I build a 6-storey on this lot?"
+    assert entry.user_message_count == 1
+    assert entry.assistant_text_count == 1
+
+
+def test_list_summaries_for_user_no_case_returns_null_anchor(
+    tmp_path: Path,
+) -> None:
+    """Legacy sessions (no case_id) still list — anchor_label is None."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    db_session_factory, factory = _build_factory(db_url)
+    user_id = _seed_user(factory, clerk_user_id="clerk_legacy", email="l@x.com")
+
+    s = factory()
+    try:
+        chat_row = DbChatSession(user_id=user_id, case_id=None)
+        s.add(chat_row)
+        s.flush()
+        s.add(
+            DbChatMessage(
+                session_id=chat_row.id,
+                sequence=0,
+                role="user",
+                content_json="Legacy question",
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    store = DbSessionStore(
+        db_session_factory=db_session_factory,
+        tool_defs_handler_factory=_empty_tool_factory,
+    )
+    entries = store.list_summaries_for_user(str(user_id))
+
+    assert len(entries) == 1
+    assert entries[0].anchor_label is None
+    assert entries[0].first_user_message == "Legacy question"
+
+
+def test_list_summaries_for_user_empty_session_first_message_is_none(
+    tmp_path: Path,
+) -> None:
+    """A session row with no messages yet returns ``first_user_message=None``.
+
+    This is the freshly-minted state the case-open redirect lands in
+    for a fraction of a second before the auto-send fires; the route
+    must still produce a sensible title rather than blowing up.
+    """
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    db_session_factory, factory = _build_factory(db_url)
+    user_id = _seed_user(factory, clerk_user_id="clerk_empty", email="e@x.com")
+
+    s = factory()
+    try:
+        case = DbCase(
+            user_id=user_id,
+            anchor_label="DA-2024-12345",
+            anchor_key="da-2024-12345",
+            anchor_kind="development_application",
+        )
+        s.add(case)
+        s.flush()
+        chat_row = DbChatSession(user_id=user_id, case_id=case.id)
+        s.add(chat_row)
+        s.commit()
+    finally:
+        s.close()
+
+    store = DbSessionStore(
+        db_session_factory=db_session_factory,
+        tool_defs_handler_factory=_empty_tool_factory,
+    )
+    entries = store.list_summaries_for_user(str(user_id))
+
+    assert len(entries) == 1
+    assert entries[0].anchor_label == "DA-2024-12345"
+    assert entries[0].first_user_message is None
+    assert entries[0].user_message_count == 0
+    assert entries[0].assistant_text_count == 0
