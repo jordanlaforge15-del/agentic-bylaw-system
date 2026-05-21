@@ -150,16 +150,45 @@ record_existing_listener() {
   # this, an orphaned stack from a prior crashed/Ctrl+C'd run cannot be
   # cleaned up by any future e2e-down — it just prints "no pidfile" and
   # silently leaves the process running.
+  #
+  # The warning block here is deliberately loud. Reusing an existing
+  # listener is the root cause of an ongoing class of e2e failures
+  # where the process on the port was launched from older code (e.g.
+  # a sibling worktree, or a crashed prior run that pre-dated the
+  # routes the current test suite exercises). The endpoint returns
+  # 404 / 503 against tests that pass against the on-disk code, which
+  # looks like a flake but is really a stale-process problem. Forcing
+  # the message into the operator's eye line is cheaper than another
+  # round of trace-zip archaeology.
   local port="$1"
   local pidfile="$2"
   local label="$3"
-  local existing_pid
+  local existing_pid existing_started_at existing_age_secs
   existing_pid="$(lsof -iTCP:"$port" -sTCP:LISTEN -tnP 2>/dev/null | head -1)"
   if [[ -n "$existing_pid" ]]; then
     echo "$existing_pid" >"$pidfile"
-    echo "${label} already listening on :${port} (PID ${existing_pid}) — recorded for cleanup"
+    # Best-effort process start time (BSD ps on macOS; falls back
+    # silently on other platforms). Used only for the warning.
+    existing_started_at="$(ps -o lstart= -p "$existing_pid" 2>/dev/null | sed 's/^[[:space:]]*//' || true)"
+    existing_age_secs="$(ps -o etime= -p "$existing_pid" 2>/dev/null | sed 's/^[[:space:]]*//' || true)"
+    printf '\n'
+    printf '!! ============================================================ !!\n' >&2
+    printf '!! WARNING: REUSING EXISTING %s LISTENER ON :%s\n' "$label" "$port" >&2
+    printf '!!   PID:         %s\n' "$existing_pid" >&2
+    if [[ -n "$existing_started_at" ]]; then
+      printf '!!   started:     %s (uptime %s)\n' "$existing_started_at" "${existing_age_secs:-?}" >&2
+    fi
+    printf '!!\n' >&2
+    printf '!! This process was NOT launched by the current e2e-up run. If it\n' >&2
+    printf '!! was started from older code (sibling worktree, prior crashed\n' >&2
+    printf '!! run, stale dev shell), the e2e suite will test against that old\n' >&2
+    printf '!! code and any new endpoints / fixes will appear to fail.\n' >&2
+    printf '!!\n' >&2
+    printf '!! To start a fresh stack:  ./scripts/e2e-down.sh && make e2e\n' >&2
+    printf '!! ============================================================ !!\n\n' >&2
   else
-    echo "${label} already listening on :${port} but PID lookup failed — manual kill may be needed"
+    printf '\n!! WARNING: %s already listening on :%s but PID lookup failed.\n' "$label" "$port" >&2
+    printf '!! Run ./scripts/e2e-down.sh and manually kill the holder before re-running.\n\n' >&2
   fi
 }
 
