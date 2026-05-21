@@ -11,13 +11,23 @@ from layer1.db.base import CrossReference, Document, PageBlock, SourceFragment, 
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
 from layer1.config import get_settings
+from layer1.manifest_adapter import (
+    ManifestNotReadyError,
+    load_manifest,
+    profile_from_manifest,
+)
 from layer1.models.enums import IngestionStatus
 from layer1.pipeline.audit import audit_document_pages
 from layer1.pipeline.export import export_document_json
 from layer1.pipeline.ingest import ingest_file
 from layer1.datasets.linker import find_orphan_datasets, relink_orphan_datasets
 from layer1.pipeline.ingest_dataset import ingest_geo_dataset
-from layer1.profiles import available_profile_names, get_parsing_profile
+from layer1.profiles import (
+    HALIFAX_PROFILE,
+    ParsingProfile,
+    available_profile_names,
+    get_parsing_profile,
+)
 from layer1.semantic.enrichment import enrich_document_semantics, validate_document_semantics
 from layer1.validators.structural import validate_document_objects
 
@@ -44,12 +54,31 @@ def ingest(
     bylaw_name: str | None = typer.Option(None, "--bylaw-name"),
     source_url: str | None = typer.Option(None, "--source-url"),
     profile: str = typer.Option(get_settings().parsing_profile, "--profile", help=f"Parsing profile ({', '.join(available_profile_names())})"),
+    manifest: Path | None = typer.Option(
+        None,
+        "--manifest",
+        help=(
+            "Path to a CityIntakeManifest JSON to drive ingestion. Mutually "
+            "exclusive with --profile (non-default). Refuses to run unless the "
+            "manifest's pipeline_ready flag is True; pass --force-not-ready to "
+            "override (intended for diagnostics)."
+        ),
+    ),
+    force_not_ready: bool = typer.Option(
+        False,
+        "--force-not-ready",
+        help="With --manifest, ignore pipeline_ready=False. Diagnostic escape hatch.",
+    ),
     ocr: bool = typer.Option(False, "--ocr", help="Enable OCR where parser support is installed"),
     debug: bool = typer.Option(False, "--debug", help="Persist extra parser/debug metadata where available"),
     create_schema: bool = typer.Option(False, "--create-schema", help="Create tables before ingesting"),
     enrich: bool = typer.Option(False, "--enrich", help="Run semantic enrichment after successful ingest"),
 ) -> None:
-    selected_profile = _parse_profile(profile)
+    selected_profile = _resolve_ingest_profile(
+        profile_name=profile,
+        manifest_path=manifest,
+        force_not_ready=force_not_ready,
+    )
     if create_schema:
         create_all(db_url)
     with session_scope(db_url) as session:
@@ -64,7 +93,11 @@ def ingest(
             profile=selected_profile,
         )
         if enrich and run.status != IngestionStatus.FAILED:
-            report = enrich_document_semantics(session, document_id=document.id)
+            report = enrich_document_semantics(
+                session,
+                document_id=document.id,
+                profile=selected_profile,
+            )
             console.print_json(data={"semantic_enrichment": report.model_dump()})
         _print_ingest_result(document.id, run.status.value, run.warnings_json, run.errors_json)
         if run.status == IngestionStatus.FAILED:
@@ -341,4 +374,50 @@ def _parse_profile(name: str):
     try:
         return get_parsing_profile(name)
     except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _resolve_ingest_profile(
+    *,
+    profile_name: str,
+    manifest_path: Path | None,
+    force_not_ready: bool,
+) -> ParsingProfile:
+    """Resolve the parsing profile for ``layer1 ingest``.
+
+    Precedence:
+
+    - ``--manifest`` (when supplied) loads a CityIntakeManifest, refuses unless
+      ``pipeline_ready=True`` (or ``--force-not-ready``), then derives a
+      profile via :func:`profile_from_manifest`. This is the manifest-driven
+      path closed by ABS-74.
+    - Otherwise ``--profile`` (which defaults to the project setting) selects
+      one of the legacy hardcoded profiles.
+
+    Specifying both ``--manifest`` and an explicit non-default ``--profile``
+    is rejected because it's almost always a mistake — the manifest is meant
+    to be the source of truth.
+    """
+    if manifest_path is None:
+        return _parse_profile(profile_name)
+
+    default_profile_name = get_settings().parsing_profile
+    if profile_name != default_profile_name:
+        raise typer.BadParameter(
+            "--manifest is mutually exclusive with --profile. Drop --profile "
+            "and let the manifest drive the parser, or drop --manifest if you "
+            "want the legacy profile path."
+        )
+    try:
+        manifest = load_manifest(manifest_path)
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(f"Manifest not found: {manifest_path}") from exc
+
+    try:
+        return profile_from_manifest(
+            manifest,
+            base=HALIFAX_PROFILE,
+            require_pipeline_ready=not force_not_ready,
+        )
+    except ManifestNotReadyError as exc:
         raise typer.BadParameter(str(exc)) from exc

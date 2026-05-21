@@ -3,12 +3,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
-from layer1.models.enums import BlockType
+from layer1.models.enums import BlockType, FragmentType
 
 if TYPE_CHECKING:
     from layer1.parsers.base import ParseResult
+
+
+@dataclass(frozen=True)
+class ManifestCitationLevel:
+    """One level from a manifest's ``ParserConfig.citation_scheme.hierarchy``.
+
+    The adapter compiles the raw regex string into ``pattern`` and maps the
+    manifest's free-form ``level`` string into a Layer 1 ``FragmentType`` plus
+    a depth integer that slots into the same stack ``parse_citation_label``
+    builds today. ``raw_level`` is retained so diagnostics can quote the
+    manifest's own wording when a pattern misfires.
+    """
+
+    raw_level: str
+    pattern: re.Pattern[str]
+    fragment_type: FragmentType
+    level: int
+    label_format: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +51,14 @@ class ParsingProfile:
         r"^\s*['\"“]?[A-Z][A-Za-z0-9 /&,'()-]{2,100}['\"”]?\s+(?:means|includes)\b",
         re.IGNORECASE,
     )
+    # Manifest-derived fields. All optional — when unset, every consumer falls
+    # back to the historical hardcoded behavior, so existing call sites that
+    # know nothing about the manifest layer keep working unchanged.
+    jurisdiction_code: str | None = None
+    manifest_citation_levels: tuple[ManifestCitationLevel, ...] = ()
+    known_zone_codes: frozenset[str] | None = None
+    zone_pattern: re.Pattern[str] | None = None
+    use_class_map: Mapping[str, str] | None = None
 
     def applies_to(self, path: Path) -> bool:
         return False

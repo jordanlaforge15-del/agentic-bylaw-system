@@ -30,9 +30,10 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -41,8 +42,17 @@ from advisor.db.models import InviteRequest, User
 from advisor.llm.mock import MockGateway
 from advisor.llm.mock_dispatcher import build_dispatcher
 from bylaw_retrieval.retrieval import LocationSlot, RetrievalService
-from layer1.db.base import utcnow
+from layer1.db.base import Document, SemanticEntity, SourceFragment, utcnow
 from layer1.db.session import session_scope
+from layer1.manifest_adapter import (
+    ManifestNotReadyError,
+    load_manifest,
+    profile_from_manifest,
+)
+from layer1.models.enums import IngestionStatus, ParseStatus
+from layer1.pipeline.ingest import ingest_file
+from layer1.profiles import HALIFAX_PROFILE
+from layer1.semantic.enrichment import enrich_document_semantics
 from layer2.compliance.db.models import SubmissionAttributeSource
 from layer2.compliance.evaluator import (
     DocumentFilters,
@@ -147,6 +157,19 @@ class _EvaluateBylawsBody(BaseModel):
     per_attribute_limit: int = Field(default=8, ge=1, le=25)
     submission_id: int | None = None
     persist_decision: bool = False
+
+
+# ABS-74: test-only manifest-driven ingest endpoint.
+# Exercises the full Phase 2 → Layer 1 wiring through the real FastAPI stack:
+# the Playwright spec POSTs a manifest path + a bylaw text path, the endpoint
+# loads the manifest, derives a ParsingProfile via the adapter, ingests, runs
+# semantic enrichment with the manifest overlay, and returns a small summary
+# the spec can assert on. The chat-loop / SSE machinery is bypassed because
+# we're proving the *ingestion* path; the chat-side coverage already exists.
+class _ManifestIngestBody(BaseModel):
+    manifest_path: str = Field(min_length=1, max_length=1024)
+    bylaw_path: str = Field(min_length=1, max_length=1024)
+    bylaw_name: str = Field(min_length=1, max_length=256)
 
 
 def _mount_test_router(app: FastAPI) -> None:
@@ -283,6 +306,112 @@ def _mount_test_router(app: FastAPI) -> None:
             )
             response = evaluator.evaluate(request)
             return response.to_json()
+
+    @app.post("/v1/_test/manifest-ingest")
+    async def manifest_ingest(body: _ManifestIngestBody) -> dict[str, object]:
+        """Drive Layer 1 ingest from a manifest path and return a summary.
+
+        Used by the ABS-74 Playwright spec to prove the agentic loop is
+        closed: a CityIntakeManifest on disk + the manifest_adapter is
+        enough to ingest a bylaw with no hand-edited ParsingProfile, and
+        semantic enrichment honors the manifest's zone codes / use map via
+        the ContextVar overlay.
+
+        Idempotent on ``bylaw_name`` — any prior document with the same name
+        is deleted before re-ingesting, so the spec can run repeatedly
+        against a long-lived test DB without piling up rows.
+        """
+        manifest_file = Path(body.manifest_path)
+        bylaw_file = Path(body.bylaw_path)
+        if not manifest_file.exists():
+            raise HTTPException(
+                status_code=400,
+                detail=f"manifest_path not found: {body.manifest_path}",
+            )
+        if not bylaw_file.exists():
+            raise HTTPException(
+                status_code=400,
+                detail=f"bylaw_path not found: {body.bylaw_path}",
+            )
+
+        manifest = load_manifest(manifest_file)
+        try:
+            profile = profile_from_manifest(manifest, base=HALIFAX_PROFILE)
+        except ManifestNotReadyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        with session_scope() as session:
+            # Drop prior runs with the same bylaw_name so the test is
+            # idempotent across runs against a shared test DB.
+            session.query(Document).filter(Document.bylaw_name == body.bylaw_name).delete(
+                synchronize_session=False
+            )
+            session.flush()
+
+            document, run = ingest_file(
+                session,
+                bylaw_file,
+                municipality=manifest.municipality.name,
+                bylaw_name=body.bylaw_name,
+                profile=profile,
+            )
+            if run.status == IngestionStatus.FAILED:
+                return {
+                    "ok": False,
+                    "errors": list(run.errors_json or []),
+                    "warnings": list(run.warnings_json or []),
+                }
+            enrich_report = enrich_document_semantics(
+                session, document_id=document.id, profile=profile
+            )
+            fragment_count = (
+                session.query(SourceFragment)
+                .filter_by(document_id=document.id)
+                .count()
+            )
+            citation_paths = [
+                row[0]
+                for row in (
+                    session.query(SourceFragment.citation_path)
+                    .filter(
+                        SourceFragment.document_id == document.id,
+                        SourceFragment.citation_path.isnot(None),
+                        SourceFragment.parse_status == ParseStatus.PARSED,
+                    )
+                    .order_by(SourceFragment.id)
+                    .limit(8)
+                    .all()
+                )
+            ]
+            zone_entities = [
+                row[0]
+                for row in (
+                    session.query(SemanticEntity.canonical_name)
+                    .filter(
+                        SemanticEntity.document_id == document.id,
+                        SemanticEntity.entity_type == "zone",
+                    )
+                    .order_by(SemanticEntity.canonical_name)
+                    .all()
+                )
+            ]
+            return {
+                "ok": True,
+                "document_id": document.id,
+                "municipality": document.municipality,
+                "bylaw_name": document.bylaw_name,
+                "parser_version": document.parser_version,
+                "jurisdiction_code": profile.jurisdiction_code,
+                "fragment_count": fragment_count,
+                "citation_paths": citation_paths,
+                "zone_entities": zone_entities,
+                "manifest_zone_codes": (
+                    sorted(profile.known_zone_codes)
+                    if profile.known_zone_codes
+                    else []
+                ),
+                "enrichment": enrich_report.model_dump(),
+            }
 
 
 app = build_e2e_app()
