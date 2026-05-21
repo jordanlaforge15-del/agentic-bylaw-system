@@ -30,6 +30,25 @@ export default async function globalSetup() {
     throw err;
   }
 
+  // ABS-53: generate the synthetic IFC fixture the submission-upload
+  // spec posts. Idempotent; runs cheap. Writing it here (rather than in
+  // the spec itself) keeps the spec free of subprocess machinery and
+  // means a stale fixture from a prior run can't poison the upload.
+  const ifcSeed = path.join(repoRoot, "scripts", "seed_e2e_submission_ifc.py");
+  try {
+    execSync(`"${venvPython}" "${ifcSeed}"`, {
+      env: {
+        ...process.env,
+        DATABASE_URL: databaseUrl,
+        PYTHONPATH: `${path.join(repoRoot, "src")}:${process.env.PYTHONPATH || ""}`,
+      },
+      stdio: "inherit",
+    });
+  } catch (err) {
+    console.error("globalSetup: seed_e2e_submission_ifc.py failed", err);
+    throw err;
+  }
+
   const apiUrl = process.env.E2E_API_URL || "http://127.0.0.1:8001";
   const res = await fetch(`${apiUrl}/healthz`).catch(() => null);
   if (!res || !res.ok) {

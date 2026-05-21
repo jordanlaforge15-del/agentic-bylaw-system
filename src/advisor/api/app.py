@@ -174,6 +174,7 @@ def create_app(
     billing_db_session_factory: Callable[[], Any] | None = None,
     billing_user_dependency: Callable[..., Any] | None = None,
     billing_user_resolver: Callable[[Any, Any], Any] | None = None,
+    submissions_evaluator_factory: Callable[[Any], Any] | None = None,
 ) -> FastAPI:
     """Build the FastAPI app with explicit, injectable dependencies.
 
@@ -362,6 +363,24 @@ def create_app(
                 db_session_factory=db_session_factory,
                 user_dependency=require_user,
                 user_resolver=_resolve_user_via_db,
+            )
+        )
+
+        # Submissions router (ABS-53) — Phase 2 BIM submission flow.
+        # The evaluator-factory is set to None here; the e2e harness
+        # wires a real EvaluatorService in `e2e_server.py` so the
+        # /evaluate endpoint works end-to-end. Dormant deployments
+        # surface a 503 on /evaluate which the UI handles gracefully.
+        from advisor.api.submissions_router import (  # noqa: PLC0415
+            build_submissions_router,
+        )
+
+        app.include_router(
+            build_submissions_router(
+                db_session_factory=db_session_factory,
+                user_dependency=require_user,
+                user_resolver=_resolve_user_via_db,
+                evaluator_factory=submissions_evaluator_factory,
             )
         )
 
