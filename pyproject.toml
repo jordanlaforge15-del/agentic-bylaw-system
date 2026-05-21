@@ -42,6 +42,12 @@ ingest = [
   "pymupdf>=1.23",
   "pdfplumber>=0.10",
 ]
+bim = [
+  # Phase 2 (ABS-49): IFC ingestion. Open-source toolkit, pip-installable
+  # wheels on macOS / Linux / Windows. APS / .rvt path lives in a separate
+  # extras group when it lands.
+  "ifcopenshell>=0.7",
+]
 api = []
 mcp = [
   "mcp[cli]>=1.27",
@@ -68,7 +74,7 @@ where = ["src", "mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "mcp"]
+pythonpath = ["src", "mcp", "tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
