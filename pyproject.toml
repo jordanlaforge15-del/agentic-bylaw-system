@@ -47,6 +47,12 @@ bim = [
   # wheels on macOS / Linux / Windows. APS / .rvt path lives in a separate
   # extras group when it lands.
   "ifcopenshell>=0.7",
+  # Phase 2 (ABS-52): coord-system transforms (project-local → EPSG:2961 / 4326).
+  # geopandas pulls pyproj transitively but Phase-1 deliberately avoided
+  # the dep — ABS-52 makes it explicit because Stane Plane reprojection
+  # has to be exact, not the local-tangent-plane approximation that
+  # layer2.spatial.lot_metrics rolls.
+  "pyproj>=3.6",
 ]
 api = []
 mcp = [
