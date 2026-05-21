@@ -83,6 +83,7 @@ attributes:
   feature_key: ASSETID
   ignore:
     - OBJECTID
+    - Shape__Length
 """
 
 
@@ -121,7 +122,7 @@ def parcels_db(tmp_path: Path):
     centerline_features = [
         {
             "type": "Feature",
-            "properties": {"ASSETID": "MAIN-001"},
+            "properties": {"ASSETID": "MAIN-001", "STR_NAME": "MAIN"},
             "geometry": line_between((-50.0, 0.0), (50.0, 0.0)),
         }
     ]
@@ -142,6 +143,60 @@ def parcels_db(tmp_path: Path):
         centerlines_result = ingest_geo_dataset(session, centerline_cfg)
         assert centerlines_result.dataset.feature_count == 1
 
+    return {"db_url": db_url}
+
+
+@pytest.fixture()
+def corner_lot_parcels_db(tmp_path: Path):
+    """SQLite DB with one corner-lot parcel and two perpendicular centerlines.
+
+    Parcel: 30 × 40 m at the corner, with its SE corner at the origin.
+    Centerlines: south street along y=0, east street along x=30, with
+    distinct ``STR_NAME`` values so the extractor passes them through
+    to ``compute_lot_metrics`` for street-name grouping.
+
+    Mirrors the production pattern from 6321 Quinpool (Quinpool ×
+    Harvard) at a synthetic scale we can assert exact numbers against.
+    """
+    db_url = f"sqlite:///{tmp_path / 'corner.db'}"
+    create_layer1(db_url)
+    create_layer2(db_url)
+
+    parcel_features = [
+        {
+            "type": "Feature",
+            "properties": {"PID": "CORNER001"},
+            "geometry": rect_at(x_m=0.0, y_m=0.0, width_m=30.0, height_m=40.0),
+        }
+    ]
+    parcel_fc = {"type": "FeatureCollection", "features": parcel_features}
+    parcel_fixture = tmp_path / "parcels.geojson"
+    parcel_fixture.write_text(json.dumps(parcel_fc))
+
+    centerline_features = [
+        {
+            "type": "Feature",
+            "properties": {"ASSETID": "SOUTH-01", "STR_NAME": "SOUTH"},
+            "geometry": line_between((-50.0, 0.0), (80.0, 0.0)),
+        },
+        {
+            "type": "Feature",
+            "properties": {"ASSETID": "EAST-01", "STR_NAME": "EAST"},
+            "geometry": line_between((30.0, -50.0), (30.0, 90.0)),
+        },
+    ]
+    centerline_fc = {"type": "FeatureCollection", "features": centerline_features}
+    centerline_fixture = tmp_path / "centerlines.geojson"
+    centerline_fixture.write_text(json.dumps(centerline_fc))
+
+    parcel_cfg = tmp_path / "parcels.yaml"
+    parcel_cfg.write_text(_PARCELS_YAML.format(fixture=str(parcel_fixture)))
+    centerline_cfg = tmp_path / "centerlines.yaml"
+    centerline_cfg.write_text(_CENTERLINES_YAML.format(fixture=str(centerline_fixture)))
+
+    with session_scope(db_url) as session:
+        ingest_geo_dataset(session, parcel_cfg)
+        ingest_geo_dataset(session, centerline_cfg)
     return {"db_url": db_url}
 
 
@@ -276,18 +331,62 @@ def test_happy_path_returns_full_lot_facts(parcels_db) -> None:
     assert facts["area_m2"] == pytest.approx(450.0, rel=1e-3)
     assert facts["perimeter_m"] == pytest.approx(90.0, abs=0.5)
     # South edge sits on the centerline (worst case for the perpendicular-
-    # edge artifact): 15 m south edge + 2 × 8 m artifact bits from the
-    # side edges entering the buffer ≈ 31 m. See lot_metrics.compute_lot_metrics
-    # docstring for the algorithm details.
-    assert facts["frontage_m"] == pytest.approx(31.0, abs=0.5)
-    assert facts["depth_m"] == pytest.approx(14.5, abs=0.5)
+    # edge artifact): 15 m south edge + 2 × 12 m artifact bits from the
+    # side edges entering the 12 m default buffer ≈ 39 m. See
+    # lot_metrics.compute_lot_metrics docstring for the algorithm details.
+    assert facts["frontage_m"] == pytest.approx(39.0, abs=0.5)
+    # Single-street lot → depth = area / frontage = 450 / 39 ≈ 11.5 m.
+    assert facts["depth_m"] == pytest.approx(11.5, abs=0.5)
     assert facts["corner"] is False
+    assert facts["street_count"] == 1
     # Frontage is well above 5% of perimeter → confidence stays at 1.0.
     assert facts["confidence"] == pytest.approx(1.0)
     # No civic-address dataset loaded → multi_unit omitted, not False.
     assert "multi_unit" not in facts
     assert facts["anchor_source"] == "test_fixture"
     assert "computed_at" in facts
+
+
+def test_corner_lot_two_streets_yields_corner_true_and_omits_depth(
+    corner_lot_parcels_db,
+) -> None:
+    """ABS-23 regression: end-to-end corner-lot detection via STR_NAME.
+
+    Point geocode lands inside the 30 × 40 m parcel. South and East
+    street centerlines have distinct STR_NAME values; extractor passes
+    those through, lot_metrics groups by name, and the resulting payload
+    reports street_count=2, corner=True, depth_m omitted, frontage
+    spanning both street-facing edges.
+    """
+    # Centroid of the 30 × 40 m parcel at the origin → (15, 20) metres.
+    anchor_lon, anchor_lat = _to_lonlat(15.0, 20.0)
+    _prime_geocode_cache_for_address(
+        corner_lot_parcels_db["db_url"],
+        normalized_text="civic:200 corner st",
+        raw_text="200 Corner Street",
+        kind="civic_address",
+        lon=anchor_lon,
+        lat=anchor_lat,
+    )
+    with session_scope(corner_lot_parcels_db["db_url"]) as session:
+        facts = extract_lot_facts(
+            session,
+            anchor_label="200 Corner Street",
+            anchor_kind="address",
+        )
+
+    assert facts["status"] == "ok"
+    assert facts["pid"] == "CORNER001"
+    assert facts["area_m2"] == pytest.approx(1200.0, rel=1e-3)
+    assert facts["street_count"] == 2
+    assert facts["corner"] is True
+    # 30 + 40 m main edges + ~12 m of each perpendicular edge entering
+    # the buffer at the two non-corner corners ≈ 94 m.
+    assert facts["frontage_m"] == pytest.approx(94.0, abs=2.0)
+    # Multi-frontage lot → depth must NOT be reported.
+    assert "depth_m" not in facts
+    # 2 streets is still "normal" (corner residential); confidence stays at 1.0.
+    assert facts["confidence"] == pytest.approx(1.0)
 
 
 def test_happy_path_without_centerlines_drops_confidence(

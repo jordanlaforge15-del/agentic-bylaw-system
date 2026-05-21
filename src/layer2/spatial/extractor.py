@@ -53,6 +53,15 @@ CENTERLINE_BBOX_PAD_DEG: float = 0.001
 FRONTAGE_PERIMETER_RATIO_OK: float = 0.05
 
 
+# Centerline attribute keys we accept as a street name. STR_NAME is
+# HRM's canonical short-name field ("HARVARD", "QUINPOOL"); FULL_NAME
+# is the suffixed long form ("HARVARD ST", "QUINPOOL RD"). Falling back
+# to FULL_NAME keeps the algorithm working against centerline datasets
+# that omit STR_NAME. Both are present in the prod ingest of HRM's
+# StreetNetwork layer as of ABS-23.
+_STREET_NAME_KEYS: tuple[str, ...] = ("STR_NAME", "FULL_NAME", "FULL_STREET_NAME")
+
+
 def extract_lot_facts(
     db: Session,
     *,
@@ -102,6 +111,7 @@ def format_lot_facts_block(spatial_facts: dict[str, Any] | None) -> str:
         "depth_m",
         "perimeter_m",
         "corner",
+        "street_count",
         "multi_unit",
         "confidence",
         "method",
@@ -162,18 +172,22 @@ def _extract_inner(
     # nearby centerline segments) takes the same path.
     centerlines_dataset_id = _find_dataset_id(db, CENTERLINES_ROLE)
     if centerlines_dataset_id is not None:
-        centerline_geojsons = _find_nearby_centerlines(
+        centerline_records = _find_nearby_centerlines(
             db,
             dataset_id=centerlines_dataset_id,
             parcel_feature=parcel_feature,
         )
+        centerline_geojsons = [r["geometry"] for r in centerline_records]
+        centerline_names = [r["street_name"] for r in centerline_records]
     else:
         centerline_geojsons = []
+        centerline_names = []
 
     metrics = compute_lot_metrics(
         parcel_feature.geometry_geojson,
         centerline_geojsons,
         buffer_m=DEFAULT_BUFFER_M,
+        centerline_names=centerline_names,
     )
     if metrics.status == "unresolved":
         return _unresolved(base, metrics.reason or "lot metrics unresolved")
@@ -203,19 +217,27 @@ def _extract_inner(
             base["depth_m"] = round(metrics.depth_m, 2)
         if metrics.corner is not None:
             base["corner"] = metrics.corner
-    # Confidence: 1.0 when the polygon was clean and the frontage looks
-    # plausible (at least 5% of perimeter). Drop to 0.7 when the buffer
-    # heuristic likely missed — e.g. centerlines dataset not ingested,
-    # parcel set back further than the buffer width, or no centerline
-    # segments near the parcel. The result is still usable; the model
-    # should hedge.
+    if metrics.street_count is not None:
+        base["street_count"] = metrics.street_count
+    # Confidence:
+    #   1.0 — clean polygon, mid-block or corner lot (1–2 streets), and
+    #         frontage above the 5%-of-perimeter floor.
+    #   0.7 — lot_metrics flagged the result as uncertain (e.g. city-
+    #         block buffer overreach on 5251 Duke), or no centerlines
+    #         dataset ingested, or 3+ streets touch the parcel
+    #         (triangular / cul-de-sac throat), or frontage came back
+    #         below the 5% floor.
+    # The model is asked to hedge whenever confidence drops to 0.7.
     perim = metrics.perimeter_m or 0.0
     frontage_ok = (
         metrics.frontage_m is not None
         and perim > 0
         and (metrics.frontage_m / perim) >= FRONTAGE_PERIMETER_RATIO_OK
     )
-    if metrics.status == "ok" and frontage_ok:
+    irregular_frontage = (
+        metrics.street_count is not None and metrics.street_count >= 3
+    )
+    if metrics.status == "ok" and frontage_ok and not irregular_frontage:
         base["confidence"] = 1.0
     else:
         base["confidence"] = 0.7
@@ -333,7 +355,7 @@ def _find_nearby_centerlines(
     dataset_id: int,
     parcel_feature: ExternalDatasetFeature,
 ) -> list[dict[str, Any]]:
-    """Return GeoJSON geometries of centerline segments near the parcel.
+    """Return centerline segments near the parcel as ``{geometry, street_name}``.
 
     "Near" = the parcel's bbox padded by ``CENTERLINE_BBOX_PAD_DEG`` on
     each side. The padding ensures we catch the centerline of a road
@@ -341,9 +363,14 @@ def _find_nearby_centerlines(
     it, a parcel that hugs its bbox edge would miss the very centerline
     its front edge runs along.
 
+    ``street_name`` is sourced from ``attributes_json`` using the keys
+    in ``_STREET_NAME_KEYS`` (HRM's StreetNetwork layer publishes
+    STR_NAME and FULL_NAME). Returned as ``None`` when no key is
+    populated — ``compute_lot_metrics`` then treats that segment as a
+    standalone street rather than merging it with its neighbours.
+
     PostGIS uses ``&&`` (bbox intersect) for a fast spatial-index lookup;
-    SQLite falls back to a JSON-bbox scan. Either way we return the raw
-    geometry dicts that ``compute_lot_metrics`` can ingest directly.
+    SQLite falls back to a JSON-bbox scan.
     """
     bbox = parcel_feature.geometry_bbox_json or {}
     minx = float(bbox.get("minx", 0.0)) - CENTERLINE_BBOX_PAD_DEG
@@ -354,7 +381,8 @@ def _find_nearby_centerlines(
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         sql = text(
             """
-            SELECT edf.geometry_geojson AS geometry_geojson
+            SELECT edf.geometry_geojson AS geometry_geojson,
+                   edf.attributes_json AS attributes_json
             FROM external_dataset_feature edf
             WHERE edf.external_dataset_id = :ds_id
               AND edf.geometry IS NOT NULL
@@ -373,7 +401,14 @@ def _find_nearby_centerlines(
                 "maxy": maxy,
             },
         ).all()
-        return [dict(row.geometry_geojson) for row in rows if row.geometry_geojson]
+        return [
+            {
+                "geometry": dict(row.geometry_geojson),
+                "street_name": _street_name_from_attrs(row.attributes_json),
+            }
+            for row in rows
+            if row.geometry_geojson
+        ]
 
     # SQLite fallback.
     features = (
@@ -396,8 +431,24 @@ def _find_nearby_centerlines(
         ):
             continue
         if feature.geometry_geojson:
-            out.append(dict(feature.geometry_geojson))
+            out.append(
+                {
+                    "geometry": dict(feature.geometry_geojson),
+                    "street_name": _street_name_from_attrs(feature.attributes_json),
+                }
+            )
     return out
+
+
+def _street_name_from_attrs(attrs: dict[str, Any] | None) -> str | None:
+    """Pick the first populated street-name key from a centerline's attributes."""
+    if not attrs:
+        return None
+    for key in _STREET_NAME_KEYS:
+        value = attrs.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().upper()
+    return None
 
 
 def _detect_multi_unit(
