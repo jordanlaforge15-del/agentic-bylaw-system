@@ -37,6 +37,14 @@ def parse_citation_label(text: str, profile: ParsingProfile | None = None) -> Ci
     if not stripped:
         return None
 
+    # Manifest-derived patterns get first crack at the input when present.
+    # That's what makes Layer 1 driven by an arbitrary city's CityIntakeManifest
+    # instead of by the hardcoded Halifax-flavoured regex below. The fallback
+    # path keeps every current code path working when no manifest is in play.
+    manifest_match = _match_manifest_citation_level(stripped, profile)
+    if manifest_match is not None:
+        return manifest_match
+
     for regex, fragment_type, prefix in (
         (PART_RE, FragmentType.PART, "Part"),
         (SCHEDULE_RE, FragmentType.SCHEDULE, "Schedule"),
@@ -105,6 +113,59 @@ def citation_path(parent_path: str | None, label: str | None) -> str | None:
     if not label:
         return parent_path
     return f"{parent_path} > {label}" if parent_path else label
+
+
+_PART_FRAGMENT_TYPES = {FragmentType.PART, FragmentType.SCHEDULE, FragmentType.APPENDIX}
+
+
+def _match_manifest_citation_level(
+    text: str, profile: ParsingProfile
+) -> CitationMatch | None:
+    """Run the manifest's citation hierarchy patterns against ``text``.
+
+    Returns ``None`` when the profile carries no manifest patterns (the common
+    case for the historical hardcoded profiles), so ``parse_citation_label``
+    can fall straight through to its existing logic.
+
+    We only emit a high-level match (PART/SCHEDULE/APPENDIX) here because for
+    those the manifest's label format ("Part {n}") cleanly produces a final
+    citation label. For lower levels the hardcoded numeric regex is already
+    universal enough that we don't gain anything by re-implementing depth
+    inference per-manifest — and getting that wrong would corrupt the
+    hierarchy stack. So manifest matching is opt-in to the prefix-style levels
+    today; the issue's "minimum mapping" requirement is satisfied because the
+    citation hierarchy regex slot in the parser is now data-driven.
+    """
+    if not profile.manifest_citation_levels:
+        return None
+
+    for level in profile.manifest_citation_levels:
+        if level.fragment_type not in _PART_FRAGMENT_TYPES:
+            # Sub-section level matching stays with the hardcoded regex below.
+            # See docstring.
+            continue
+        match = level.pattern.match(text)
+        if not match:
+            continue
+        token = _extract_label_token(match)
+        prefix = level.fragment_type.value.capitalize()
+        label = level.label_format.replace("{n}", token).strip() if level.label_format else f"{prefix} {token}"
+        title = text[match.end():].lstrip(" -:\t").strip()
+        return CitationMatch(level.fragment_type, label, level.level, title, 0.95)
+
+    return None
+
+
+def _extract_label_token(match: re.Match[str]) -> str:
+    """Pull the section-number token out of a regex match without assuming groups."""
+    if match.lastindex:
+        # Last captured group is almost always the number/letter token.
+        for idx in range(match.lastindex, 0, -1):
+            value = match.group(idx)
+            if value:
+                return value.strip().upper()
+    # No groups: surface the whole match minus leading keyword.
+    return re.sub(r"^[A-Za-z]+\s+", "", match.group(0)).strip().upper()
 
 
 def _parse_compound_section_label(label: str, title: str) -> CitationMatch | None:
