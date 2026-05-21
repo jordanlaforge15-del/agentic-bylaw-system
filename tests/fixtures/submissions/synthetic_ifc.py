@@ -60,6 +60,12 @@ class SyntheticBuildingSpec:
     )
     include_building_pset: bool = True
     n_buildings: int = 1
+    # World coordinate-system origin to bake into the
+    # IfcGeometricRepresentationContext. Defaults to None which leaves
+    # the ifcopenshell-default (0, 0, 0). Tests that exercise ABS-52
+    # / ABS-51 use a Halifax UTM 20N base so the reprojected footprint
+    # lands near a real parcel centroid.
+    world_origin: tuple[float, float, float] | None = None
 
 
 def write_synthetic_ifc(spec: SyntheticBuildingSpec, out_path: Path) -> Path:
@@ -87,6 +93,16 @@ def write_synthetic_ifc(spec: SyntheticBuildingSpec, out_path: Path) -> Path:
             context_identifier="Body",
             target_view="MODEL_VIEW",
         )
+
+    # Override the world coordinate-system origin when the caller asked
+    # for one. ifcopenshell.api doesn't expose a helper for this, so
+    # we mutate the entity directly. Used by ABS-51 / ABS-52 tests
+    # that need the reprojected footprint to land near a real parcel.
+    if spec.world_origin is not None:
+        ctx = ifc.by_type("IfcGeometricRepresentationContext")[0]
+        wcs = getattr(ctx, "WorldCoordinateSystem", None)
+        if wcs is not None and getattr(wcs, "Location", None) is not None:
+            wcs.Location.Coordinates = [float(c) for c in spec.world_origin]
 
     site = ifcopenshell.api.run(
         "root.create_entity", ifc, ifc_class="IfcSite", name="Site"
