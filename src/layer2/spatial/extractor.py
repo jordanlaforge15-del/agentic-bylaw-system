@@ -145,8 +145,15 @@ def _extract_inner(
     if resolved is None:
         return _unresolved(base, "geocoder could not resolve anchor")
 
-    parcels_dataset_id = _find_dataset_id(db, PARCELS_ROLE)
-    if parcels_dataset_id is None:
+    # Multiple ingests can register the same role — e.g. an evaluator
+    # fixture dataset alongside the real parcels ingest in the e2e
+    # database. Scan across all of them rather than picking one
+    # arbitrarily; the first dataset whose polygon contains the point
+    # wins. Picking arbitrarily is a flake risk: a dataset that lacks
+    # the PostGIS ``geometry`` column populated (older fixtures) would
+    # silently swallow the lookup and return ``unresolved``.
+    parcels_dataset_ids = _find_dataset_ids(db, PARCELS_ROLE)
+    if not parcels_dataset_ids:
         return _unresolved(
             base,
             "no property_parcels dataset is ingested; run the parcels ingest",
@@ -157,7 +164,7 @@ def _extract_inner(
         return _unresolved(base, "resolved geometry has no usable centroid")
 
     parcel_feature = _find_containing_parcel(
-        db, dataset_id=parcels_dataset_id, point=point
+        db, dataset_ids=parcels_dataset_ids, point=point
     )
     if parcel_feature is None:
         return _unresolved(
@@ -170,11 +177,11 @@ def _extract_inner(
     # behaviour of Part 1), just with frontage / depth / corner absent.
     # An ingested-but-empty result (parcel in a rural area with no
     # nearby centerline segments) takes the same path.
-    centerlines_dataset_id = _find_dataset_id(db, CENTERLINES_ROLE)
-    if centerlines_dataset_id is not None:
+    centerlines_dataset_ids = _find_dataset_ids(db, CENTERLINES_ROLE)
+    if centerlines_dataset_ids:
         centerline_records = _find_nearby_centerlines(
             db,
-            dataset_id=centerlines_dataset_id,
+            dataset_ids=centerlines_dataset_ids,
             parcel_feature=parcel_feature,
         )
         centerline_geojsons = [r["geometry"] for r in centerline_records]
@@ -251,15 +258,25 @@ def _unresolved(base: dict[str, Any], reason: str) -> dict[str, Any]:
     return base
 
 
-def _find_dataset_id(db: Session, role: str) -> int | None:
-    """Return the dataset id whose metadata_json.role matches ``role``."""
+def _find_dataset_ids(db: Session, role: str) -> list[int]:
+    """Return all dataset ids whose metadata_json.role matches ``role``.
+
+    Returns lower ids first (insertion order). Callers that want
+    deterministic resolution should iterate the full list rather than
+    taking ``[0]`` — e.g. when a fixture dataset and a production
+    ingest both register the same role, only one will actually
+    contain the geocoded point.
+    """
     rows = db.execute(
-        select(ExternalDataset.id, ExternalDataset.metadata_json)
+        select(ExternalDataset.id, ExternalDataset.metadata_json).order_by(
+            ExternalDataset.id
+        )
     ).all()
-    for row in rows:
-        if (row.metadata_json or {}).get("role") == role:
-            return int(row.id)
-    return None
+    return [
+        int(row.id)
+        for row in rows
+        if (row.metadata_json or {}).get("role") == role
+    ]
 
 
 def _representative_point(resolved: ResolvedLocation) -> Point | None:
@@ -286,10 +303,15 @@ def _representative_point(resolved: ResolvedLocation) -> Point | None:
 def _find_containing_parcel(
     db: Session,
     *,
-    dataset_id: int,
+    dataset_ids: list[int],
     point: Point,
 ) -> ExternalDatasetFeature | None:
     """Return the parcel feature whose polygon contains ``point``.
+
+    Scans across every dataset id in ``dataset_ids`` — when the same
+    role is registered by multiple datasets (e.g. an evaluator
+    fixture beside the real parcels ingest) the parcels live in
+    different datasets and the lookup must consider both.
 
     Uses PostGIS ``ST_Contains`` when available and falls back to the
     shapely bbox-prefilter loop on SQLite (the test path). When the
@@ -300,13 +322,16 @@ def _find_containing_parcel(
     homeowner's, and the boundary case is vanishingly rare for
     real-world civic-address geocodes.
     """
+    if not dataset_ids:
+        return None
+
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         geojson = json.dumps(point.__geo_interface__)
         sql = text(
             """
             SELECT edf.id AS feature_id
             FROM external_dataset_feature edf
-            WHERE edf.external_dataset_id = :ds_id
+            WHERE edf.external_dataset_id = ANY(:ds_ids)
               AND edf.geometry IS NOT NULL
               AND ST_Contains(
                   edf.geometry,
@@ -315,7 +340,9 @@ def _find_containing_parcel(
             LIMIT 1
             """
         )
-        row = db.execute(sql, {"geojson": geojson, "ds_id": dataset_id}).first()
+        row = db.execute(
+            sql, {"geojson": geojson, "ds_ids": list(dataset_ids)}
+        ).first()
         if row is None:
             return None
         return db.get(ExternalDatasetFeature, int(row.feature_id))
@@ -325,7 +352,7 @@ def _find_containing_parcel(
     features = (
         db.execute(
             select(ExternalDatasetFeature).where(
-                ExternalDatasetFeature.external_dataset_id == dataset_id
+                ExternalDatasetFeature.external_dataset_id.in_(dataset_ids)
             )
         )
         .scalars()
@@ -352,7 +379,7 @@ def _find_containing_parcel(
 def _find_nearby_centerlines(
     db: Session,
     *,
-    dataset_id: int,
+    dataset_ids: list[int],
     parcel_feature: ExternalDatasetFeature,
 ) -> list[dict[str, Any]]:
     """Return centerline segments near the parcel as ``{geometry, street_name}``.
@@ -378,13 +405,16 @@ def _find_nearby_centerlines(
     miny = float(bbox.get("miny", 0.0)) - CENTERLINE_BBOX_PAD_DEG
     maxy = float(bbox.get("maxy", 0.0)) + CENTERLINE_BBOX_PAD_DEG
 
+    if not dataset_ids:
+        return []
+
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         sql = text(
             """
             SELECT edf.geometry_geojson AS geometry_geojson,
                    edf.attributes_json AS attributes_json
             FROM external_dataset_feature edf
-            WHERE edf.external_dataset_id = :ds_id
+            WHERE edf.external_dataset_id = ANY(:ds_ids)
               AND edf.geometry IS NOT NULL
               AND edf.geometry && ST_MakeEnvelope(
                   :minx, :miny, :maxx, :maxy, 4326
@@ -394,7 +424,7 @@ def _find_nearby_centerlines(
         rows = db.execute(
             sql,
             {
-                "ds_id": dataset_id,
+                "ds_ids": list(dataset_ids),
                 "minx": minx,
                 "miny": miny,
                 "maxx": maxx,
@@ -414,7 +444,7 @@ def _find_nearby_centerlines(
     features = (
         db.execute(
             select(ExternalDatasetFeature).where(
-                ExternalDatasetFeature.external_dataset_id == dataset_id
+                ExternalDatasetFeature.external_dataset_id.in_(dataset_ids)
             )
         )
         .scalars()
