@@ -100,7 +100,26 @@ DEVELOPMENT_CONTEXT_RE = re.compile(
 
 def normalize_zone(text: str, *, known_zone_codes: Iterable[str] | None = None) -> str:
     upper = re.sub(r"\s+", "", text.upper())
-    corrected = _correct_leading_ocr_zone(upper, known_zone_codes=known_zone_codes)
+    # Resolve known_zone_codes once — `_correct_leading_ocr_zone` needs it too
+    # and we want to honor any manifest overlay before the hyphenation rule
+    # kicks in. Without this short-circuit, a manifest declaring "R1" gets
+    # reshaped to "R-1" by the fullmatch below and then doesn't round-trip
+    # against the manifest's own taxonomy — surprising and wrong.
+    if known_zone_codes is None:
+        overlay = _current_overlay()
+        if overlay is not None and overlay.known_zone_codes is not None:
+            known_zone_codes = overlay.known_zone_codes
+    codes = list(known_zone_codes) if known_zone_codes is not None else None
+    if codes is not None:
+        upper_codes = {code.upper() for code in codes}
+        if upper.upper() in upper_codes:
+            # Preserve the exact spelling the manifest declared (case-insensitive
+            # match, then look up the manifest's canonical form).
+            for code in codes:
+                if code.upper() == upper:
+                    return code
+            return upper
+    corrected = _correct_leading_ocr_zone(upper, known_zone_codes=codes)
     if corrected:
         return corrected
     if "-" in upper:
