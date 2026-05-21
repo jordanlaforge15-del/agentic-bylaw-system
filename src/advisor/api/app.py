@@ -63,6 +63,7 @@ from advisor.chat.session import ChatSession
 from advisor.chat.tools import build_bylaw_tools
 from advisor.db.models import Case, User
 from advisor.llm import LLMGateway, LLMRole, Message, StreamEvent
+from layer1.db.base import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +349,22 @@ def create_app(
             )
         )
 
+        # Terms-and-conditions router — the click-wrap gate. Mounted
+        # whenever a DB factory is wired (the acceptance row needs a
+        # real DB). The router itself doesn't require Clerk to be
+        # configured; the user dependency falls back to the
+        # X-Test-User-Id header for tests, just like the other routers
+        # in this block.
+        from advisor.api.terms_router import build_terms_router  # noqa: PLC0415
+
+        app.include_router(
+            build_terms_router(
+                db_session_factory=db_session_factory,
+                user_dependency=require_user,
+                user_resolver=_resolve_user_via_db,
+            )
+        )
+
     # Clerk webhook router. Only mounted when both the secret and a DB
     # factory are wired — the route needs a real DB to write user-row
     # changes against, and without the secret we have no way to verify
@@ -423,6 +440,32 @@ def create_app(
                     ) from exc
 
                 enforce_request_rate(db, db_user)
+
+                # Click-wrap gate. The Next.js layout redirects
+                # unsigned users to /app/terms, but a direct API caller
+                # would otherwise bypass that — refuse the turn here
+                # with the same 412 the require_accepted_current_terms
+                # dependency raises on future endpoints (/v1/keys etc.).
+                # Kept inline (rather than as a Depends) because the
+                # chat route already opens its own db session above and
+                # the dependency would open a second one.
+                from advisor.legal import (  # noqa: PLC0415 — lazy to keep import graph flat
+                    user_has_accepted_current_terms,
+                )
+
+                if not user_has_accepted_current_terms(db, db_user):
+                    raise HTTPException(
+                        status_code=412,
+                        detail={
+                            "code": "terms_not_accepted",
+                            "message": (
+                                "Accept the current Terms and Conditions "
+                                "before using the chat. Navigate to "
+                                "/app/terms in the web UI, or call "
+                                "POST /v1/terms/accept from your client."
+                            ),
+                        },
+                    )
 
                 try:
                     db_session_pk = int(session.session_id)
@@ -995,16 +1038,62 @@ def _build_user_dependency(
 ) -> Callable[..., User]:
     """Return a Depends-compatible callable that yields a ``User``.
 
-    Production path: real Clerk verification + DB-backed user
-    resolution. Test fallback: an ``X-Test-User-Id`` header that is
-    wrapped in a synthetic ``User`` instance so route handlers see the
-    same shape regardless of code path.
+    Three modes:
+
+    * **Production** (``verifier`` + ``db_session_factory``): real Clerk
+      JWT verification and DB-backed user resolution via
+      ``current_user_dependency``.
+    * **E2E** (``verifier=None`` + ``db_session_factory``): header-based
+      auth (``X-Test-User-Id``, optional ``X-Test-User-Email`` /
+      ``X-Test-User-Full-Name``) that JIT-creates a real
+      ``advisor_user`` row on first sight and redeems any matching
+      approved ``InviteRequest``. Mirrors ``resolve_or_create_user``'s
+      shape so the Playwright suite exercises the full sign-up →
+      approval → first-login redemption path without Clerk.
+    * **Unit-test** (``verifier=None`` + no ``db_session_factory``):
+      transient synthetic ``_TestUser`` for in-memory chat-behaviour
+      tests that never touch the DB.
     """
     if verifier is not None and db_session_factory is not None:
         return current_user_dependency(verifier, db_session_factory)
 
-    # test-only fallback — header-based auth so existing chat-behaviour
-    # tests don't have to mint JWTs to exercise unrelated route logic.
+    if db_session_factory is not None:
+        # E2E header-auth path: header → real ``advisor_user`` row.
+        # Mirrors the lifecycle of ``current_user_dependency`` so the
+        # sign-up / invite-redemption code paths are actually exercised
+        # by the Playwright suite under ``advisor.api.e2e_server``.
+        def _require_test_user_resolved(
+            x_test_user_id: str | None = Header(default=None),
+            x_test_user_email: str | None = Header(default=None),
+            x_test_user_full_name: str | None = Header(default=None),
+        ) -> User:
+            if not x_test_user_id or not x_test_user_id.strip():
+                raise HTTPException(
+                    status_code=401,
+                    detail="Missing X-Test-User-Id header (test-only fallback).",
+                )
+            cleaned = x_test_user_id.strip()
+            cleaned_email = (x_test_user_email or "").strip()
+            cleaned_name = (x_test_user_full_name or "").strip() or None
+            with db_session_factory() as db:
+                user = _resolve_or_create_test_user(
+                    db,
+                    clerk_user_id=cleaned,
+                    email=cleaned_email,
+                    full_name=cleaned_name,
+                )
+                # Commit so the row is durable for any later DB session
+                # opened during this request (cases router, session
+                # store). Mirrors current_user_dependency's commit.
+                db.commit()
+                db.refresh(user)
+                return user
+
+        return _require_test_user_resolved
+
+    # In-memory fallback for unit tests that don't wire a DB factory:
+    # a transient synthetic ``User`` keeps the handler shape stable
+    # without touching SQLAlchemy.
     def _require_test_user_id(
         x_test_user_id: str | None = Header(default=None),
     ) -> User:
@@ -1023,6 +1112,107 @@ def _build_user_dependency(
         return _TestUser(id=cleaned)
 
     return _require_test_user_id
+
+
+def _resolve_or_create_test_user(
+    db: Session,
+    *,
+    clerk_user_id: str,
+    email: str,
+    full_name: str | None,
+) -> User:
+    """JIT-create an ``advisor_user`` row for the E2E header-auth path.
+
+    Mirrors ``advisor.api.auth.resolve_or_create_user`` minus the Clerk
+    dependency: on first sight of a ``clerk_user_id`` we insert a row,
+    redeem any approved ``InviteRequest`` whose email matches, and
+    fall back to the starter-credit safety net so the user can open a
+    case immediately. Email/full_name updates from later requests
+    overwrite stored values only when non-empty, matching production.
+
+    Returning a real ``User`` (not the synthetic ``_TestUser``) means
+    the chat/cases routers' ``default_resolve_user`` lookups succeed
+    against a real PK rather than crashing on a missing FK, and the
+    invite-redemption + starter-grant code paths are now covered by
+    the e2e suite.
+    """
+    from advisor.db.models import InviteRequest  # noqa: PLC0415
+
+    user = (
+        db.query(User).filter(User.clerk_user_id == clerk_user_id).one_or_none()
+    )
+    if user is None:
+        # ``email`` is NOT NULL on ``advisor_user``. The e2e header is
+        # optional; fall back to a deterministic synthetic so legacy
+        # specs that only set X-Test-User-Id continue to work.
+        effective_email = email or f"{clerk_user_id}@e2e.test"
+        user = User(
+            clerk_user_id=clerk_user_id,
+            email=effective_email,
+            full_name=full_name,
+            # Raise rpm cap so 6-worker parallel Playwright doesn't
+            # 429 newly-minted users mid-suite. Matches the bump
+            # ``scripts/seed_e2e_user.py`` applies to the seed user.
+            requests_per_minute_limit=600,
+        )
+        db.add(user)
+        db.flush()
+        # Invite redemption: match by email (case-insensitive), then
+        # gift starter credits and mark redeemed so the expiry sweep
+        # leaves the row alone.
+        if email:
+            invite = (
+                db.query(InviteRequest)
+                .filter(
+                    InviteRequest.email.ilike(email),
+                    InviteRequest.status == "approved",
+                )
+                .one_or_none()
+            )
+            if invite is not None:
+                if (
+                    invite.granted_starter_credits > 0
+                    and invite.granted_starter_tier
+                ):
+                    from advisor.db.cases import (  # noqa: PLC0415
+                        grant_admin_credits,
+                    )
+
+                    grant_admin_credits(
+                        db,
+                        user=user,
+                        tier=invite.granted_starter_tier,
+                        quantity=invite.granted_starter_credits,
+                        reason=f"invite_redemption:{invite.id}",
+                    )
+                invite.redeemed_at = utcnow()
+                db.add(invite)
+        # Safety net: every brand-new user gets default trial credits
+        # if nothing upstream gave them any. Mirrors prod auth.py.
+        from advisor.db.cases import (  # noqa: PLC0415
+            grant_starter_credits_if_needed,
+        )
+
+        grant_starter_credits_if_needed(db, user=user)
+        return user
+
+    # Existing user — refresh mutable profile fields only when the
+    # caller actually supplied non-empty values. Never blank out a
+    # previously stored email/full_name.
+    changed = False
+    if email and user.email != email:
+        user.email = email
+        changed = True
+    if full_name is not None and user.full_name != full_name:
+        user.full_name = full_name
+        changed = True
+    if user.requests_per_minute_limit < 600:
+        user.requests_per_minute_limit = 600
+        changed = True
+    if changed:
+        user.updated_at = utcnow()
+        db.flush()
+    return user
 
 
 class _TestUser:

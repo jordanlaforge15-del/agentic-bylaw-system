@@ -186,12 +186,43 @@ The seed (`scripts/seed_e2e_user.py`) provisions:
 - `advisor_user` with `clerk_user_id="demo-user-1"`, `requests_per_minute_limit=600` (raised from the prod default of 6 to survive 6-worker parallel load).
 - 200 available credits per tier (`quick`, `standard`, `complex`). `globalSetup` tops this up before every Playwright run, so a long suite doesn't drain into 402s.
 
+### Sign-up / approval / logout lifecycle (auth specs)
+
+`web/e2e/auth/` covers the Clerk lifecycle (sign-up → admin approval → login → logout/login) without hosting Clerk in tests. Three pieces let the suite simulate the journey:
+
+1. **JIT user resolution in the test backend.** `advisor.api.e2e_server` mounts a header-auth user-dependency that — when a `db_session_factory` is wired (which the e2e entrypoint always does) — creates an `advisor_user` row on first sight of an unknown `X-Test-User-Id`, matches any approved `InviteRequest` by `X-Test-User-Email`, and gifts the row's `granted_starter_credits`. This mirrors `advisor.api.auth.resolve_or_create_user` so the post-Clerk invite-redemption code path is actually exercised.
+2. **Test-only invite endpoint.** `POST /v1/_test/invite-approve` writes a row directly into `invite_request` in the `approved` state, bypassing the Clerk allowlist API that the production `/api/admin/invites/{id}/approve` route calls. Companion endpoint `POST /v1/_test/reset-user` deletes a test user (FK cascades clean up cases, credits, chat sessions).
+3. **Per-context identity cookies.** `web/lib/advisor-auth.ts` honours three cookies in fallback mode:
+
+   | Cookie | Forwarded as | Used by |
+   |---|---|---|
+   | `abs_test_sub_user_id` | `X-Test-User-Id` | clerk_user_id lookup + JIT-create |
+   | `abs_test_sub_email` | `X-Test-User-Email` | invite redemption match |
+   | `abs_test_sub_full_name` | `X-Test-User-Full-Name` | `advisor_user.full_name` |
+
+   The `signInAs` fixture mints these alongside `abs_demo`; `signOut` clears all four. After sign-out a navigation to `/app` redirects through `/access`, matching the user-visible behaviour of Clerk's sign-out under the password-gate fallback.
+
+Spec layout:
+
+- `auth/01-signup-approve-login-case-chat.spec.ts` — flow 1 from the issue: invite via the `/signup` form, approve via the test endpoint, sign in as a fresh identity, open a case from `/cases/new`, get a streamed SSE reply. Exercises the JIT-create + redemption path end-to-end.
+- `auth/02-logout-resume-same-case.spec.ts` — flow 2: same identity, first turn, sign out, navigate to `/app` (asserts the `/access` redirect), sign back in, open the existing case URL, send a second turn. Guards the `user_id`-mismatch class of bugs called out in `functional/multi-turn.spec.ts`.
+- `auth/03-logout-resume-new-case.spec.ts` — flow 3: after logout/login, opening a *second* case must surface both rows on `/cases` for the same user.
+
+Run them in isolation:
+
+```bash
+cd web
+npx playwright test e2e/auth
+```
+
+The specs use unique synthetic identities (`auth-<slug>@e2e.test`) per run, so they don't share state with each other or with `demo-user-1`. Identity uniqueness keeps parallel workers from colliding on the `invite_request.email` UNIQUE constraint; the test endpoint also drops prior rows for the same email defensively.
+
 ## Test seams — what's mocked, what's real
 
 | Layer | In production | In the e2e suite | Why |
 |---|---|---|---|
 | Anthropic LLM | `AnthropicGateway` | `MockGateway(callable_=build_dispatcher())` | Determinism, speed, no API key. |
-| Clerk auth | JWT verifier | `verifier=None` + `X-Test-User-Id` header | Avoids Clerk dev-tenant flakiness. |
+| Clerk auth | JWT verifier + allowlist API | `verifier=None` + `X-Test-User-Id/-Email/-Full-Name` headers + `/v1/_test/invite-approve` | Avoids Clerk dev-tenant flakiness; the JIT-create code path still exercises the `resolve_or_create_user` + invite-redemption logic. |
 | Postgres | Real | Real, separate DB (`layer1_test`) | Migrations, FKs, credit-reservation logic are part of what we test. |
 | Retrieval (pgvector) | Real | Real, seeded synthetic bylaw on demand | Reuses `scripts/seed_synthetic_fragment.py`. |
 | Google Geocoder | Optional | Disabled by `tests/conftest.py` default | Off in tests; opt-in only. |

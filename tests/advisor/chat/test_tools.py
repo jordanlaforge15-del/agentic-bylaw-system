@@ -68,6 +68,7 @@ def test_build_bylaw_tools_returns_full_tool_set(seeded_service):
         "get_document_outline",
         "lookup_citation",
         "search_bylaw_evidence",
+        "evaluate_submission_against_bylaws",
         "request_tier_upgrade",
     }
     assert set(handlers.keys()) == set(names)

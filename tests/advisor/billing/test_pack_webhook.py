@@ -58,7 +58,7 @@ def test_pack_purchase_inserts_one_credit_per_quantity(tmp_path: Path) -> None:
                 tier="standard",
                 pack_sku="pro",
                 quantity=20,
-                amount_cents=110_500,  # $1,105 = pro discount on 20×$65
+                amount_cents=55_250,  # $552.50 = pro discount on 20×$32.50
             ),
             settings,
         )
@@ -70,7 +70,7 @@ def test_pack_purchase_inserts_one_credit_per_quantity(tmp_path: Path) -> None:
         assert purchases[0].pack_sku == "pro"
         assert purchases[0].tier == "standard"
         assert purchases[0].quantity == 20
-        assert purchases[0].amount_paid_cents == 110_500
+        assert purchases[0].amount_paid_cents == 55_250
 
         credits = list(s.query(CaseCredit).all())
         assert len(credits) == 20
@@ -92,7 +92,7 @@ def test_duplicate_event_id_is_no_op(tmp_path: Path) -> None:
         tier="quick",
         pack_sku="payg",
         quantity=1,
-        amount_cents=2500,
+        amount_cents=1250,
         event_id="evt_dup",
     )
 

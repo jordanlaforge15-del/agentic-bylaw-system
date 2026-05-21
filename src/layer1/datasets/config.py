@@ -13,6 +13,14 @@ class CanonicalFieldMapping(BaseModel):
     """How a single canonical field is sourced from a dataset's raw properties.
 
     Exactly one of ``from_field`` or ``synthesize`` must be set.
+
+    When ``lookup`` is set, the raw value pulled from ``from_field`` is used
+    as a key into the named lookup table on the parent ``DatasetConfig``
+    (``DatasetConfig.lookups[lookup_name]``). ``lookup_field`` then picks
+    which column of the lookup row becomes the canonical value. This lets a
+    single integer source field (e.g. HRM's ``BYLAW_ID``) drive several
+    canonical fields — code, name, and any other denormalised attributes —
+    without re-fetching the source data.
     """
 
     from_field: str | None = Field(default=None, alias="from")
@@ -20,6 +28,8 @@ class CanonicalFieldMapping(BaseModel):
     optional: bool = False
     null_when: list[Any] = Field(default_factory=list)
     synthesize: str | None = None
+    lookup: str | None = None
+    lookup_field: str | None = None
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
@@ -33,6 +43,15 @@ class CanonicalFieldMapping(BaseModel):
             raise ValueError(f"canonical mapping for '{self.from_field}' requires 'type'")
         if self.type and self.type not in SUPPORTED_TYPES:
             raise ValueError(f"unsupported canonical type '{self.type}'")
+        if self.lookup is not None:
+            if self.synthesize is not None:
+                raise ValueError("'lookup' cannot be combined with 'synthesize'")
+            if not self.from_field:
+                raise ValueError("'lookup' requires 'from' to specify the key field")
+            if not self.lookup_field:
+                raise ValueError("'lookup' requires 'lookup_field' to pick a column from the row")
+        elif self.lookup_field is not None:
+            raise ValueError("'lookup_field' is only valid alongside 'lookup'")
         return self
 
 
@@ -96,6 +115,14 @@ class DatasetConfig(BaseModel):
     role: DatasetRole | None = None
     links_to: LinksTo | None = None
     attributes: AttributesConfig
+    # Named lookup tables keyed by raw source-field value. A canonical field
+    # mapping with ``lookup: <name>`` consults the matching table here; the
+    # outer key is whatever the upstream API publishes (e.g. integer BYLAW_ID
+    # codes), and each inner row is an arbitrary dict of denormalised columns
+    # the field mapping selects via ``lookup_field``. Per-dataset by design
+    # so upstream codes from different jurisdictions (HRM's BYLAW_ID 9 vs.
+    # Toronto's 9) never collide in a global namespace.
+    lookups: dict[str, dict[Any, dict[str, Any]]] = Field(default_factory=dict)
 
     model_config = {"extra": "forbid"}
 
@@ -107,6 +134,18 @@ class DatasetConfig(BaseModel):
             raise ValueError(
                 "non-role datasets must declare 'links_to' to bind them to a bylaw fragment"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_lookup_references(self) -> "DatasetConfig":
+        for canonical_name, mapping in self.attributes.canonical.items():
+            if mapping.lookup is None:
+                continue
+            if mapping.lookup not in self.lookups:
+                raise ValueError(
+                    f"canonical field {canonical_name!r} references unknown lookup table "
+                    f"{mapping.lookup!r}; add it to the top-level 'lookups' block"
+                )
         return self
 
 

@@ -14,11 +14,11 @@ Tiers
 -----
 Three case tiers, ordered by token budget and price:
 
-* ``quick`` — 12k token budget, $25 CAD. Single-property zoning lookups,
-  permitted-use checks. ~4-6 retrieval rounds.
-* ``standard`` — 45k token budget, $65 CAD. Variance research, multi-
+* ``quick`` — 12k token budget, $12.50 CAD. Single-property zoning
+  lookups, permitted-use checks. ~4-6 retrieval rounds.
+* ``standard`` — 45k token budget, $32.50 CAD. Variance research, multi-
   bylaw cross-references, development-standards lookups. ~12-18 rounds.
-* ``complex`` — 130k token budget, $150 CAD. Multi-property files,
+* ``complex`` — 130k token budget, $75 CAD. Multi-property files,
   rezoning, deep overlay-zone analysis. ~35-50 rounds.
 
 Token budgets are CUMULATIVE (input + output) across all sessions in
@@ -111,7 +111,7 @@ TIER_QUICK_DEF = Tier(
     name=TIER_QUICK,
     display_name="Quick Lookup",
     token_budget=12_000,
-    unit_price_cents=2500,  # $25 CAD
+    unit_price_cents=1250,  # $12.50 CAD
     description=(
         "A single-property zoning or permitted-use lookup. ~4-6 retrieval "
         "rounds. Best for fast yes/no answers on a known address."
@@ -121,7 +121,7 @@ TIER_STANDARD_DEF = Tier(
     name=TIER_STANDARD,
     display_name="Standard Case",
     token_budget=45_000,
-    unit_price_cents=6500,  # $65 CAD
+    unit_price_cents=3250,  # $32.50 CAD
     description=(
         "Variance research, multi-bylaw cross-references, and "
         "development-standards lookups for a single property. ~12-18 "
@@ -132,7 +132,7 @@ TIER_COMPLEX_DEF = Tier(
     name=TIER_COMPLEX,
     display_name="Complex File",
     token_budget=130_000,
-    unit_price_cents=15000,  # $150 CAD
+    unit_price_cents=7500,  # $75 CAD
     description=(
         "Rezoning, multi-overlay analysis, deep development-application "
         "files. ~35-50 retrieval rounds. Use when you need a thorough "

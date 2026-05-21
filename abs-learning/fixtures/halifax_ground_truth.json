@@ -1,0 +1,146 @@
+{
+  "municipality": "HRM",
+  "document_id": 4,
+  "parser_version": "docling:halifax",
+  "page_count": 457,
+  "content_zone_start_page": 8,
+  "zone_codes": [
+    "CEN-1",
+    "CEN-2",
+    "CH-1",
+    "CH-2",
+    "CLI",
+    "COR",
+    "DD",
+    "DH",
+    "ER-1",
+    "ER-2",
+    "ER-3",
+    "HR-1",
+    "HR-2",
+    "INS",
+    "PCF",
+    "RPK",
+    "UC-1",
+    "UC-2"
+  ],
+  "zone_codes_full": [
+    "CEN-1",
+    "CEN-2",
+    "CH-1",
+    "CH-2",
+    "CDD-1",
+    "CDD-2",
+    "CLI",
+    "COR",
+    "DD",
+    "DH",
+    "DND",
+    "H",
+    "HR-1",
+    "HR-2",
+    "HRI",
+    "INS",
+    "LI",
+    "PCF",
+    "RPK",
+    "UC-1",
+    "UC-2",
+    "ER-1",
+    "ER-2",
+    "ER-3"
+  ],
+  "zone_code_count": 24,
+  "known_use_classes": [
+    "single-unit dwelling use",
+    "secondary suite use",
+    "cluster housing use",
+    "multi-unit dwelling use",
+    "home occupation use",
+    "daycare use"
+  ],
+  "known_standards_categories": [
+    "height",
+    "lot_coverage",
+    "front_setback",
+    "side_setback",
+    "rear_setback",
+    "parking"
+  ],
+  "use_permission_tables": ["1A", "1B", "1C", "1D"],
+  "parts_count_minimum": 5,
+  "citation_hierarchy": [
+    {
+      "level": "part",
+      "label_example": "Part I",
+      "pattern_expected": "^Part [IVXLC]+"
+    },
+    {
+      "level": "section",
+      "label_example": "1",
+      "pattern_expected": "^\\d{1,3}\\b"
+    },
+    {
+      "level": "clause",
+      "label_example": "(a)",
+      "pattern_expected": "^\\([a-z]{1,2}\\)"
+    },
+    {
+      "level": "subclause",
+      "label_example": "(i)",
+      "pattern_expected": "^\\([ivxlc]+\\)"
+    }
+  ],
+  "citation_samples": [
+    {
+      "citation_path": "Part I > 1",
+      "fragment_type": "section",
+      "text_prefix": "1 This By-law enables:"
+    },
+    {
+      "citation_path": "Part I > 1 > [Introduction] > (a)",
+      "fragment_type": "clause",
+      "text_prefix": "(a) as-of-right development;"
+    },
+    {
+      "citation_path": "Part I > 4 > [Repeal of Former By-laws] > (c)",
+      "fragment_type": "clause",
+      "text_prefix": "(c) the Regional Centre Land Use By-law, adopted by Council on September 18, 201"
+    },
+    {
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (r)",
+      "fragment_type": "clause",
+      "text_prefix": "(r) an internal conversion of a building with a commercial use in a DD or DH zon"
+    },
+    {
+      "citation_path": "Part I > 10 > [Development Permit Applications] > (b) > [Development Permit Applications] > (i)",
+      "fragment_type": "subclause",
+      "text_prefix": "(i) height measurements and dimensions shown for all sides of proposed structure"
+    },
+    {
+      "citation_path": "Part I > 13 > [Revocation] > (a) > [Revocation] > (iv)",
+      "fragment_type": "subclause",
+      "text_prefix": "(iv) an approved development agreement;"
+    },
+    {
+      "citation_path": "Part I > 15 > [Matters Subject to Site Plan Approval] > (h)",
+      "fragment_type": "clause",
+      "text_prefix": "(h) applicability of general design requirements for a new construction on a reg"
+    },
+    {
+      "citation_path": "Part I > 26 > [Diagrams] > (b)",
+      "fragment_type": "clause",
+      "text_prefix": "(b) do not form a part of this By-law; and"
+    },
+    {
+      "citation_path": "Part I > 29 > [List of Schedules and Appendices] > (al)",
+      "fragment_type": "clause",
+      "text_prefix": "(al) Schedule 31: Salter Street Waterfront View Corridor;"
+    },
+    {
+      "citation_path": "Part I > 49 > [Combination of Uses in Established Residential Zones] > (a)",
+      "fragment_type": "clause",
+      "text_prefix": "(a) home occupation use;"
+    }
+  ]
+}

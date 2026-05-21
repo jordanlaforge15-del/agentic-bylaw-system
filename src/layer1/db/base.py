@@ -9,6 +9,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -115,6 +116,18 @@ class SourceFragment(Base):
     confidence: Mapped[float | None] = mapped_column(Float)
     source_block_ids_json: Mapped[list] = mapped_column(MutableList.as_mutable(json_type()), default=list)
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    # Phase-1 compliance taxonomy tags. List of attribute IDs from
+    # ``src/layer2/compliance/attributes/taxonomy.yaml`` that this clause
+    # regulates (e.g. ``["front_setback_m", "side_setback_left_m"]``).
+    # Populated by the semantic-enrichment pass; the evaluator uses these
+    # to pre-filter candidate clauses per attribute, so it doesn't fall
+    # back to O(all-clauses) text matching for every attribute lookup.
+    attribute_tags: Mapped[list] = mapped_column(
+        MutableList.as_mutable(json_type()),
+        default=list,
+        nullable=False,
+        server_default="[]",
+    )
 
     document: Mapped[Document] = relationship(back_populates="fragments")
     parent: Mapped["SourceFragment | None"] = relationship(remote_side=[id])
@@ -334,6 +347,14 @@ class ExternalDatasetFeature(Base):
     geometry_bbox_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
     parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    # Phase-1 link to the cadastral parcel this feature corresponds to,
+    # populated by ``scripts/backfill_parcels.py`` for the Halifax parcel
+    # dataset and by future municipal ingests for theirs. Nullable
+    # because non-parcel datasets (zoning, height precincts, etc.) never
+    # carry a parcel and are expected to leave this NULL.
+    parcel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("parcel.id", ondelete="SET NULL"), index=True
+    )
 
     dataset: Mapped[ExternalDataset] = relationship(back_populates="features")
 
@@ -370,6 +391,50 @@ class SourceImage(Base):
     docling_ref: Mapped[str | None] = mapped_column(String(255))
     parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+
+class Parcel(Base):
+    """A cadastral parcel — the spatial anchor for development submissions.
+
+    Lives in layer 1 alongside ``external_dataset_feature`` because it's
+    *base geography*: it's referenced by feature rows (so the layer-1
+    table needs the FK target to exist at metadata-resolution time) and
+    by the layer-2 ``submission`` table (every submission points at a
+    parcel). Keeping it here avoids a layer-1 → layer-2 import cycle.
+
+    Identity is ``(jurisdiction, parcel_identifier)``. Jurisdiction is
+    a plain string for Phase 1 — Halifax is the only municipality
+    ingested. A real ``jurisdiction`` entity is deferred to whichever
+    phase first ingests a second municipality.
+
+    Geometry is stored as GeoJSON in JSONB for portability; spatial
+    queries against ``external_dataset_feature.geometry`` (the postgres
+    geometry column added by ``0009_postgis_spatial_index``) already
+    cover the indexed-lookup hot path, so we don't need a duplicate
+    geometry column here in Phase 1.
+    """
+
+    __tablename__ = "parcel"
+    __table_args__ = (
+        UniqueConstraint(
+            "jurisdiction", "parcel_identifier", name="uq_parcel_jurisdiction_identifier"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    jurisdiction: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    parcel_identifier: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    geometry_geojson: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(json_type()))
+    centroid_geojson: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(json_type()))
+    area_m2: Mapped[float | None] = mapped_column(Numeric(14, 2))
+    # ``zone_code`` is a denormalised convenience for the evaluator's
+    # zone-applicability filter. Source of truth remains the linked
+    # zoning ``external_dataset_feature``; this column is populated by
+    # the parcel backfill from intersecting zone polygons.
+    zone_code: Mapped[str | None] = mapped_column(String(64), index=True)
+    metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class GeocodeCache(Base):

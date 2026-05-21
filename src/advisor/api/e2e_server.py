@@ -29,14 +29,27 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
+from typing import Literal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 from advisor.api.app import create_app
+from advisor.db.models import InviteRequest, User
 from advisor.llm.mock import MockGateway
 from advisor.llm.mock_dispatcher import build_dispatcher
+from bylaw_retrieval.retrieval import LocationSlot, RetrievalService
+from layer1.db.base import utcnow
 from layer1.db.session import session_scope
+from layer2.compliance.db.models import SubmissionAttributeSource
+from layer2.compliance.evaluator import (
+    DocumentFilters,
+    EvaluationRequest,
+    EvaluatorService,
+    SubmissionAttributeInput,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +75,15 @@ def build_e2e_app() -> FastAPI:
         allow_headers=[
             "Content-Type",
             "X-Test-User-Id",
+            "X-Test-User-Email",
+            "X-Test-User-Full-Name",
             "Authorization",
             "Last-Event-ID",
         ],
         expose_headers=["X-Session-Id"],
     )
+
+    _mount_test_router(app)
 
     logger.warning(
         "advisor.api.e2e_server is running with MockGateway and the "
@@ -74,6 +91,198 @@ def build_e2e_app() -> FastAPI:
         "exposed to the public internet."
     )
     return app
+
+
+# ---------------------------------------------------------------------------
+# Test-only auth-lifecycle router (mounted only by the e2e entrypoint).
+#
+# The Playwright suite uses these endpoints to drive the sign-up /
+# admin-approval / first-login lifecycle that production wires through
+# Clerk's allowlist + the /api/admin/invites/{id}/approve route. Both
+# of those depend on Clerk being configured (JWKS, Backend API,
+# allowlist) — none of which the e2e stack provides. By exposing a
+# direct InviteRequest writer here, the auth specs can exercise the
+# *post-Clerk* code path (resolve_or_create user, invite redemption,
+# starter-credit gift) without re-hosting Clerk in tests.
+#
+# Endpoints are namespaced ``/v1/_test/...`` so they're impossible to
+# confuse with the production surface. ``advisor.api.main`` never
+# imports this module — the routes literally cannot exist outside the
+# e2e entrypoint.
+# ---------------------------------------------------------------------------
+
+
+class _ApproveInviteBody(BaseModel):
+    # Plain str to avoid the email-validator runtime dep — same choice
+    # the rest of the codebase makes (see advisor.db.schemas).
+    email: str = Field(min_length=3, max_length=320)
+    name: str = Field(min_length=1, max_length=200)
+    starter_credits: int = Field(default=0, ge=0, le=1000)
+    starter_tier: Literal["quick", "standard", "complex"] = "standard"
+
+
+class _ResetUserBody(BaseModel):
+    clerk_user_id: str = Field(min_length=1, max_length=255)
+
+
+# ABS-46: test-only evaluator endpoint. Bypasses the chat / SSE
+# pipeline so the Playwright spec can assert directly on the
+# structured compliance matrix the evaluate_submission_against_bylaws
+# MCP tool returns. The chat-layer path is already covered by the
+# pytest suite in ``tests/test_evaluator_mcp_tool.py``; the spec's
+# job is to exercise the path through real-stack HTTP + Postgres so a
+# misconfigured proxy or missing migration would trip e2e.
+class _EvaluateBylawsAttribute(BaseModel):
+    attribute_key: str = Field(min_length=1, max_length=128)
+    value: object | None = None
+    unit: str | None = None
+    source: Literal["manual", "extracted", "derived", "override"] = "manual"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class _EvaluateBylawsBody(BaseModel):
+    attributes: list[_EvaluateBylawsAttribute] = Field(min_length=1)
+    location: dict[str, object] | None = None
+    document_filters: dict[str, object] | None = None
+    per_attribute_limit: int = Field(default=8, ge=1, le=25)
+    submission_id: int | None = None
+    persist_decision: bool = False
+
+
+def _mount_test_router(app: FastAPI) -> None:
+    """Wire the ``/v1/_test/...`` lifecycle endpoints onto ``app``."""
+
+    @app.post("/v1/_test/invite-approve")
+    async def invite_approve(body: _ApproveInviteBody) -> dict[str, object]:
+        """Insert an ``approved`` ``InviteRequest`` for the given email.
+
+        Production approves via Clerk's allowlist API + a DB write;
+        we skip the Clerk side (no allowlist to enforce in the test
+        stack) and write the row directly. On the user's first sign-in
+        the e2e user-dependency redeems the row and gifts
+        ``starter_credits`` of ``starter_tier``.
+        """
+        now = utcnow()
+        with session_scope() as db:
+            # Drop any existing row for this email so re-running a spec
+            # doesn't trip the UNIQUE constraint on email. Cases that
+            # need to test the "already redeemed" path can submit
+            # through the public /api/invite first.
+            existing = (
+                db.query(InviteRequest)
+                .filter(InviteRequest.email.ilike(body.email))
+                .all()
+            )
+            for row in existing:
+                db.delete(row)
+            db.flush()
+            invite = InviteRequest(
+                id=f"e2e_{uuid.uuid4().hex[:12]}",
+                email=body.email.lower(),
+                name=body.name,
+                status="approved",
+                created_at=now,
+                decided_at=now,
+                decided_by="e2e-test",
+                expires_at=None,
+                granted_starter_credits=body.starter_credits,
+                granted_starter_tier=body.starter_tier
+                if body.starter_credits > 0
+                else None,
+            )
+            db.add(invite)
+            db.commit()
+            return {
+                "invite": {
+                    "id": invite.id,
+                    "email": invite.email,
+                    "status": invite.status,
+                    "starter_credits": invite.granted_starter_credits,
+                    "starter_tier": invite.granted_starter_tier,
+                }
+            }
+
+    @app.post("/v1/_test/reset-user")
+    async def reset_user(body: _ResetUserBody) -> dict[str, object]:
+        """Delete an ``advisor_user`` row + all dependent rows.
+
+        Lets specs that mint a fresh user-id (timestamp-based) clean up
+        their footprint if needed. Idempotent — missing user returns
+        ``deleted=False`` rather than 404.
+        """
+        with session_scope() as db:
+            user = (
+                db.query(User)
+                .filter(User.clerk_user_id == body.clerk_user_id)
+                .one_or_none()
+            )
+            if user is None:
+                return {"deleted": False}
+            # advisor_user.id has ON DELETE CASCADE FKs from every
+            # dependent table (cases, chat_sessions, credits, usage
+            # events, purchases) — deleting the user row at the DB
+            # layer cascades automatically. invite_request matches by
+            # email rather than FK, so clean that up alongside.
+            email = user.email
+            db.delete(user)
+            if email:
+                db.query(InviteRequest).filter(
+                    InviteRequest.email.ilike(email)
+                ).delete(synchronize_session=False)
+            db.commit()
+            return {"deleted": True}
+
+    @app.post("/v1/_test/evaluate-bylaws")
+    async def evaluate_bylaws(body: _EvaluateBylawsBody) -> dict[str, object]:
+        """Run the compliance evaluator against the configured corpus.
+
+        Mirrors the contract of the ``evaluate_submission_against_bylaws``
+        MCP tool — exercised here over HTTP so the Playwright spec can
+        seed Postgres, hit the real proxy, and assert on the structured
+        response without standing up the full chat-loop machinery.
+
+        ``location`` accepts the same ``LocationSlot`` shape used by
+        ``search_bylaw_evidence``. ``persist_decision`` defaults to
+        False so the test endpoint stays side-effect-free unless the
+        caller asks otherwise.
+        """
+        with session_scope() as session:
+            retrieval = RetrievalService(session)
+            evaluator = EvaluatorService(session, retrieval_service=retrieval)
+            request = EvaluationRequest(
+                attributes=[
+                    SubmissionAttributeInput(
+                        attribute_key=attr.attribute_key,
+                        value=attr.value,
+                        unit=attr.unit,
+                        source=SubmissionAttributeSource(attr.source),
+                        confidence=attr.confidence,
+                    )
+                    for attr in body.attributes
+                ],
+                location=(
+                    LocationSlot.model_validate(body.location)
+                    if body.location
+                    else None
+                ),
+                document_filters=(
+                    DocumentFilters(
+                        municipality=body.document_filters.get("municipality"),
+                        bylaw_name=body.document_filters.get("bylaw_name"),
+                        citation_path_prefix=body.document_filters.get(
+                            "citation_path_prefix"
+                        ),
+                        document_id=body.document_filters.get("document_id"),
+                    )
+                    if body.document_filters
+                    else None
+                ),
+                per_attribute_limit=body.per_attribute_limit,
+                submission_id=body.submission_id,
+                persist_decision=body.persist_decision,
+            )
+            response = evaluator.evaluate(request)
+            return response.to_json()
 
 
 app = build_e2e_app()

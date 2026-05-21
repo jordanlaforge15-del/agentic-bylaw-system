@@ -25,6 +25,23 @@ test("chat: user message streams a mock answer", async ({ page }) => {
   // the small-viewport runs.
   await textarea.scrollIntoViewIfNeeded();
 
+  // Gate input on React hydration. The Composer is a controlled
+  // input: <textarea value={val} ...>. If Playwright fills before
+  // React attaches, the DOM is mutated but no onChange runs, and as
+  // soon as React hydrates it overwrites the DOM with the empty
+  // state value — leaving the textarea blank, the Send button
+  // disabled, and Enter a no-op. We detect hydration by waiting for
+  // React's internal prop bag (__reactProps$… key) to land on the
+  // textarea node; that's the same DOM marker React 18+ writes when
+  // attaching event handlers during commit.
+  await page.waitForFunction(() => {
+    const el = document.querySelector(
+      'textarea[placeholder^="Ask about this parcel"]',
+    );
+    if (!el) return false;
+    return Object.keys(el).some((k) => k.startsWith("__reactProps"));
+  });
+
   await textarea.fill("What is the minimum front yard setback?");
   // Press Enter to submit. We deliberately avoid clicking the Send
   // button here: on mobile-iphone WebKit the soft keyboard's layout

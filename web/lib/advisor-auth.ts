@@ -13,10 +13,27 @@
 //     advisor.api.dev:app) keeps working with no Clerk setup. The
 //     FastAPI side accepts this header only when no verifier is
 //     wired; never use this mode in production.
+//
+// In dev-fallback mode, three optional cookies let an e2e test
+// override the synthetic identity per browser context:
+//   * abs_test_sub_user_id    → X-Test-User-Id header value
+//   * abs_test_sub_email      → X-Test-User-Email header (lets the
+//                                e2e backend's invite-redemption code
+//                                path match an approved InviteRequest
+//                                by email on first sign-in)
+//   * abs_test_sub_full_name  → X-Test-User-Full-Name header
+// Specs set these via context.addCookies() at sign-in and clear them
+// at sign-out, simulating the Clerk session-cookie lifecycle without
+// hosting Clerk in tests. See web/e2e/auth/fixtures.ts.
 
 import { auth } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
 
 const DEMO_USER_ID = process.env.ADVISOR_DEMO_USER_ID || "demo-user-1";
+
+const TEST_USER_ID_COOKIE = "abs_test_sub_user_id";
+const TEST_USER_EMAIL_COOKIE = "abs_test_sub_email";
+const TEST_USER_FULL_NAME_COOKIE = "abs_test_sub_full_name";
 
 // True only when the Clerk secret key is set AND looks real.
 // We deliberately only check CLERK_SECRET_KEY (no NEXT_PUBLIC_ prefix)
@@ -41,7 +58,22 @@ export async function buildAdvisorAuthHeaders(): Promise<
   Record<string, string> | null
 > {
   if (!isClerkConfigured()) {
-    return { "X-Test-User-Id": DEMO_USER_ID };
+    // Read the optional per-test identity cookies. cookies() is async
+    // in Next 16; we await it. The cookie store is request-scoped so
+    // each browser context sees its own identity even though they
+    // share the same dev server process.
+    const store = await cookies();
+    const subUserId = store.get(TEST_USER_ID_COOKIE)?.value?.trim();
+    const subEmail = store.get(TEST_USER_EMAIL_COOKIE)?.value?.trim();
+    const subFullName = store
+      .get(TEST_USER_FULL_NAME_COOKIE)
+      ?.value?.trim();
+    const headers: Record<string, string> = {
+      "X-Test-User-Id": subUserId && subUserId.length > 0 ? subUserId : DEMO_USER_ID,
+    };
+    if (subEmail) headers["X-Test-User-Email"] = subEmail;
+    if (subFullName) headers["X-Test-User-Full-Name"] = subFullName;
+    return headers;
   }
   const { userId, getToken } = await auth();
   if (!userId) {
