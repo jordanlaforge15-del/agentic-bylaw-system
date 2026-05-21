@@ -57,10 +57,21 @@ logger = logging.getLogger(__name__)
 def build_e2e_app() -> FastAPI:
     """Construct the test FastAPI app wired for end-to-end UI tests."""
     gateway = MockGateway(callable_=build_dispatcher())
+
+    # ABS-53: wire a real EvaluatorService into the submissions router
+    # so the /submissions/{id}/evaluate endpoint actually evaluates. The
+    # factory is called per-request with the active DB session so each
+    # evaluator run gets its own retrieval-service handle.
+    def _submissions_evaluator_factory(session):
+        retrieval = RetrievalService(session)
+        evaluator = EvaluatorService(session, retrieval_service=retrieval)
+        return evaluator.evaluate
+
     app = create_app(
         gateway=gateway,
         verifier=None,
         db_session_factory=session_scope,
+        submissions_evaluator_factory=_submissions_evaluator_factory,
     )
 
     origins_env = os.environ.get(
