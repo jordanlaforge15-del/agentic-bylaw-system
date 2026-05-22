@@ -140,8 +140,8 @@ function CatalogUnavailable() {
       <div className="text-text-muted text-[13.5px]">
         We couldn&apos;t load the live catalog. Refresh in a moment, or
         contact us at{" "}
-        <a className="underline" href="mailto:hello@abs.app">
-          hello@abs.app
+        <a className="underline" href="mailto:info@agenticbylawsystems.com">
+          info@agenticbylawsystems.com
         </a>{" "}
         for direct pricing.
       </div>

@@ -1,16 +1,13 @@
-// ABS-73 — every footer link reaches a real page (no more 404s).
-//
-// Before this change, the marketing footer column listed six routes
-// that didn't exist in the Next.js app (/changelog, /coverage,
-// /support, /about, /privacy, /terms). The footer also surfaces
-// pre-existing routes (Home, Pricing, Sign in, Get an invite,
-// Billing) plus a `mailto:hello@abs.app` link.
+// ABS-73 wired the six footer pages (no more 404s). ABS-78 then
+// fact-checked the copy so the pages reflect the real state of the
+// app — single bylaw indexed, real legal entity, real contact email,
+// no fake team / changelog / status panel / chat. This spec covers
+// both: the footer links don't 404, AND the destination copy matches
+// what the app is actually claiming about itself.
 //
 // Strategy: navigate to `/`, find each footer link by visible text,
 // click, and assert (a) the URL is what we expect and (b) a stable
-// landmark from the new design renders. We test the six new pages
-// individually and re-check the pre-existing ones for a smoke pass
-// — together that's "no dead links in the footer."
+// copy fragment from the post-ABS-78 page renders.
 //
 // The mailto: link is asserted by reading the `href` attribute
 // (clicking would open the OS mail handler, which Playwright can't
@@ -24,20 +21,28 @@ type Target = {
   /** URL pathname after navigation. */
   path: string;
   /**
-   * A text fragment that must render on the destination page. Using
-   * a heading word is more durable than asserting full headings
-   * (copy gets re-edited; the kicker / title keyword tends to
-   * survive).
+   * A text fragment that must render on the destination page. We pick
+   * fragments tied to claims we want to *keep* true (the bylaw name,
+   * the entity name, the beta status) rather than incidental headings
+   * — so the test fails if someone re-introduces placeholder copy.
    */
   expectText: RegExp;
 };
 
 const NEW_PAGES: Target[] = [
-  { label: "Changelog", path: "/changelog", expectText: /What.s changed/i },
-  { label: "Coverage", path: "/coverage", expectText: /One jurisdiction/i },
+  { label: "Changelog", path: "/changelog", expectText: /PRIVATE BETA/i },
+  {
+    label: "Coverage",
+    path: "/coverage",
+    expectText: /Regional Centre Land Use By-law/i,
+  },
   { label: "Support", path: "/support", expectText: /How can we help/i },
   { label: "About", path: "/about", expectText: /An expert planner/i },
-  { label: "Privacy", path: "/privacy", expectText: /Privacy\./i },
+  {
+    label: "Privacy",
+    path: "/privacy",
+    expectText: /Agentic Bylaw Systems/i,
+  },
   { label: "Terms", path: "/terms", expectText: /Terms of use/i },
 ];
 
@@ -46,7 +51,9 @@ const PRE_EXISTING: Target[] = [
   { label: "Pricing", path: "/pricing", expectText: /./i },
 ];
 
-test.describe("Footer links — ABS-73", () => {
+const SUPPORT_EMAIL = "info@agenticbylawsystems.com";
+
+test.describe("Footer links — ABS-73 / ABS-78", () => {
   for (const t of [...NEW_PAGES, ...PRE_EXISTING]) {
     test(`footer link "${t.label}" reaches ${t.path}`, async ({ page }) => {
       await page.goto("/");
@@ -63,18 +70,20 @@ test.describe("Footer links — ABS-73", () => {
       await expect(page).toHaveURL(new RegExp(`${t.path}(\\?|#|$)`));
 
       // Page must render — bare minimum a non-404 body. We assert
-      // a copy fragment from the new design lands in the DOM.
+      // a copy fragment we want to *keep* true lands in the DOM.
       await expect(page.locator("body")).toContainText(t.expectText);
     });
   }
 
-  test('footer "hello@abs.app" link uses mailto:', async ({ page }) => {
+  test(`footer "${SUPPORT_EMAIL}" link uses mailto:`, async ({ page }) => {
+    // ABS-78 replaced the made-up hello@abs.app handle with the real
+    // info@agenticbylawsystems.com address used in the Terms doc.
     await page.goto("/");
     const footer = page.locator("footer");
-    const mailLink = footer.getByRole("link", { name: "hello@abs.app" });
+    const mailLink = footer.getByRole("link", { name: SUPPORT_EMAIL });
     await expect(mailLink).toBeVisible();
     const href = await mailLink.getAttribute("href");
-    expect(href).toBe("mailto:hello@abs.app");
+    expect(href).toBe(`mailto:${SUPPORT_EMAIL}`);
   });
 
   test("LegalShell sidebar TOC is sticky and lists every privacy section", async ({
@@ -94,17 +103,48 @@ test.describe("Footer links — ABS-73", () => {
     }
   });
 
-  test("Coverage page renders the active HRM hero", async ({ page }) => {
-    // A second smoke check on the most data-dense new page. If the
-    // bylaws table or hero card silently breaks (e.g. a CSS-token
-    // rename strips the inverted background), this catches it.
+  test("Coverage page advertises only the Regional Centre LUB", async ({
+    page,
+  }) => {
+    // Post-ABS-78: the bylaws table is collapsed to the single
+    // document we actually index. This guards against a regression
+    // that re-introduces the placeholder six-bylaw inventory.
     await page.goto("/coverage");
     await expect(page.locator("h1")).toContainText("One jurisdiction");
     // Hero heading — scoped with getByRole so we don't collide with the
     // "© 2026 ABS · HALIFAX REGIONAL MUNICIPALITY" string in the footer.
     await expect(
-      page.getByRole("heading", { name: "Halifax Regional Municipality" }),
+      page.getByRole("heading", { name: "Halifax Regional Centre" }),
     ).toBeVisible();
-    await expect(page.getByText("FULLY INDEXED")).toBeVisible();
+    await expect(page.getByText("PRIMARY BYLAW INDEXED")).toBeVisible();
+    // The placeholder doc names that ABS-78 removed must stay removed.
+    await expect(page.locator("body")).not.toContainText(
+      /Land Use By-law for Dartmouth/i,
+    );
+    await expect(page.locator("body")).not.toContainText(
+      /Centre Plan — Package A/i,
+    );
+  });
+
+  test("Privacy page names the real entity and hosting", async ({ page }) => {
+    // Guard against re-introducing the fictional "ABS Reading Inc."
+    // entity or the wrong-hosting subprocessor list.
+    await page.goto("/privacy");
+    await expect(page.locator("body")).toContainText(/Agentic Bylaw Systems/i);
+    await expect(page.locator("body")).toContainText(/Hetzner/i);
+    await expect(page.locator("body")).not.toContainText(/ABS Reading Inc\./i);
+  });
+
+  test("Support page does not advertise channels that don't exist", async ({
+    page,
+  }) => {
+    // ABS-78 removed the fake live-chat / office-hours / status-dot
+    // panels. The page should only surface the two channels we
+    // actually monitor.
+    await page.goto("/support");
+    await expect(page.locator("body")).toContainText(SUPPORT_EMAIL);
+    await expect(page.locator("body")).not.toContainText(/Thursdays, 11am/i);
+    await expect(page.locator("body")).not.toContainText(/In-app chat/i);
+    await expect(page.locator("body")).not.toContainText(/247 ms/i);
   });
 });

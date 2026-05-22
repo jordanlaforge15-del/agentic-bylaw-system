@@ -10,7 +10,6 @@
 
 import { useEffect, useState } from "react";
 import { Mono } from "@/components/mono";
-import { Btn } from "@/components/btn";
 import { Page, PageHead } from "@/components/marketing/page-shell";
 import { cn } from "@/lib/cn";
 
@@ -155,21 +154,6 @@ export function LegalShell({
             </a>
           ))}
 
-          <div className="mt-4 p-3.5 bg-surface-alt border border-hair">
-            <Mono muted size={9.5}>
-              EXPORT
-            </Mono>
-            <div
-              className="text-text-muted mt-1.5 mb-2.5"
-              style={{ fontSize: 12, lineHeight: 1.45 }}
-            >
-              Need an archival copy? Download the PDF stamped with the
-              consolidation date.
-            </div>
-            <Btn variant="ghost" size="sm" className="w-full">
-              Download PDF
-            </Btn>
-          </div>
         </aside>
 
         {/* Body */}
@@ -268,7 +252,13 @@ export function LegalShell({
               style={{ fontSize: 13, lineHeight: 1.5 }}
             >
               Questions about this document? Email{" "}
-              <span className="text-text font-semibold">legal@abs.app</span>.
+              <a
+                className="text-text font-semibold underline"
+                href="mailto:info@agenticbylawsystems.com"
+              >
+                info@agenticbylawsystems.com
+              </a>
+              .
             </div>
             <Mono muted size={9.5}>
               END OF DOCUMENT
