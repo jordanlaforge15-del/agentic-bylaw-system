@@ -29,13 +29,25 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import uuid
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+from unittest.mock import MagicMock
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+# ABS-75: bring the abs-learning agents package onto sys.path so the
+# test-only discovery endpoint can import DiscoveryAgent. This module is
+# only ever imported by the e2e entrypoint — production (advisor.api.main)
+# never sees this file, so the sys.path insertion is scoped to tests.
+_ABS_LEARNING_SRC = Path(__file__).resolve().parents[3] / "abs-learning" / "src"
+if _ABS_LEARNING_SRC.is_dir():
+    _abs_learning_path = str(_ABS_LEARNING_SRC)
+    if _abs_learning_path not in sys.path:
+        sys.path.insert(0, _abs_learning_path)
 
 from advisor.api.app import create_app
 from advisor.db.models import InviteRequest, User
@@ -157,6 +169,39 @@ class _EvaluateBylawsBody(BaseModel):
     per_attribute_limit: int = Field(default=8, ge=1, le=25)
     submission_id: int | None = None
     persist_decision: bool = False
+
+
+# ABS-75: test-only Discovery Agent endpoint. Exercises the classifier →
+# parent-resolution → SourceDocument assembly path through the real FastAPI
+# stack. The crawler half (HTTP fetch + link extraction) is unit-tested in
+# abs-learning/tests/test_discovery.py against an httpx MockTransport; here
+# the spec POSTs pre-crawled candidates + canned LLM tool-use payloads, and
+# the endpoint runs the same data-plane code the production agent runs.
+# Keeps the spec hermetic (no live web, no real Anthropic calls) while
+# proving the FastAPI proxy + abs-learning package wiring still works.
+class _DiscoveryCandidateBody(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    link_text: str = Field(default="", max_length=512)
+    discovered_on: str = Field(default="", max_length=2048)
+    page_title: str | None = None
+    content_type: str | None = None
+    is_pdf: bool = False
+
+
+class _DiscoveryMunicipalityBody(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    jurisdiction_code: str = Field(min_length=1, max_length=64)
+    province: str = Field(min_length=1, max_length=64)
+    governing_body: str | None = None
+
+
+class _DiscoveryBody(BaseModel):
+    municipality: _DiscoveryMunicipalityBody
+    candidates: list[_DiscoveryCandidateBody] = Field(min_length=1, max_length=64)
+    classifier_responses: list[list[dict[str, object]]] = Field(min_length=1)
+    parent_links: list[dict[str, object]] | None = None
+    confidence_floor: float = Field(default=0.4, ge=0.0, le=1.0)
+    batch_size: int = Field(default=15, ge=1, le=64)
 
 
 # ABS-74: test-only manifest-driven ingest endpoint.
@@ -412,6 +457,126 @@ def _mount_test_router(app: FastAPI) -> None:
                 ),
                 "enrichment": enrich_report.model_dump(),
             }
+
+    @app.post("/v1/_test/discover")
+    async def discover(body: _DiscoveryBody) -> dict[str, object]:
+        """Run the discovery agent's classifier + assembly path.
+
+        Inputs:
+            * ``candidates`` — pre-crawled documents (the crawler half is
+              already covered by abs-learning unit tests against an
+              httpx.MockTransport).
+            * ``classifier_responses`` — one entry per batch the agent
+              will make; each entry is the ``documents`` array the
+              classifier tool returns. Length must match the number of
+              batches implied by ``len(candidates) / batch_size``.
+            * ``parent_links`` — optional; if present, used as the
+              parent-resolution tool response.
+
+        Returns the assembled ``SourceDocument`` list as JSON. The
+        spec asserts on shape — primary bylaw identifiable,
+        companion list non-empty, news pages dropped.
+        """
+        try:
+            from agents.discovery import (  # type: ignore[import-not-found]
+                CLASSIFIER_TOOL_NAME,
+                PARENT_RESOLVER_TOOL_NAME,
+                CrawledCandidate,
+                DiscoveryAgent,
+                companions_from_sources,
+            )
+            from manifest.models import Municipality  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"abs-learning package not importable: {exc}. "
+                    "Expected at <repo>/abs-learning/src on sys.path."
+                ),
+            ) from exc
+
+        def _tool_block(payload: dict[str, Any], tool_name: str) -> MagicMock:
+            block = MagicMock()
+            block.type = "tool_use"
+            block.name = tool_name
+            block.input = payload
+            response = MagicMock()
+            response.content = [block]
+            return response
+
+        canned_messages = [
+            _tool_block(
+                {"documents": list(batch)}, CLASSIFIER_TOOL_NAME
+            )
+            for batch in body.classifier_responses
+        ]
+        if body.parent_links is not None:
+            canned_messages.append(
+                _tool_block(
+                    {"links": list(body.parent_links)},
+                    PARENT_RESOLVER_TOOL_NAME,
+                )
+            )
+
+        message_iter = iter(canned_messages)
+
+        def fake_create(*_args, **_kwargs):
+            try:
+                return next(message_iter)
+            except StopIteration as exc:  # pragma: no cover — caller bug
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Discovery test endpoint: ran out of canned LLM "
+                        "responses. Provide one per classifier batch "
+                        "plus one parent-resolution call if needed."
+                    ),
+                ) from exc
+
+        fake_llm = MagicMock()
+        fake_llm.messages.create.side_effect = fake_create
+
+        # The agent never makes HTTP requests in this code path
+        # (no _crawl call), but it still needs an http_client to
+        # satisfy the constructor.
+        import httpx
+
+        agent = DiscoveryAgent(
+            fake_llm,
+            http_client=httpx.Client(timeout=1.0),
+            confidence_floor=body.confidence_floor,
+            batch_size=body.batch_size,
+        )
+        try:
+            municipality = Municipality(
+                name=body.municipality.name,
+                jurisdiction_code=body.municipality.jurisdiction_code,
+                province=body.municipality.province,
+                governing_body=body.municipality.governing_body,
+            )
+            candidates = [
+                CrawledCandidate(
+                    url=c.url,
+                    link_text=c.link_text,
+                    discovered_on=c.discovered_on,
+                    page_title=c.page_title,
+                    content_type=c.content_type,
+                    is_pdf=c.is_pdf,
+                )
+                for c in body.candidates
+            ]
+            classified = agent._classify(candidates, municipality)
+            classified = agent._resolve_parents(classified, municipality)
+            sources = agent._to_source_documents(classified)
+        finally:
+            agent.close()
+
+        return {
+            "ok": True,
+            "sources": [s.model_dump(mode="json") for s in sources],
+            "companions": companions_from_sources(sources),
+            "llm_call_count": fake_llm.messages.create.call_count,
+        }
 
 
 app = build_e2e_app()
