@@ -41,25 +41,14 @@ export default function ChangelogPage() {
           className="m-0 text-text-muted max-w-[640px]"
           style={{ fontSize: 15, lineHeight: 1.55 }}
         >
-          ABS is being built in the open against the Halifax Regional Centre
-          Land Use By-law. Until the first GA cut we are deliberately not
-          publishing a polished release log — too much changes day to day
-          for a curated changelog to stay honest. If you want to follow the
-          actual work, the commit history and the issue tracker are the
-          source of truth.
+          ABS is being built against the Halifax Regional Centre Land Use
+          By-law. Until the first GA cut we are deliberately not publishing
+          a polished release log — too much changes day to day for a
+          curated changelog to stay honest.
         </p>
         <div className="flex flex-wrap gap-2.5 pt-2">
-          <a
-            href="https://linear.app/agenticbylawsystems"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Btn variant="primary" size="sm">
-              Linear board →
-            </Btn>
-          </a>
           <Link href="/coverage">
-            <Btn variant="ghost" size="sm">
+            <Btn variant="primary" size="sm">
               What's covered today
             </Btn>
           </Link>

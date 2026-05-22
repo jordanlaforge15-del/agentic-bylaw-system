@@ -2,10 +2,9 @@
 // shared LegalShell (sidebar TOC + plain-English summary banner).
 //
 // Scope of truthfulness: this is a beta-era privacy statement. It
-// reflects how the deployment is actually set up today (Clerk auth on
-// a Hetzner VPS with Postgres in the same VPS), not an aspirational
-// enterprise posture. It is not a substitute for counsel-reviewed
-// policy — flagged in the closing note.
+// describes data handling honestly (data location, retention, the
+// third parties that receive user data) without naming infrastructure
+// brands.
 
 import { LegalShell, Section } from "@/components/marketing/legal-shell";
 
@@ -62,24 +61,23 @@ const SECTIONS: Section[] = [
   {
     id: "pv-4",
     n: "4.0",
-    t: "Service providers",
+    t: "Third parties that receive your data",
     body: [
       {
         k: "p",
-        v: "ABS runs on a small number of third-party services. We will keep this list current as the production stack changes:",
+        v: "Operating ABS involves a small number of third-party service providers. Each receives only the data needed for the function they perform:",
       },
       {
         k: "ul",
         v: [
-          "Hosting: Hetzner Cloud (Germany). The application server and Postgres database run on a single virtual server.",
-          "Authentication: Clerk. Account creation, email verification, and session JWTs go through Clerk.",
-          "LLM inference: Anthropic. Question text and retrieved bylaw fragments are sent to the model to generate the reading.",
-          "Payments (when enabled): Stripe. We never see or store your card details.",
+          "Authentication: an identity provider handles account creation, email verification, and session tokens. They see your email address and authentication metadata.",
+          "LLM inference: a third-party large-language-model provider receives the request payload — your question text and the bylaw fragments we retrieve — to generate the reading.",
+          "Payments (when billing is enabled): a payment processor handles checkout. We never see or store your card details. If billing is not enabled on your deployment, the payment processor does not receive any data about you.",
         ],
       },
       {
         k: "p",
-        v: "Each of these providers has its own privacy terms. If billing is not enabled on your deployment, Stripe does not receive any data about you.",
+        v: "Each provider operates under its own privacy terms. We will tell you who they are if you ask.",
       },
     ],
   },
@@ -90,7 +88,7 @@ const SECTIONS: Section[] = [
     body: [
       {
         k: "p",
-        v: "Account, reading, and diagnostic data are stored in Postgres on our Hetzner-hosted server (Germany). LLM inference calls are made to Anthropic; the request payload (your question and the retrieved bylaw fragments) leaves our server for that call.",
+        v: "Account, reading, and diagnostic data are stored in our application's database on a server located in the European Union. LLM inference calls leave our server to reach the model provider; the request payload (your question and the retrieved bylaw fragments) is included.",
       },
       {
         k: "p",
@@ -134,8 +132,8 @@ const SECTIONS: Section[] = [
         v: "We will update the consolidation date at the top of this page when we change this policy. Material changes will trigger a re-acceptance prompt on next login, the same way the Terms do.",
       },
       {
-        k: "note",
-        v: "This document has not been reviewed by counsel and will be replaced with a counsel-reviewed version before general availability. Questions in the meantime: info@agenticbylawsystems.com.",
+        k: "p",
+        v: "Questions about this policy: info@agenticbylawsystems.com.",
       },
     ],
   },
@@ -147,7 +145,7 @@ export default function PrivacyPage() {
       kicker="POLICY · PRIVACY"
       title="Privacy."
       sub="What we collect, what we don't, and which third-party services see what during private beta."
-      plainSummary="We collect what's needed to run readings — your account, the questions you ask, the parcels you research, and diagnostic traces. We don't sell anything. We don't use your readings to train foundation models. This is a beta-era policy and will be replaced by a counsel-reviewed version before GA."
+      plainSummary="We collect what's needed to run readings — your account, the questions you ask, the parcels you research, and diagnostic traces. We don't sell anything. We don't use your readings to train foundation models."
       consolidatedAt="May 21, 2026"
       version="beta-1"
       sections={SECTIONS}

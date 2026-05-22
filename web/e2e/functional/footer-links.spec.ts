@@ -126,13 +126,17 @@ test.describe("Footer links — ABS-73 / ABS-78", () => {
     );
   });
 
-  test("Privacy page names the real entity and hosting", async ({ page }) => {
+  test("Privacy page names the real entity and avoids tech-stack brands", async ({
+    page,
+  }) => {
     // Guard against re-introducing the fictional "ABS Reading Inc."
-    // entity or the wrong-hosting subprocessor list.
+    // entity, and against re-introducing infrastructure brand names
+    // (Hetzner, Postgres) that the policy deliberately doesn't disclose.
     await page.goto("/privacy");
     await expect(page.locator("body")).toContainText(/Agentic Bylaw Systems/i);
-    await expect(page.locator("body")).toContainText(/Hetzner/i);
     await expect(page.locator("body")).not.toContainText(/ABS Reading Inc\./i);
+    await expect(page.locator("body")).not.toContainText(/Hetzner/i);
+    await expect(page.locator("body")).not.toContainText(/Postgres/i);
   });
 
   test("Support page does not advertise channels that don't exist", async ({

@@ -139,8 +139,8 @@ const SECTIONS: Section[] = [
         v: "Material changes to the binding Terms trigger a re-acceptance prompt on next login. This summary will be updated to match.",
       },
       {
-        k: "note",
-        v: "Both the binding Terms and this summary are pre-counsel and will be replaced with a counsel-reviewed version before general availability. Questions in the meantime: info@agenticbylawsystems.com.",
+        k: "p",
+        v: "Questions about these Terms: info@agenticbylawsystems.com.",
       },
     ],
   },
@@ -152,7 +152,7 @@ export default function TermsPage() {
       kicker="POLICY · TERMS OF USE"
       title="Terms of use."
       sub="A plain-English summary of the agreement between you and ABS. The binding version is the document you accept on the sign-in screen — please read it there."
-      plainSummary="ABS produces research, not legal advice. Verify every reading with HRM Planning before acting on it. AI can be confidently wrong. Total liability is capped at the greater of fees-paid-in-the-last-12-months or CAD $100. Nova Scotia law governs. The binding document is the one you accept at sign-in — this page is a summary, not a substitute."
+      plainSummary="ABS produces research, not legal advice — verify every reading with HRM Planning before acting on it, because AI can be confidently wrong. Our total liability is capped at the greater of the fees you paid us in the last 12 months or CAD $100, and the agreement is governed by Nova Scotia law. The binding document is the one you accept at sign-in; this page is a summary, not a substitute."
       consolidatedAt="May 21, 2026"
       version="beta-1"
       sections={SECTIONS}
