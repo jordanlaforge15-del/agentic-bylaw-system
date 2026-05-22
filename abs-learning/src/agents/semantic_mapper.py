@@ -3,13 +3,28 @@
 Reads a bylaw document, locates the windows most likely to contain zone
 definitions, use-permission tables, and development-standards sections, and
 calls Anthropic with strict tool-use schemas to extract a :class:`TaxonomyMap`.
+
+The canonical vocabulary (zone types, use classes, standards categories)
+lives in ``abs-learning/fixtures/canonical_vocabulary_v1.json`` and is loaded
+at module import time. The agent constructor accepts a ``vocabulary_path``
+override so a city can be re-run against a newer vocabulary without a code
+release. The version is persisted on every produced :class:`TaxonomyMap`.
+
+The tool schemas accept any string for ``canonical_key`` / ``categories``;
+out-of-vocabulary proposals are routed to
+:attr:`TaxonomyMap.vocabulary_extension_candidates` and
+:attr:`TaxonomyMap.proposed_categories` instead of being silently dropped.
+This is the diagnostic loop that lets us see what a new city *wanted* to say
+before we clamp it.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import tempfile
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -19,56 +34,44 @@ from bootstrap.pdf_reader import PdfBootstrapReader
 from manifest.models import (
     SourceDocument,
     TaxonomyMap,
+    VocabularyExtensionCandidate,
     ZoneDesignation,
 )
 
 
-CANONICAL_ZONE_TYPES: Tuple[str, ...] = (
-    "residential",
-    "commercial",
-    "mixed_use",
-    "industrial",
-    "institutional",
-    "open_space",
-    "special_area",
-    "unknown",
+DEFAULT_VOCABULARY_PATH: Path = (
+    Path(__file__).resolve().parent.parent.parent
+    / "fixtures"
+    / "canonical_vocabulary_v1.json"
 )
 
-CANONICAL_USE_CLASSES: Tuple[str, ...] = (
-    "residential_dwelling_single",
-    "residential_dwelling_multi",
-    "residential_dwelling_accessory",
-    "residential_dwelling_cluster",
-    "retail_general",
-    "retail_food",
-    "food_and_beverage",
-    "office_general",
-    "institutional_education",
-    "institutional_health",
-    "industrial_light",
-    "industrial_general",
-    "open_space_park",
-    "accommodation",
-    "home_occupation",
-    "short_term_rental",
-    "other",
-)
 
-CANONICAL_STANDARDS: Tuple[str, ...] = (
-    "height",
-    "front_setback",
-    "side_setback",
-    "rear_setback",
-    "lot_coverage",
-    "floor_area_ratio",
-    "parking",
-    "bicycle_parking",
-    "landscaping",
-    "signage",
-    "amenity_space",
-    "stepback",
-    "podium_height",
-)
+def load_vocabulary(path: Optional[Path] = None) -> Dict[str, Any]:
+    """Load the canonical vocabulary fixture.
+
+    Returns a dict with keys ``version``, ``zone_types``, ``use_classes``,
+    ``standards``. ``path`` defaults to the bundled v1 fixture.
+    """
+    resolved = Path(path) if path is not None else DEFAULT_VOCABULARY_PATH
+    with resolved.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    for key in ("version", "zone_types", "use_classes", "standards"):
+        if key not in data:
+            raise ValueError(
+                f"Vocabulary fixture {resolved} missing required key {key!r}"
+            )
+    return data
+
+
+_DEFAULT_VOCABULARY = load_vocabulary()
+
+# Convenience re-exports of the bundled v1 vocabulary for code that doesn't
+# construct a :class:`SemanticMapperAgent`. The authoritative per-run source
+# is whatever the agent was constructed with — these constants are the floor.
+CANONICAL_ZONE_TYPES: Tuple[str, ...] = tuple(_DEFAULT_VOCABULARY["zone_types"])
+CANONICAL_USE_CLASSES: Tuple[str, ...] = tuple(_DEFAULT_VOCABULARY["use_classes"])
+CANONICAL_STANDARDS: Tuple[str, ...] = tuple(_DEFAULT_VOCABULARY["standards"])
+DEFAULT_VOCABULARY_VERSION: str = str(_DEFAULT_VOCABULARY["version"])
 
 
 ZONES_TOOL_NAME = "report_zone_designations"
@@ -76,81 +79,126 @@ USES_TOOL_NAME = "report_use_class_mappings"
 STANDARDS_TOOL_NAME = "report_standards_categories"
 
 
-_ZONES_TOOL_SCHEMA: Dict[str, Any] = {
-    "name": ZONES_TOOL_NAME,
-    "description": "Report identified zone codes and their canonical types.",
-    "input_schema": {
-        "type": "object",
-        "required": ["zones", "confidence"],
-        "properties": {
-            "zones": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": ["code", "canonical_type"],
-                    "properties": {
-                        "code": {"type": "string"},
-                        "full_name": {"type": ["string", "null"]},
-                        "canonical_type": {
-                            "type": "string",
-                            "enum": list(CANONICAL_ZONE_TYPES),
-                        },
-                        "description": {"type": ["string", "null"]},
-                    },
-                },
-            },
-            "confidence": {"type": "number"},
-        },
-    },
-}
-
-_USES_TOOL_SCHEMA: Dict[str, Any] = {
-    "name": USES_TOOL_NAME,
-    "description": "Report local use-name → canonical use-class mappings.",
-    "input_schema": {
-        "type": "object",
-        "required": ["mappings", "confidence"],
-        "properties": {
-            "mappings": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": ["local_term", "canonical_key"],
-                    "properties": {
-                        "local_term": {"type": "string"},
-                        "canonical_key": {
-                            "type": "string",
-                            "enum": list(CANONICAL_USE_CLASSES),
+def _zones_tool_schema(zone_types: Tuple[str, ...]) -> Dict[str, Any]:
+    return {
+        "name": ZONES_TOOL_NAME,
+        "description": "Report identified zone codes and their canonical types.",
+        "input_schema": {
+            "type": "object",
+            "required": ["zones", "confidence"],
+            "properties": {
+                "zones": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["code", "canonical_type"],
+                        "properties": {
+                            "code": {"type": "string"},
+                            "full_name": {"type": ["string", "null"]},
+                            "canonical_type": {
+                                "type": "string",
+                                "enum": list(zone_types),
+                            },
+                            "description": {"type": ["string", "null"]},
                         },
                     },
                 },
+                "confidence": {"type": "number"},
             },
-            "confidence": {"type": "number"},
         },
-    },
-}
+    }
 
-_STANDARDS_TOOL_SCHEMA: Dict[str, Any] = {
-    "name": STANDARDS_TOOL_NAME,
-    "description": "Report normalised development standard categories.",
-    "input_schema": {
-        "type": "object",
-        "required": ["categories", "confidence"],
-        "properties": {
-            "categories": {
-                "type": "array",
-                "items": {
-                    "type": "string",
-                    "enum": list(CANONICAL_STANDARDS),
+
+def _uses_tool_schema() -> Dict[str, Any]:
+    # No enum constraint on canonical_key: the LLM is told to prefer the
+    # controlled vocabulary in the system prompt, but is free to propose
+    # snake_case keys outside it. Out-of-vocab proposals are routed to
+    # vocabulary_extension_candidates in the merge step.
+    return {
+        "name": USES_TOOL_NAME,
+        "description": "Report local use-name → canonical use-class mappings.",
+        "input_schema": {
+            "type": "object",
+            "required": ["mappings", "confidence"],
+            "properties": {
+                "mappings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["local_term", "canonical_key"],
+                        "properties": {
+                            "local_term": {"type": "string"},
+                            "canonical_key": {"type": "string"},
+                        },
+                    },
                 },
+                "confidence": {"type": "number"},
             },
-            "confidence": {"type": "number"},
         },
-    },
-}
+    }
 
 
-ZONES_SYSTEM_PROMPT = """You are a bylaw semantic analyst. You will be given a window of text from a
+def _standards_tool_schema() -> Dict[str, Any]:
+    # Same treatment as the uses schema — accept any snake_case string and
+    # route out-of-vocab proposals to proposed_categories in the merge step.
+    return {
+        "name": STANDARDS_TOOL_NAME,
+        "description": "Report normalised development standard categories.",
+        "input_schema": {
+            "type": "object",
+            "required": ["categories", "confidence"],
+            "properties": {
+                "categories": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "confidence": {"type": "number"},
+            },
+        },
+    }
+
+
+def _uses_system_prompt(use_classes: Tuple[str, ...]) -> str:
+    vocab = ", ".join(use_classes)
+    return f"""You are a bylaw semantic analyst. You will be given a window of text from
+a municipal land-use bylaw. Identify rows in use-permission tables that name
+permitted, conditional, or prohibited uses.
+
+For each use you find, output:
+  - local_term: the use name as written in the document (verbatim)
+  - canonical_key: PREFER a member of the controlled vocabulary below; if
+    nothing fits, propose your own snake_case key (e.g.
+    "cannabis_retail", "data_centre", "rooming_house"). Do NOT force a use
+    into "other" when a more specific local concept exists — the operator
+    will review proposals to extend the vocabulary.
+
+Controlled vocabulary (prefer these when they fit):
+  {vocab}
+
+Return ONLY valid JSON matching the required schema. No prose."""
+
+
+def _standards_system_prompt(standards: Tuple[str, ...]) -> str:
+    vocab = ", ".join(standards)
+    return f"""You are a bylaw semantic analyst. List every development standard
+category heading you observe in the window (e.g. "Maximum Building Height",
+"Minimum Front Yard Setback").
+
+Normalise each to a snake_case canonical name. PREFER the controlled
+vocabulary below when a heading fits; if nothing fits, propose your own
+snake_case name (e.g. "green_roof_coverage", "tree_canopy",
+"ev_parking_minimum"). Do NOT drop a heading because it isn't in the
+vocabulary — proposals will be reviewed to extend it.
+
+Controlled vocabulary (prefer these when they fit):
+  {vocab}
+
+Return ONLY valid JSON matching the required schema. No prose."""
+
+
+def _zones_system_prompt(zone_types: Tuple[str, ...]) -> str:
+    vocab = ", ".join(zone_types)
+    return f"""You are a bylaw semantic analyst. You will be given a window of text from a
 municipal land-use bylaw. Identify every zone code and, where stated, its
 full name and purpose.
 
@@ -159,43 +207,9 @@ Zone codes follow this pattern: 1–4 uppercase letters, a hyphen, one digit
 hyphens (e.g. DD, DH, CLI) — include these too if they are clearly zone names.
 
 For each zone, determine its canonical_type from this fixed list:
-  residential, commercial, mixed_use, industrial,
-  institutional, open_space, special_area, unknown
+  {vocab}
 
 Use "unknown" only if the zone's purpose is genuinely unclear from context.
-
-Return ONLY valid JSON matching the required schema. No prose."""
-
-
-USES_SYSTEM_PROMPT = """You are a bylaw semantic analyst. You will be given a window of text from
-a municipal land-use bylaw. Identify rows in use-permission tables that name
-permitted, conditional, or prohibited uses.
-
-For each use you find, output:
-  - local_term: the use name as written in the document (verbatim)
-  - canonical_key: a member of the fixed controlled vocabulary
-
-Controlled vocabulary (canonical_key MUST be one of these):
-  residential_dwelling_single, residential_dwelling_multi,
-  residential_dwelling_accessory, residential_dwelling_cluster,
-  retail_general, retail_food, food_and_beverage,
-  office_general, institutional_education, institutional_health,
-  industrial_light, industrial_general, open_space_park,
-  accommodation, home_occupation, short_term_rental, other
-
-Use "other" only if no canonical_key fits.
-
-Return ONLY valid JSON matching the required schema. No prose."""
-
-
-STANDARDS_SYSTEM_PROMPT = """You are a bylaw semantic analyst. List every development standard
-category heading you observe in the window (e.g. "Maximum Building Height",
-"Minimum Front Yard Setback").
-
-Normalise each to a snake_case canonical name from this controlled vocabulary:
-  height, front_setback, side_setback, rear_setback,
-  lot_coverage, floor_area_ratio, parking, bicycle_parking,
-  landscaping, signage, amenity_space, stepback, podium_height
 
 Return ONLY valid JSON matching the required schema. No prose."""
 
@@ -217,9 +231,25 @@ def _file_url_to_path(url: str) -> str:
 class SemanticMapperAgent:
     """Read a bylaw and produce a :class:`TaxonomyMap`."""
 
-    def __init__(self, anthropic_client, model: str = "claude-sonnet-4-6"):
+    def __init__(
+        self,
+        anthropic_client,
+        model: str = "claude-sonnet-4-6",
+        vocabulary_path: Optional[Path] = None,
+    ):
         self.client = anthropic_client
         self.model = model
+        vocab = load_vocabulary(vocabulary_path) if vocabulary_path else _DEFAULT_VOCABULARY
+        self.vocabulary_version: str = str(vocab["version"])
+        self.zone_types: Tuple[str, ...] = tuple(vocab["zone_types"])
+        self.use_classes: Tuple[str, ...] = tuple(vocab["use_classes"])
+        self.standards: Tuple[str, ...] = tuple(vocab["standards"])
+        self._zones_tool_schema = _zones_tool_schema(self.zone_types)
+        self._uses_tool_schema = _uses_tool_schema()
+        self._standards_tool_schema = _standards_tool_schema()
+        self._zones_system_prompt = _zones_system_prompt(self.zone_types)
+        self._uses_system_prompt = _uses_system_prompt(self.use_classes)
+        self._standards_system_prompt = _standards_system_prompt(self.standards)
 
     # -------------------------------------------------------------- public
     def map(
@@ -253,8 +283,10 @@ class SemanticMapperAgent:
             standards_windows = self._find_standards_windows(pages, content_zone)
 
             zones, zone_flags, zone_conf = self._extract_zones(zone_windows)
-            uses, use_flags, use_conf = self._extract_use_classes(zone_windows)
-            stds, std_flags, std_conf = self._extract_standards_categories(
+            uses, use_candidates, use_flags, use_conf = self._extract_use_classes(
+                zone_windows
+            )
+            stds, proposed_stds, std_flags, std_conf = self._extract_standards_categories(
                 standards_windows
             )
 
@@ -262,7 +294,26 @@ class SemanticMapperAgent:
             base_confidence = (
                 sum(confidences) / len(confidences) if confidences else 1.0
             )
-            all_flags = zone_flags + use_flags + std_flags
+            all_flags = list(zone_flags) + list(use_flags) + list(std_flags)
+            if use_candidates:
+                terms = sorted({c.proposed_canonical_key for c in use_candidates})
+                preview = ", ".join(terms[:5])
+                more = f" (+{len(terms) - 5} more)" if len(terms) > 5 else ""
+                all_flags.append(
+                    f"vocabulary_extension_candidates: {len(use_candidates)} "
+                    f"use-class proposal(s) outside v{self.vocabulary_version} vocab "
+                    f"[{preview}{more}]"
+                )
+            if proposed_stds:
+                preview = ", ".join(proposed_stds[:5])
+                more = (
+                    f" (+{len(proposed_stds) - 5} more)" if len(proposed_stds) > 5 else ""
+                )
+                all_flags.append(
+                    f"proposed_standards_categories: {len(proposed_stds)} "
+                    f"standard(s) outside v{self.vocabulary_version} vocab "
+                    f"[{preview}{more}]"
+                )
             confidence = max(0.0, min(1.0, base_confidence - 0.05 * len(all_flags)))
 
             return TaxonomyMap(
@@ -272,6 +323,9 @@ class SemanticMapperAgent:
                 companion_bylaws_required=list(companions or []),
                 confidence=confidence,
                 flags=all_flags,
+                vocabulary_version=self.vocabulary_version,
+                vocabulary_extension_candidates=use_candidates,
+                proposed_categories=proposed_stds,
             )
         finally:
             if tmp_path is not None:
@@ -401,17 +455,18 @@ class SemanticMapperAgent:
         window_results: List[Dict[str, Any]] = []
         for window in windows:
             result = self._call_tool(
-                ZONES_SYSTEM_PROMPT,
-                _ZONES_TOOL_SCHEMA,
+                self._zones_system_prompt,
+                self._zones_tool_schema,
                 ZONES_TOOL_NAME,
                 self._format_user_text(window),
             )
             window_results.append(result)
-        return self._merge_zones(window_results)
+        return self._merge_zones(window_results, self.zone_types)
 
     @staticmethod
     def _merge_zones(
-        window_results: List[Dict[str, Any]]
+        window_results: List[Dict[str, Any]],
+        zone_types: Tuple[str, ...],
     ) -> Tuple[List[ZoneDesignation], List[str], Optional[float]]:
         by_code: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         type_seen: Dict[str, "OrderedDict[str, None]"] = {}
@@ -421,7 +476,7 @@ class SemanticMapperAgent:
                 if not code:
                     continue
                 canonical_type = zone.get("canonical_type") or "unknown"
-                if canonical_type not in CANONICAL_ZONE_TYPES:
+                if canonical_type not in zone_types:
                     canonical_type = "unknown"
                 full_name = zone.get("full_name")
                 description = zone.get("description")
@@ -470,33 +525,57 @@ class SemanticMapperAgent:
     # ------------------------------------------ private: use-class extraction
     def _extract_use_classes(
         self, windows: List[Dict[str, Any]]
-    ) -> Tuple[Dict[str, str], List[str], Optional[float]]:
+    ) -> Tuple[
+        Dict[str, str],
+        List[VocabularyExtensionCandidate],
+        List[str],
+        Optional[float],
+    ]:
         if not windows:
-            return {}, [], None
-        window_results: List[Dict[str, Any]] = []
+            return {}, [], [], None
+        window_results: List[Tuple[Dict[str, Any], int]] = []
         for window in windows:
             result = self._call_tool(
-                USES_SYSTEM_PROMPT,
-                _USES_TOOL_SCHEMA,
+                self._uses_system_prompt,
+                self._uses_tool_schema,
                 USES_TOOL_NAME,
                 self._format_user_text(window),
             )
-            window_results.append(result)
-        return self._merge_uses(window_results)
+            window_results.append((result, int(window.get("window_index", 0))))
+        return self._merge_uses(window_results, self.use_classes)
 
     @staticmethod
     def _merge_uses(
-        window_results: List[Dict[str, Any]]
-    ) -> Tuple[Dict[str, str], List[str], Optional[float]]:
+        window_results: List[Tuple[Dict[str, Any], int]],
+        use_classes: Tuple[str, ...],
+    ) -> Tuple[
+        Dict[str, str],
+        List[VocabularyExtensionCandidate],
+        List[str],
+        Optional[float],
+    ]:
         mapping: Dict[str, str] = {}
         flags: List[str] = []
-        for result in window_results:
+        candidates: "OrderedDict[Tuple[str, str], VocabularyExtensionCandidate]" = (
+            OrderedDict()
+        )
+        confidences: List[float] = []
+        for result, window_index in window_results:
+            confidences.append(float(result.get("confidence", 1.0)))
             for entry in result.get("mappings", []) or []:
                 local = entry.get("local_term")
                 canonical = entry.get("canonical_key")
                 if not local or not canonical:
                     continue
-                if canonical not in CANONICAL_USE_CLASSES:
+                if canonical not in use_classes:
+                    key = (local, canonical)
+                    if key not in candidates:
+                        candidates[key] = VocabularyExtensionCandidate(
+                            local_term=local,
+                            proposed_canonical_key=canonical,
+                            was_in_vocabulary=False,
+                            source_window=window_index,
+                        )
                     continue
                 if local in mapping:
                     if mapping[local] != canonical:
@@ -506,40 +585,43 @@ class SemanticMapperAgent:
                         )
                 else:
                     mapping[local] = canonical
-        confidences = [
-            float(r.get("confidence", 1.0)) for r in window_results
-        ]
         mean_conf = sum(confidences) / len(confidences) if confidences else None
-        return mapping, flags, mean_conf
+        return mapping, list(candidates.values()), flags, mean_conf
 
     # ------------------------------------------ private: standards extraction
     def _extract_standards_categories(
         self, windows: List[Dict[str, Any]]
-    ) -> Tuple[List[str], List[str], Optional[float]]:
+    ) -> Tuple[List[str], List[str], List[str], Optional[float]]:
         if not windows:
-            return [], [], None
+            return [], [], [], None
         window_results: List[Dict[str, Any]] = []
         for window in windows:
             result = self._call_tool(
-                STANDARDS_SYSTEM_PROMPT,
-                _STANDARDS_TOOL_SCHEMA,
+                self._standards_system_prompt,
+                self._standards_tool_schema,
                 STANDARDS_TOOL_NAME,
                 self._format_user_text(window),
             )
             window_results.append(result)
-        return self._merge_standards(window_results)
+        return self._merge_standards(window_results, self.standards)
 
     @staticmethod
     def _merge_standards(
-        window_results: List[Dict[str, Any]]
-    ) -> Tuple[List[str], List[str], Optional[float]]:
+        window_results: List[Dict[str, Any]],
+        standards: Tuple[str, ...],
+    ) -> Tuple[List[str], List[str], List[str], Optional[float]]:
         category_set: set[str] = set()
+        proposed: "OrderedDict[str, None]" = OrderedDict()
         for result in window_results:
             for cat in result.get("categories", []) or []:
-                if cat in CANONICAL_STANDARDS:
+                if not isinstance(cat, str) or not cat:
+                    continue
+                if cat in standards:
                     category_set.add(cat)
+                else:
+                    proposed.setdefault(cat, None)
         confidences = [
             float(r.get("confidence", 1.0)) for r in window_results
         ]
         mean_conf = sum(confidences) / len(confidences) if confidences else None
-        return sorted(category_set), [], mean_conf
+        return sorted(category_set), list(proposed.keys()), [], mean_conf
