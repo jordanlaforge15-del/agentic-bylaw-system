@@ -5,27 +5,38 @@ EPSG:4326), compute area, road frontage, depth, and corner-lot status.
 
 Method
 ------
-Frontage uses the *centerline-buffer* heuristic. HRM's parcel layer
-tessellates edge-to-edge to road centerlines (no right-of-way polygon
-between adjacent parcels and the street), which means the parcel's
-road-facing edges sit right on the centerline. We:
+Frontage uses a centerline-buffer heuristic. Each centerline is projected
+to local metres, buffered by ``buffer_m``, and intersected with the parcel
+exterior; the intersection length is the frontage contributed by that
+centerline. Centerlines that belong to the same street (matched by name
+when present, else treated as independent) are unioned before buffering so
+multiple segments of one street collapse to a single contribution.
 
-1. Project both the parcel and the candidate centerlines to local
-   metres via an equirectangular projection centred on the parcel.
-2. Union the centerlines and buffer the union by ``buffer_m``.
-3. Intersect the parcel's exterior boundary with the buffer — the
-   length of that intersection is the road frontage.
+The buffer width is sized to reach typical Halifax urban parcel boundaries.
+HRM parcels are *not* tessellated to the road centerline as an earlier
+revision of this module assumed — they're inset 7–15 m for the road
+allowance (sidewalk + half-ROW). ABS-23 measured the actual gap on
+6321 Quinpool (7.8 / 9.5 m), 1505 Barrington (7.7–9.0 m), and
+5251 Duke (8.3 m+). The 12 m default catches the typical urban gap
+without overreaching into adjacent parcels.
 
-This replaces an earlier shared-edge heuristic that classified each
-boundary segment by whether it was ε-close to a neighbour parcel; that
-approach collapsed to 0 m on tessellated urban parcels because every
-front edge of a residential lot is also ε-close to the parcel directly
-across the street.
+Corner / multi-frontage detection
+---------------------------------
+The count of *distinct streets* contributing > ``MIN_STREET_CONTRIB_M``
+of intersection length is the signal:
+  - 1 street → mid-block; depth = area / frontage is meaningful.
+  - 2 streets → corner; depth is geometrically undefined and is omitted.
+  - 3 streets → triangular / cul-de-sac-throat; report frontage, omit depth.
+  - 4+ streets, or frontage / perimeter > ``CITY_BLOCK_FRONTAGE_RATIO`` →
+    the buffer has wrapped around the parcel (institutional / city-block
+    parcel — e.g. 5251 Duke). Frontage / depth / corner are suppressed
+    and the caller drops confidence so the model hedges.
 
-Corner detection inspects the bearings of the frontage-intersection
-segments: a mid-block lot's frontage runs along one bearing, while a
-corner lot's frontage wraps around the parcel's road-facing corner and
-spans two perpendicular bearings.
+Replacing bearing-distinct detection: the prior approach filtered out
+segments shorter than ``1.1 × buffer_m`` to avoid the perpendicular-edge
+artifact, which meant any buffer increase silently disabled corner
+detection for the typical-size frontage. The street-grouping approach
+is robust to buffer changes.
 
 Projection
 ----------
@@ -50,13 +61,11 @@ from shapely.ops import unary_union
 logger = logging.getLogger(__name__)
 
 
-# Half-width of the centerline buffer in metres. Halifax road allowances
-# are typically 12–30 m wide, and HRM's parcels tessellate edge-to-edge
-# to the centerline — so the parcel's front edge sits right on the
-# centerline. An 8 m buffer comfortably catches a front edge that's
-# exactly on the centerline while staying narrow enough to avoid pulling
-# in non-frontage edges of nearby parcels.
-DEFAULT_BUFFER_M: float = 8.0
+# Half-width of the centerline buffer in metres. Sized to reach typical
+# Halifax urban parcel boundaries — HRM parcels are inset 7–15 m from
+# the road centerline (road allowance), so anything narrower silently
+# drops corner-lot frontage. See ABS-23 for the per-address measurements.
+DEFAULT_BUFFER_M: float = 12.0
 
 
 # Threshold below which we mark the result ``uncertain`` rather than
@@ -67,6 +76,25 @@ DEFAULT_BUFFER_M: float = 8.0
 CONFIDENCE_OK_THRESHOLD: float = 0.5
 
 
+# A street counts toward the multi-frontage tally only when it
+# contributes at least this much intersection length. Filters out the
+# tiny slivers a far-away centerline can produce when the buffer
+# just barely reaches a corner of the parcel.
+MIN_STREET_CONTRIB_M: float = 4.0
+
+
+# When the total buffer-intersection length exceeds this fraction of the
+# parcel perimeter, the buffer has wrapped around the parcel — typical
+# of an institutional / city-block lot (5251 Duke). Frontage / depth /
+# corner are suppressed and confidence drops.
+CITY_BLOCK_FRONTAGE_RATIO: float = 0.75
+
+
+# Above this street count the parcel is surrounded by streets, not
+# fronting them — same suppression as the frontage-ratio rule.
+CITY_BLOCK_STREET_COUNT: int = 4
+
+
 @dataclass(frozen=True)
 class LotMetrics:
     """Computed spatial characteristics of a lot.
@@ -74,12 +102,15 @@ class LotMetrics:
     ``status`` is ``"ok"`` when the computation succeeded and the
     confidence is at or above the threshold; ``"uncertain"`` when the
     geometry was usable but the result is shaky (e.g. shapely had to
-    repair the polygon); ``"unresolved"`` when the geometry was
-    unusable. ``reason`` is populated on ``unresolved``.
+    repair the polygon, or the buffer wrapped around the parcel);
+    ``"unresolved"`` when the geometry was unusable. ``reason`` is
+    populated on ``unresolved`` / ``uncertain``.
 
     All linear measurements are metres; ``area_m2`` is square metres.
     ``corner`` is True when the lot's road-facing boundary spans two
-    or more distinct bearings (i.e. fronts more than one street).
+    or more distinct streets. ``street_count`` is the number of
+    distinct streets contributing non-trivial frontage; the extractor
+    uses it to decide confidence and which fields to surface.
     ``multi_unit`` is left as None by this module; the extractor sets
     it after a civic-address dataset lookup.
     """
@@ -89,6 +120,7 @@ class LotMetrics:
     depth_m: float | None
     perimeter_m: float | None
     corner: bool | None
+    street_count: int | None
     multi_unit: bool | None
     method: str
     confidence: float
@@ -112,6 +144,8 @@ class LotMetrics:
             d["perimeter_m"] = round(self.perimeter_m, 2)
         if self.corner is not None:
             d["corner"] = self.corner
+        if self.street_count is not None:
+            d["street_count"] = self.street_count
         if self.multi_unit is not None:
             d["multi_unit"] = self.multi_unit
         if self.reason:
@@ -124,6 +158,7 @@ def compute_lot_metrics(
     centerline_geojsons: list[dict[str, Any]] | None = None,
     *,
     buffer_m: float = DEFAULT_BUFFER_M,
+    centerline_names: list[str | None] | None = None,
 ) -> LotMetrics:
     """Compute lot metrics from a parcel polygon and nearby centerlines.
 
@@ -132,11 +167,26 @@ def compute_lot_metrics(
     case frontage, depth, and corner are reported as 0 / None / False and
     the caller can adjust confidence based on coverage.
 
+    ``centerline_names`` is an optional parallel list of street names for
+    grouping segments that belong to the same street. When absent or
+    ``None`` for a given index, the segment is treated as its own
+    "street" — fine for synthetic tests with one centerline per street,
+    but suboptimal for real data where HRM splits each road at every
+    intersection. The extractor passes ``STR_NAME`` from the centerlines
+    dataset so multiple segments of e.g. Quinpool count once.
+
     Never raises for bad input — returns ``LotMetrics`` with
     ``status="unresolved"`` and ``reason`` set so the caller can persist
     an explicit absence rather than silently dropping a case.
     """
     centerlines = centerline_geojsons or []
+    names = centerline_names or [None] * len(centerlines)
+    if len(names) != len(centerlines):
+        return _unresolved(
+            f"centerline_names length {len(names)} != "
+            f"centerline_geojsons length {len(centerlines)}"
+        )
+
     try:
         parcel_raw = shapely_shape(parcel_geojson)
     except (TypeError, ValueError, KeyError, AttributeError) as exc:
@@ -169,41 +219,91 @@ def compute_lot_metrics(
 
     area_m2 = float(parcel_m.area)
     perimeter_m = float(parcel_m.exterior.length)
+    parcel_boundary = parcel_m.exterior
 
-    centerline_lines_m: list[LineString] = []
-    for n_geojson in centerlines:
+    # Project every centerline to metres and group by street name. A
+    # missing name yields a synthetic per-index key ("__unnamed_<i>"),
+    # which preserves the "each centerline is its own street" behaviour
+    # the synthetic test fixtures rely on.
+    groups: dict[str, list[LineString]] = {}
+    for i, geojson in enumerate(centerlines):
         try:
-            n_geom = shapely_shape(n_geojson)
+            geom = shapely_shape(geojson)
         except (TypeError, ValueError, KeyError, AttributeError):
             continue
-        if n_geom.is_empty or not n_geom.is_valid:
+        if geom.is_empty or not geom.is_valid:
             continue
-        if n_geom.geom_type == "LineString":
-            _append_line(n_geom, project, centerline_lines_m)
-        elif n_geom.geom_type == "MultiLineString":
-            for g in n_geom.geoms:
-                _append_line(g, project, centerline_lines_m)
+        key = names[i] if names[i] else f"__unnamed_{i}"
+        if geom.geom_type == "LineString":
+            _append_projected_line(geom, project, groups, key)
+        elif geom.geom_type == "MultiLineString":
+            for g in geom.geoms:
+                _append_projected_line(g, project, groups, key)
 
-    if centerline_lines_m:
-        buffer = unary_union(centerline_lines_m).buffer(buffer_m)
-        frontage_intersection = parcel_m.exterior.intersection(buffer)
-        frontage_m = float(frontage_intersection.length)
-        corner = _detect_corner(frontage_intersection, buffer_m=buffer_m)
+    if groups:
+        # Total frontage: union every projected line (across all streets)
+        # and intersect parcel boundary once. Single-pass intersection
+        # avoids double-counting the small overlap at street intersections.
+        all_lines: list[LineString] = [ln for lns in groups.values() for ln in lns]
+        union_buf = unary_union(all_lines).buffer(buffer_m)
+        frontage_m = float(parcel_boundary.intersection(union_buf).length)
+
+        # Per-street contribution: how much of the parcel boundary falls
+        # inside the buffer around just that street's centerlines.
+        street_count = 0
+        for lines in groups.values():
+            group_buf = unary_union(lines).buffer(buffer_m)
+            contrib = float(parcel_boundary.intersection(group_buf).length)
+            if contrib >= MIN_STREET_CONTRIB_M:
+                street_count += 1
     else:
         # No centerline segments reached this parcel. We can still report
         # area and perimeter, but frontage is unknown. The caller decides
         # whether to surface a frontage=0 result or flag it as uncertain.
         frontage_m = 0.0
-        corner = False
+        street_count = 0
 
-    if frontage_m > 1.0:
+    perim_ratio = frontage_m / perimeter_m if perimeter_m > 0 else 0.0
+    city_block_like = (
+        street_count >= CITY_BLOCK_STREET_COUNT
+        or perim_ratio >= CITY_BLOCK_FRONTAGE_RATIO
+    )
+
+    if city_block_like:
+        # Parcel is surrounded by streets, not fronting them. Suppress
+        # frontage / depth / corner and let the extractor drop confidence.
+        return LotMetrics(
+            area_m2=area_m2,
+            frontage_m=None,
+            depth_m=None,
+            perimeter_m=perimeter_m,
+            corner=None,
+            street_count=street_count,
+            multi_unit=None,
+            method="centerline_buffer",
+            confidence=1.0,
+            status="uncertain",
+            reason=(
+                f"buffer wrapped around parcel "
+                f"(street_count={street_count}, frontage/perim={perim_ratio:.2f}) "
+                f"— likely city block; frontage / depth / corner suppressed"
+            ),
+        )
+
+    corner = street_count >= 2 if frontage_m > 1.0 else False
+
+    # Depth is only meaningful for a single-frontage (mid-block) lot.
+    # For corner / triangular parcels area-divided-by-frontage produces
+    # nonsense — e.g. 6321 Quinpool reported 65 m of "depth" when the
+    # lot is actually 35 m deep — so we omit it.
+    if street_count == 1 and frontage_m > 1.0:
         depth_m: float | None = area_m2 / frontage_m
     else:
         depth_m = None
 
     # Geometry confidence: 1.0 when the parcel polygon was clean enough
     # to project without repair. The extractor layers on frontage-quality
-    # adjustments (e.g. drop to 0.7 when frontage is < 5% of perimeter)
+    # adjustments (e.g. drop to 0.7 for triangular / cul-de-sac lots)
     # because that requires knowing the perimeter — kept here, not in the
     # confidence math, since extractor.py decides what's "ok" for the
     # case-open payload.
@@ -216,6 +316,7 @@ def compute_lot_metrics(
         depth_m=depth_m,
         perimeter_m=perimeter_m,
         corner=corner,
+        street_count=street_count,
         multi_unit=None,
         method="centerline_buffer",
         confidence=confidence,
@@ -228,18 +329,19 @@ def compute_lot_metrics(
 # ---------------------------------------------------------------------------
 
 
-def _append_line(
+def _append_projected_line(
     line: LineString,
     project: Any,
-    out: list[LineString],
+    groups: dict[str, list[LineString]],
+    key: str,
 ) -> None:
-    """Project ``line`` to metres and append if non-empty."""
+    """Project ``line`` to metres and add to the named group."""
     try:
         line_m = shapely_transform(project, line)
     except Exception:  # noqa: BLE001 — silent skip on transform failure
         return
     if not line_m.is_empty:
-        out.append(line_m)
+        groups.setdefault(key, []).append(line_m)
 
 
 def _make_equirectangular_projector(lat0: float, lon0: float):
@@ -258,72 +360,6 @@ def _make_equirectangular_projector(lat0: float, lon0: float):
     return _project
 
 
-def _detect_corner(frontage: Any, *, buffer_m: float) -> bool:
-    """True when the frontage intersection spans 2+ distinct bearings.
-
-    A mid-block lot's frontage is one straight segment along one bearing
-    (plus a small artifact at each end where the side edges cross the
-    buffer — see below). A corner lot's frontage wraps around the
-    parcel's road-facing corner and includes long segments along two
-    perpendicular bearings.
-
-    Artifact filter: ``ST_Intersection(parcel_boundary, buffer)`` also
-    captures the portion of each PERPENDICULAR parcel edge that happens
-    to fall inside the buffer near the corners of the parcel — those
-    "artifact" segments are bounded in length by ``buffer_m`` and would
-    otherwise contribute a spurious second bearing for every lot. We
-    require segments to be longer than ``1.1 * buffer_m`` (slightly
-    above the artifact ceiling) before counting their bearing.
-
-    Bearings >= 30° apart are treated as distinct — a single slightly-
-    curving road shouldn't trigger a corner classification.
-    """
-    if frontage.is_empty:
-        return False
-    min_segment_m = max(1.0, buffer_m * 1.1)
-    if isinstance(frontage, LineString):
-        return len(_line_distinct_bearings(frontage, min_segment_m)) >= 2
-    if isinstance(frontage, MultiLineString):
-        bearings: list[float] = []
-        for line in frontage.geoms:
-            for bearing in _line_distinct_bearings(line, min_segment_m):
-                if not any(_bearing_close(bearing, b) for b in bearings):
-                    bearings.append(bearing)
-        return len(bearings) >= 2
-    # GeometryCollection or unexpected — be conservative.
-    return False
-
-
-def _line_distinct_bearings(
-    line: LineString, min_segment_m: float
-) -> list[float]:
-    """Return distinct dominant bearings within ``line`` (degrees [0,180)).
-
-    Segments shorter than ``min_segment_m`` are skipped — see
-    ``_detect_corner`` for why this filter matters (perpendicular-edge
-    artifacts from the buffer intersection).
-    """
-    coords = list(line.coords)
-    if len(coords) < 2:
-        return []
-    bearings: list[float] = []
-    for (x1, y1), (x2, y2) in zip(coords[:-1], coords[1:]):
-        dx, dy = x2 - x1, y2 - y1
-        seg_len = math.hypot(dx, dy)
-        if seg_len < min_segment_m:
-            continue
-        angle_deg = math.degrees(math.atan2(dy, dx)) % 180
-        if not any(_bearing_close(angle_deg, b) for b in bearings):
-            bearings.append(angle_deg)
-    return bearings
-
-
-def _bearing_close(a: float, b: float, tolerance_deg: float = 30.0) -> bool:
-    """Two bearings (both in [0,180)) are 'the same direction' if within tol."""
-    diff = abs(a - b) % 180
-    return diff <= tolerance_deg or diff >= 180 - tolerance_deg
-
-
 def _unresolved(reason: str) -> LotMetrics:
     return LotMetrics(
         area_m2=None,
@@ -331,6 +367,7 @@ def _unresolved(reason: str) -> LotMetrics:
         depth_m=None,
         perimeter_m=None,
         corner=None,
+        street_count=None,
         multi_unit=None,
         method="centerline_buffer",
         confidence=0.0,

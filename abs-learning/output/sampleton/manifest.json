@@ -1,0 +1,84 @@
+{
+  "municipality": {
+    "name": "Town of Sampleton",
+    "jurisdiction_code": "sampleton",
+    "province": "NS",
+    "governing_body": "Sampleton Town Council"
+  },
+  "sources": [
+    {
+      "document_name": "Sampleton Zoning Bylaw",
+      "document_type": "bylaw",
+      "document_role": "Primary zoning bylaw for the Town of Sampleton",
+      "parent_document": null,
+      "source_url": "file:///tests/fixtures/synthetic_bylaw.txt",
+      "format": "pdf",
+      "access_method": "direct_download",
+      "page_count_estimate": 2,
+      "last_amended": null,
+      "amendment_series": null,
+      "in_scope": true
+    }
+  ],
+  "parser_config": {
+    "parser_version": "manifest-only-sampleton-1.0",
+    "citation_scheme": {
+      "full_citation_example": "Part 1, Section 1.2, Clause (a)",
+      "separator": ", ",
+      "hierarchy": [
+        {
+          "level": "part",
+          "pattern": "^\\s*part\\s+(\\d+)",
+          "label_format": "Part {n}"
+        },
+        {
+          "level": "schedule",
+          "pattern": "^\\s*schedule\\s+([A-Z]|\\d+)",
+          "label_format": "Schedule {n}"
+        },
+        {
+          "level": "section",
+          "pattern": "^\\s*(\\d+(?:\\.\\d+){0,5})\\b",
+          "label_format": "{n}"
+        },
+        {
+          "level": "clause",
+          "pattern": "^\\s*(\\([a-z]{1,3}\\))\\s",
+          "label_format": "{n}"
+        }
+      ]
+    },
+    "schedule_patterns": ["^\\s*schedule\\s+([A-Z]|\\d+)"],
+    "table_caption_pattern": "^Table\\s+\\d+",
+    "confidence": 0.9,
+    "flags": []
+  },
+  "taxonomy": {
+    "zone_designations": [
+      {"code": "R1", "canonical_type": "residential", "full_name": "Single-Family Residential"},
+      {"code": "R2", "canonical_type": "residential", "full_name": "Two-Family Residential"},
+      {"code": "C1", "canonical_type": "commercial", "full_name": "Local Commercial"},
+      {"code": "I1", "canonical_type": "industrial", "full_name": "Light Industrial"}
+    ],
+    "use_class_map": {
+      "single-detached dwelling": "single_family_residential",
+      "two-family dwelling": "two_family_residential"
+    },
+    "standards_categories": ["lot area", "setback"],
+    "companion_bylaws_required": [],
+    "confidence": 0.85,
+    "flags": []
+  },
+  "qa_report": {
+    "status": "PASS",
+    "citation_resolution_rate": 0.9,
+    "zone_completeness": 0.9,
+    "pattern_coverage": 0.9,
+    "flags": [],
+    "recommended_action": "approve"
+  },
+  "manifest_version": "0.1.0",
+  "status": "active",
+  "pipeline_ready": true,
+  "flags": []
+}

@@ -201,6 +201,17 @@ def _apply_canonical_mapping(
             status = ParseStatus.UNCERTAIN
             continue
 
+        if mapping.lookup is not None:
+            resolved, lookup_status, lookup_warnings = _apply_lookup(
+                canonical_name, mapping, raw, config
+            )
+            warnings.extend(lookup_warnings)
+            if lookup_status == ParseStatus.UNCERTAIN:
+                status = ParseStatus.UNCERTAIN
+            if resolved is not None:
+                canonical[canonical_name] = resolved
+            continue
+
         try:
             canonical[canonical_name] = coerce_value(raw, mapping.type)
         except CoercionError as exc:
@@ -216,6 +227,59 @@ def _apply_canonical_mapping(
         raise RuntimeError(f"canonical keys not declared in CANONICAL_FIELDS: {sorted(extra)}")
 
     return canonical, status, warnings
+
+
+def _apply_lookup(
+    canonical_name: str,
+    mapping: Any,
+    raw: Any,
+    config: DatasetConfig,
+) -> tuple[Any, ParseStatus, list[str]]:
+    """Resolve a raw source value through a per-dataset lookup table.
+
+    Lookup tables are loaded from YAML where keys may be either ints or
+    strings depending on how the author wrote them. The upstream raw value
+    from the GeoJSON properties is whatever JSON gave us (typically ``int``
+    for numeric subtype codes). We try both forms so a YAML author can use
+    bare-integer keys without quoting them.
+    """
+    table = config.lookups.get(mapping.lookup, {})
+    row = table.get(raw)
+    if row is None and not isinstance(raw, str):
+        row = table.get(str(raw))
+    if row is None and isinstance(raw, str):
+        try:
+            row = table.get(int(raw))
+        except ValueError:
+            row = None
+    if row is None:
+        warnings = [
+            f"lookup {mapping.lookup!r} has no entry for key {raw!r} "
+            f"(canonical field {canonical_name!r})"
+        ]
+        if mapping.optional:
+            return None, ParseStatus.PARSED, warnings
+        return None, ParseStatus.UNCERTAIN, warnings
+
+    if mapping.lookup_field not in row:
+        warnings = [
+            f"lookup row for {raw!r} in {mapping.lookup!r} is missing column "
+            f"{mapping.lookup_field!r} (canonical field {canonical_name!r})"
+        ]
+        if mapping.optional:
+            return None, ParseStatus.PARSED, warnings
+        return None, ParseStatus.UNCERTAIN, warnings
+
+    value = row[mapping.lookup_field]
+    try:
+        coerced = coerce_value(value, mapping.type)
+    except CoercionError as exc:
+        if mapping.optional:
+            return None, ParseStatus.PARSED, [str(exc)]
+        return None, ParseStatus.UNCERTAIN, [
+            f"coercion failed for {canonical_name!r} (lookup value): {exc}"
+        ]
+    return coerced, ParseStatus.PARSED, []
 
 
 def _render_template(template: str, properties: dict[str, Any]) -> str:

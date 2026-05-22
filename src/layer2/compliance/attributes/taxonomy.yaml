@@ -1,0 +1,447 @@
+# Phase-1 attribute taxonomy.
+#
+# Single source of truth for the attribute IDs used by:
+#   * source_fragment.attribute_tags         (which clauses regulate this attribute)
+#   * submission_attribute.attribute_key     (which value the submission carries)
+#
+# Out of scope for this file:
+#   * Subjective attributes ("compatible with neighbourhood character") — handled
+#     by human review, never tagged here.
+#   * Conditional rule modelling ("front_setback differs on corner lots") — that
+#     lives on the bylaw side; the taxonomy carries one ID per *measured*
+#     attribute, plus the contextual attribute (`corner_lot_boolean`) the rule
+#     conditions on.
+#
+# Versioning: first cut is a single file. A `taxonomy_version` field will be
+# added before Phase 4 so `approval_decision` can pin which version it was
+# evaluated against.
+
+version: "phase1-2026-05"
+
+attributes:
+
+  # ---------- Geometric (BIM-extractable / PDF-extractable with effort) ----------
+
+  - id: building_height_m
+    category: geometric_direct
+    unit: m
+    value_type: number
+    description: Building height from average finished grade to the highest point of the roof structure, excluding mechanical penthouses and parapets where the local bylaw exempts them.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    derivation:
+      inputs: [building_envelope_geometry, finished_grade_elevation]
+      method: max_elevation_minus_grade
+    bylaw_tag_keywords:
+      - "building height"
+      - "maximum height"
+      - "max height"
+      - "height of building"
+      - "principal building height"
+
+  - id: building_height_storeys
+    category: geometric_direct
+    unit: storeys
+    value_type: integer
+    description: Number of storeys in the principal building. Mezzanines counted per the local bylaw definition.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: easy
+      pdf_scan: medium
+    bylaw_tag_keywords:
+      - "storeys"
+      - "stories"
+      - "maximum storeys"
+      - "number of storeys"
+
+  - id: gross_floor_area_m2
+    category: geometric_direct
+    unit: m2
+    value_type: number
+    description: Total enclosed floor area of all storeys, measured to the outside of exterior walls, excluding parking and mechanical areas where the local bylaw exempts them.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    derivation:
+      inputs: [building_geometry_per_storey]
+      method: sum_storey_areas
+    bylaw_tag_keywords:
+      - "gross floor area"
+      - "GFA"
+      - "floor area"
+
+  - id: floor_area_ratio
+    category: geometric_derived
+    unit: ratio
+    value_type: number
+    description: Ratio of gross floor area to lot area. Often capped by bylaw at a maximum FAR per zone.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    derivation:
+      inputs: [gross_floor_area_m2, lot_area_m2]
+      method: divide
+    bylaw_tag_keywords:
+      - "floor area ratio"
+      - "FAR"
+      - "floor space ratio"
+      - "FSR"
+
+  - id: lot_coverage_percent
+    category: geometric_derived
+    unit: percent
+    value_type: number
+    description: Percentage of lot area covered by the building footprint at grade.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    derivation:
+      inputs: [building_footprint_area_m2, lot_area_m2]
+      method: ratio_percent
+    bylaw_tag_keywords:
+      - "lot coverage"
+      - "site coverage"
+      - "building coverage"
+      - "maximum coverage"
+
+  - id: building_footprint_area_m2
+    category: geometric_direct
+    unit: m2
+    value_type: number
+    description: Plan area of the principal building at grade.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    bylaw_tag_keywords:
+      - "building footprint"
+      - "footprint area"
+      - "ground floor area"
+
+  - id: front_setback_m
+    category: geometric_derived
+    unit: m
+    value_type: number
+    description: Minimum distance from the front building face to the front lot line.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    derivation:
+      inputs: [building_footprint_geometry, parcel_front_boundary]
+      method: shapely_distance_min
+    bylaw_tag_keywords:
+      - "front setback"
+      - "front yard"
+      - "minimum front yard"
+      - "front lot line"
+
+  - id: rear_setback_m
+    category: geometric_derived
+    unit: m
+    value_type: number
+    description: Minimum distance from the rear building face to the rear lot line.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    derivation:
+      inputs: [building_footprint_geometry, parcel_rear_boundary]
+      method: shapely_distance_min
+    bylaw_tag_keywords:
+      - "rear setback"
+      - "rear yard"
+      - "minimum rear yard"
+      - "rear lot line"
+
+  - id: side_setback_left_m
+    category: geometric_derived
+    unit: m
+    value_type: number
+    description: Minimum distance from the left side building face to the left side lot line, as viewed from the front lot line.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    derivation:
+      inputs: [building_footprint_geometry, parcel_left_side_boundary]
+      method: shapely_distance_min
+    bylaw_tag_keywords:
+      - "side setback"
+      - "side yard"
+      - "minimum side yard"
+      - "side lot line"
+
+  - id: side_setback_right_m
+    category: geometric_derived
+    unit: m
+    value_type: number
+    description: Minimum distance from the right side building face to the right side lot line, as viewed from the front lot line.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    derivation:
+      inputs: [building_footprint_geometry, parcel_right_side_boundary]
+      method: shapely_distance_min
+    bylaw_tag_keywords:
+      - "side setback"
+      - "side yard"
+      - "minimum side yard"
+      - "side lot line"
+
+  - id: height_to_eaves_m
+    category: geometric_direct
+    unit: m
+    value_type: number
+    description: Height from average finished grade to the eaves line of the principal building.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    bylaw_tag_keywords:
+      - "eaves height"
+      - "height to eaves"
+      - "eave"
+
+  - id: height_to_ridge_m
+    category: geometric_direct
+    unit: m
+    value_type: number
+    description: Height from average finished grade to the ridgeline of the principal building.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    bylaw_tag_keywords:
+      - "ridge height"
+      - "height to ridge"
+      - "roof ridge"
+
+  # ---------- Categorical (BIM project metadata / drawing title block) ----------
+
+  - id: primary_use_class
+    category: categorical
+    value_type: string
+    description: The principal use of the proposed building, e.g. residential, commercial, mixed-use. Matched against the zone's permitted uses list.
+    extraction_difficulty:
+      bim: medium
+      pdf_vector: medium
+      pdf_scan: medium
+    bylaw_tag_keywords:
+      - "permitted use"
+      - "principal use"
+      - "use class"
+      - "permitted uses"
+      - "primary use"
+
+  - id: secondary_use_classes
+    category: categorical
+    value_type: string
+    description: Additional uses present alongside the primary use (e.g. ground-floor retail with residential above).
+    extraction_difficulty:
+      bim: medium
+      pdf_vector: medium
+      pdf_scan: medium
+    bylaw_tag_keywords:
+      - "secondary use"
+      - "accessory use"
+      - "ancillary use"
+      - "mixed use"
+
+  - id: occupancy_type
+    category: categorical
+    value_type: string
+    description: Building Code occupancy classification (e.g. Group C residential, Group E mercantile).
+    extraction_difficulty:
+      bim: medium
+      pdf_vector: easy
+      pdf_scan: medium
+    bylaw_tag_keywords:
+      - "occupancy"
+      - "occupancy classification"
+      - "Group C"
+      - "Group E"
+
+  - id: construction_type
+    category: categorical
+    value_type: string
+    description: Construction type per the Building Code (e.g. combustible, non-combustible).
+    extraction_difficulty:
+      bim: medium
+      pdf_vector: medium
+      pdf_scan: medium
+    bylaw_tag_keywords:
+      - "construction type"
+      - "combustible"
+      - "non-combustible"
+
+  - id: residential_unit_count
+    category: categorical
+    value_type: integer
+    description: Total number of dwelling units in the proposed building.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: easy
+      pdf_scan: medium
+    bylaw_tag_keywords:
+      - "dwelling unit"
+      - "dwelling units"
+      - "number of units"
+      - "unit count"
+      - "residential units"
+
+  - id: residential_unit_mix
+    category: categorical
+    value_type: string
+    description: Per-bedroom-count breakdown of residential units (studio / 1BR / 2BR / 3BR+). Stored as a structured map in value_json.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: medium
+      pdf_scan: hard
+    bylaw_tag_keywords:
+      - "unit mix"
+      - "bedroom"
+      - "studio"
+      - "family-friendly"
+
+  # ---------- Site / parking ----------
+
+  - id: parking_stalls_count
+    category: site
+    value_type: integer
+    description: Total number of vehicle parking stalls provided.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: easy
+      pdf_scan: medium
+    bylaw_tag_keywords:
+      - "parking stall"
+      - "parking space"
+      - "parking requirement"
+      - "minimum parking"
+
+  - id: parking_stalls_accessible_count
+    category: site
+    value_type: integer
+    description: Number of accessible (barrier-free) parking stalls provided.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: easy
+      pdf_scan: medium
+    bylaw_tag_keywords:
+      - "accessible parking"
+      - "barrier-free parking"
+      - "disabled parking"
+
+  - id: bicycle_stalls_count
+    category: site
+    value_type: integer
+    description: Number of bicycle parking spaces provided (short-term + long-term combined unless the bylaw differentiates).
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: easy
+      pdf_scan: medium
+    bylaw_tag_keywords:
+      - "bicycle parking"
+      - "bike parking"
+      - "bicycle space"
+      - "bicycle stall"
+
+  - id: loading_bays_count
+    category: site
+    value_type: integer
+    description: Number of loading bays provided for the proposed building.
+    extraction_difficulty:
+      bim: easy
+      pdf_vector: easy
+      pdf_scan: medium
+    bylaw_tag_keywords:
+      - "loading bay"
+      - "loading space"
+      - "loading requirement"
+
+  # ---------- Contextual (joined from external_dataset_feature, not extracted) ----------
+
+  - id: zone_code
+    category: contextual
+    value_type: string
+    description: Zone code that applies to the parcel (e.g. ER-1, COR, HR-1). Joined from the zoning external dataset.
+    bylaw_tag_keywords:
+      - "zone"
+      - "zoning"
+      - "zoning district"
+      - "land use district"
+
+  - id: height_precinct_code
+    category: contextual
+    value_type: string
+    description: Height precinct identifier from the height-precincts external dataset, where applicable.
+    bylaw_tag_keywords:
+      - "height precinct"
+      - "precinct height"
+
+  - id: heritage_overlay
+    category: contextual
+    value_type: boolean
+    description: Whether the parcel falls within a designated heritage conservation area.
+    bylaw_tag_keywords:
+      - "heritage"
+      - "heritage district"
+      - "heritage conservation"
+      - "designated heritage"
+
+  - id: flood_overlay
+    category: contextual
+    value_type: boolean
+    description: Whether the parcel falls within a regulated flood-risk area.
+    bylaw_tag_keywords:
+      - "flood"
+      - "floodplain"
+      - "flood hazard"
+      - "flood risk"
+
+  - id: transit_catchment
+    category: contextual
+    value_type: boolean
+    description: Whether the parcel falls within a defined frequent-transit or rapid-transit catchment area (typically used by parking-relaxation clauses).
+    bylaw_tag_keywords:
+      - "transit"
+      - "frequent transit"
+      - "rapid transit"
+      - "transit-oriented"
+
+  - id: lot_area_m2
+    category: contextual
+    unit: m2
+    value_type: number
+    description: "Parcel area. Source: parcel.area_m2 (computed from the cadastral geometry)."
+    bylaw_tag_keywords:
+      - "lot area"
+      - "lot size"
+      - "minimum lot area"
+      - "site area"
+
+  - id: corner_lot_boolean
+    category: contextual
+    value_type: boolean
+    description: Whether the parcel is a corner lot (fronts on two intersecting streets). Many setback clauses are conditional on this.
+    bylaw_tag_keywords:
+      - "corner lot"
+      - "corner parcel"
+      - "double frontage"
+
+  - id: arterial_frontage_boolean
+    category: contextual
+    value_type: boolean
+    description: Whether the parcel fronts on an arterial street (typically per the street centerline classification dataset). Some height and use clauses condition on this.
+    bylaw_tag_keywords:
+      - "arterial"
+      - "arterial road"
+      - "arterial street"
+      - "major street"

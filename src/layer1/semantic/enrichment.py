@@ -20,7 +20,9 @@ from layer1.db.base import (
     TableAxisBinding,
     TableSemanticProfile,
 )
+from layer1.profiles import ParsingProfile
 from layer1.semantic.extractors import (
+    ProfileOverlay,
     extract_condition_refs,
     extract_development_contexts,
     extract_numeric_values,
@@ -31,6 +33,8 @@ from layer1.semantic.extractors import (
     extract_zones,
     looks_like_use_label,
     normalize_use,
+    reset_profile_overlay,
+    use_profile_overlay,
 )
 
 EXTRACTOR_VERSION = "semantic-v1"
@@ -64,33 +68,67 @@ class SemanticEnrichmentReport:
         }
 
 
-def enrich_document_semantics(session: Session, *, document_id: int) -> SemanticEnrichmentReport:
-    _clear_existing_semantics(session, document_id=document_id)
-    report = SemanticEnrichmentReport(document_id=document_id)
-    cache: dict[tuple[str, str], SemanticEntity] = {}
+def enrich_document_semantics(
+    session: Session,
+    *,
+    document_id: int,
+    profile: ParsingProfile | None = None,
+) -> SemanticEnrichmentReport:
+    """Run semantic enrichment for a single document.
 
-    fragments = (
-        session.query(SourceFragment)
-        .filter(SourceFragment.document_id == document_id)
-        .order_by(SourceFragment.page_start, SourceFragment.id)
-        .all()
+    Pass ``profile`` (typically derived via
+    :func:`layer1.manifest_adapter.profile_from_manifest`) to override the
+    Halifax-flavoured hardcoded zone codes / use map for the duration of this
+    call. Without a profile the historical behavior is preserved exactly.
+    """
+    overlay = _overlay_from_profile(profile)
+    token = use_profile_overlay(overlay) if overlay is not None else None
+    try:
+        _clear_existing_semantics(session, document_id=document_id)
+        report = SemanticEnrichmentReport(document_id=document_id)
+        cache: dict[tuple[str, str], SemanticEntity] = {}
+
+        fragments = (
+            session.query(SourceFragment)
+            .filter(SourceFragment.document_id == document_id)
+            .order_by(SourceFragment.page_start, SourceFragment.id)
+            .all()
+        )
+        tables = (
+            session.query(SourceTable)
+            .filter(SourceTable.document_id == document_id)
+            .order_by(SourceTable.page_start, SourceTable.id)
+            .all()
+        )
+        for fragment in fragments:
+            _extract_fragment_entities(session, report, cache, fragment)
+            _extract_definition_fact(session, report, cache, fragment)
+            _extract_condition_definition(session, report, cache, fragment)
+        for table in tables:
+            _enrich_table(session, report, cache, table)
+        _enrich_cross_references(session, report, cache, document_id=document_id)
+        session.flush()
+        _refresh_counts(session, report)
+        return report
+    finally:
+        if token is not None:
+            reset_profile_overlay(token)
+
+
+def _overlay_from_profile(profile: ParsingProfile | None) -> ProfileOverlay | None:
+    if profile is None:
+        return None
+    if (
+        profile.zone_pattern is None
+        and profile.known_zone_codes is None
+        and profile.use_class_map is None
+    ):
+        return None
+    return ProfileOverlay(
+        zone_pattern=profile.zone_pattern,
+        known_zone_codes=profile.known_zone_codes,
+        use_class_map=profile.use_class_map,
     )
-    tables = (
-        session.query(SourceTable)
-        .filter(SourceTable.document_id == document_id)
-        .order_by(SourceTable.page_start, SourceTable.id)
-        .all()
-    )
-    for fragment in fragments:
-        _extract_fragment_entities(session, report, cache, fragment)
-        _extract_definition_fact(session, report, cache, fragment)
-        _extract_condition_definition(session, report, cache, fragment)
-    for table in tables:
-        _enrich_table(session, report, cache, table)
-    _enrich_cross_references(session, report, cache, document_id=document_id)
-    session.flush()
-    _refresh_counts(session, report)
-    return report
 
 
 def validate_document_semantics(session: Session, *, document_id: int) -> dict:

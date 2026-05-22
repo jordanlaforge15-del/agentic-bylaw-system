@@ -53,6 +53,15 @@ CENTERLINE_BBOX_PAD_DEG: float = 0.001
 FRONTAGE_PERIMETER_RATIO_OK: float = 0.05
 
 
+# Centerline attribute keys we accept as a street name. STR_NAME is
+# HRM's canonical short-name field ("HARVARD", "QUINPOOL"); FULL_NAME
+# is the suffixed long form ("HARVARD ST", "QUINPOOL RD"). Falling back
+# to FULL_NAME keeps the algorithm working against centerline datasets
+# that omit STR_NAME. Both are present in the prod ingest of HRM's
+# StreetNetwork layer as of ABS-23.
+_STREET_NAME_KEYS: tuple[str, ...] = ("STR_NAME", "FULL_NAME", "FULL_STREET_NAME")
+
+
 def extract_lot_facts(
     db: Session,
     *,
@@ -102,6 +111,7 @@ def format_lot_facts_block(spatial_facts: dict[str, Any] | None) -> str:
         "depth_m",
         "perimeter_m",
         "corner",
+        "street_count",
         "multi_unit",
         "confidence",
         "method",
@@ -135,8 +145,15 @@ def _extract_inner(
     if resolved is None:
         return _unresolved(base, "geocoder could not resolve anchor")
 
-    parcels_dataset_id = _find_dataset_id(db, PARCELS_ROLE)
-    if parcels_dataset_id is None:
+    # Multiple ingests can register the same role — e.g. an evaluator
+    # fixture dataset alongside the real parcels ingest in the e2e
+    # database. Scan across all of them rather than picking one
+    # arbitrarily; the first dataset whose polygon contains the point
+    # wins. Picking arbitrarily is a flake risk: a dataset that lacks
+    # the PostGIS ``geometry`` column populated (older fixtures) would
+    # silently swallow the lookup and return ``unresolved``.
+    parcels_dataset_ids = _find_dataset_ids(db, PARCELS_ROLE)
+    if not parcels_dataset_ids:
         return _unresolved(
             base,
             "no property_parcels dataset is ingested; run the parcels ingest",
@@ -147,7 +164,7 @@ def _extract_inner(
         return _unresolved(base, "resolved geometry has no usable centroid")
 
     parcel_feature = _find_containing_parcel(
-        db, dataset_id=parcels_dataset_id, point=point
+        db, dataset_ids=parcels_dataset_ids, point=point
     )
     if parcel_feature is None:
         return _unresolved(
@@ -160,20 +177,24 @@ def _extract_inner(
     # behaviour of Part 1), just with frontage / depth / corner absent.
     # An ingested-but-empty result (parcel in a rural area with no
     # nearby centerline segments) takes the same path.
-    centerlines_dataset_id = _find_dataset_id(db, CENTERLINES_ROLE)
-    if centerlines_dataset_id is not None:
-        centerline_geojsons = _find_nearby_centerlines(
+    centerlines_dataset_ids = _find_dataset_ids(db, CENTERLINES_ROLE)
+    if centerlines_dataset_ids:
+        centerline_records = _find_nearby_centerlines(
             db,
-            dataset_id=centerlines_dataset_id,
+            dataset_ids=centerlines_dataset_ids,
             parcel_feature=parcel_feature,
         )
+        centerline_geojsons = [r["geometry"] for r in centerline_records]
+        centerline_names = [r["street_name"] for r in centerline_records]
     else:
         centerline_geojsons = []
+        centerline_names = []
 
     metrics = compute_lot_metrics(
         parcel_feature.geometry_geojson,
         centerline_geojsons,
         buffer_m=DEFAULT_BUFFER_M,
+        centerline_names=centerline_names,
     )
     if metrics.status == "unresolved":
         return _unresolved(base, metrics.reason or "lot metrics unresolved")
@@ -203,19 +224,27 @@ def _extract_inner(
             base["depth_m"] = round(metrics.depth_m, 2)
         if metrics.corner is not None:
             base["corner"] = metrics.corner
-    # Confidence: 1.0 when the polygon was clean and the frontage looks
-    # plausible (at least 5% of perimeter). Drop to 0.7 when the buffer
-    # heuristic likely missed — e.g. centerlines dataset not ingested,
-    # parcel set back further than the buffer width, or no centerline
-    # segments near the parcel. The result is still usable; the model
-    # should hedge.
+    if metrics.street_count is not None:
+        base["street_count"] = metrics.street_count
+    # Confidence:
+    #   1.0 — clean polygon, mid-block or corner lot (1–2 streets), and
+    #         frontage above the 5%-of-perimeter floor.
+    #   0.7 — lot_metrics flagged the result as uncertain (e.g. city-
+    #         block buffer overreach on 5251 Duke), or no centerlines
+    #         dataset ingested, or 3+ streets touch the parcel
+    #         (triangular / cul-de-sac throat), or frontage came back
+    #         below the 5% floor.
+    # The model is asked to hedge whenever confidence drops to 0.7.
     perim = metrics.perimeter_m or 0.0
     frontage_ok = (
         metrics.frontage_m is not None
         and perim > 0
         and (metrics.frontage_m / perim) >= FRONTAGE_PERIMETER_RATIO_OK
     )
-    if metrics.status == "ok" and frontage_ok:
+    irregular_frontage = (
+        metrics.street_count is not None and metrics.street_count >= 3
+    )
+    if metrics.status == "ok" and frontage_ok and not irregular_frontage:
         base["confidence"] = 1.0
     else:
         base["confidence"] = 0.7
@@ -229,15 +258,25 @@ def _unresolved(base: dict[str, Any], reason: str) -> dict[str, Any]:
     return base
 
 
-def _find_dataset_id(db: Session, role: str) -> int | None:
-    """Return the dataset id whose metadata_json.role matches ``role``."""
+def _find_dataset_ids(db: Session, role: str) -> list[int]:
+    """Return all dataset ids whose metadata_json.role matches ``role``.
+
+    Returns lower ids first (insertion order). Callers that want
+    deterministic resolution should iterate the full list rather than
+    taking ``[0]`` — e.g. when a fixture dataset and a production
+    ingest both register the same role, only one will actually
+    contain the geocoded point.
+    """
     rows = db.execute(
-        select(ExternalDataset.id, ExternalDataset.metadata_json)
+        select(ExternalDataset.id, ExternalDataset.metadata_json).order_by(
+            ExternalDataset.id
+        )
     ).all()
-    for row in rows:
-        if (row.metadata_json or {}).get("role") == role:
-            return int(row.id)
-    return None
+    return [
+        int(row.id)
+        for row in rows
+        if (row.metadata_json or {}).get("role") == role
+    ]
 
 
 def _representative_point(resolved: ResolvedLocation) -> Point | None:
@@ -264,10 +303,15 @@ def _representative_point(resolved: ResolvedLocation) -> Point | None:
 def _find_containing_parcel(
     db: Session,
     *,
-    dataset_id: int,
+    dataset_ids: list[int],
     point: Point,
 ) -> ExternalDatasetFeature | None:
     """Return the parcel feature whose polygon contains ``point``.
+
+    Scans across every dataset id in ``dataset_ids`` — when the same
+    role is registered by multiple datasets (e.g. an evaluator
+    fixture beside the real parcels ingest) the parcels live in
+    different datasets and the lookup must consider both.
 
     Uses PostGIS ``ST_Contains`` when available and falls back to the
     shapely bbox-prefilter loop on SQLite (the test path). When the
@@ -278,13 +322,16 @@ def _find_containing_parcel(
     homeowner's, and the boundary case is vanishingly rare for
     real-world civic-address geocodes.
     """
+    if not dataset_ids:
+        return None
+
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         geojson = json.dumps(point.__geo_interface__)
         sql = text(
             """
             SELECT edf.id AS feature_id
             FROM external_dataset_feature edf
-            WHERE edf.external_dataset_id = :ds_id
+            WHERE edf.external_dataset_id = ANY(:ds_ids)
               AND edf.geometry IS NOT NULL
               AND ST_Contains(
                   edf.geometry,
@@ -293,7 +340,9 @@ def _find_containing_parcel(
             LIMIT 1
             """
         )
-        row = db.execute(sql, {"geojson": geojson, "ds_id": dataset_id}).first()
+        row = db.execute(
+            sql, {"geojson": geojson, "ds_ids": list(dataset_ids)}
+        ).first()
         if row is None:
             return None
         return db.get(ExternalDatasetFeature, int(row.feature_id))
@@ -303,7 +352,7 @@ def _find_containing_parcel(
     features = (
         db.execute(
             select(ExternalDatasetFeature).where(
-                ExternalDatasetFeature.external_dataset_id == dataset_id
+                ExternalDatasetFeature.external_dataset_id.in_(dataset_ids)
             )
         )
         .scalars()
@@ -330,10 +379,10 @@ def _find_containing_parcel(
 def _find_nearby_centerlines(
     db: Session,
     *,
-    dataset_id: int,
+    dataset_ids: list[int],
     parcel_feature: ExternalDatasetFeature,
 ) -> list[dict[str, Any]]:
-    """Return GeoJSON geometries of centerline segments near the parcel.
+    """Return centerline segments near the parcel as ``{geometry, street_name}``.
 
     "Near" = the parcel's bbox padded by ``CENTERLINE_BBOX_PAD_DEG`` on
     each side. The padding ensures we catch the centerline of a road
@@ -341,9 +390,14 @@ def _find_nearby_centerlines(
     it, a parcel that hugs its bbox edge would miss the very centerline
     its front edge runs along.
 
+    ``street_name`` is sourced from ``attributes_json`` using the keys
+    in ``_STREET_NAME_KEYS`` (HRM's StreetNetwork layer publishes
+    STR_NAME and FULL_NAME). Returned as ``None`` when no key is
+    populated — ``compute_lot_metrics`` then treats that segment as a
+    standalone street rather than merging it with its neighbours.
+
     PostGIS uses ``&&`` (bbox intersect) for a fast spatial-index lookup;
-    SQLite falls back to a JSON-bbox scan. Either way we return the raw
-    geometry dicts that ``compute_lot_metrics`` can ingest directly.
+    SQLite falls back to a JSON-bbox scan.
     """
     bbox = parcel_feature.geometry_bbox_json or {}
     minx = float(bbox.get("minx", 0.0)) - CENTERLINE_BBOX_PAD_DEG
@@ -351,12 +405,16 @@ def _find_nearby_centerlines(
     miny = float(bbox.get("miny", 0.0)) - CENTERLINE_BBOX_PAD_DEG
     maxy = float(bbox.get("maxy", 0.0)) + CENTERLINE_BBOX_PAD_DEG
 
+    if not dataset_ids:
+        return []
+
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         sql = text(
             """
-            SELECT edf.geometry_geojson AS geometry_geojson
+            SELECT edf.geometry_geojson AS geometry_geojson,
+                   edf.attributes_json AS attributes_json
             FROM external_dataset_feature edf
-            WHERE edf.external_dataset_id = :ds_id
+            WHERE edf.external_dataset_id = ANY(:ds_ids)
               AND edf.geometry IS NOT NULL
               AND edf.geometry && ST_MakeEnvelope(
                   :minx, :miny, :maxx, :maxy, 4326
@@ -366,20 +424,27 @@ def _find_nearby_centerlines(
         rows = db.execute(
             sql,
             {
-                "ds_id": dataset_id,
+                "ds_ids": list(dataset_ids),
                 "minx": minx,
                 "miny": miny,
                 "maxx": maxx,
                 "maxy": maxy,
             },
         ).all()
-        return [dict(row.geometry_geojson) for row in rows if row.geometry_geojson]
+        return [
+            {
+                "geometry": dict(row.geometry_geojson),
+                "street_name": _street_name_from_attrs(row.attributes_json),
+            }
+            for row in rows
+            if row.geometry_geojson
+        ]
 
     # SQLite fallback.
     features = (
         db.execute(
             select(ExternalDatasetFeature).where(
-                ExternalDatasetFeature.external_dataset_id == dataset_id
+                ExternalDatasetFeature.external_dataset_id.in_(dataset_ids)
             )
         )
         .scalars()
@@ -396,8 +461,24 @@ def _find_nearby_centerlines(
         ):
             continue
         if feature.geometry_geojson:
-            out.append(dict(feature.geometry_geojson))
+            out.append(
+                {
+                    "geometry": dict(feature.geometry_geojson),
+                    "street_name": _street_name_from_attrs(feature.attributes_json),
+                }
+            )
     return out
+
+
+def _street_name_from_attrs(attrs: dict[str, Any] | None) -> str | None:
+    """Pick the first populated street-name key from a centerline's attributes."""
+    if not attrs:
+        return None
+    for key in _STREET_NAME_KEYS:
+        value = attrs.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().upper()
+    return None
 
 
 def _detect_multi_unit(

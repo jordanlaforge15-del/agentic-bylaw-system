@@ -1,14 +1,14 @@
 // Marketing-page client component: posts to /api/billing/checkout/pack
-// and redirects the browser to the returned Stripe URL.
+// and redirects the browser to the returned hosted-checkout URL.
 //
 // Lives in /components/marketing/ rather than /components/ because
 // it's only used by the pricing page; the in-app product chrome has
 // its own purchase flow.
 //
-// When the catalog says the offer isn't `available` (Stripe Price ID
-// not configured for this SKU), the button renders disabled with a
-// "coming soon" affordance. That keeps the pricing page usable
-// during the pre-Stripe rollout.
+// When the catalog says the offer isn't `available` (the payment
+// processor's Price ID not configured for this SKU), the button
+// renders disabled with a "coming soon" affordance. That keeps the
+// pricing page usable during the pre-checkout rollout.
 
 "use client";
 
@@ -77,7 +77,7 @@ export function BuyPackButton({ tier, packSku, available, featured }: Props) {
           className={`text-[10.5px] ${featured ? "opacity-60" : "text-text-muted"}`}
           style={{ letterSpacing: "-0.005em" }}
         >
-          Stripe checkout not yet configured for this SKU.
+          Checkout not yet configured for this SKU.
         </span>
       </div>
     );

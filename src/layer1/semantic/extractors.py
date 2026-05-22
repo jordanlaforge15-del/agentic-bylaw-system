@@ -1,8 +1,49 @@
 from __future__ import annotations
 
+import contextvars
 import re
+from dataclasses import dataclass
+from typing import Iterable, Mapping
 
 from layer1.semantic.taxonomy import standard_terms, use_aliases
+
+
+@dataclass(frozen=True)
+class ProfileOverlay:
+    """Manifest-derived overrides for the otherwise-hardcoded zone / use logic.
+
+    Lives in a :class:`contextvars.ContextVar` so the dozens of call sites in
+    ``layer1.semantic.enrichment`` don't each have to take a ``profile`` kwarg;
+    the enrichment entrypoint sets the overlay once and tears it down on
+    completion. Each extractor below falls back to the legacy module-level
+    constants when no overlay is active, so the historical code paths keep
+    behaving exactly as before.
+    """
+
+    zone_pattern: re.Pattern[str] | None = None
+    known_zone_codes: Iterable[str] | None = None
+    use_class_map: Mapping[str, str] | None = None
+
+
+_active_overlay: contextvars.ContextVar[ProfileOverlay | None] = contextvars.ContextVar(
+    "layer1_semantic_profile_overlay", default=None
+)
+
+
+def use_profile_overlay(overlay: ProfileOverlay | None) -> contextvars.Token:
+    """Bind ``overlay`` as the active manifest overlay; returns the token used
+    to restore the previous value via :func:`reset_profile_overlay`. Typically
+    used as ``token = use_profile_overlay(o); try: ... finally:
+    reset_profile_overlay(token)``."""
+    return _active_overlay.set(overlay)
+
+
+def reset_profile_overlay(token: contextvars.Token) -> None:
+    _active_overlay.reset(token)
+
+
+def _current_overlay() -> ProfileOverlay | None:
+    return _active_overlay.get()
 
 KNOWN_ZONE_CODES = {
     "CEN-2",
@@ -57,9 +98,28 @@ DEVELOPMENT_CONTEXT_RE = re.compile(
 )
 
 
-def normalize_zone(text: str) -> str:
+def normalize_zone(text: str, *, known_zone_codes: Iterable[str] | None = None) -> str:
     upper = re.sub(r"\s+", "", text.upper())
-    corrected = _correct_leading_ocr_zone(upper)
+    # Resolve known_zone_codes once — `_correct_leading_ocr_zone` needs it too
+    # and we want to honor any manifest overlay before the hyphenation rule
+    # kicks in. Without this short-circuit, a manifest declaring "R1" gets
+    # reshaped to "R-1" by the fullmatch below and then doesn't round-trip
+    # against the manifest's own taxonomy — surprising and wrong.
+    if known_zone_codes is None:
+        overlay = _current_overlay()
+        if overlay is not None and overlay.known_zone_codes is not None:
+            known_zone_codes = overlay.known_zone_codes
+    codes = list(known_zone_codes) if known_zone_codes is not None else None
+    if codes is not None:
+        upper_codes = {code.upper() for code in codes}
+        if upper.upper() in upper_codes:
+            # Preserve the exact spelling the manifest declared (case-insensitive
+            # match, then look up the manifest's canonical form).
+            for code in codes:
+                if code.upper() == upper:
+                    return code
+            return upper
+    corrected = _correct_leading_ocr_zone(upper, known_zone_codes=codes)
     if corrected:
         return corrected
     if "-" in upper:
@@ -73,35 +133,75 @@ def normalize_zone(text: str) -> str:
     return upper
 
 
-def _correct_leading_ocr_zone(upper: str) -> str | None:
+def _correct_leading_ocr_zone(
+    upper: str, *, known_zone_codes: Iterable[str] | None = None
+) -> str | None:
+    if known_zone_codes is None:
+        overlay = _current_overlay()
+        if overlay is not None and overlay.known_zone_codes is not None:
+            known_zone_codes = overlay.known_zone_codes
+    codes = known_zone_codes if known_zone_codes is not None else KNOWN_ZONE_CODES
     compact = upper.replace("-", "")
-    for zone_code in KNOWN_ZONE_CODES:
+    for zone_code in codes:
         zone_compact = zone_code.replace("-", "")
         if compact in {f"L{zone_compact}", f"I{zone_compact}"}:
             return zone_code
     return None
 
 
-def extract_zones(text: str) -> list[str]:
+def extract_zones(
+    text: str,
+    *,
+    zone_pattern: re.Pattern[str] | None = None,
+    known_zone_codes: Iterable[str] | None = None,
+) -> list[str]:
+    """Extract zone codes from ``text``.
+
+    Defaults to the Halifax-flavoured module constants ``ZONE_RE`` and
+    ``KNOWN_ZONE_CODES``. When a :class:`ProfileOverlay` is active (set by
+    ``layer1.semantic.enrichment.enrich_document_semantics`` during manifest-
+    driven ingestion) and the caller hasn't passed explicit overrides, the
+    overlay supplies the regex and known code set instead.
+    """
+    if zone_pattern is None or known_zone_codes is None:
+        overlay = _current_overlay()
+        if overlay is not None:
+            if zone_pattern is None and overlay.zone_pattern is not None:
+                zone_pattern = overlay.zone_pattern
+            if known_zone_codes is None and overlay.known_zone_codes is not None:
+                known_zone_codes = overlay.known_zone_codes
+    pattern = zone_pattern if zone_pattern is not None else ZONE_RE
     zones = set()
-    for match in ZONE_RE.finditer(text):
+    for match in pattern.finditer(text):
         raw = match.group(0)
         if re.fullmatch(r"m\s*2|m²", raw, flags=re.I):
             continue
-        zones.add(normalize_zone(raw))
+        zones.add(normalize_zone(raw, known_zone_codes=known_zone_codes))
     return sorted(zones)
 
 
-def normalize_use(text: str) -> str:
+def normalize_use(
+    text: str, *, use_class_map: Mapping[str, str] | None = None
+) -> str:
     normalized = re.sub(r"\s+", " ", text.strip().strip(".,;:")).lower()
     normalized = normalized.replace(" - ", "-")
+    if use_class_map is None:
+        overlay = _current_overlay()
+        if overlay is not None and overlay.use_class_map is not None:
+            use_class_map = overlay.use_class_map
+    # Manifest-supplied mapping wins over the module-level taxonomy aliases —
+    # the manifest is the per-jurisdiction source of truth when present.
+    if use_class_map is not None and normalized in use_class_map:
+        return use_class_map[normalized]
     return use_aliases().get(normalized, normalized)
 
 
-def extract_uses(text: str) -> list[str]:
+def extract_uses(
+    text: str, *, use_class_map: Mapping[str, str] | None = None
+) -> list[str]:
     uses = []
     for match in USE_PHRASE_RE.finditer(text):
-        candidate = normalize_use(match.group(1))
+        candidate = normalize_use(match.group(1), use_class_map=use_class_map)
         if candidate in {"land use", "permitted use"}:
             continue
         uses.append(candidate)

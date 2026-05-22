@@ -12,6 +12,13 @@ from bylaw_retrieval.retrieval import (
     latest_document_id_resolver,
 )
 from layer1.db.session import session_scope
+from layer2.compliance.evaluator import (
+    DocumentFilters,
+    EvaluationRequest,
+    EvaluatorService,
+    SubmissionAttributeInput,
+)
+from layer2.compliance.db.models import SubmissionAttributeSource
 
 SERVER_NAME = "Bylaw Retrieval MCP"
 
@@ -52,15 +59,27 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             "When the user mentions ANY address, parcel, intersection, or "
             "named place (e.g. '6321 Quinpool Road', 'PID 00012345', 'corner "
             "of Spring Garden and Queen', 'Halifax Citadel'), you MUST set "
-            "the structured 'location' field on search_bylaw_evidence. Do "
-            "NOT rely on putting the address in the 'query' string alone — "
-            "that produces text-only matches and silently skips zone, "
-            "height, FAR, heritage, and bonus-zoning datasets, which are "
-            "the exact data needed to answer most planning questions.\n\n"
+            "the structured 'location' field on search_bylaw_evidence and "
+            "evaluate_submission_against_bylaws. Do NOT rely on putting the "
+            "address in the 'query' string alone — that produces text-only "
+            "matches and silently skips zone, height, FAR, heritage, and "
+            "bonus-zoning datasets, which are the exact data needed to "
+            "answer most planning questions.\n\n"
             "Example: for '6321 Quinpool Road' send "
             "location={civic_number: '6321', street: 'Quinpool Road'}. "
             "If the response contains a 'notes' array warning that the "
-            "location was missing, re-issue the call with the slot set."
+            "location was missing, re-issue the call with the slot set.\n\n"
+            "WHEN TO USE evaluate_submission_against_bylaws.\n"
+            "Use this fifth tool ONLY when the user has stated specific "
+            "proposed attribute values (height, setbacks, use class, "
+            "parking, etc.) AND a location. For exploratory questions "
+            "('what rules apply here?', 'what's allowed in this zone?') "
+            "use search_bylaw_evidence instead — the evaluator is the "
+            "wrong tool when there's nothing concrete to compare against. "
+            "Output is ADVISORY: surface clause citations to the user, "
+            "never present a verdict without the citing clause. When "
+            "overall_status is 'incomplete', ask the user for the missing "
+            "attributes listed in unevaluated_attributes before proceeding."
             + scope_note
         ),
     )
@@ -122,6 +141,7 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         page_start: int | None = None,
         page_end: int | None = None,
         location: dict[str, Any] | None = None,
+        attribute_tag_filter: list[str] | None = None,
         include_context: bool = True,
         include_cross_references: bool = True,
         include_tables: bool = True,
@@ -192,6 +212,7 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             page_start=page_start,
             page_end=page_end,
             location=LocationSlot.model_validate(location) if location else None,
+            attribute_tag_filter=attribute_tag_filter,
             include_context=include_context,
             include_cross_references=include_cross_references,
             include_tables=include_tables,
@@ -201,6 +222,117 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         with session_scope(db_url) as session:
             service = _service(session)
             return service.search(request).model_dump(mode="json")
+
+    @mcp.tool()
+    def evaluate_submission_against_bylaws(
+        attributes: list[dict[str, Any]],
+        location: dict[str, Any] | None = None,
+        document_filters: dict[str, Any] | None = None,
+        taxonomy_version: str | None = None,
+        per_attribute_limit: int = 8,
+        submission_id: int | None = None,
+        persist_decision: bool = False,
+    ) -> dict:
+        """Evaluate a submission's attributes against applicable bylaw clauses.
+
+        Returns a structured compliance matrix — per-attribute applicable
+        clauses, computed deltas, and pass/fail/uncertain verdicts. Output
+        is ADVISORY; surface clause citations alongside any verdict.
+
+        WHEN TO USE
+        -----------
+        Call this tool ONLY when the user has stated specific proposed
+        attribute values (height, setbacks, use class, parking, etc.)
+        AND a location. If only one of attributes or location is
+        provided, fall back to ``search_bylaw_evidence`` for the
+        exploratory case.
+
+        INPUT
+        -----
+        * ``attributes``: list of ``{attribute_key, value, unit?, source?}``.
+          ``attribute_key`` MUST be a valid ID from the Phase-1 taxonomy
+          (``src/layer2/compliance/attributes/taxonomy.yaml``).
+        * ``location``: same ``LocationSlot`` shape used by
+          ``search_bylaw_evidence`` (civic_number + street, parcel_id,
+          intersection_streets, named_place, or geometry).
+        * ``document_filters``: optional ``{municipality, bylaw_name,
+          citation_path_prefix, document_id}`` to scope the corpus.
+        * ``taxonomy_version``: defaults to the running version.
+        * ``per_attribute_limit``: per-attribute retrieval limit; default 8.
+        * ``submission_id`` + ``persist_decision``: when both are
+          provided, the tool writes an ``approval_decision`` row pinned
+          to the running evaluator version. Default is ``persist=False``
+          for what-if queries from agents.
+
+        OUTPUT
+        ------
+        ``EvaluationResponse``:
+        * ``overall_status``: compliant | non_compliant | uncertain | incomplete.
+        * ``attribute_results``: per-attribute ``{attribute_key,
+          submitted_value, applicable_clauses[], verdict, delta}``.
+        * ``unevaluated_attributes``: regulated attributes for this zone
+          with no submitted value — prompt the user for them before
+          presenting a verdict.
+        * ``notes``: human-readable advisories (location unresolved,
+          missing conditional inputs, low-confidence clause matches).
+
+        IMPORTANT
+        ---------
+        Always populate ``location`` — same rule as
+        ``search_bylaw_evidence``. An evaluation without a location
+        skips spatial filtering and may surface clauses from the wrong
+        zone. If ``overall_status`` is ``incomplete``, the agent's next
+        turn should ASK the user for the missing attributes from
+        ``unevaluated_attributes`` rather than guessing.
+        """
+        parsed_location = (
+            LocationSlot.model_validate(location) if location else None
+        )
+        attribute_inputs: list[SubmissionAttributeInput] = []
+        for entry in attributes:
+            attr_key = entry.get("attribute_key")
+            if not isinstance(attr_key, str) or not attr_key:
+                continue
+            source_token = entry.get("source") or "manual"
+            try:
+                source = SubmissionAttributeSource(source_token)
+            except ValueError:
+                source = SubmissionAttributeSource.MANUAL
+            attribute_inputs.append(
+                SubmissionAttributeInput(
+                    attribute_key=attr_key,
+                    value=entry.get("value"),
+                    unit=entry.get("unit"),
+                    source=source,
+                    confidence=float(entry.get("confidence", 1.0)),
+                )
+            )
+        filters = (
+            DocumentFilters(
+                municipality=document_filters.get("municipality"),
+                bylaw_name=document_filters.get("bylaw_name"),
+                citation_path_prefix=document_filters.get("citation_path_prefix"),
+                document_id=document_filters.get("document_id"),
+            )
+            if document_filters
+            else None
+        )
+        request = EvaluationRequest(
+            attributes=attribute_inputs,
+            location=parsed_location,
+            document_filters=filters,
+            taxonomy_version=taxonomy_version,
+            per_attribute_limit=per_attribute_limit,
+            submission_id=submission_id,
+            persist_decision=persist_decision,
+        )
+        with session_scope(db_url) as session:
+            retrieval_service = _service(session)
+            evaluator = EvaluatorService(
+                session, retrieval_service=retrieval_service
+            )
+            response = evaluator.evaluate(request)
+            return response.to_json()
 
     @mcp.resource("bylaw://documents")
     def documents_resource() -> str:

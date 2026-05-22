@@ -193,6 +193,19 @@ class RetrievalRequest(BaseModel):
             "linked geo datasets (e.g. height precincts)."
         ),
     )
+    attribute_tag_filter: list[str] | None = Field(
+        default=None,
+        description=(
+            "Hard pre-filter on the candidate fragment set. When set, only "
+            "fragments whose ``source_fragment.attribute_tags`` array contains "
+            "at least one of the supplied attribute IDs are considered for "
+            "scoring (the multiple-tag case is a union). Default None "
+            "preserves prior behaviour for non-evaluator callers. Populated by "
+            "the compliance evaluator (one search per submission attribute) "
+            "so per-attribute retrieval is O(clauses-tagged-with-this-attribute) "
+            "instead of O(all-clauses)."
+        ),
+    )
     include_context: bool = Field(
         default=True,
         description="Include ancestor chain and related context for each match.",

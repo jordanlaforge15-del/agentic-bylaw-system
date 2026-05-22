@@ -35,12 +35,29 @@ advisor = [
   "pyjwt[crypto]>=2.8",
   "stripe>=10.0",
   "svix>=1.40",
+  # python-multipart is required by FastAPI for any multipart/form-data
+  # endpoint (the submissions upload route — ABS-53). Without it FastAPI
+  # raises RuntimeError at request time instead of import time, so the
+  # missing dep doesn't show until a real upload is attempted.
+  "python-multipart>=0.0.9",
 ]
 ingest = [
   "docling>=2.0",
   "openai>=1.40",
   "pymupdf>=1.23",
   "pdfplumber>=0.10",
+]
+bim = [
+  # Phase 2 (ABS-49): IFC ingestion. Open-source toolkit, pip-installable
+  # wheels on macOS / Linux / Windows. APS / .rvt path lives in a separate
+  # extras group when it lands.
+  "ifcopenshell>=0.7",
+  # Phase 2 (ABS-52): coord-system transforms (project-local → EPSG:2961 / 4326).
+  # geopandas pulls pyproj transitively but Phase-1 deliberately avoided
+  # the dep — ABS-52 makes it explicit because Stane Plane reprojection
+  # has to be exact, not the local-tangent-plane approximation that
+  # layer2.spatial.lot_metrics rolls.
+  "pyproj>=3.6",
 ]
 api = []
 mcp = [
@@ -68,7 +85,7 @@ where = ["src", "mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "mcp"]
+pythonpath = ["src", "mcp", "tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
