@@ -80,6 +80,13 @@ class SubmissionAttributeSource(StrEnum):
     OVERRIDE = "override"
 
 
+# SAEnum defaults to writing the Python member name ("DRAFT"), but the
+# Postgres enum labels are the lowercase .value form. Force value-based
+# round-trip so SubmissionStatus.DRAFT serializes as "draft".
+def _enum_values(enum_cls: type[StrEnum]) -> list[str]:
+    return [m.value for m in enum_cls]
+
+
 class Submission(Base):
     """A development proposal being evaluated against the bylaw graph.
 
@@ -98,13 +105,21 @@ class Submission(Base):
     )
     submitter_id: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[SubmissionStatus] = mapped_column(
-        SAEnum(SubmissionStatus, name="submission_status"),
+        SAEnum(
+            SubmissionStatus,
+            name="submission_status",
+            values_callable=_enum_values,
+        ),
         nullable=False,
         default=SubmissionStatus.DRAFT,
         index=True,
     )
     source_type: Mapped[SubmissionSourceType] = mapped_column(
-        SAEnum(SubmissionSourceType, name="submission_source_type"),
+        SAEnum(
+            SubmissionSourceType,
+            name="submission_source_type",
+            values_callable=_enum_values,
+        ),
         nullable=False,
         default=SubmissionSourceType.MANUAL,
     )
@@ -145,7 +160,11 @@ class SubmissionAttribute(Base):
     value_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     source: Mapped[SubmissionAttributeSource] = mapped_column(
-        SAEnum(SubmissionAttributeSource, name="submission_attribute_source"),
+        SAEnum(
+            SubmissionAttributeSource,
+            name="submission_attribute_source",
+            values_callable=_enum_values,
+        ),
         nullable=False,
         default=SubmissionAttributeSource.MANUAL,
     )
