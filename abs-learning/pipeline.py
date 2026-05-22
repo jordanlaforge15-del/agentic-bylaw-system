@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from agents.discovery import companions_from_sources
 from agents.semantic_mapper import SemanticMapperAgent
 from agents.structure_analyst import StructureAnalystAgent
 from agents.validation import ValidationAgent
@@ -73,7 +74,10 @@ def run_learning_pipeline(
 
     semantic_agent = SemanticMapperAgent(anthropic_client)
     try:
-        taxonomy = semantic_agent.map(primary)
+        taxonomy = semantic_agent.map(
+            primary,
+            companions=companions_from_sources(sources),
+        )
     except Exception as exc:  # noqa: BLE001
         flags.append(f"semantic_mapper_failed: {type(exc).__name__}: {exc}")
 
