@@ -1,11 +1,14 @@
-// /coverage — what jurisdictions ABS has indexed end-to-end.
+// /coverage — exactly what ABS reads today, in plain numbers.
 //
 // Three stacked sections:
-//   1. Active jurisdiction hero (dark on light) with 4-stat strip.
-//   2. Bylaws table (1px hair, 6-col grid at desktop; rows collapse to
-//      stacked cards below `lg`).
-//   3. Methodology + Roadmap two-col split, with a dark CTA strip
-//      under the roadmap.
+//   1. Active jurisdiction hero (dark on light).
+//   2. Bylaws table — the documents we have actually indexed end-to-end.
+//   3. Methodology + Roadmap two-col split, with a dark CTA strip.
+//
+// Source of truth for the indexed-document set: the Layer 1 ingest
+// manifest at abs-learning/output/halifax-regional-centre/manifest.json.
+// If you add a new document here you should also add it to that manifest
+// (or vice versa) — the two should agree.
 
 import Link from "next/link";
 import { Mono } from "@/components/mono";
@@ -18,82 +21,31 @@ type Bylaw = {
   name: string;
   version: string;
   pages: number;
-  fragments: string;
-  status: "CURRENT" | "REFERENCE";
-  spatial: boolean;
+  status: "CURRENT";
 };
 
 type RoadmapItem = {
   name: string;
-  province: string;
-  eta: string;
-  stage: "INDEXING" | "NEGOTIATING" | "BACKLOG";
+  scope: string;
+  stage: "QUEUED" | "EXPLORATORY";
   note: string;
 };
 
 const ACTIVE = {
-  name: "Halifax Regional Municipality",
+  name: "Halifax Regional Centre",
+  parent: "Halifax Regional Municipality",
   province: "Nova Scotia",
-  parcels: "38,420",
-  documents: 6,
-  totalFragments: "18,142",
-  lastSync: "2026-05-12",
 };
 
+// Single-document scope today. Page count and amendment date are from
+// the Layer 1 ingest manifest (abs-learning/output/halifax-regional-centre).
 const BYLAWS: Bylaw[] = [
   {
-    id: "LUB-MAINLAND",
-    name: "Land Use By-law for Halifax Mainland",
-    version: "Consolidated · Mar 2026",
-    pages: 248,
-    fragments: "4,210",
+    id: "RCLUB",
+    name: "Regional Centre Land Use By-law",
+    version: "Consolidated · last amended 2024-04-26 (Case 24469)",
+    pages: 457,
     status: "CURRENT",
-    spatial: true,
-  },
-  {
-    id: "LUB-PENINSULA",
-    name: "Land Use By-law for Halifax Peninsula",
-    version: "Consolidated · Mar 2026",
-    pages: 214,
-    fragments: "3,884",
-    status: "CURRENT",
-    spatial: true,
-  },
-  {
-    id: "LUB-DARTMOUTH",
-    name: "Land Use By-law for Dartmouth",
-    version: "Consolidated · Feb 2026",
-    pages: 196,
-    fragments: "3,402",
-    status: "CURRENT",
-    spatial: true,
-  },
-  {
-    id: "CDD",
-    name: "Centre Plan — Package A",
-    version: "Adopted · 2021, am. Jan 2026",
-    pages: 312,
-    fragments: "5,108",
-    status: "CURRENT",
-    spatial: true,
-  },
-  {
-    id: "SUB-BYL",
-    name: "Regional Subdivision By-law",
-    version: "Consolidated · Nov 2025",
-    pages: 88,
-    fragments: "1,124",
-    status: "CURRENT",
-    spatial: false,
-  },
-  {
-    id: "NS-BC",
-    name: "NS Building Code references",
-    version: "Edition 2020",
-    pages: 36,
-    fragments: "414",
-    status: "REFERENCE",
-    spatial: false,
   },
 ];
 
@@ -101,92 +53,54 @@ const METHODOLOGY: Array<{ n: string; t: string; d: string }> = [
   {
     n: "01",
     t: "Acquire",
-    d: "Source the consolidated bylaw text directly from the municipality.",
+    d: "Source the consolidated bylaw text directly from the municipality's published version.",
   },
   {
     n: "02",
     t: "Parse",
-    d: "Extract structure — parts, sections, tables, defined terms — into a fragment graph.",
+    d: "Extract structure — parts, sections, subsections, clauses, schedules — into a fragment graph keyed to the official citation scheme.",
   },
   {
     n: "03",
     t: "Link to land",
-    d: "Join the zoning layer to parcel geometry. Validate against a sample of 50 known parcels.",
+    d: "Join the zoning layer to parcel geometry so a reading can resolve from a civic address to the rules that apply on the ground.",
   },
   {
     n: "04",
-    t: "Calibrate",
-    d: "Run 1,000+ planner-reviewed test questions. Coverage launches only above 0.90 calibrated confidence.",
+    t: "Test against real questions",
+    d: "Run an evolving evaluator suite against the agent before opening new coverage. Beta means this is still in motion — see the Linear board.",
   },
 ];
 
 const ROADMAP: RoadmapItem[] = [
   {
-    name: "Charlottetown",
-    province: "PE",
-    eta: "Q3 2026",
-    stage: "NEGOTIATING",
-    note: "Bylaw acquisition in progress.",
+    name: "Rest of HRM (suburban + rural Land Use By-laws)",
+    scope: "NS",
+    stage: "QUEUED",
+    note: "Same parser, additional documents. Sequenced after the Regional Centre LUB stabilizes.",
   },
   {
-    name: "Moncton",
-    province: "NB",
-    eta: "Q3 2026",
-    stage: "INDEXING",
-    note: "Documents acquired, parsing under review.",
-  },
-  {
-    name: "Saint John",
-    province: "NB",
-    eta: "Q4 2026",
-    stage: "INDEXING",
-    note: "Documents acquired.",
-  },
-  {
-    name: "Fredericton",
-    province: "NB",
-    eta: "Q4 2026",
-    stage: "BACKLOG",
-    note: "Sequenced after Moncton.",
-  },
-  {
-    name: "St. John’s",
-    province: "NL",
-    eta: "Q1 2027",
-    stage: "BACKLOG",
-    note: "Targeted for Atlantic rollout.",
-  },
-  {
-    name: "Sydney (CBRM)",
-    province: "NS",
-    eta: "Q1 2027",
-    stage: "BACKLOG",
-    note: "Following the Atlantic rollout.",
+    name: "Other Atlantic Canada municipalities",
+    scope: "ATL · CAN",
+    stage: "EXPLORATORY",
+    note: "Scoping by demand. If you want ABS in your city, tell us.",
   },
 ];
 
 // Stage swatch colors map to design tokens.
 const stageClass = (s: RoadmapItem["stage"]) =>
-  s === "INDEXING"
-    ? "text-accent-ink"
-    : s === "NEGOTIATING"
-      ? "text-brick"
-      : "text-text-muted";
+  s === "QUEUED" ? "text-accent-ink" : "text-text-muted";
 
 const stageBgClass = (s: RoadmapItem["stage"]) =>
-  s === "INDEXING"
-    ? "bg-accent-ink"
-    : s === "NEGOTIATING"
-      ? "bg-brick"
-      : "bg-text-muted opacity-35";
+  s === "QUEUED" ? "bg-accent-ink" : "bg-text-muted opacity-35";
 
 export default function CoveragePage() {
   return (
     <Page>
       <PageHead
-        kicker="COVERAGE · MAY 2026"
+        kicker="COVERAGE · PRIVATE BETA"
         title="One jurisdiction. Deep."
-        sub="ABS is built for one place at a time. We index every applicable bylaw end-to-end before opening a new region — so a reading isn’t half-true."
+        sub="ABS is built for one place at a time. The page below lists exactly what's indexed today — no more, no less."
       />
 
       {/* Active hero — inverted card */}
@@ -211,6 +125,17 @@ export default function CoveragePage() {
             >
               {ACTIVE.name}
             </h2>
+            <div
+              className="mt-1"
+              style={{
+                fontSize: 13,
+                color: "rgba(255,255,255,0.6)",
+                letterSpacing: "-0.005em",
+              }}
+            >
+              The urban core of {ACTIVE.parent}. Other HRM plan areas are
+              not yet in scope.
+            </div>
           </div>
           <span
             className="bg-accent text-on-accent self-start font-mono"
@@ -220,19 +145,18 @@ export default function CoveragePage() {
               letterSpacing: "0.14em",
             }}
           >
-            FULLY INDEXED
+            PRIMARY BYLAW INDEXED
           </span>
         </div>
 
         <div
-          className="grid grid-cols-2 sm:grid-cols-4 gap-6 mt-7 pt-[22px]"
+          className="grid grid-cols-1 sm:grid-cols-3 gap-6 mt-7 pt-[22px]"
           style={{ borderTop: "1px solid rgba(255,255,255,0.15)" }}
         >
           {[
-            { l: "PARCELS", n: ACTIVE.parcels },
-            { l: "BYLAW DOCUMENTS", n: ACTIVE.documents },
-            { l: "TOTAL FRAGMENTS", n: ACTIVE.totalFragments },
-            { l: "LAST SYNC", n: ACTIVE.lastSync },
+            { l: "JURISDICTIONS", n: "1" },
+            { l: "BYLAW DOCUMENTS", n: String(BYLAWS.length) },
+            { l: "STATUS", n: "Private beta" },
           ].map((s) => (
             <div key={s.l}>
               <Mono size={9.5} style={{ color: "rgba(255,255,255,0.55)" }}>
@@ -260,17 +184,14 @@ export default function CoveragePage() {
           className="hidden lg:grid bg-surface-alt border-b border-hair gap-4"
           style={{
             padding: "12px 18px",
-            gridTemplateColumns:
-              "2.4fr 1.6fr 0.8fr 0.8fr 0.7fr 0.6fr",
+            gridTemplateColumns: "2.4fr 2.4fr 0.8fr 0.8fr",
           }}
         >
-          {["DOCUMENT", "VERSION", "PAGES", "FRAGMENTS", "SPATIAL", "STATUS"].map(
-            (h) => (
-              <Mono muted size={9.5} key={h}>
-                {h}
-              </Mono>
-            ),
-          )}
+          {["DOCUMENT", "VERSION", "PAGES", "STATUS"].map((h) => (
+            <Mono muted size={9.5} key={h}>
+              {h}
+            </Mono>
+          ))}
         </div>
         {BYLAWS.map((b, i) => (
           <div
@@ -281,8 +202,7 @@ export default function CoveragePage() {
             }
             style={{
               padding: "14px 18px",
-              gridTemplateColumns:
-                "2.4fr 1.6fr 0.8fr 0.8fr 0.7fr 0.6fr",
+              gridTemplateColumns: "2.4fr 2.4fr 0.8fr 0.8fr",
             }}
           >
             <div className="flex flex-col gap-0.5">
@@ -300,25 +220,7 @@ export default function CoveragePage() {
               <span className="lg:hidden text-text-muted mr-2">PAGES</span>
               {b.pages}
             </span>
-            <span className="font-mono" style={{ fontSize: 12 }}>
-              <span className="lg:hidden text-text-muted mr-2">FRAGMENTS</span>
-              {b.fragments}
-            </span>
-            <span
-              className={
-                "font-mono " +
-                (b.spatial ? "text-accent-ink" : "text-text-muted")
-              }
-              style={{ fontSize: 11, letterSpacing: "0.06em" }}
-            >
-              <span className="lg:hidden text-text-muted mr-2">SPATIAL</span>
-              {b.spatial ? "✓ YES" : "— NO"}
-            </span>
-            <Mono
-              accent={b.status === "CURRENT"}
-              muted={b.status !== "CURRENT"}
-              size={9.5}
-            >
+            <Mono accent size={9.5}>
               {b.status}
             </Mono>
           </div>
@@ -341,9 +243,9 @@ export default function CoveragePage() {
               lineHeight: 1.05,
             }}
           >
-            We don’t claim coverage
+            We don't claim coverage
             <br />
-            until it’s <HighlightWord>verifiable</HighlightWord>.
+            until it's <HighlightWord>verifiable</HighlightWord>.
           </h3>
           <ol className="list-none p-0 m-0 flex flex-col gap-[18px]">
             {METHODOLOGY.map((s) => (
@@ -381,7 +283,7 @@ export default function CoveragePage() {
         {/* Roadmap */}
         <section>
           <Mono muted size={10} className="mb-3 block">
-            ROADMAP · ATLANTIC CANADA
+            ROADMAP · DIRECTIONAL
           </Mono>
           <h3
             className="m-0 mb-[22px] font-sans"
@@ -392,34 +294,38 @@ export default function CoveragePage() {
               lineHeight: 1.05,
             }}
           >
-            What’s next.
+            What's next.
           </h3>
           <div className="flex flex-col gap-2.5">
             {ROADMAP.map((r) => (
               <div
                 key={r.name}
-                className="grid gap-3 sm:gap-4 items-center border border-hair bg-surface-alt"
+                className="grid gap-3 sm:gap-4 items-start border border-hair bg-surface-alt"
                 style={{
                   padding: "14px 16px",
-                  gridTemplateColumns: "1.4fr 0.7fr 1fr",
+                  gridTemplateColumns: "1.6fr 0.6fr 0.8fr",
                 }}
               >
                 <div>
                   <div
                     style={{
-                      fontSize: 16,
+                      fontSize: 15.5,
                       fontWeight: 600,
                       letterSpacing: "-0.015em",
+                      lineHeight: 1.3,
                     }}
                   >
                     {r.name}
                   </div>
-                  <Mono muted size={9.5}>
-                    {r.province}
-                  </Mono>
+                  <div
+                    className="text-text-muted mt-1"
+                    style={{ fontSize: 12, lineHeight: 1.5 }}
+                  >
+                    {r.note}
+                  </div>
                 </div>
-                <Mono muted size={10}>
-                  ETA · {r.eta}
+                <Mono muted size={9.5}>
+                  {r.scope}
                 </Mono>
                 <div className="flex items-center gap-2 justify-end">
                   <span
@@ -434,6 +340,13 @@ export default function CoveragePage() {
                 </div>
               </div>
             ))}
+          </div>
+          <div
+            className="mt-3 text-text-muted"
+            style={{ fontSize: 12, lineHeight: 1.5 }}
+          >
+            No fixed ETAs while ABS is in beta — we'd rather ship coverage
+            when the evaluator says it's ready than commit to a quarter.
           </div>
           <div
             className="mt-5 bg-text text-surface flex justify-between items-center gap-4 flex-wrap"

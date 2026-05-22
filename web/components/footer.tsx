@@ -42,7 +42,10 @@ const COLUMNS: Column[] = [
       { label: "About", href: "/about" },
       { label: "Privacy", href: "/privacy" },
       { label: "Terms", href: "/terms" },
-      { label: "hello@abs.app", href: "mailto:hello@abs.app" },
+      {
+        label: "info@agenticbylawsystems.com",
+        href: "mailto:info@agenticbylawsystems.com",
+      },
     ],
   },
 ];
