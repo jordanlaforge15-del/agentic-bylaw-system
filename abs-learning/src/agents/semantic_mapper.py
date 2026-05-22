@@ -222,7 +222,11 @@ class SemanticMapperAgent:
         self.model = model
 
     # -------------------------------------------------------------- public
-    def map(self, source_doc: SourceDocument) -> TaxonomyMap:
+    def map(
+        self,
+        source_doc: SourceDocument,
+        companions: Optional[List[str]] = None,
+    ) -> TaxonomyMap:
         url = source_doc.source_url
         tmp_path: Optional[str] = None
         try:
@@ -265,7 +269,7 @@ class SemanticMapperAgent:
                 zone_designations=zones,
                 use_class_map=uses,
                 standards_categories=stds,
-                companion_bylaws_required=[],
+                companion_bylaws_required=list(companions or []),
                 confidence=confidence,
                 flags=all_flags,
             )
