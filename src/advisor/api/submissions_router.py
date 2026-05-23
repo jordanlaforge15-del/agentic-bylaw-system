@@ -49,8 +49,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-# Side-effect import: registers the IFC extractor with the submission factory.
+# Side-effect imports: register submission extractors with the factory.
+# Each module calls register_extractor() at import time; without these
+# imports the upload route would hit ExtractorNotRegisteredError on any
+# non-MANUAL source_type.
 import layer1.parsers.ifc_submission  # noqa: F401
+import layer1.parsers.pdf_submission  # noqa: F401
 
 from advisor.db.models import User
 from layer1.config import get_settings
