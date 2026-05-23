@@ -24,8 +24,11 @@ We considered three approaches (see ABS-75):
 """
 from __future__ import annotations
 
+import heapq
+import itertools
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -46,6 +49,30 @@ logger = logging.getLogger(__name__)
 # package, which is sufficient for our use case (relatively stable
 # municipal-site domain layouts).
 _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
+
+
+# Patterns that mark a link as more likely to be bylaw/document content
+# than site-wide navigation. Used to prioritise the BFS queue so the
+# crawler reaches actual bylaws before exhausting max_pages on nav chrome.
+_CONTENT_HREF_REGEX = re.compile(
+    r"(?i)(?:/media/\d+|/node/\d+|/files?/\d+|\.pdf(?:[?#]|$))"
+)
+_CONTENT_TEXT_REGEX = re.compile(
+    # Match common bylaw / planning vocabulary. Uses explicit inflections
+    # so "Police" doesn't match "polic" and "Mapping" doesn't match "map".
+    r"(?i)\b(by[- ]?laws?|schedules?|appendix|appendices|amendments?|"
+    r"polic(y|ies)|plan(s|ning|ners?|ned)?|strateg(y|ies)|"
+    r"land\s*uses?|zoning|maps?|MPS|LUB)\b"
+)
+
+
+def _looks_like_content_link(href: str, link_text: str) -> bool:
+    """Heuristic — does this link look like a document/bylaw rather than nav?"""
+    if href and _CONTENT_HREF_REGEX.search(href):
+        return True
+    if link_text and _CONTENT_TEXT_REGEX.search(link_text):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------- public types
@@ -381,10 +408,19 @@ class DiscoveryAgent:
 
         candidates: Dict[str, CrawledCandidate] = {}
         visited_pages: Set[str] = set()
-        queue: List[Tuple[str, int, str, str]] = [(seed_url, 0, "", seed_url)]
+        # Min-heap of (priority_key, work_item). priority_key is
+        # (depth, tier, insertion_order) — depth FIRST so BFS ordering
+        # is strict (all depth-1 before any depth-2), tier second
+        # (bylaw-text before PDF-URL before nav), insertion order last
+        # for deterministic tie-breaking.
+        counter = itertools.count()
+        queue: List[Tuple[Tuple[int, int, int], Tuple[str, int, str, str]]] = []
+        heapq.heappush(
+            queue, ((0, 0, next(counter)), (seed_url, 0, "", seed_url))
+        )
 
         while queue and len(candidates) < self.max_pages:
-            url, depth, link_text, discovered_on = queue.pop(0)
+            _, (url, depth, link_text, discovered_on) = heapq.heappop(queue)
             url = _normalize_url(url)
             if not url:
                 continue
@@ -456,6 +492,20 @@ class DiscoveryAgent:
             if depth >= self.max_depth:
                 continue
 
+            # Push child links into the heap with priority keys that
+            # enforce strict BFS by depth, then content-tier within depth:
+            #   Tier 0: link text matches bylaw keywords (LUB, MPS, etc.).
+            #   Tier 1: href matches CMS route / PDF (content but not
+            #           necessarily bylaw — minutes, agendas).
+            #   Tier 2: everything else (nav, breadcrumbs, footer).
+            # Insertion order breaks ties so output is deterministic.
+            #
+            # Beyond depth 0, demote tier-1 (PDF-without-bylaw-text) into
+            # tier-2: the seed page is a curated index where PDFs are
+            # usually relevant, but deeper pages often have unrelated
+            # PDF sidebars (council minutes, agendas) that should not
+            # outrank actual bylaw links.
+            child_depth = depth + 1
             for href, text in extractor.links:
                 child = _resolve_href(url, href)
                 if not child:
@@ -466,7 +516,23 @@ class DiscoveryAgent:
                     continue
                 if child in visited_pages:
                     continue
-                queue.append((child, depth + 1, text, url))
+                if text and _CONTENT_TEXT_REGEX.search(text):
+                    tier = 0
+                elif (
+                    href
+                    and _CONTENT_HREF_REGEX.search(href)
+                    and depth == 0
+                ):
+                    tier = 1
+                else:
+                    tier = 2
+                heapq.heappush(
+                    queue,
+                    (
+                        (child_depth, tier, next(counter)),
+                        (child, child_depth, text, url),
+                    ),
+                )
 
         return list(candidates.values())
 

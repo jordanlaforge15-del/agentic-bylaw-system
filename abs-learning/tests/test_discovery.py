@@ -271,6 +271,98 @@ def test_crawler_with_allowed_hosts_uses_explicit_set():
     )
 
 
+# --------------------------------------------------------------------- ABS-93
+# Priority queue: bylaw-relevant links must be visited before global nav,
+# even when the nav appears earlier in the DOM (as it does on every real
+# municipal site).
+
+def test_crawler_prioritises_content_links_over_nav_within_max_pages():
+    """ABS-93: 30 nav links followed by 5 bylaw links in DOM order;
+    with max_pages=10 the bylaws should still all be found."""
+    nav_anchors = "\n".join(
+        f'<a href="/nav/section-{i}">Nav section {i}</a>'
+        for i in range(30)
+    )
+    content_anchors = "\n".join([
+        '<a href="/media/93483">Land Use By-law</a>',
+        '<a href="/media/93274">Municipal Planning Strategy</a>',
+        '<a href="/docs/sched-A.pdf">Schedule A</a>',
+        '<a href="/media/93227">ZM-1 Zoning</a>',
+        '<a href="/media/93314">ZM-2 Schedules</a>',
+    ])
+    index_html = (
+        "<!DOCTYPE html><html><body>"
+        + nav_anchors
+        + content_anchors
+        + "</body></html>"
+    )
+    routes = {
+        "https://www.example.com/index": httpx.Response(
+            200, text=index_html, headers={"content-type": "text/html"}
+        ),
+    }
+    # All nav pages exist as empty HTML so the crawler doesn't error
+    # when (if) it visits them; bylaw PDFs return content-type pdf.
+    for i in range(30):
+        routes[f"https://www.example.com/nav/section-{i}"] = httpx.Response(
+            200, text="<html><body>nav</body></html>",
+            headers={"content-type": "text/html"},
+        )
+    for slug in ("93483", "93274", "93227", "93314"):
+        routes[f"https://www.example.com/media/{slug}"] = httpx.Response(
+            200, headers={"content-type": "application/pdf"}
+        )
+    routes["https://www.example.com/docs/sched-A.pdf"] = httpx.Response(
+        200, headers={"content-type": "application/pdf"}
+    )
+
+    agent = DiscoveryAgent(
+        MagicMock(),
+        http_client=_httpx_client(routes),
+        max_pages=10,
+        max_depth=2,
+    )
+    candidates = agent._crawl("https://www.example.com/index")
+    urls = {c.url for c in candidates}
+
+    # All five bylaw-relevant links should be in the candidate set,
+    # even though they appear AFTER 30 nav links in DOM order.
+    bylaw_urls = {
+        "https://www.example.com/media/93483",
+        "https://www.example.com/media/93274",
+        "https://www.example.com/media/93227",
+        "https://www.example.com/media/93314",
+        "https://www.example.com/docs/sched-A.pdf",
+    }
+    missing = bylaw_urls - urls
+    assert not missing, (
+        f"Priority queue should have surfaced bylaw links within "
+        f"max_pages=10, but these were missed: {sorted(missing)}. "
+        f"Candidates collected: {sorted(urls)}"
+    )
+
+
+def test_looks_like_content_link_helper():
+    """ABS-93: content-likely detection covers PDFs, CMS routes, and
+    bylaw-keyword link text."""
+    from agents.discovery import _looks_like_content_link
+
+    # By URL pattern.
+    assert _looks_like_content_link("https://x.test/media/123", "")
+    assert _looks_like_content_link("https://x.test/node/45", "")
+    assert _looks_like_content_link("https://x.test/files/9", "")
+    assert _looks_like_content_link("https://x.test/foo/bar.pdf", "")
+    # By link text.
+    assert _looks_like_content_link("https://x.test/x", "Land Use By-law")
+    assert _looks_like_content_link("https://x.test/y", "Schedule A")
+    assert _looks_like_content_link("https://x.test/z", "Zoning Map")
+    assert _looks_like_content_link("https://x.test/a", "MPS Amendment")
+    # Negative cases.
+    assert not _looks_like_content_link("https://x.test/about", "About us")
+    assert not _looks_like_content_link("https://x.test/contact", "Contact")
+    assert not _looks_like_content_link("https://x.test/", "")
+
+
 # --------------------------------------------------------------------- ABS-92
 # CMS-routed PDF links: many municipal sites (Halifax uses Drupal's /media/X)
 # serve PDFs through URLs that don't end in .pdf. The crawler must recognize
