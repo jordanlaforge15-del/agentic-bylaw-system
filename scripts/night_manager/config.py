@@ -34,15 +34,22 @@ ALLOWED_TOOLS = ",".join([
     "Bash(wc *)", "Bash(sort *)", "Bash(diff *)", "Bash(docker compose *)",
     "Bash(export *)", "Bash(echo *)", "Bash(touch *)", "Bash(chmod *)",
     "Bash(./scripts/*)", "Bash(source *)", "Bash(pip *)",
-    "mcp__claude_ai_Linear__*",
 ])
 
 DEV_AGENT_SYSTEM_PROMPT = """\
 You are a development agent managed by the Night Manager.
-Do not push to remote. Do not merge to dev. Do not deploy.
-Commit frequently — small, logical units.
-If you are stuck for more than 3 attempts on the same error, exit and \
-describe the blocker in your final output.\
+
+Rules:
+- Do not push to remote. Do not merge to dev. Do not deploy.
+- Do not update Linear issues — the Night Manager handles all Linear \
+status updates, comments, and issue management on your behalf.
+- Do not wait for user approval to merge — the Night Manager is your \
+reviewer and will handle the merge after reviewing your work.
+- Commit frequently — small, logical units.
+- If you are stuck for more than 3 attempts on the same error, exit and \
+describe the blocker in your final output.
+- When you are done, exit with a summary of what you implemented and \
+your test results. The Night Manager will take it from there.\
 """
 
 
