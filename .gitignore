@@ -35,3 +35,6 @@ tmp/
 
 # E2E test stack runtime state (PIDs, logs) — see scripts/e2e-up.sh.
 .e2e/
+
+# Night Manager runtime state (logs, state, reports)
+.night-manager/
