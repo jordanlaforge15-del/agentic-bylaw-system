@@ -40,6 +40,15 @@ advisor = [
   # raises RuntimeError at request time instead of import time, so the
   # missing dep doesn't show until a real upload is attempted.
   "python-multipart>=0.0.9",
+  # pyproj + ifcopenshell are runtime deps of advisor.api.submissions_router
+  # (Phase 2 BIM ingestion in the request path). pyproj is imported at module
+  # load via layer2.compliance.derived_attributes — without it advisor crashes
+  # at startup with ModuleNotFoundError, surfaced on the 0.8.3 deploy attempt
+  # (advisor wouldn't boot). ifcopenshell imports are lazy inside parser
+  # functions but still need to be installed so /v1/submissions IFC uploads
+  # don't 500 at request time. Mirrored in [bim] for non-advisor consumers.
+  "pyproj>=3.6",
+  "ifcopenshell>=0.7",
 ]
 ingest = [
   "docling>=2.0",
