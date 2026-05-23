@@ -194,7 +194,7 @@ def test_t7e_validate_returns_valid_qa_report(monkeypatch, tmp_path):
         agent, "_check_citation_resolution", lambda samples: (0.82, [])
     )
     monkeypatch.setattr(
-        agent, "_check_zone_completeness", lambda src, tax: (0.90, [])
+        agent, "_check_zone_completeness", lambda src, tax, cfg: (0.90, [])
     )
     monkeypatch.setattr(
         agent, "_check_pattern_coverage", lambda src, cfg: (0.10, [])
@@ -246,3 +246,124 @@ def test_citation_lookup_error_is_flagged():
     assert rate == pytest.approx(2 / 3)
     assert len(flags) == 1
     assert flags[0]["code"] == "citation_lookup_error"
+
+
+# --------------------------------------------------------------------- ABS-91
+# Schedule labels like "ZM-1", "ZM-2" must not be flagged as missing zone
+# codes. The parser_config knows they're schedules; thread it through and
+# subtract before the taxonomy diff.
+
+def _parser_config_with_schedule_patterns(patterns: List[str]) -> ParserConfig:
+    return ParserConfig(
+        parser_version="docling:test",
+        citation_scheme=CitationScheme(
+            full_citation_example="1(a)",
+            separator=" > ",
+            hierarchy=[
+                CitationLevel(level="section", pattern=r"^\d+", label_format="{n}")
+            ],
+        ),
+        schedule_patterns=patterns,
+        table_caption_pattern=None,
+        confidence=1.0,
+        flags=[],
+    )
+
+
+def test_abs91_schedule_zm_labels_excluded_from_missing_zones(monkeypatch, tmp_path):
+    """ZM-1, ZM-2 occur frequently as zoning-map labels — they must be
+    filtered out via parser_config.schedule_patterns rather than flagged."""
+    taxonomy_codes = ["R-1", "R-2", "C-1"]
+    # Each taxonomy code 10x, ZM-1 and ZM-2 each 20x (schedule references).
+    pages = {
+        1: " ".join(taxonomy_codes * 10)
+        + " "
+        + " ".join(["ZM-1"] * 20 + ["ZM-2"] * 20),
+    }
+    monkeypatch.setattr(
+        "agents.validation.PdfBootstrapReader", _stub_reader(pages, (1, 1))
+    )
+
+    agent = ValidationAgent(MagicMock())
+    source_doc = _stub_source_doc(tmp_path)
+    taxonomy = _make_taxonomy(taxonomy_codes)
+    parser_config = _parser_config_with_schedule_patterns(
+        [r"^Schedule ZM-\d+", r"^ZM-\d+", r"^Schedule [A-Z]"]
+    )
+
+    completeness, flags = agent._check_zone_completeness(
+        source_doc, taxonomy, parser_config
+    )
+
+    assert completeness == pytest.approx(1.0), (
+        f"Expected 1.0 once ZM-N labels are excluded, got {completeness}"
+    )
+    assert flags == [], f"No missing-zone flags should remain, got {flags!r}"
+
+
+def test_abs91_normal_hyphenated_zones_not_filtered(monkeypatch, tmp_path):
+    """A real zone like 'R-1' must not be incorrectly filtered just because
+    schedule patterns are configured."""
+    pages = {
+        1: " ".join(["R-1", "R-2", "ZM-1"] * 10),
+    }
+    monkeypatch.setattr(
+        "agents.validation.PdfBootstrapReader", _stub_reader(pages, (1, 1))
+    )
+
+    agent = ValidationAgent(MagicMock())
+    source_doc = _stub_source_doc(tmp_path)
+    # Only R-1 is in taxonomy; R-2 should still be flagged as missing.
+    # ZM-1 should be filtered (matches the schedule pattern).
+    taxonomy = _make_taxonomy(["R-1"])
+    parser_config = _parser_config_with_schedule_patterns([r"^ZM-\d+"])
+
+    completeness, flags = agent._check_zone_completeness(
+        source_doc, taxonomy, parser_config
+    )
+    flagged = {f["zone_code"] for f in flags}
+    assert flagged == {"R-2"}, (
+        f"Expected only R-2 flagged as missing, got {flagged}"
+    )
+    # Two codes in `found` (R-1 in taxonomy, R-2 missing); ZM-1 excluded.
+    assert completeness == pytest.approx(0.5)
+
+
+def test_abs91_no_parser_config_preserves_legacy_behavior(monkeypatch, tmp_path):
+    """Backward-compat: when parser_config is None (or not passed), the
+    schedule-filter is a no-op and existing behavior is preserved."""
+    pages = {1: " ".join(["R-1", "ZM-1"] * 10)}
+    monkeypatch.setattr(
+        "agents.validation.PdfBootstrapReader", _stub_reader(pages, (1, 1))
+    )
+    agent = ValidationAgent(MagicMock())
+    source_doc = _stub_source_doc(tmp_path)
+    taxonomy = _make_taxonomy(["R-1"])
+
+    # No parser_config arg → ZM-1 still gets flagged (legacy behavior).
+    completeness, flags = agent._check_zone_completeness(source_doc, taxonomy)
+    flagged = {f["zone_code"] for f in flags}
+    assert flagged == {"ZM-1"}
+    assert completeness == pytest.approx(0.5)
+
+
+def test_abs91_schedule_code_patterns_helper():
+    """The helper strips ^ anchors and Schedule/Appendix prefixes, then
+    bi-anchors so the resulting regex matches bare codes."""
+    from agents.validation import _schedule_code_patterns
+
+    patterns = _schedule_code_patterns(
+        [r"^Schedule ZM-\d+", r"^Appendix [A-Z]", r"^ZM-\d+", r""]
+    )
+    # Each pattern should match a bare-code instance.
+    matchers = [p.pattern for p in patterns]
+    assert any("ZM-" in m for m in matchers)
+
+    # Behavioural checks: ZM-1 matches schedule patterns, R-1 doesn't.
+    from agents.validation import _matches_any
+    assert _matches_any("ZM-1", patterns)
+    assert not _matches_any("R-1", patterns)
+    # The Appendix [A-Z] pattern should match a single uppercase letter,
+    # which the bare-code detection never produces — confirming the
+    # helper doesn't accidentally over-match hyphenated codes.
+    assert not _matches_any("AB-1", patterns)
