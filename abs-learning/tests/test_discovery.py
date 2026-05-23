@@ -271,6 +271,67 @@ def test_crawler_with_allowed_hosts_uses_explicit_set():
     )
 
 
+# --------------------------------------------------------------------- ABS-92
+# CMS-routed PDF links: many municipal sites (Halifax uses Drupal's /media/X)
+# serve PDFs through URLs that don't end in .pdf. The crawler must recognize
+# the post-redirect content-type and treat them as PDF candidates.
+
+def test_crawler_captures_cms_routed_pdf_when_content_type_is_pdf():
+    """ABS-92: a /media/<id>-style URL that resolves to application/pdf
+    becomes a PDF candidate, not a silently-dropped HTML fetch."""
+    index_html = """<!DOCTYPE html>
+<html><body>
+  <a href="/media/93483">Halifax Mainland Land Use By-law</a>
+</body></html>"""
+    routes = {
+        "https://www.example.com/plan-area": httpx.Response(
+            200, text=index_html, headers={"content-type": "text/html"}
+        ),
+        # CMS route returns PDF content directly (httpx mock has no redirect
+        # support, but the effect on the crawler is the same: GET returns
+        # application/pdf, _fetch_html returns (None, "application/pdf")).
+        "https://www.example.com/media/93483": httpx.Response(
+            200, headers={"content-type": "application/pdf"}
+        ),
+    }
+    client = _httpx_client(routes)
+    agent = DiscoveryAgent(
+        MagicMock(), http_client=client, max_pages=10, max_depth=2
+    )
+    candidates = agent._crawl("https://www.example.com/plan-area")
+
+    media = [c for c in candidates if c.url.endswith("/media/93483")]
+    assert len(media) == 1, (
+        f"Expected /media/93483 to be enumerated, got: {[c.url for c in candidates]}"
+    )
+    assert media[0].is_pdf is True, (
+        f"CMS-routed PDF must carry is_pdf=True, got is_pdf={media[0].is_pdf}"
+    )
+    assert media[0].link_text == "Halifax Mainland Land Use By-law"
+    assert media[0].content_type == "application/pdf"
+
+
+def test_crawler_non_pdf_non_html_response_still_skipped():
+    """ABS-92 regression: only application/pdf gets the new treatment.
+    A non-HTML non-PDF response (e.g. image/png) must still be dropped."""
+    index_html = """<html><body>
+      <a href="/asset/foo.png">image</a>
+    </body></html>"""
+    routes = {
+        "https://www.example.com/index": httpx.Response(
+            200, text=index_html, headers={"content-type": "text/html"}
+        ),
+        "https://www.example.com/asset/foo.png": httpx.Response(
+            200, headers={"content-type": "image/png"}
+        ),
+    }
+    agent = DiscoveryAgent(
+        MagicMock(), http_client=_httpx_client(routes), max_pages=10, max_depth=2
+    )
+    candidates = agent._crawl("https://www.example.com/index")
+    assert not any(c.url.endswith("/asset/foo.png") for c in candidates)
+
+
 def test_registrable_domain_helper():
     """ABS-89: _registrable_domain returns eTLD+1, empty for invalid hosts."""
     from agents.discovery import _registrable_domain

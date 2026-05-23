@@ -414,6 +414,25 @@ class DiscoveryAgent:
 
             page_body, content_type = self._fetch_html(url)
             if page_body is None:
+                # CMS-routed PDFs (Drupal /media/<id>, /node/<id>, etc.)
+                # don't end in .pdf but the response after redirects is
+                # application/pdf. Capture them as PDF candidates rather
+                # than silently dropping. Keep the canonical URL (the
+                # /media/<id> form), not the redirect target — that's
+                # what the seed page actually links to.
+                if (
+                    content_type
+                    and "application/pdf" in content_type.lower()
+                    and url not in candidates
+                ):
+                    candidates[url] = CrawledCandidate(
+                        url=url,
+                        link_text=link_text,
+                        discovered_on=discovered_on,
+                        page_title=None,
+                        content_type=content_type,
+                        is_pdf=True,
+                    )
                 continue
 
             extractor = _LinkExtractor()
