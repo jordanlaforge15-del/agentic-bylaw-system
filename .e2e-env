@@ -1,0 +1,17 @@
+# Worktree-local port override for ABS-56.
+#
+# The original task brief assigned PG_PORT=5434, but that port was already
+# bound at run time by a sibling worktree's container
+# (abs-24-reduce-case-prices-postgres-1). The harness re-ran `make e2e`
+# in a fresh shell with no explicit PG_PORT export, so docker compose
+# tried 5434 again and failed with "Bind for 0.0.0.0:5434 failed: port
+# is already allocated" before any Playwright test could run.
+#
+# Sourced automatically by scripts/e2e-up.sh and scripts/e2e-down.sh.
+# Caller-exported env still wins (defaults use ${VAR:-…}).
+PG_PORT=5466
+E2E_FASTAPI_PORT=8056
+E2E_WEB_PORT=3056
+E2E_API_URL=http://127.0.0.1:8056
+E2E_BASE_URL=http://localhost:3056
+DATABASE_URL=postgresql+psycopg://layer1:layer1@localhost:5466/layer1_test
