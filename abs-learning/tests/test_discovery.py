@@ -74,7 +74,7 @@ SAMPLETON_INDEX_HTML = """<!DOCTYPE html>
     <li><a href="/bylaws/amend-2024-03.pdf">Bylaw No. 2024-03 — Heritage Amendment</a></li>
     <li><a href="/bylaws/zoning-map.pdf">Zoning Map (Schedule A)</a></li>
     <li><a href="/news/road-closure-2024">Road closure notice</a></li>
-    <li><a href="https://external.example.com/skip">Off-site link</a></li>
+    <li><a href="https://offsite.example.org/skip">Off-site link</a></li>
     <li><a href="mailto:planning@sampleton.ca">Email planning</a></li>
   </ul>
 </body></html>"""
@@ -153,8 +153,11 @@ def test_crawler_enumerates_pdfs_dedups_and_stays_in_domain():
     assert (
         "https://sampleton.example.com/news/road-closure-2024" in urls
     ), "Same-domain HTML pages should be enumerated as candidates"
-    # Off-domain, mailto, and the seed page itself should NOT be candidates.
-    assert not any("external.example.com" in u for u in urls)
+    # Off-domain (different registrable domain), mailto, and the seed page
+    # itself should NOT be candidates. NB: sampleton.example.com (seed) and
+    # offsite.example.org have different eTLD+1, so the eTLD+1 filter drops
+    # the off-site link as intended.
+    assert not any("offsite.example.org" in u for u in urls)
     assert not any(u.startswith("mailto:") for u in urls)
     assert "https://sampleton.example.com/bylaws" not in urls, (
         "Seed page is not itself a candidate"
@@ -190,6 +193,98 @@ def test_crawler_handles_invalid_seed():
     )
     assert agent._crawl("") == []
     assert agent._crawl("not-a-url") == []
+
+
+# ----------------------------------------------------------------------- ABS-89
+# Cross-subdomain crawling: many municipal sites publish nav pages on
+# www.<city>.<tld> and serve the actual bylaw PDFs from cdn.<city>.<tld>.
+# The crawler must follow the link across the subdomain boundary by
+# default, with an opt-out for callers that need stricter scope.
+
+# Mimics the HRM site layout: seed page on www.<eTLD+1>, bylaw PDFs on
+# cdn.<eTLD+1>. Uses RFC-2606 reserved example.com / example.org so the
+# eTLD+1 (registrable domain) check returns deterministic values.
+_HRM_LIKE_INDEX_HTML = """<!DOCTYPE html>
+<html><head><title>Halifax Plan Area</title></head>
+<body>
+  <h1>Halifax Plan Area Bylaws</h1>
+  <ul>
+    <li><a href="https://cdn.example.com/docs/mainland-lub.pdf">Mainland LUB</a></li>
+    <li><a href="https://cdn.example.com/docs/regional-mps.pdf">Regional MPS</a></li>
+    <li><a href="https://offsite.example.org/bylaws/x.pdf">Off-site link</a></li>
+  </ul>
+</body></html>"""
+
+
+def _hrm_like_routes():
+    return {
+        "https://www.example.com/plan-area": httpx.Response(
+            200,
+            text=_HRM_LIKE_INDEX_HTML,
+            headers={"content-type": "text/html"},
+        ),
+        "https://cdn.example.com/docs/mainland-lub.pdf": httpx.Response(
+            200, headers={"content-type": "application/pdf"}
+        ),
+        "https://cdn.example.com/docs/regional-mps.pdf": httpx.Response(
+            200, headers={"content-type": "application/pdf"}
+        ),
+    }
+
+
+def test_crawler_follows_cross_subdomain_same_registrable_domain():
+    """ABS-89: seed on www.<host> follows links to cdn.<host>."""
+    client = _httpx_client(_hrm_like_routes())
+    agent = DiscoveryAgent(
+        MagicMock(), http_client=client, max_pages=10, max_depth=2
+    )
+    candidates = agent._crawl("https://www.example.com/plan-area")
+    urls = {c.url for c in candidates}
+
+    assert "https://cdn.example.com/docs/mainland-lub.pdf" in urls, (
+        "PDFs on a sibling subdomain (cdn.*) must be enumerated when the "
+        "registrable domain matches the seed's"
+    )
+    assert "https://cdn.example.com/docs/regional-mps.pdf" in urls
+    assert not any("example.org" in u for u in urls), (
+        "Different registrable domain (example.org vs example.com) must "
+        "still be filtered"
+    )
+
+
+def test_crawler_with_allowed_hosts_uses_explicit_set():
+    """ABS-89: explicit allowed_hosts overrides the eTLD+1 default."""
+    client = _httpx_client(_hrm_like_routes())
+    agent = DiscoveryAgent(
+        MagicMock(),
+        http_client=client,
+        max_pages=10,
+        max_depth=2,
+        allowed_hosts={"www.example.com"},
+    )
+    candidates = agent._crawl("https://www.example.com/plan-area")
+    urls = {c.url for c in candidates}
+
+    assert not any("cdn.example.com" in u for u in urls), (
+        "With allowed_hosts={www.example.com}, the cdn.* subdomain is now "
+        "out of scope and must be filtered"
+    )
+
+
+def test_registrable_domain_helper():
+    """ABS-89: _registrable_domain returns eTLD+1, empty for invalid hosts."""
+    from agents.discovery import _registrable_domain
+
+    assert _registrable_domain("https://www.halifax.ca/x") == "halifax.ca"
+    assert _registrable_domain("https://cdn.halifax.ca/y") == "halifax.ca"
+    assert _registrable_domain("https://halifax.ca/z") == "halifax.ca"
+    assert _registrable_domain("https://example.org/q") == "example.org"
+    assert _registrable_domain("https://example.org") != _registrable_domain(
+        "https://example.com"
+    )
+    # Degenerate cases — no public suffix, no host.
+    assert _registrable_domain("") == ""
+    assert _registrable_domain("not-a-url") == ""
 
 
 # ----------------------------------------------------------------------- T-D

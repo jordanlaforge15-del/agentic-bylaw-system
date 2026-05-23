@@ -32,11 +32,20 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urldefrag, urljoin, urlparse
 
 import httpx
+import tldextract
 
 from manifest.models import Municipality, SourceDocument
 
 
 logger = logging.getLogger(__name__)
+
+
+# Use only the bundled PSL snapshot — no network fetch on first use. This
+# keeps the agent usable in offline/CI contexts and makes unit tests
+# deterministic. The snapshot is refreshed by upgrading the tldextract
+# package, which is sufficient for our use case (relatively stable
+# municipal-site domain layouts).
+_TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
 
 
 # ---------------------------------------------------------------- public types
@@ -296,6 +305,7 @@ class DiscoveryAgent:
         max_depth: int = DEFAULT_MAX_DEPTH,
         batch_size: int = DEFAULT_BATCH_SIZE,
         confidence_floor: float = DEFAULT_CONFIDENCE_FLOOR,
+        allowed_hosts: Optional[Set[str]] = None,
     ) -> None:
         self.client = anthropic_client
         self._owned_http_client = http_client is None
@@ -314,6 +324,12 @@ class DiscoveryAgent:
         self.max_depth = max_depth
         self.batch_size = batch_size
         self.confidence_floor = confidence_floor
+        # When None, the crawler accepts any URL whose registrable domain
+        # (eTLD+1) matches the seed's. When provided, the crawler accepts
+        # only URLs whose exact host is in this set — use this when the
+        # default eTLD+1 scope is too broad (e.g. seed on a shared platform
+        # subdomain).
+        self.allowed_hosts = allowed_hosts
 
     def close(self) -> None:
         if self._owned_http_client:
@@ -345,16 +361,22 @@ class DiscoveryAgent:
 
     # --------------------------------------------------------- private: crawl
     def _crawl(self, seed_url: str) -> List[CrawledCandidate]:
-        """BFS crawl from ``seed_url`` within the same domain.
+        """BFS crawl from ``seed_url`` within the same registrable domain.
 
         Returns a deduplicated list of ``CrawledCandidate`` capped at
         ``self.max_pages``. PDFs are recorded as candidates but not
         recursed into; HTML pages have their links extracted and pushed
         onto the queue up to ``self.max_depth``.
+
+        Scope: by default, accepts any URL whose registrable domain (eTLD+1)
+        matches the seed's, so a seed on ``www.<city>.<tld>`` will follow
+        links to ``cdn.<city>.<tld>`` where municipalities commonly serve
+        their bylaw PDFs. Override with ``allowed_hosts`` for stricter scope.
         """
         seed_url = _normalize_url(seed_url)
         seed_host = _host_of(seed_url)
-        if not seed_host:
+        seed_domain = _registrable_domain(seed_url)
+        if not seed_host or not seed_domain:
             return []
 
         candidates: Dict[str, CrawledCandidate] = {}
@@ -366,7 +388,7 @@ class DiscoveryAgent:
             url = _normalize_url(url)
             if not url:
                 continue
-            if _host_of(url) != seed_host:
+            if not self._host_allowed(url, seed_domain):
                 continue
 
             is_pdf = _looks_like_pdf(url)
@@ -419,7 +441,7 @@ class DiscoveryAgent:
                 child = _resolve_href(url, href)
                 if not child:
                     continue
-                if _host_of(child) != seed_host:
+                if not self._host_allowed(child, seed_domain):
                     continue
                 if child in candidates:
                     continue
@@ -428,6 +450,20 @@ class DiscoveryAgent:
                 queue.append((child, depth + 1, text, url))
 
         return list(candidates.values())
+
+    def _host_allowed(self, url: str, seed_domain: str) -> bool:
+        """Return True if ``url``'s host falls inside the crawl scope.
+
+        With an explicit ``allowed_hosts`` set, match on exact hostname.
+        Otherwise default to registrable-domain (eTLD+1) match against the
+        seed's domain.
+        """
+        host = _host_of(url)
+        if not host:
+            return False
+        if self.allowed_hosts is not None:
+            return host in self.allowed_hosts
+        return _registrable_domain(url) == seed_domain
 
     def _fetch_html(self, url: str) -> Tuple[Optional[str], Optional[str]]:
         try:
@@ -692,6 +728,20 @@ def _host_of(url: str) -> str:
         return urlparse(url).hostname or ""
     except ValueError:
         return ""
+
+
+def _registrable_domain(url: str) -> str:
+    """Return the eTLD+1 of ``url`` (e.g. ``halifax.ca`` for both
+    ``www.halifax.ca`` and ``cdn.halifax.ca``). Empty string on hosts
+    with no public suffix (e.g. ``localhost``, raw IPs).
+    """
+    host = _host_of(url)
+    if not host:
+        return ""
+    ext = _TLD_EXTRACT(host)
+    if not ext.domain or not ext.suffix:
+        return ""
+    return f"{ext.domain}.{ext.suffix}"
 
 
 def _looks_like_pdf(url: str) -> bool:
