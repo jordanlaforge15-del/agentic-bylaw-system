@@ -82,6 +82,13 @@ class ZoneDesignation(BaseModel):
     description: Optional[str] = None
 
 
+class VocabularyExtensionCandidate(BaseModel):
+    local_term: str
+    proposed_canonical_key: str
+    was_in_vocabulary: bool = False
+    source_window: Optional[int] = None
+
+
 class TaxonomyMap(BaseModel):
     zone_designations: list[ZoneDesignation]
     use_class_map: dict[str, str]
@@ -89,6 +96,9 @@ class TaxonomyMap(BaseModel):
     companion_bylaws_required: list[str]
     confidence: float
     flags: list[str] = []
+    vocabulary_version: Optional[str] = None
+    vocabulary_extension_candidates: list[VocabularyExtensionCandidate] = []
+    proposed_categories: list[str] = []
 
     @field_validator("confidence")
     @classmethod

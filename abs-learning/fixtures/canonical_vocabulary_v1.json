@@ -1,0 +1,47 @@
+{
+  "version": "v1",
+  "zone_types": [
+    "residential",
+    "commercial",
+    "mixed_use",
+    "industrial",
+    "institutional",
+    "open_space",
+    "special_area",
+    "unknown"
+  ],
+  "use_classes": [
+    "residential_dwelling_single",
+    "residential_dwelling_multi",
+    "residential_dwelling_accessory",
+    "residential_dwelling_cluster",
+    "retail_general",
+    "retail_food",
+    "food_and_beverage",
+    "office_general",
+    "institutional_education",
+    "institutional_health",
+    "industrial_light",
+    "industrial_general",
+    "open_space_park",
+    "accommodation",
+    "home_occupation",
+    "short_term_rental",
+    "other"
+  ],
+  "standards": [
+    "height",
+    "front_setback",
+    "side_setback",
+    "rear_setback",
+    "lot_coverage",
+    "floor_area_ratio",
+    "parking",
+    "bicycle_parking",
+    "landscaping",
+    "signage",
+    "amenity_space",
+    "stepback",
+    "podium_height"
+  ]
+}
