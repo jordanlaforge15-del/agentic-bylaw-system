@@ -255,12 +255,19 @@ async def _run_agent_lifecycle(
     exit_code, final_output = await monitor_agent(proc, issue, STUCK_TIMEOUT_MINUTES)
 
     if exit_code != 0:
-        issue.mark_failed(f"Agent exited with code {exit_code}")
+        error_detail = final_output
+        if not error_detail and issue.log_file:
+            try:
+                log_content = Path(issue.log_file).read_text()
+                error_detail = log_content.strip()
+            except OSError:
+                error_detail = "(no log output captured)"
+        issue.mark_failed(f"Agent exited with code {exit_code}: {error_detail[:500]}")
         state.save()
         await linear.post_comment(
             issue.linear_id,
             f"**Night Manager** — Agent FAILED (exit={exit_code})\n\n"
-            f"Last output:\n```\n{final_output[-2000:]}\n```",
+            f"```\n{error_detail[-2000:]}\n```",
         )
         return
 

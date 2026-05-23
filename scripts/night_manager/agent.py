@@ -125,6 +125,7 @@ async def spawn_agent(
     cmd = [
         "claude",
         "-p",
+        "--verbose",
         "--output-format", "stream-json",
         "--permission-mode", "acceptEdits",
         "--allowedTools", ALLOWED_TOOLS,
@@ -179,6 +180,7 @@ async def resume_agent(
     cmd = [
         "claude",
         "-p",
+        "--verbose",
         "--output-format", "stream-json",
         "--permission-mode", "acceptEdits",
         "--allowedTools", ALLOWED_TOOLS,
