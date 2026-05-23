@@ -158,6 +158,7 @@ def enrich_document(
     tagger: LLMTagger,
     taxonomy: Taxonomy | None = None,
     dry_run: bool = False,
+    commit_every: int | None = None,
 ) -> EnrichStats:
     """Enrich every parsed fragment in one document.
 
@@ -169,6 +170,14 @@ def enrich_document(
     ``dry_run=True`` runs the full pipeline (including LLM calls) but
     skips the DB writes. Useful for evaluating model swaps against an
     existing population without rewriting the audit trail.
+
+    ``commit_every=N`` flushes the session every N persisted
+    fragments, bounding the work-loss window for long production runs
+    where a connection blip mid-pass would otherwise discard hundreds
+    of paid LLM calls. ``None`` (the default) preserves the original
+    single-transaction behaviour, which is right for short runs and
+    for tests that assert on rollback semantics. Ignored when
+    ``dry_run`` is true.
     """
     taxonomy = taxonomy or load_taxonomy()
     stats = EnrichStats(document_id=document_id)
@@ -197,6 +206,7 @@ def enrich_document(
     # reads the parent's prefilter result rather than re-running the
     # scan.
     parent_hit_cache: dict[int, set[str]] = {}
+    persisted_since_commit = 0
 
     for fragment in fragments:
         if fragment.parse_status != ParseStatus.PARSED:
@@ -266,6 +276,11 @@ def enrich_document(
         if new_tag_ids:
             stats.fragments_with_tags += 1
             stats.tags_assigned += len(new_tag_ids)
+        persisted_since_commit += 1
+
+        if commit_every and persisted_since_commit >= commit_every:
+            session.commit()
+            persisted_since_commit = 0
 
     return stats
 
@@ -568,6 +583,15 @@ def main() -> int:
         default=None,
         help="Override DATABASE_URL.",
     )
+    parser.add_argument(
+        "--commit-every",
+        type=int,
+        default=None,
+        help=(
+            "Commit every N persisted fragments (bounds the work-loss "
+            "window on long runs). Default: single end-of-run commit."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -593,6 +617,7 @@ def main() -> int:
             document_id=args.document_id,
             tagger=tagger,
             dry_run=args.dry_run,
+            commit_every=args.commit_every,
         )
     elapsed_s = time.monotonic() - started
     print(
