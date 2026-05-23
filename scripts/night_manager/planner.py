@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
-
-import anthropic
 
 from .config import NMConfig, PORT_BASE_PG, PORT_BASE_API, PORT_BASE_WEB, LOGS_DIR
 from .linear_client import LinearIssue
@@ -79,23 +78,27 @@ async def plan_execution(
         for issue in issues
     )
 
-    client = anthropic.AsyncAnthropic()
-    try:
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2048,
-            messages=[{
-                "role": "user",
-                "content": CONFLICT_ANALYSIS_PROMPT.format(
-                    issues_text=issues_text,
-                    max_agents=config.max_agents,
-                ),
-            }],
-        )
-    finally:
-        await client.close()
+    prompt = CONFLICT_ANALYSIS_PROMPT.format(
+        issues_text=issues_text,
+        max_agents=config.max_agents,
+    )
 
-    raw = response.content[0].text.strip()
+    proc = await asyncio.create_subprocess_exec(
+        "claude", "-p",
+        "--model", "sonnet",
+        "--max-budget-usd", "1",
+        prompt,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"Planner claude -p failed (exit={proc.returncode}): "
+            f"{stderr.decode()[:500]}"
+        )
+
+    raw = stdout.decode("utf-8", errors="replace").strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
