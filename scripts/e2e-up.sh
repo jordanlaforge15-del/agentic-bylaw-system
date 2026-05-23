@@ -27,6 +27,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Worktree-local port overrides. ``.e2e-env`` is a plain shell file
+# (``KEY=value`` lines) that gets sourced before defaults are applied,
+# so a worktree assigned a port triplet that ends up colliding with a
+# sibling worktree's running stack can pin its own free triplet without
+# the harness needing to know. Caller-exported env still wins because
+# every default below uses ``${VAR:-…}``.
+if [[ -f "${REPO_ROOT}/.e2e-env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.e2e-env"
+  set +a
+fi
+
 E2E_TEST_DB="${E2E_TEST_DB:-layer1_test}"
 E2E_FASTAPI_PORT="${E2E_FASTAPI_PORT:-8001}"
 E2E_WEB_PORT="${E2E_WEB_PORT:-3001}"

@@ -2,6 +2,16 @@
 
 DB_URL ?= postgresql+psycopg://layer1:layer1@localhost:5432/layer1
 
+# Worktree-local port overrides. Pair with scripts/e2e-up.sh — when
+# .e2e-env exists, the shell scripts source it so docker compose / the
+# uvicorn / next dev runners pick up overridden ports, and we mirror
+# the same vars into Make's recipe env so `npx playwright test` (which
+# runs in its own sub-shell from make) sees matching E2E_BASE_URL /
+# E2E_API_URL. Without this, the boot stage would bind one set of
+# ports while Playwright still pointed at the assigned defaults.
+-include .e2e-env
+export PG_PORT E2E_FASTAPI_PORT E2E_WEB_PORT E2E_API_URL E2E_BASE_URL DATABASE_URL
+
 install:
 	python -m pip install -e ".[dev]"
 

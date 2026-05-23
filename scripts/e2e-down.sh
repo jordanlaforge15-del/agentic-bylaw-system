@@ -9,6 +9,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Mirror the worktree-local port override mechanism from e2e-up.sh so
+# teardown targets the same ports the boot stage used. Without this,
+# a worktree that boots on overridden ports would have its teardown
+# fall back to the 8001 / 3001 / 5432 defaults and either no-op (best
+# case) or kill a sibling worktree's listeners (worst case).
+if [[ -f "${REPO_ROOT}/.e2e-env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.e2e-env"
+  set +a
+fi
+
 DROP_DB=0
 if [[ "${1:-}" == "--drop-db" ]]; then
   DROP_DB=1
