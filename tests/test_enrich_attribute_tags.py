@@ -436,6 +436,155 @@ def test_dry_run_does_not_persist(tmp_path: Path) -> None:
         assert "attribute_tag_audit" not in (fragment.metadata_json or {})
 
 
+def test_commit_every_flushes_partial_progress(tmp_path: Path) -> None:
+    """A mid-run failure preserves chunks already committed.
+
+    Why this matters: production runs against Halifax issue ~1500
+    sequential LLM calls over ~90 minutes inside one session. Without
+    chunked commits, a connection blip late in the run discards all
+    of the paid LLM work. With ``commit_every=N`` set, only the
+    in-flight chunk is lost.
+    """
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document = Document(
+            municipality="HRM",
+            bylaw_name="Test Bylaw",
+            source_path="t.pdf",
+            file_hash="h",
+            mime_type="application/pdf",
+            page_count=1,
+            parser_version="test",
+        )
+        session.add(document)
+        session.flush()
+        document_id = document.id
+        heading = SourceFragment(
+            document_id=document_id,
+            fragment_type=FragmentType.SECTION,
+            citation_label="4",
+            citation_path="4",
+            parent_fragment_id=None,
+            page_start=1,
+            page_end=1,
+            reading_order_start=0,
+            text="4. Front yard requirements.",
+            parse_status=ParseStatus.PARSED,
+            confidence=1.0,
+        )
+        session.add(heading)
+        session.flush()
+        clause_ids: list[int] = []
+        for i in range(5):
+            clause = SourceFragment(
+                document_id=document_id,
+                fragment_type=FragmentType.CLAUSE,
+                citation_label=f"4.{i + 1}",
+                citation_path=f"4.{i + 1}",
+                parent_fragment_id=heading.id,
+                page_start=1,
+                page_end=1,
+                reading_order_start=i + 1,
+                text=f"Clause {i + 1}: the minimum front yard shall be {i + 4} metres.",
+                parse_status=ParseStatus.PARSED,
+                confidence=1.0,
+            )
+            session.add(clause)
+            session.flush()
+            clause_ids.append(clause.id)
+
+    tagger = FakeTagger(
+        {
+            "Front yard requirements.": [],
+            "Clause 1": [TagProposal(attribute_id="front_setback_m", rationale="front yard 4 m")],
+            "Clause 2": [TagProposal(attribute_id="front_setback_m", rationale="front yard 5 m")],
+            "Clause 3": [TagProposal(attribute_id="front_setback_m", rationale="front yard 6 m")],
+            "Clause 4": [TagProposal(attribute_id="front_setback_m", rationale="front yard 7 m")],
+            "Clause 5": [TagProposal(attribute_id="front_setback_m", rationale="front yard 8 m")],
+        },
+    )
+
+    # Simulate a hard mid-run blip: patch _persist_enrichment to raise
+    # on the persist call for c4 (5th call: heading + c1 + c2 + c3 +
+    # c4). With commit_every=2, commits land after persist #2 (heading
+    # + c1) and persist #4 (c2 + c3). The exception on c4 propagates
+    # out of enrich_document and session_scope rolls back; c4's persist
+    # call never modified session state because the raise is before
+    # original_persist runs.
+    from layer2.semantic import enrich_attribute_tags as mod
+
+    original_persist = mod._persist_enrichment
+    persist_calls = {"n": 0}
+
+    def raising_persist(**kwargs):
+        persist_calls["n"] += 1
+        if persist_calls["n"] == 5:
+            raise RuntimeError("simulated connection blip during c4 persist")
+        return original_persist(**kwargs)
+
+    mod._persist_enrichment = raising_persist
+    try:
+        try:
+            with session_scope(db_url) as session:
+                enrich_document(
+                    session,
+                    document_id=document_id,
+                    tagger=tagger,
+                    commit_every=2,
+                )
+        except RuntimeError:
+            pass
+    finally:
+        mod._persist_enrichment = original_persist
+
+    # Two chunks committed (heading+c1, c2+c3) so c1..c3 survive.
+    # c4's persist call raised before touching session state, and c5
+    # was never reached.
+    with session_scope(db_url) as session:
+        for clause_id in clause_ids[:3]:
+            fragment = session.get(SourceFragment, clause_id)
+            assert fragment.attribute_tags == ["front_setback_m"], (
+                f"clause {fragment.citation_path} lost its tag after chunk commit"
+            )
+        for clause_id in clause_ids[3:]:
+            fragment = session.get(SourceFragment, clause_id)
+            assert fragment.attribute_tags == [], (
+                f"clause {fragment.citation_path} was unexpectedly tagged "
+                "despite the simulated mid-run blip"
+            )
+
+
+def test_commit_every_is_ignored_under_dry_run(tmp_path: Path) -> None:
+    """``commit_every`` must not bypass the dry-run guarantee."""
+    db_url = _make_db(tmp_path)
+    with session_scope(db_url) as session:
+        document_id, ids = _seed_document(session)
+
+    tagger = FakeTagger(
+        {
+            "minimum front yard": [
+                TagProposal(
+                    attribute_id="front_setback_m",
+                    rationale="Sets the minimum front yard distance.",
+                )
+            ]
+        }
+    )
+    with session_scope(db_url) as session:
+        enrich_document(
+            session,
+            document_id=document_id,
+            tagger=tagger,
+            dry_run=True,
+            commit_every=1,
+        )
+
+    with session_scope(db_url) as session:
+        fragment = session.get(SourceFragment, ids["front"])
+        assert fragment.attribute_tags == []
+        assert "attribute_tag_audit" not in (fragment.metadata_json or {})
+
+
 def test_llm_failure_does_not_abort_run(tmp_path: Path) -> None:
     db_url = _make_db(tmp_path)
     with session_scope(db_url) as session:
