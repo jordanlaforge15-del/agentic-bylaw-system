@@ -228,6 +228,26 @@ def _file_url_to_path(url: str) -> str:
     return parsed.path
 
 
+def _pick_canonical_type_winner(counts: "OrderedDict[str, int]") -> str:
+    """Pick the winning canonical_type for a zone code by majority vote.
+
+    Tie-break rules (in order):
+      1. Higher vote count wins outright.
+      2. On a tie, prefer any non-``unknown`` type over ``unknown``.
+      3. Among still-tied non-``unknown`` types, pick alphabetically for
+         determinism (insertion order is intentionally NOT used here —
+         which window saw a code first is an arbitrary artifact of
+         windowing, not a quality signal).
+    """
+    max_count = max(counts.values())
+    leaders = [t for t, c in counts.items() if c == max_count]
+    if len(leaders) == 1:
+        return leaders[0]
+    non_unknown = [t for t in leaders if t != "unknown"]
+    pool = non_unknown if non_unknown else leaders
+    return sorted(pool)[0]
+
+
 class SemanticMapperAgent:
     """Read a bylaw and produce a :class:`TaxonomyMap`."""
 
@@ -282,18 +302,41 @@ class SemanticMapperAgent:
             zone_windows = self._find_zone_section_windows(pages, content_zone)
             standards_windows = self._find_standards_windows(pages, content_zone)
 
-            zones, zone_flags, zone_conf = self._extract_zones(zone_windows)
-            uses, use_candidates, use_flags, use_conf = self._extract_use_classes(
+            zones, zone_flags, zone_conf, zone_agreement = self._extract_zones(
                 zone_windows
             )
+            (
+                uses,
+                use_candidates,
+                use_flags,
+                use_conf,
+                use_agreement,
+            ) = self._extract_use_classes(zone_windows)
             stds, proposed_stds, std_flags, std_conf = self._extract_standards_categories(
                 standards_windows
             )
 
-            confidences = [c for c in (zone_conf, use_conf, std_conf) if c is not None]
+            llm_confidences = [
+                c for c in (zone_conf, use_conf, std_conf) if c is not None
+            ]
             base_confidence = (
-                sum(confidences) / len(confidences) if confidences else 1.0
+                sum(llm_confidences) / len(llm_confidences)
+                if llm_confidences
+                else 1.0
             )
+            # Cross-window agreement is a stronger signal than the LLM's
+            # per-window self-reported confidence — a flat 1.0 per window
+            # is meaningless if four windows disagreed about a zone's
+            # canonical_type. Combine the two by averaging.
+            agreement_signals = [
+                a for a in (zone_agreement, use_agreement) if a is not None
+            ]
+            mean_agreement = (
+                sum(agreement_signals) / len(agreement_signals)
+                if agreement_signals
+                else 1.0
+            )
+
             all_flags = list(zone_flags) + list(use_flags) + list(std_flags)
             if use_candidates:
                 terms = sorted({c.proposed_canonical_key for c in use_candidates})
@@ -314,7 +357,7 @@ class SemanticMapperAgent:
                     f"standard(s) outside v{self.vocabulary_version} vocab "
                     f"[{preview}{more}]"
                 )
-            confidence = max(0.0, min(1.0, base_confidence - 0.05 * len(all_flags)))
+            confidence = max(0.0, min(1.0, (base_confidence + mean_agreement) / 2))
 
             return TaxonomyMap(
                 zone_designations=zones,
@@ -467,9 +510,27 @@ class SemanticMapperAgent:
     def _merge_zones(
         window_results: List[Dict[str, Any]],
         zone_types: Tuple[str, ...],
-    ) -> Tuple[List[ZoneDesignation], List[str], Optional[float]]:
+    ) -> Tuple[List[ZoneDesignation], List[str], Optional[float], Optional[float]]:
+        """Merge zone observations across windows with majority-vote conflict resolution.
+
+        When the same code is reported with conflicting ``canonical_type``
+        values across windows, pick the winner by majority vote; tie-break
+        by preferring non-``unknown`` types, then alphabetical for
+        determinism. The conflict is still recorded as a flag so reviewers
+        can audit, but the resolution is deterministic and surfaced in
+        the returned ``ZoneDesignation``.
+
+        Returns ``(designations, flags, mean_llm_confidence,
+        mean_per_code_agreement)``. The agreement signal is the mean of
+        ``max_votes / total_votes`` across all codes that received any
+        votes; 1.0 means every code was unanimous across windows.
+        """
         by_code: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-        type_seen: Dict[str, "OrderedDict[str, None]"] = {}
+        # type_counts[code][canonical_type] = number of windows that voted
+        # for that type on that code. Insertion order on the inner dict is
+        # preserved so that alphabetical-tie-break behavior is also
+        # deterministic in the rare all-tie-all-unknown case.
+        type_counts: Dict[str, "OrderedDict[str, int]"] = {}
         for result in window_results:
             for zone in result.get("zones", []) or []:
                 code = zone.get("code")
@@ -484,11 +545,9 @@ class SemanticMapperAgent:
                     by_code[code] = {
                         "code": code,
                         "full_name": full_name,
-                        "canonical_type": canonical_type,
                         "description": description,
                     }
-                    type_seen[code] = OrderedDict()
-                    type_seen[code][canonical_type] = None
+                    type_counts[code] = OrderedDict()
                 else:
                     existing = by_code[code]
                     if full_name and (
@@ -498,14 +557,25 @@ class SemanticMapperAgent:
                         existing["full_name"] = full_name
                     if description and not existing.get("description"):
                         existing["description"] = description
-                    type_seen[code][canonical_type] = None
+                type_counts[code][canonical_type] = (
+                    type_counts[code].get(canonical_type, 0) + 1
+                )
 
         flags: List[str] = []
-        for code, types in type_seen.items():
-            if len(types) > 1:
+        agreement_rates: List[float] = []
+        for code, counts in type_counts.items():
+            total = sum(counts.values())
+            max_count = max(counts.values()) if counts else 0
+            agreement_rates.append(max_count / total if total else 1.0)
+            if len(counts) > 1:
+                winner = _pick_canonical_type_winner(counts)
                 flags.append(
-                    f"zone canonical_type conflict on {code}: {list(types.keys())}"
+                    f"zone canonical_type conflict on {code}: "
+                    f"{list(counts.keys())} (winner: {winner!r})"
                 )
+            else:
+                winner = next(iter(counts))
+            by_code[code]["canonical_type"] = winner
 
         designations = [
             ZoneDesignation(
@@ -520,7 +590,12 @@ class SemanticMapperAgent:
             float(r.get("confidence", 1.0)) for r in window_results
         ]
         mean_conf = sum(confidences) / len(confidences) if confidences else None
-        return designations, flags, mean_conf
+        mean_agreement = (
+            sum(agreement_rates) / len(agreement_rates)
+            if agreement_rates
+            else None
+        )
+        return designations, flags, mean_conf, mean_agreement
 
     # ------------------------------------------ private: use-class extraction
     def _extract_use_classes(
@@ -553,13 +628,25 @@ class SemanticMapperAgent:
         List[VocabularyExtensionCandidate],
         List[str],
         Optional[float],
+        Optional[float],
     ]:
-        mapping: Dict[str, str] = {}
+        """Merge use-class mappings with majority-vote conflict resolution.
+
+        When the same local term is mapped to different canonical keys
+        across windows, pick the winner by majority vote; tie-break by
+        insertion order (first-seen wins on a tie). Returns
+        ``(mapping, candidates, flags, mean_llm_confidence,
+        mean_per_term_agreement)``.
+        """
         flags: List[str] = []
         candidates: "OrderedDict[Tuple[str, str], VocabularyExtensionCandidate]" = (
             OrderedDict()
         )
         confidences: List[float] = []
+        # vote_counts[local_term][canonical_key] = number of windows that
+        # mapped local→canonical. Insertion order preserved on the inner
+        # dict so a tie breaks toward the first-seen mapping.
+        vote_counts: "OrderedDict[str, OrderedDict[str, int]]" = OrderedDict()
         for result, window_index in window_results:
             confidences.append(float(result.get("confidence", 1.0)))
             for entry in result.get("mappings", []) or []:
@@ -577,16 +664,42 @@ class SemanticMapperAgent:
                             source_window=window_index,
                         )
                     continue
-                if local in mapping:
-                    if mapping[local] != canonical:
-                        flags.append(
-                            f"use_class mapping conflict on '{local}': "
-                            f"{mapping[local]} vs {canonical} (keeping first)"
-                        )
-                else:
-                    mapping[local] = canonical
+                if local not in vote_counts:
+                    vote_counts[local] = OrderedDict()
+                vote_counts[local][canonical] = (
+                    vote_counts[local].get(canonical, 0) + 1
+                )
+
+        mapping: Dict[str, str] = {}
+        agreement_rates: List[float] = []
+        for local, counts in vote_counts.items():
+            total = sum(counts.values())
+            max_count = max(counts.values()) if counts else 0
+            agreement_rates.append(max_count / total if total else 1.0)
+            if len(counts) > 1:
+                # Tie-break by insertion order (first-seen on ties).
+                winner = max(counts.items(), key=lambda kv: kv[1])[0]
+                flags.append(
+                    f"use_class mapping conflict on '{local}': "
+                    f"{list(counts.keys())} (winner: {winner!r})"
+                )
+            else:
+                winner = next(iter(counts))
+            mapping[local] = winner
+
         mean_conf = sum(confidences) / len(confidences) if confidences else None
-        return mapping, list(candidates.values()), flags, mean_conf
+        mean_agreement = (
+            sum(agreement_rates) / len(agreement_rates)
+            if agreement_rates
+            else None
+        )
+        return (
+            mapping,
+            list(candidates.values()),
+            flags,
+            mean_conf,
+            mean_agreement,
+        )
 
     # ------------------------------------------ private: standards extraction
     def _extract_standards_categories(

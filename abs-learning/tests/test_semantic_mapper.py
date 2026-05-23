@@ -77,7 +77,7 @@ def test_t6a_extract_zones_finds_minimum_required_codes():
     fake_client.messages.create.return_value = _zones_response(canned_zones)
 
     agent = SemanticMapperAgent(fake_client)
-    designations, flags, confidence = agent._extract_zones([_make_window()])
+    designations, flags, confidence, _ = agent._extract_zones([_make_window()])
 
     codes = {z.code for z in designations}
     required = {"ER-1", "UC-1", "CEN-1", "DD", "INS", "CLI"}
@@ -104,7 +104,7 @@ def test_t6b_canonical_type_mapping_is_valid():
     fake_client.messages.create.return_value = _zones_response(canned_zones)
 
     agent = SemanticMapperAgent(fake_client)
-    designations, _, _ = agent._extract_zones([_make_window()])
+    designations, _, _, _ = agent._extract_zones([_make_window()])
 
     assert designations, "Expected at least one ZoneDesignation"
     for d in designations:
@@ -128,7 +128,7 @@ def test_t6c_use_class_map_keys_are_canonical():
     fake_client.messages.create.return_value = _uses_response(canned)
 
     agent = SemanticMapperAgent(fake_client)
-    mapping, candidates, _, _ = agent._extract_use_classes([_make_window()])
+    mapping, candidates, _, _, _ = agent._extract_use_classes([_make_window()])
 
     for local, canonical in mapping.items():
         assert canonical in CANONICAL_USE_CLASSES, (
@@ -308,7 +308,7 @@ def test_abs76_use_class_out_of_vocab_preserved_as_candidate():
     fake_client.messages.create.return_value = _uses_response(canned)
 
     agent = SemanticMapperAgent(fake_client)
-    mapping, candidates, _, _ = agent._extract_use_classes([_make_window(3)])
+    mapping, candidates, _, _, _ = agent._extract_use_classes([_make_window(3)])
 
     # Mapping still only contains in-vocab entries.
     assert mapping == {"single-unit dwelling use": "residential_dwelling_single"}
@@ -437,7 +437,7 @@ def test_abs76_vocabulary_path_override(tmp_path):
         {"local_term": "other thing", "canonical_key": "retail_general"},  # NOT in-vocab here
     ]
     fake_client.messages.create.return_value = _uses_response(canned)
-    mapping, candidates, _, _ = agent._extract_use_classes([_make_window()])
+    mapping, candidates, _, _, _ = agent._extract_use_classes([_make_window()])
 
     assert mapping == {"thing": "custom_use_a"}
     # retail_general is in the default vocab but NOT in this agent's custom vocab,
@@ -518,6 +518,134 @@ def test_abs76_use_class_other_is_not_a_candidate():
     fake_client.messages.create.return_value = _uses_response(canned)
 
     agent = SemanticMapperAgent(fake_client)
-    mapping, candidates, _, _ = agent._extract_use_classes([_make_window()])
+    mapping, candidates, _, _, _ = agent._extract_use_classes([_make_window()])
     assert mapping == {"miscellaneous use": "other"}
     assert candidates == []
+
+
+# --------------------------------------------------------------------- ABS-90
+# Majority-vote conflict reconciliation for cross-window disagreements.
+
+def test_abs90_zone_conflict_resolved_by_majority_vote():
+    """Two windows say ``residential``, one says ``mixed_use`` → winner is
+    ``residential``. Flag is still emitted; resolution is deterministic."""
+    fake_client = MagicMock()
+    fake_client.messages.create.side_effect = [
+        _zones_response([{"code": "R-4B", "canonical_type": "residential"}]),
+        _zones_response([{"code": "R-4B", "canonical_type": "residential"}]),
+        _zones_response([{"code": "R-4B", "canonical_type": "mixed_use"}]),
+    ]
+    agent = SemanticMapperAgent(fake_client)
+    designations, flags, _, agreement = agent._extract_zones(
+        [_make_window(0), _make_window(1), _make_window(2)]
+    )
+
+    r4b = [z for z in designations if z.code == "R-4B"]
+    assert len(r4b) == 1
+    assert r4b[0].canonical_type == "residential", (
+        f"Expected majority winner 'residential', got {r4b[0].canonical_type!r}"
+    )
+    assert any("R-4B" in f and "conflict" in f for f in flags), (
+        f"Expected R-4B conflict flag, got {flags!r}"
+    )
+    assert agreement == pytest.approx(2 / 3), (
+        f"Agreement should be 2/3 (2 votes for winner of 3 total), got {agreement}"
+    )
+
+
+def test_abs90_zone_conflict_tie_breaks_to_non_unknown():
+    """One vote ``unknown``, one vote ``residential`` → tie-break to
+    ``residential``; alphabetical applies only among non-unknown ties."""
+    fake_client = MagicMock()
+    fake_client.messages.create.side_effect = [
+        _zones_response([{"code": "T", "canonical_type": "residential"}]),
+        _zones_response([{"code": "T", "canonical_type": "unknown"}]),
+    ]
+    agent = SemanticMapperAgent(fake_client)
+    designations, _, _, _ = agent._extract_zones(
+        [_make_window(0), _make_window(1)]
+    )
+    assert designations[0].canonical_type == "residential"
+
+
+def test_abs90_zone_conflict_tie_breaks_alphabetically_among_non_unknown():
+    """``commercial`` vs ``mixed_use`` with equal votes → alphabetical
+    wins → ``commercial``."""
+    fake_client = MagicMock()
+    fake_client.messages.create.side_effect = [
+        _zones_response([{"code": "CEN-1", "canonical_type": "commercial"}]),
+        _zones_response([{"code": "CEN-1", "canonical_type": "mixed_use"}]),
+    ]
+    agent = SemanticMapperAgent(fake_client)
+    designations, _, _, _ = agent._extract_zones(
+        [_make_window(0), _make_window(1)]
+    )
+    assert designations[0].canonical_type == "commercial"
+
+
+def test_abs90_use_class_conflict_resolved_by_majority_vote():
+    """Two windows map a term to one canonical key, one window to another
+    → majority wins; flag is still emitted."""
+    fake_client = MagicMock()
+    fake_client.messages.create.side_effect = [
+        _uses_response([{"local_term": "Semi-detached dwellings",
+                         "canonical_key": "residential_dwelling_single"}]),
+        _uses_response([{"local_term": "Semi-detached dwellings",
+                         "canonical_key": "residential_dwelling_single"}]),
+        _uses_response([{"local_term": "Semi-detached dwellings",
+                         "canonical_key": "residential_dwelling_multi"}]),
+    ]
+    agent = SemanticMapperAgent(fake_client)
+    mapping, _, flags, _, _ = agent._extract_use_classes(
+        [_make_window(0), _make_window(1), _make_window(2)]
+    )
+    assert mapping["Semi-detached dwellings"] == "residential_dwelling_single", (
+        f"Expected majority winner 'residential_dwelling_single', got {mapping}"
+    )
+    assert any(
+        "Semi-detached dwellings" in f and "conflict" in f for f in flags
+    ), f"Expected conflict flag, got {flags!r}"
+
+
+def test_abs90_unanimous_zone_has_agreement_one():
+    """No conflict → agreement rate is 1.0."""
+    fake_client = MagicMock()
+    fake_client.messages.create.side_effect = [
+        _zones_response([{"code": "ER-1", "canonical_type": "residential"}]),
+        _zones_response([{"code": "ER-1", "canonical_type": "residential"}]),
+    ]
+    agent = SemanticMapperAgent(fake_client)
+    _, flags, _, agreement = agent._extract_zones(
+        [_make_window(0), _make_window(1)]
+    )
+    assert agreement == 1.0
+    assert not any("conflict" in f for f in flags), (
+        f"No conflict flag should be emitted when everything is unanimous, "
+        f"got {flags!r}"
+    )
+
+
+def test_abs90_pick_canonical_type_winner_helper():
+    """The tie-break helper applies the documented precedence rules."""
+    from collections import OrderedDict
+    from agents.semantic_mapper import _pick_canonical_type_winner
+
+    # Outright majority wins.
+    assert _pick_canonical_type_winner(
+        OrderedDict([("residential", 3), ("mixed_use", 1)])
+    ) == "residential"
+
+    # Tie, one is unknown → prefer non-unknown.
+    assert _pick_canonical_type_winner(
+        OrderedDict([("unknown", 2), ("residential", 2)])
+    ) == "residential"
+
+    # Tie among non-unknowns → alphabetical.
+    assert _pick_canonical_type_winner(
+        OrderedDict([("mixed_use", 2), ("commercial", 2)])
+    ) == "commercial"
+
+    # All tied, all unknown (degenerate) → returns "unknown".
+    assert _pick_canonical_type_winner(
+        OrderedDict([("unknown", 1)])
+    ) == "unknown"
