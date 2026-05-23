@@ -22,10 +22,18 @@ services:
     # without a server-side cap, that can wedge a connection (and any
     # row locks it holds) indefinitely. 60s/120s is generous enough
     # for any legitimate query and short enough to self-heal.
+    #
+    # The defaults are exported as env vars so long-running workflows
+    # (e.g. Layer 1 ingest of a 200+ page bylaw, which holds one
+    # transaction across the full pdfplumber parse + per-page block
+    # extraction + table extraction + insert) can opt out without
+    # editing this file. Recipe documented in docs/E2E_TESTING.md /
+    # docs/DEV_DB_BACKUP.md. Setting either to "0" disables that
+    # particular cap (Postgres default). ABS-100.
     command: >
       postgres
-      -c idle_in_transaction_session_timeout=60000
-      -c statement_timeout=120000
+      -c idle_in_transaction_session_timeout=${PG_IDLE_IN_TXN_TIMEOUT:-60000}
+      -c statement_timeout=${PG_STATEMENT_TIMEOUT:-120000}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U layer1 -d layer1"]
       interval: 5s
