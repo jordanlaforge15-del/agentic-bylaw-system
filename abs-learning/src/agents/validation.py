@@ -53,6 +53,40 @@ def _file_url_to_path(url: str) -> str:
     return parsed.path
 
 
+# Leading words a schedule pattern commonly starts with. We strip them
+# (along with the trailing whitespace) before anchoring, so a pattern
+# like ``^Schedule ZM-\d+`` becomes the bare-code matcher ``\AZM-\d+\Z``.
+_SCHEDULE_PREFIX_REGEX = re.compile(r"^(Schedule|Appendix|Table|Map)\s+")
+
+
+def _schedule_code_patterns(raw_patterns: List[str]) -> List[re.Pattern[str]]:
+    """Compile a list of bare-code matchers from ParserConfig.schedule_patterns.
+
+    The raw patterns describe schedule HEADER lines (``^Schedule ZM-\\d+``).
+    To recognize a detected token like ``ZM-1`` as a schedule label rather
+    than a zone code, strip the leading anchor and any
+    ``Schedule|Appendix|Table|Map`` prefix, then anchor with ``\\A...\\Z``
+    so the resulting regex matches a bare code in full.
+    """
+    out: List[re.Pattern[str]] = []
+    for raw in raw_patterns:
+        if not isinstance(raw, str) or not raw:
+            continue
+        body = raw[1:] if raw.startswith("^") else raw
+        body = _SCHEDULE_PREFIX_REGEX.sub("", body)
+        if not body:
+            continue
+        try:
+            out.append(re.compile(rf"\A{body}\Z"))
+        except re.error:
+            continue
+    return out
+
+
+def _matches_any(value: str, patterns: List[re.Pattern[str]]) -> bool:
+    return any(p.search(value) for p in patterns)
+
+
 class ValidationAgent:
     """Run automated QA checks against parser_config + taxonomy outputs."""
 
@@ -75,7 +109,7 @@ class ValidationAgent:
     ) -> QAReport:
         citation_rate, citation_flags = self._check_citation_resolution(citation_samples)
         zone_completeness, zone_flags = self._check_zone_completeness(
-            source_doc, taxonomy
+            source_doc, taxonomy, parser_config
         )
         pattern_coverage, pattern_flags = self._check_pattern_coverage(
             source_doc, parser_config
@@ -139,6 +173,7 @@ class ValidationAgent:
         self,
         source_doc: SourceDocument,
         taxonomy: TaxonomyMap,
+        parser_config: Optional[ParserConfig] = None,
     ) -> Tuple[float, List[Dict[str, Any]]]:
         pages, _ = self._load_pdf_state(source_doc)
 
@@ -150,10 +185,18 @@ class ValidationAgent:
         for text in pages.values():
             for code in _HYPHENATED_CODE_REGEX.findall(text):
                 hyphenated_counts[code] += 1
+        # Bylaws that name their zoning maps "Schedule ZM-1", "Schedule ZM-2"
+        # surface ZM-N tokens hundreds of times. Without this filter the
+        # validator flags every map label as a "missing zone code" even
+        # though Structure Analyst already captured them as schedules.
+        schedule_code_patterns = _schedule_code_patterns(
+            parser_config.schedule_patterns if parser_config else []
+        )
         found: set[str] = {
             code
             for code, count in hyphenated_counts.items()
             if count >= _MIN_CODE_OCCURRENCES
+            and not _matches_any(code, schedule_code_patterns)
         }
 
         taxonomy_codes = {z.code for z in taxonomy.zone_designations}

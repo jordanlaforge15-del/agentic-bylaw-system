@@ -24,19 +24,55 @@ We considered three approaches (see ABS-75):
 """
 from __future__ import annotations
 
+import heapq
+import itertools
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urldefrag, urljoin, urlparse
 
 import httpx
+import tldextract
 
 from manifest.models import Municipality, SourceDocument
 
 
 logger = logging.getLogger(__name__)
+
+
+# Use only the bundled PSL snapshot — no network fetch on first use. This
+# keeps the agent usable in offline/CI contexts and makes unit tests
+# deterministic. The snapshot is refreshed by upgrading the tldextract
+# package, which is sufficient for our use case (relatively stable
+# municipal-site domain layouts).
+_TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
+
+
+# Patterns that mark a link as more likely to be bylaw/document content
+# than site-wide navigation. Used to prioritise the BFS queue so the
+# crawler reaches actual bylaws before exhausting max_pages on nav chrome.
+_CONTENT_HREF_REGEX = re.compile(
+    r"(?i)(?:/media/\d+|/node/\d+|/files?/\d+|\.pdf(?:[?#]|$))"
+)
+_CONTENT_TEXT_REGEX = re.compile(
+    # Match common bylaw / planning vocabulary. Uses explicit inflections
+    # so "Police" doesn't match "polic" and "Mapping" doesn't match "map".
+    r"(?i)\b(by[- ]?laws?|schedules?|appendix|appendices|amendments?|"
+    r"polic(y|ies)|plan(s|ning|ners?|ned)?|strateg(y|ies)|"
+    r"land\s*uses?|zoning|maps?|MPS|LUB)\b"
+)
+
+
+def _looks_like_content_link(href: str, link_text: str) -> bool:
+    """Heuristic — does this link look like a document/bylaw rather than nav?"""
+    if href and _CONTENT_HREF_REGEX.search(href):
+        return True
+    if link_text and _CONTENT_TEXT_REGEX.search(link_text):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------- public types
@@ -296,6 +332,7 @@ class DiscoveryAgent:
         max_depth: int = DEFAULT_MAX_DEPTH,
         batch_size: int = DEFAULT_BATCH_SIZE,
         confidence_floor: float = DEFAULT_CONFIDENCE_FLOOR,
+        allowed_hosts: Optional[Set[str]] = None,
     ) -> None:
         self.client = anthropic_client
         self._owned_http_client = http_client is None
@@ -314,6 +351,12 @@ class DiscoveryAgent:
         self.max_depth = max_depth
         self.batch_size = batch_size
         self.confidence_floor = confidence_floor
+        # When None, the crawler accepts any URL whose registrable domain
+        # (eTLD+1) matches the seed's. When provided, the crawler accepts
+        # only URLs whose exact host is in this set — use this when the
+        # default eTLD+1 scope is too broad (e.g. seed on a shared platform
+        # subdomain).
+        self.allowed_hosts = allowed_hosts
 
     def close(self) -> None:
         if self._owned_http_client:
@@ -345,28 +388,43 @@ class DiscoveryAgent:
 
     # --------------------------------------------------------- private: crawl
     def _crawl(self, seed_url: str) -> List[CrawledCandidate]:
-        """BFS crawl from ``seed_url`` within the same domain.
+        """BFS crawl from ``seed_url`` within the same registrable domain.
 
         Returns a deduplicated list of ``CrawledCandidate`` capped at
         ``self.max_pages``. PDFs are recorded as candidates but not
         recursed into; HTML pages have their links extracted and pushed
         onto the queue up to ``self.max_depth``.
+
+        Scope: by default, accepts any URL whose registrable domain (eTLD+1)
+        matches the seed's, so a seed on ``www.<city>.<tld>`` will follow
+        links to ``cdn.<city>.<tld>`` where municipalities commonly serve
+        their bylaw PDFs. Override with ``allowed_hosts`` for stricter scope.
         """
         seed_url = _normalize_url(seed_url)
         seed_host = _host_of(seed_url)
-        if not seed_host:
+        seed_domain = _registrable_domain(seed_url)
+        if not seed_host or not seed_domain:
             return []
 
         candidates: Dict[str, CrawledCandidate] = {}
         visited_pages: Set[str] = set()
-        queue: List[Tuple[str, int, str, str]] = [(seed_url, 0, "", seed_url)]
+        # Min-heap of (priority_key, work_item). priority_key is
+        # (depth, tier, insertion_order) — depth FIRST so BFS ordering
+        # is strict (all depth-1 before any depth-2), tier second
+        # (bylaw-text before PDF-URL before nav), insertion order last
+        # for deterministic tie-breaking.
+        counter = itertools.count()
+        queue: List[Tuple[Tuple[int, int, int], Tuple[str, int, str, str]]] = []
+        heapq.heappush(
+            queue, ((0, 0, next(counter)), (seed_url, 0, "", seed_url))
+        )
 
         while queue and len(candidates) < self.max_pages:
-            url, depth, link_text, discovered_on = queue.pop(0)
+            _, (url, depth, link_text, discovered_on) = heapq.heappop(queue)
             url = _normalize_url(url)
             if not url:
                 continue
-            if _host_of(url) != seed_host:
+            if not self._host_allowed(url, seed_domain):
                 continue
 
             is_pdf = _looks_like_pdf(url)
@@ -392,6 +450,25 @@ class DiscoveryAgent:
 
             page_body, content_type = self._fetch_html(url)
             if page_body is None:
+                # CMS-routed PDFs (Drupal /media/<id>, /node/<id>, etc.)
+                # don't end in .pdf but the response after redirects is
+                # application/pdf. Capture them as PDF candidates rather
+                # than silently dropping. Keep the canonical URL (the
+                # /media/<id> form), not the redirect target — that's
+                # what the seed page actually links to.
+                if (
+                    content_type
+                    and "application/pdf" in content_type.lower()
+                    and url not in candidates
+                ):
+                    candidates[url] = CrawledCandidate(
+                        url=url,
+                        link_text=link_text,
+                        discovered_on=discovered_on,
+                        page_title=None,
+                        content_type=content_type,
+                        is_pdf=True,
+                    )
                 continue
 
             extractor = _LinkExtractor()
@@ -415,19 +492,63 @@ class DiscoveryAgent:
             if depth >= self.max_depth:
                 continue
 
+            # Push child links into the heap with priority keys that
+            # enforce strict BFS by depth, then content-tier within depth:
+            #   Tier 0: link text matches bylaw keywords (LUB, MPS, etc.).
+            #   Tier 1: href matches CMS route / PDF (content but not
+            #           necessarily bylaw — minutes, agendas).
+            #   Tier 2: everything else (nav, breadcrumbs, footer).
+            # Insertion order breaks ties so output is deterministic.
+            #
+            # Beyond depth 0, demote tier-1 (PDF-without-bylaw-text) into
+            # tier-2: the seed page is a curated index where PDFs are
+            # usually relevant, but deeper pages often have unrelated
+            # PDF sidebars (council minutes, agendas) that should not
+            # outrank actual bylaw links.
+            child_depth = depth + 1
             for href, text in extractor.links:
                 child = _resolve_href(url, href)
                 if not child:
                     continue
-                if _host_of(child) != seed_host:
+                if not self._host_allowed(child, seed_domain):
                     continue
                 if child in candidates:
                     continue
                 if child in visited_pages:
                     continue
-                queue.append((child, depth + 1, text, url))
+                if text and _CONTENT_TEXT_REGEX.search(text):
+                    tier = 0
+                elif (
+                    href
+                    and _CONTENT_HREF_REGEX.search(href)
+                    and depth == 0
+                ):
+                    tier = 1
+                else:
+                    tier = 2
+                heapq.heappush(
+                    queue,
+                    (
+                        (child_depth, tier, next(counter)),
+                        (child, child_depth, text, url),
+                    ),
+                )
 
         return list(candidates.values())
+
+    def _host_allowed(self, url: str, seed_domain: str) -> bool:
+        """Return True if ``url``'s host falls inside the crawl scope.
+
+        With an explicit ``allowed_hosts`` set, match on exact hostname.
+        Otherwise default to registrable-domain (eTLD+1) match against the
+        seed's domain.
+        """
+        host = _host_of(url)
+        if not host:
+            return False
+        if self.allowed_hosts is not None:
+            return host in self.allowed_hosts
+        return _registrable_domain(url) == seed_domain
 
     def _fetch_html(self, url: str) -> Tuple[Optional[str], Optional[str]]:
         try:
@@ -692,6 +813,20 @@ def _host_of(url: str) -> str:
         return urlparse(url).hostname or ""
     except ValueError:
         return ""
+
+
+def _registrable_domain(url: str) -> str:
+    """Return the eTLD+1 of ``url`` (e.g. ``halifax.ca`` for both
+    ``www.halifax.ca`` and ``cdn.halifax.ca``). Empty string on hosts
+    with no public suffix (e.g. ``localhost``, raw IPs).
+    """
+    host = _host_of(url)
+    if not host:
+        return ""
+    ext = _TLD_EXTRACT(host)
+    if not ext.domain or not ext.suffix:
+        return ""
+    return f"{ext.domain}.{ext.suffix}"
 
 
 def _looks_like_pdf(url: str) -> bool:
