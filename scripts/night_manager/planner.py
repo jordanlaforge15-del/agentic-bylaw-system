@@ -112,13 +112,36 @@ async def plan_execution(
     return ExecutionPlan(groups=groups, conflict_notes=conflict_notes)
 
 
+def _port_is_free(port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
+_claimed_offsets: set[int] = set()
+
+
 def allocate_ports(slot: int) -> IssuePorts:
-    """Allocate a unique port triplet for the given slot (0-indexed)."""
-    return IssuePorts(
-        pg=PORT_BASE_PG + slot,
-        api=PORT_BASE_API + slot,
-        web=PORT_BASE_WEB + slot,
-    )
+    """Allocate a free port triplet, skipping occupied and already-claimed ports."""
+    offset = slot
+    for _ in range(50):
+        if offset in _claimed_offsets:
+            offset += 1
+            continue
+        pg = PORT_BASE_PG + offset
+        api = PORT_BASE_API + offset
+        web = PORT_BASE_WEB + offset
+        if _port_is_free(pg) and _port_is_free(api) and _port_is_free(web):
+            _claimed_offsets.add(offset)
+            log.info("Allocated ports PG=%d API=%d WEB=%d (offset=%d)", pg, api, web, offset)
+            return IssuePorts(pg=pg, api=api, web=web)
+        log.debug("Port triplet offset=%d busy, trying next", offset)
+        offset += 1
+    raise RuntimeError(f"Could not find a free port triplet after 50 attempts (starting from slot {slot})")
 
 
 def build_state_from_plan(
