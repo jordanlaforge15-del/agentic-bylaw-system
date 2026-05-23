@@ -274,6 +274,13 @@ async def _run_agent_lifecycle(
     issue.mark_completed()
     state.save()
 
+    in_review_id = workflow_states.get("In Review")
+    if in_review_id:
+        try:
+            await linear.update_issue_state(issue.linear_id, in_review_id)
+        except Exception as e:
+            log.warning("Failed to update Linear status for %s: %s", issue.identifier, e)
+
     await linear.post_comment(
         issue.linear_id,
         f"**Night Manager** — Agent completed, entering review.\n\n"
