@@ -29,8 +29,7 @@ async def run(config: NMConfig) -> None:
         state = await _plan(issues, config)
         state.save()
 
-        team_id = issues[0].team_id
-        workflow_states = await linear.get_workflow_states(team_id)
+        workflow_states = await linear.get_workflow_states()
 
         if config.dry_run:
             await _dry_run_report(state, linear)

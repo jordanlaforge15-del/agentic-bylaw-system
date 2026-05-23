@@ -31,7 +31,6 @@ class LinearIssue:
 class LinearClient:
     def __init__(self, api_key: str) -> None:
         self._client = httpx.AsyncClient(
-            base_url=GRAPHQL_URL,
             headers={
                 "Authorization": api_key,
                 "Content-Type": "application/json",
@@ -46,7 +45,7 @@ class LinearClient:
         payload: dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
-        resp = await self._client.post("", json=payload)
+        resp = await self._client.post(GRAPHQL_URL, json=payload)
         resp.raise_for_status()
         body = resp.json()
         if "errors" in body:
@@ -62,7 +61,7 @@ class LinearClient:
               labels: { name: { eq: $labelName } }
               state: { type: { in: ["backlog", "unstarted"] } }
             }
-            orderBy: sortOrder
+            orderBy: updatedAt
           ) {
             nodes {
               id
@@ -81,7 +80,7 @@ class LinearClient:
         """
         data = await self._query(query, {"labelName": label_name, "teamKey": team_key})
         nodes = data["issues"]["nodes"]
-        return [
+        issues = [
             LinearIssue(
                 id=n["id"],
                 identifier=n["identifier"],
@@ -97,6 +96,8 @@ class LinearClient:
             )
             for n in nodes
         ]
+        issues.sort(key=lambda i: i.sort_order)
+        return issues
 
     async def fetch_issue(self, identifier: str) -> LinearIssue:
         query = """
@@ -131,16 +132,16 @@ class LinearClient:
             team_id=n["team"]["id"],
         )
 
-    async def get_workflow_states(self, team_id: str) -> dict[str, str]:
+    async def get_workflow_states(self, team_key: str = "ABS") -> dict[str, str]:
         """Return {state_name: state_id} for the team."""
         query = """
-        query WorkflowStates($teamId: String!) {
-          workflowStates(filter: { team: { id: { eq: $teamId } } }) {
+        query WorkflowStates($teamKey: String!) {
+          workflowStates(filter: { team: { key: { eq: $teamKey } } }) {
             nodes { id name type }
           }
         }
         """
-        data = await self._query(query, {"teamId": team_id})
+        data = await self._query(query, {"teamKey": team_key})
         return {n["name"]: n["id"] for n in data["workflowStates"]["nodes"]}
 
     async def update_issue_state(self, issue_id: str, state_id: str) -> None:

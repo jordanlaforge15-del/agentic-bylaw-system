@@ -61,6 +61,12 @@ class NMConfig:
         if not self.linear_api_key:
             from dotenv import load_dotenv
             load_dotenv(self.repo_root / ".env")
+            # Worktrees share the main repo's .env via git commondir
+            git_common = self.repo_root / ".git"
+            if git_common.is_file():
+                commondir = git_common.read_text().strip().split("gitdir: ", 1)[-1]
+                main_root = Path(commondir).resolve().parents[2]
+                load_dotenv(main_root / ".env")
             self.linear_api_key = os.environ.get("LINEAR_API_KEY", "")
         if not self.linear_api_key:
             raise RuntimeError("LINEAR_API_KEY not found in environment or .env")
