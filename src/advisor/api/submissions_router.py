@@ -162,7 +162,12 @@ def build_submissions_router(
         if storage_dir is not None
         else Path(get_settings().submission_storage_dir)
     )
-    storage_root.mkdir(parents=True, exist_ok=True)
+    # Don't mkdir storage_root at startup — the prod advisor runs with a
+    # read-only filesystem (`read_only: true` in compose) and would crash on
+    # boot. The upload handler below calls `user_dir.mkdir(parents=True,
+    # exist_ok=True)` lazily, which creates `storage_root` as a parent on
+    # the first real upload — turning a startup-time crash into a clear
+    # request-time error if no writable volume is mounted.
 
     router = APIRouter(prefix="/v1/submissions", tags=["submissions"])
 
