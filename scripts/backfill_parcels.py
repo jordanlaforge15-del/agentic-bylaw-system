@@ -128,25 +128,41 @@ def backfill(session: Session, *, dry_run: bool = False) -> BackfillStats:
     zoning_features = _load_zoning_geometries(session, zoning_dataset)
 
     stats = BackfillStats()
-    features = (
+    # Pre-count for progress logging, but stream the actual feature rows
+    # via yield_per so we don't materialize all ~150k Halifax parcel
+    # features (with full geometry_geojson payloads) in memory at once.
+    # The earlier .all() flavour OOM'd inside a 3 GB container against
+    # prod-sized data. Streaming + per-batch expunge keeps RSS flat.
+    from sqlalchemy import func
+
+    stats.features_total = (
         session.execute(
-            select(ExternalDatasetFeature).where(
+            select(func.count(ExternalDatasetFeature.id)).where(
                 ExternalDatasetFeature.external_dataset_id == parcels_dataset.id
             )
         )
-        .scalars()
-        .all()
+        .scalar_one()
     )
-    stats.features_total = len(features)
     logger.info("processing %d parcel features", stats.features_total)
 
-    # Cache parcels by (jurisdiction, identifier) so re-encountering the
-    # same identifier within one run reuses the in-memory instance
-    # instead of re-querying the DB. Halifax has unique PIDs, but the
-    # cache hardens the script against future datasets with collisions.
-    parcel_cache: dict[tuple[str, str], Parcel] = {}
+    # Cache parcels by (jurisdiction, identifier) — store only the int
+    # `parcel.id` (post-flush), not the full Parcel ORM instance. Halifax
+    # has unique PIDs, so we accumulate ~180k cache entries; keeping the
+    # whole ORM instance (with its geometry_geojson dict) blew past 2 GB
+    # in the streamed run that processed 148k/182k features before OOM.
+    # An int per entry is ~28 bytes; an instance is multiple kB.
+    parcel_id_cache: dict[tuple[str, str], int] = {}
 
-    for index, feature in enumerate(features, start=1):
+    feature_stream = (
+        session.execute(
+            select(ExternalDatasetFeature)
+            .where(ExternalDatasetFeature.external_dataset_id == parcels_dataset.id)
+            .execution_options(yield_per=500)
+        )
+        .scalars()
+    )
+
+    for index, feature in enumerate(feature_stream, start=1):
         parcel_identifier = _extract_parcel_identifier(feature)
         if parcel_identifier is None:
             stats.missing_identifier += 1
@@ -171,40 +187,49 @@ def backfill(session: Session, *, dry_run: bool = False) -> BackfillStats:
             continue
 
         cache_key = (HALIFAX_JURISDICTION, parcel_identifier)
-        parcel = parcel_cache.get(cache_key)
-        if parcel is None:
-            parcel = _find_parcel(session, HALIFAX_JURISDICTION, parcel_identifier)
-        if parcel is None:
-            centroid_geojson = _centroid_geojson(polygon)
-            area_m2 = _polygon_area_m2(polygon)
-            zone_code = _zone_code_for_polygon(polygon, zoning_features)
-            if zone_code is not None:
-                stats.zone_lookups_successful += 1
+        parcel_id = parcel_id_cache.get(cache_key)
+        if parcel_id is None:
+            existing = _find_parcel(session, HALIFAX_JURISDICTION, parcel_identifier)
+            if existing is not None:
+                parcel_id = existing.id
+                stats.parcels_reused += 1
+                if not dry_run:
+                    session.expunge(existing)
             else:
-                stats.zone_lookups_failed += 1
-            parcel = Parcel(
-                jurisdiction=HALIFAX_JURISDICTION,
-                parcel_identifier=parcel_identifier,
-                geometry_geojson=dict(geometry) if geometry else None,
-                centroid_geojson=centroid_geojson,
-                area_m2=area_m2,
-                zone_code=zone_code,
-                metadata_json={
-                    "source_dataset": HALIFAX_PARCELS_DATASET_NAME,
-                    "source_feature_id": feature.id,
-                    "backfilled_via": "scripts/backfill_parcels.py",
-                },
-            )
-            if not dry_run:
-                session.add(parcel)
-                session.flush()
-            stats.parcels_inserted += 1
-        else:
-            stats.parcels_reused += 1
+                centroid_geojson = _centroid_geojson(polygon)
+                area_m2 = _polygon_area_m2(polygon)
+                zone_code = _zone_code_for_polygon(polygon, zoning_features)
+                if zone_code is not None:
+                    stats.zone_lookups_successful += 1
+                else:
+                    stats.zone_lookups_failed += 1
+                parcel = Parcel(
+                    jurisdiction=HALIFAX_JURISDICTION,
+                    parcel_identifier=parcel_identifier,
+                    geometry_geojson=dict(geometry) if geometry else None,
+                    centroid_geojson=centroid_geojson,
+                    area_m2=area_m2,
+                    zone_code=zone_code,
+                    metadata_json={
+                        "source_dataset": HALIFAX_PARCELS_DATASET_NAME,
+                        "source_feature_id": feature.id,
+                        "backfilled_via": "scripts/backfill_parcels.py",
+                    },
+                )
+                if not dry_run:
+                    session.add(parcel)
+                    session.flush()
+                    parcel_id = parcel.id
+                    # Done with this Parcel — drop it from the identity map
+                    # so the next 150k inserts don't accumulate.
+                    session.expunge(parcel)
+                else:
+                    parcel_id = -1  # sentinel — never read back in dry-run
+                stats.parcels_inserted += 1
+            parcel_id_cache[cache_key] = parcel_id
 
-        parcel_cache[cache_key] = parcel
         if not dry_run:
-            feature.parcel_id = parcel.id
+            feature.parcel_id = parcel_id
         stats.features_linked += 1
 
         if index % 500 == 0:
@@ -215,6 +240,18 @@ def backfill(session: Session, *, dry_run: bool = False) -> BackfillStats:
                 stats.parcels_inserted,
                 stats.parcels_reused,
             )
+            # Flush pending parcel inserts + feature.parcel_id UPDATEs so
+            # the per-batch session work gets pushed to the DB, then expunge
+            # the *features* (we no longer need them) to drop their
+            # geometry_geojson payloads from the identity map. Parcels stay
+            # tracked by design.
+            if not dry_run:
+                session.flush()
+            for cached_feature in [
+                obj for obj in list(session.identity_map.values())
+                if isinstance(obj, ExternalDatasetFeature)
+            ]:
+                session.expunge(cached_feature)
 
     return stats
 
