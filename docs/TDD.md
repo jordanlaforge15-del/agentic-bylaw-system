@@ -1,0 +1,840 @@
+# Technical Design Document — Agentic Bylaw System
+
+Status: Living document. Last regenerated from code on 2026-05-22 (ABS-82).
+Companion to [`docs/architecture.md`](architecture.md) (narrative) and
+[`docs/DEPLOYMENT.md`](DEPLOYMENT.md) (ops). This document is derived from
+the code as it sits on `dev`; each section cites the file and function
+that backs the claim so the doc can be re-verified mechanically.
+
+> A browser-renderable copy of this file lives at [`docs/TDD.html`](TDD.html).
+> Open it directly in any browser — Mermaid is loaded from a CDN at page
+> load, no extensions or build step required.
+
+---
+
+## 1. System overview and goals
+
+The Agentic Bylaw System is a citation-grounded planning advisor for
+municipal land-use bylaws. The pilot deployment indexes the Halifax
+Regional Centre Land Use By-law and adjacent zoning datasets. The
+system answers natural-language questions about what a bylaw permits
+on a given parcel and, given a structured development proposal,
+evaluates that proposal against the indexed bylaw graph.
+
+Three concrete capabilities make up the product surface:
+
+1. **Retrieval-grounded chat.** A web app at
+   `agenticbylawsystems.com` (Next.js — `web/app/`) hits the FastAPI
+   advisor at `api.agenticbylawsystems.com`
+   (`src/advisor/api/main.py:build_app`). The advisor runs a tool-using
+   LLM loop (`src/advisor/llm/tool_loop.py`) over a fixed set of
+   retrieval tools (`src/advisor/chat/tools.py:build_bylaw_tools`) that
+   call the shared `RetrievalService`
+   (`mcp/bylaw_retrieval/retrieval/service.py:70`).
+2. **Submission evaluation.** Architectural artifacts (IFC, APS/RVT,
+   PDF) are extracted into a normalised attribute bag
+   (`src/layer1/pipeline/ingest_submission.py:ingest_submission`) and
+   scored against bylaw clauses by the deterministic evaluator
+   (`src/layer2/compliance/evaluator.py:EvaluatorService`).
+3. **Programmatic retrieval / MCP.** The same retrieval core is exposed
+   over an HTTP API (`mcp/bylaw_retrieval/api/app.py:create_app`) and an
+   MCP server (`mcp/bylaw_retrieval/server.py:create_mcp_server`) for
+   third-party agents and ChatGPT-style tool callers.
+
+Design goals (visible in the code and reinforced by `README.md` and
+`docs/architecture.md`):
+
+- **Citation-grounded answers.** Layer 1 stores immutable source
+  evidence — pages, fragments, tables, cross-references — and every
+  Layer 2 / advisor answer must trace back to a `source_fragment` or
+  `source_table_cell` row. Enforced by the prompt builder
+  (`src/layer2/prompts/builder.py`) and persisted in
+  `prompt_log.fragment_ids_json` (`src/layer2/db/models.py:88`).
+- **Retrieval-first, not pre-extracted.** No giant offline rule base.
+  Claims are emitted at answer time and only persisted when
+  generated. See `_synthesize_claims_from_candidates`
+  (`src/layer2/pipeline/service.py:167`) and `GeneratedClaim`
+  (`src/layer2/db/models.py:119`).
+- **Append-only trace.** Retrieval runs, prompts, model outputs, and
+  feedback are all persisted as logs, not mutated. Tables
+  `retrieval_run`, `retrieval_result`, `prompt_log`, `answer_log`,
+  `generated_claim`, `*_feedback` (`src/layer2/db/models.py`).
+- **Reusable normalised storage.** Layer 1 is shared by Layer 2 (the
+  retrieval/answer pipeline), the MCP retrieval server, the HTTP API,
+  the compliance evaluator, and the advisor chat tools — none of them
+  re-parses source PDFs.
+- **Local-first development.** Postgres + pgvector + PostGIS run in
+  Docker locally (`docker-compose.yml`). Production is a single
+  Hetzner VPS with the same stack behind Caddy
+  (`docs/DEPLOYMENT.md`).
+- **Defence in depth on prod.** Rate-limited Caddy, non-root
+  containers, `cap_drop: ALL`, statement timeouts on Postgres
+  (`Caddyfile`, `docker-compose.yml`).
+
+### Non-goals
+
+- The system does **not** issue legal opinions. The MCP server
+  instructions are explicit: it returns evidence, not verdicts
+  (`mcp/bylaw_retrieval/server.py:52-84`).
+- No multi-tenant per-municipality isolation yet — `submission.submitter_id`
+  is nullable and Phase-1 has a single jurisdiction
+  (`src/layer2/compliance/db/models.py:90`).
+- Real OCR tuning is out of scope; OCR is exposed but production
+  quality requires per-document tuning (`README.md:436`).
+
+---
+
+## 2. High-level architecture
+
+The system splits into four runtime tiers — edge, web, advisor API,
+and the shared Postgres data plane — plus a separate ingest path that
+populates the database out-of-band.
+
+```mermaid
+graph TD
+    Browser["Browser (Next.js client)"]
+    Caddy["Caddy edge<br/>TLS + rate limit<br/>Caddyfile"]
+    Web["Next.js app<br/>web/app/"]
+    Advisor["FastAPI advisor<br/>src/advisor/api/main.py"]
+    ToolLoop["Tool loop<br/>src/advisor/llm/tool_loop.py"]
+    BylawTools["Bylaw tools<br/>src/advisor/chat/tools.py"]
+    Retrieval["RetrievalService<br/>mcp/bylaw_retrieval/retrieval/service.py"]
+    Layer2["Layer 2 pipeline<br/>src/layer2/pipeline/service.py"]
+    Evaluator["EvaluatorService<br/>src/layer2/compliance/evaluator.py"]
+    MCP["MCP server<br/>mcp/bylaw_retrieval/server.py"]
+    MCPAPI["MCP HTTP API<br/>mcp/bylaw_retrieval/api/app.py"]
+    DB["Postgres 16<br/>pgvector + PostGIS<br/>Dockerfile.postgres"]
+    Anthropic["Anthropic API<br/>anthropic_backend.py"]
+    L1["Layer 1 ingest<br/>src/layer1/pipeline/ingest.py"]
+    L1Sub["Submission ingest<br/>src/layer1/pipeline/ingest_submission.py"]
+    L1Geo["Geo dataset ingest<br/>src/layer1/pipeline/ingest_dataset.py"]
+
+    Browser -->|HTTPS| Caddy
+    Caddy -->|reverse_proxy web:3000| Web
+    Caddy -->|reverse_proxy advisor:8000| Advisor
+    Web -->|server-side fetch + X-Test-User-Id or Bearer| Advisor
+    Advisor --> ToolLoop
+    ToolLoop -->|chat completions| Anthropic
+    ToolLoop --> BylawTools
+    BylawTools --> Retrieval
+    Retrieval --> DB
+    Advisor --> Layer2
+    Layer2 --> Retrieval
+    Layer2 --> DB
+    Advisor --> Evaluator
+    Evaluator --> Retrieval
+    Evaluator --> DB
+    MCP --> Retrieval
+    MCPAPI --> Retrieval
+    L1 --> DB
+    L1Sub --> DB
+    L1Geo --> DB
+```
+
+Operational notes:
+
+- The **only** code path that mutates source-evidence tables is the
+  Layer 1 ingest CLI (`src/layer1/cli.py`); the advisor and MCP server
+  open read-only sessions via `session_scope`
+  (`src/layer1/db/session.py`).
+- The advisor's chat tools share the **same** `RetrievalService`
+  instance the standalone MCP server uses — there is one retrieval
+  contract, four transports (FastAPI internal, MCP stdio, MCP
+  streamable HTTP, HTTP REST). See
+  `src/advisor/chat/tools.py:build_bylaw_tools` and
+  `mcp/bylaw_retrieval/server.py:create_mcp_server`.
+- The web container reaches the advisor at `http://advisor:8000`
+  inside the Docker network; both run behind Caddy on the public
+  internet (`docs/DEPLOYMENT.md:32-43`).
+
+---
+
+## 3. Ingestion pipelines
+
+Three independent ingest pipelines populate the shared `layer1.*`
+schema. They are independent in code paths and in CLI surface, but
+they all terminate in the same Postgres instance and are queried
+through the same `RetrievalService`.
+
+### 3.1 Bylaw document ingest (PDF / text → `document` + fragment tree)
+
+Entry point: `layer1.pipeline.ingest.ingest_file`
+(`src/layer1/pipeline/ingest.py:31`). Dispatch through
+`layer1.parsers.factory.parse_source` (`src/layer1/parsers/factory.py:12`)
+which prefers Docling for PDFs and falls back to PyMuPDF / pdfplumber
+via `PdfParser`. Text-only fixtures use `TextParser`.
+
+```mermaid
+flowchart LR
+    PDF["PDF or text<br/>file on disk"]
+    Hash["sha256_file<br/>utils/files.py"]
+    Parse["parse_source<br/>Docling primary,<br/>PyMuPDF fallback"]
+    Blocks["Page blocks<br/>BlockType classified"]
+    Hier["reconstruct_hierarchy<br/>pipeline/hierarchy.py"]
+    Tables["Table fallback<br/>parsers/table_fallback.py<br/>or Camelot"]
+    XRef["detect_cross_references<br/>pipeline/crossrefs.py"]
+    Validate["validate_document_objects<br/>validators/structural.py"]
+    L1DB["Postgres layer1<br/>document, page_block,<br/>source_fragment, source_table,<br/>source_table_cell, cross_reference,<br/>source_image, ingestion_run"]
+
+    PDF --> Hash
+    Hash --> Parse
+    Parse --> Blocks
+    Blocks --> Hier
+    Blocks --> Tables
+    Hier --> XRef
+    Hier --> Validate
+    Tables --> Validate
+    XRef --> Validate
+    Validate --> L1DB
+```
+
+Key invariants from the code:
+
+- Every ingest produces exactly one `ingestion_run` row tied to the
+  `document`. Run status transitions to `COMPLETED`,
+  `COMPLETED_WITH_WARNINGS`, or `FAILED` and persists the warnings /
+  errors as JSON (`src/layer1/pipeline/ingest.py:90-104`).
+- Hierarchy is conservative: ambiguous content is preserved as
+  `parse_status='uncertain'` rather than discarded
+  (`docs/architecture.md:19`).
+- Cross-references are deterministic regex output stored unresolved;
+  resolution links to a `target_fragment_id` when a match exists,
+  otherwise `resolution_status='unresolved'`
+  (`src/layer1/pipeline/crossrefs.py`,
+  `src/layer1/db/base.py:168-181`).
+
+### 3.2 Geo dataset ingest (ArcGIS / GeoJSON → `external_dataset`)
+
+Entry point: `layer1.pipeline.ingest_dataset.ingest_geo_dataset`
+(`src/layer1/pipeline/ingest_dataset.py:64`). Sources are local GeoJSON
+files or ArcGIS REST `FeatureServer` layers paginated by
+`_fetch_arcgis_paginated`. Canonical attribute mapping (e.g. raw
+ArcGIS zone codes → `zone_code`) is driven by per-dataset YAML in
+`src/layer1/datasets/` and applied by `_apply_canonical_mapping`
+(`src/layer1/parsers/geo_dataset.py:169`).
+
+```mermaid
+flowchart LR
+    Src["ArcGIS REST<br/>or local GeoJSON"]
+    Cache[".cache/geo-datasets<br/>DEFAULT_CACHE_DIR"]
+    Fetch["_fetch_arcgis_paginated<br/>or _resolve_source_path"]
+    Parse["parse_geojson<br/>parsers/geo_dataset.py"]
+    Map["_apply_canonical_mapping<br/>(zone_code, FAR,<br/>height_precinct, etc.)"]
+    Link["link_dataset_to_bylaw<br/>datasets/linker.py"]
+    DB["Postgres<br/>external_dataset,<br/>external_dataset_feature,<br/>parcel (via backfill)"]
+
+    Src --> Fetch
+    Fetch --> Cache
+    Cache --> Parse
+    Parse --> Map
+    Map --> Link
+    Link --> DB
+```
+
+Notes:
+
+- Linking is the join point with bylaw text: an `external_dataset` is
+  pinned to a `document_id` and optionally a specific
+  `source_fragment_id`, so a zoning polygon can be cited against the
+  zoning section that defines its rules
+  (`src/layer1/db/base.py:304-330`).
+- Parcels are seeded by a one-shot backfill
+  (`scripts/backfill_parcels.py`) from the Halifax parcel dataset; the
+  denormalised `parcel.zone_code` is set by intersecting with zoning
+  polygons (`src/layer1/db/base.py:396-435`).
+- Address resolution caches in `geocode_cache`
+  (`src/layer1/db/base.py:440-469`); the Google geocoder is fenced to
+  `country:CA|locality:Halifax` to stop cross-province false matches
+  (`docs/DEPLOYMENT.md:172`).
+
+### 3.3 Submission ingest (BIM / drawing → `submission` + attributes)
+
+Entry point: `layer1.pipeline.ingest_submission.ingest_submission`
+(`src/layer1/pipeline/ingest_submission.py:103`). Used at chat time
+when a user uploads an architectural artifact and asks the evaluator
+to score it. Extractors are pluggable per `SubmissionSourceType`
+(`src/layer1/parsers/submission_factory.py:34`); IFC is implemented
+in `parsers/ifc_submission.py`, Autodesk Platform Services (APS) in
+`parsers/aps_submission.py`.
+
+```mermaid
+flowchart LR
+    Upload["Submission upload<br/>IFC, RVT-APS, PDF,<br/>or manual attrs"]
+    Draft["Insert submission<br/>status=DRAFT"]
+    Extract["extract_submission<br/>parsers/submission_factory.py"]
+    Manual["Merge manual_attributes<br/>from advisor UI"]
+    Tax["Taxonomy normalise<br/>compliance/taxonomy.py"]
+    Derived["derived_attribute_fn<br/>(setbacks, FAR, coverage)"]
+    Persist["Upsert submission_attribute<br/>uq submission_id, attribute_key"]
+    Eval["EvaluatorService.evaluate<br/>compliance/evaluator.py"]
+    DB["Postgres<br/>submission, submission_attribute,<br/>approval_decision"]
+
+    Upload --> Draft
+    Draft --> Extract
+    Extract --> Manual
+    Manual --> Tax
+    Tax --> Derived
+    Derived --> Persist
+    Persist --> Eval
+    Eval --> DB
+```
+
+Notes:
+
+- Status transitions are `DRAFT → EVALUATING → EVALUATED` (or stays
+  `DRAFT` if the caller doesn't pass an evaluator)
+  (`src/layer2/compliance/db/models.py:61`).
+- The `(submission_id, attribute_key)` unique constraint makes the
+  attribute bag a map; updates overwrite in-place
+  (`src/layer2/compliance/db/models.py:149`).
+- Evaluator output is append-only — every re-evaluation writes a new
+  `approval_decision` row pinned by `evaluator_version`
+  (`src/layer2/compliance/db/models.py:178-201`).
+
+---
+
+## 4. Data model
+
+The schema is owned by Alembic migrations under `alembic/versions/`
+(0001 through 0014 as of 2026-05-22). The ORM classes live in three
+files:
+
+- Layer 1 source-of-truth tables: `src/layer1/db/base.py`
+- Layer 2 retrieval / answer / feedback trace: `src/layer2/db/models.py`
+- Phase-1 compliance schema (submissions, decisions):
+  `src/layer2/compliance/db/models.py`
+- Advisor-side users, cases, billing: `src/advisor/db/models.py`
+
+The ER diagram below covers the **normalised bylaw schema** — the
+Layer 1 source tables plus the Layer 2 retrieval/answer trace and
+compliance submission tables that anchor on them. The advisor's user
+and billing tables are intentionally omitted; they are documented
+inline in `src/advisor/db/models.py` and don't participate in the
+retrieval graph.
+
+```mermaid
+erDiagram
+    DOCUMENT ||--o{ INGESTION_RUN : "ingested by"
+    DOCUMENT ||--o{ PAGE_BLOCK : "contains"
+    DOCUMENT ||--o{ SOURCE_FRAGMENT : "contains"
+    DOCUMENT ||--o{ SOURCE_TABLE : "contains"
+    DOCUMENT ||--o{ CROSS_REFERENCE : "contains"
+    DOCUMENT ||--o{ SOURCE_IMAGE : "contains"
+    DOCUMENT ||--o{ FRAGMENT_EMBEDDING : "embeds"
+    DOCUMENT ||--o{ GENERATED_CLAIM : "claims about"
+    DOCUMENT ||--o{ EXTERNAL_DATASET : "linked via"
+    SOURCE_FRAGMENT ||--o{ SOURCE_FRAGMENT : "parent of"
+    SOURCE_FRAGMENT ||--o{ FRAGMENT_EMBEDDING : "vectorised by"
+    SOURCE_FRAGMENT ||--o{ CROSS_REFERENCE : "source of"
+    SOURCE_FRAGMENT ||--o{ SOURCE_TABLE : "anchors"
+    SOURCE_TABLE ||--o{ SOURCE_TABLE_CELL : "cells"
+    EXTERNAL_DATASET ||--o{ EXTERNAL_DATASET_FEATURE : "features"
+    PARCEL ||--o{ EXTERNAL_DATASET_FEATURE : "linked feature"
+    PARCEL ||--o{ SUBMISSION : "proposed on"
+    SUBMISSION ||--o{ SUBMISSION_ATTRIBUTE : "carries"
+    SUBMISSION ||--o{ APPROVAL_DECISION : "evaluated to"
+    QUERY_SESSION ||--o{ RETRIEVAL_RUN : "triggers"
+    RETRIEVAL_RUN ||--o{ RETRIEVAL_RESULT : "candidates"
+    RETRIEVAL_RUN ||--o{ RETRIEVAL_FEEDBACK : "feedback"
+    QUERY_SESSION ||--o{ PROMPT_LOG : "prompts"
+    PROMPT_LOG ||--o{ ANSWER_LOG : "answers"
+    ANSWER_LOG ||--o{ ANSWER_FEEDBACK : "feedback"
+    ANSWER_LOG ||--o{ GENERATED_CLAIM : "emits"
+    GENERATED_CLAIM ||--o{ CLAIM_FEEDBACK : "feedback"
+    SOURCE_FRAGMENT ||--o{ RETRIEVAL_RESULT : "cited by"
+    SOURCE_TABLE_CELL ||--o{ RETRIEVAL_RESULT : "cited by"
+
+    DOCUMENT {
+        int id PK
+        string municipality
+        string bylaw_name
+        string file_hash
+        string mime_type
+        int page_count
+        date consolidation_date
+    }
+    INGESTION_RUN {
+        int id PK
+        int document_id FK
+        string status
+        datetime started_at
+        datetime completed_at
+        json warnings_json
+        json errors_json
+    }
+    PAGE_BLOCK {
+        int id PK
+        int document_id FK
+        int page_number
+        string block_type
+        int reading_order
+        text raw_text
+        bool is_boilerplate
+    }
+    SOURCE_FRAGMENT {
+        int id PK
+        int document_id FK
+        int parent_fragment_id FK
+        string fragment_type
+        string citation_label
+        string citation_path
+        text text
+        string parse_status
+        json attribute_tags
+    }
+    SOURCE_TABLE {
+        int id PK
+        int document_id FK
+        int parent_fragment_id FK
+        text caption
+        int page_start
+        int page_end
+    }
+    SOURCE_TABLE_CELL {
+        int id PK
+        int table_id FK
+        int row_index
+        int col_index
+        text text
+        text row_header_path
+        text col_header_path
+    }
+    CROSS_REFERENCE {
+        int id PK
+        int document_id FK
+        int source_fragment_id FK
+        int target_fragment_id FK
+        text raw_reference_text
+        string resolution_status
+    }
+    SOURCE_IMAGE {
+        int id PK
+        int document_id FK
+        int page_number
+        string image_path
+        string figure_kind
+    }
+    EXTERNAL_DATASET {
+        int id PK
+        string name
+        string publisher
+        int linked_document_id FK
+        int linked_fragment_id FK
+        string crs
+        int feature_count
+    }
+    EXTERNAL_DATASET_FEATURE {
+        int id PK
+        int external_dataset_id FK
+        int parcel_id FK
+        string feature_key
+        json canonical_attributes_json
+        json geometry_geojson
+    }
+    PARCEL {
+        int id PK
+        string jurisdiction
+        string parcel_identifier
+        string zone_code
+        float area_m2
+    }
+    SUBMISSION {
+        int id PK
+        int parcel_id FK
+        string status
+        string source_type
+        string source_artifact_path
+    }
+    SUBMISSION_ATTRIBUTE {
+        int id PK
+        int submission_id FK
+        string attribute_key
+        json value_json
+        string source
+    }
+    APPROVAL_DECISION {
+        int id PK
+        int submission_id FK
+        string evaluator_version
+        json decision_summary_json
+    }
+    FRAGMENT_EMBEDDING {
+        int id PK
+        int document_id FK
+        int source_fragment_id FK
+        string embedding_model
+        vector embedding
+    }
+    QUERY_SESSION {
+        int id PK
+        int document_id FK
+        text question_text
+        text normalized_question_text
+        string status
+    }
+    RETRIEVAL_RUN {
+        int id PK
+        int query_session_id FK
+        string retrieval_version
+        string status
+    }
+    RETRIEVAL_RESULT {
+        int id PK
+        int retrieval_run_id FK
+        int source_fragment_id FK
+        int source_table_cell_id FK
+        string source_type
+        string retrieval_channel
+        float rerank_score
+        bool selected_for_prompt
+    }
+    PROMPT_LOG {
+        int id PK
+        int query_session_id FK
+        int retrieval_run_id FK
+        text system_prompt
+        text user_prompt
+        json fragment_ids_json
+        string model_name
+    }
+    ANSWER_LOG {
+        int id PK
+        int query_session_id FK
+        int prompt_log_id FK
+        text raw_model_output
+        text final_answer_text
+        string answer_status
+    }
+    GENERATED_CLAIM {
+        int id PK
+        int answer_log_id FK
+        int document_id FK
+        string claim_type
+        string topic
+        json source_fragment_ids_json
+        string verification_status
+    }
+    ANSWER_FEEDBACK {
+        int id PK
+        int answer_log_id FK
+        int rating
+        bool is_correct
+    }
+    CLAIM_FEEDBACK {
+        int id PK
+        int generated_claim_id FK
+        bool is_correct
+        string reviewer_type
+    }
+    RETRIEVAL_FEEDBACK {
+        int id PK
+        int retrieval_run_id FK
+        int missing_source_fragment_id FK
+        int irrelevant_source_fragment_id FK
+    }
+```
+
+Schema highlights worth calling out:
+
+- **Citation uniqueness.** `source_fragment` has a unique constraint on
+  `(document_id, citation_path)` so re-ingesting the same bylaw text
+  is idempotent at the clause level
+  (`src/layer1/db/base.py:102`).
+- **Hierarchy via self-reference.** `source_fragment.parent_fragment_id`
+  encodes the tree (`Part` → `Section` → `Subsection`).
+  `expand_hierarchy` (`src/layer2/retrieval/expansion.py:10`) walks it
+  upward to enrich retrieval candidates with ancestor context.
+- **Attribute tags as a join shortcut.**
+  `source_fragment.attribute_tags` (JSON list of taxonomy attribute
+  IDs) is set by the semantic-enrichment pass
+  (`src/layer2/semantic/enrich_attribute_tags.py`) and consumed by the
+  evaluator (`mcp/bylaw_retrieval/retrieval/service.py:_attribute_tag_filter_clause`)
+  to skip O(all-clauses) text matching per attribute.
+- **Append-only feedback.** `answer_feedback`, `claim_feedback`,
+  `retrieval_feedback` never mutate the answer/claim/result they
+  describe; they hang off it and are used by
+  `apply_feedback_adjustments`
+  (`src/layer2/retrieval/service.py:390`) on subsequent retrievals.
+- **Embedding storage is pluggable.** `FragmentEmbedding.embedding`
+  is typed as `EmbeddingVector(384)` — `pgvector` in PostgreSQL,
+  JSON-backed in SQLite (`src/layer2/db/types.py`). The default model
+  is the local hashing embedder (`hashing-bge-small-en-v1.5`) and can
+  be swapped to OpenAI by setting `LAYER2_EMBEDDING_BASE_URL`
+  (`README.md:147`).
+
+---
+
+## 5. Retrieval API
+
+Retrieval is exposed two ways:
+
+- Inside the advisor chat loop as bylaw tools
+  (`src/advisor/chat/tools.py:build_bylaw_tools`) that dispatch into
+  `mcp/bylaw_retrieval/retrieval/service.py:RetrievalService`.
+- As a standalone Python module via `RetrievalService.search`,
+  `lookup_citation`, `list_documents`, `get_document_outline` — the
+  contract surfaced to MCP clients and the HTTP API.
+
+The end-to-end sequence below is the **Layer 2 answer path** —
+question → understanding → multi-channel retrieval → graph expansion
+→ rerank → prompt → answer. It is driven by
+`layer2.pipeline.service.run_answer_pipeline`
+(`src/layer2/pipeline/service.py:228`); the advisor chat surface
+re-uses the same `RetrievalService` but delegates LLM control to the
+`tool_loop` rather than a fixed prompt.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Web as Next.js web
+    participant Advisor as FastAPI advisor
+    participant Pipeline as run_answer_pipeline
+    participant QU as understand_question
+    participant Retrieval as retrieve_context
+    participant DB as Postgres
+    participant Expand as expand_hierarchy + cross_refs + semantic_graph
+    participant Rerank as rerank_candidates
+    participant Prompt as build_prompt
+    participant LLM as Anthropic / mock LLM
+
+    User->>Web: "What's the max height in HR-1?"
+    Web->>Advisor: POST /v1/chat (SSE)
+    Advisor->>Pipeline: question + document_id + known_facts
+    Pipeline->>QU: normalise question, pull topics + zone codes
+    QU-->>Pipeline: QueryUnderstanding
+    Pipeline->>Retrieval: retrieve_context(top_k, filters)
+    Retrieval->>DB: full_text_candidates (tsvector / GIN)
+    Retrieval->>DB: vector_candidates (pgvector cosine)
+    Retrieval->>DB: table_candidates (zone-aware boost)
+    Retrieval->>DB: retrieve_semantic_facts
+    Retrieval->>Expand: merge + dedupe candidates
+    Expand->>DB: parent + sibling fragments
+    Expand->>DB: cross_reference targets
+    Expand->>DB: semantic_graph walk
+    Expand-->>Retrieval: expanded candidates
+    Retrieval->>Rerank: heuristic boosts + feedback
+    Rerank-->>Pipeline: ranked CandidateFragments
+    Pipeline->>Prompt: PromptContext (selected fragments + cached claims)
+    Prompt-->>Pipeline: system + user prompt
+    Pipeline->>LLM: generate grounded answer
+    LLM-->>Pipeline: raw JSON with citations
+    Pipeline->>DB: persist retrieval_run, retrieval_result, prompt_log, answer_log, generated_claim
+    Pipeline-->>Advisor: answer + citations
+    Advisor-->>Web: SSE chunks
+    Web-->>User: rendered answer + citations
+```
+
+Concrete contract details:
+
+- **Channel set is fixed.** `retrieve_context`
+  (`src/layer2/retrieval/service.py:438`) fans out into
+  `full_text_candidates`, `vector_candidates`, `table_candidates`,
+  `retrieve_semantic_facts`, and the planner-driven
+  `execute_retrieval_plan`. Results merge through
+  `merge_and_dedupe_candidates`
+  (`src/layer2/retrieval/merge.py:6`).
+- **Graph expansion is layered.** Hierarchy
+  (`expand_hierarchy`) → cross-references (`expand_cross_references`)
+  → linked geo datasets (`expand_datasets`) → spatial
+  (`expand_spatial`) → semantic graph (`expand_semantic_graph`). Each
+  step appends candidates with `reason.expansion` set so retrieval
+  reasons are auditable downstream.
+- **Reranking is deterministic.** `rerank_candidates`
+  (`src/layer2/rerank/heuristic.py:6`) applies keyword overlap, zone
+  match, use match, definition-need, and feedback boosts —
+  intentionally not ML — so retrieval is reproducible across runs.
+- **Prompt selection is token-budgeted.** `_select_fragments_for_prompt`
+  (`src/layer2/pipeline/service.py:77`) walks ranked candidates and
+  greedily fills the `LAYER2_TOKEN_BUDGET` envelope, prioritising
+  semantic-fact candidates first.
+- **Persistence is exhaustive.** Every candidate considered (not just
+  selected) lands in `retrieval_result` with its channel, scores, and
+  `selected_for_prompt` flag — so a future operator can reconstruct
+  exactly why a fragment was or wasn't shown to the model
+  (`src/layer2/pipeline/service.py:274-291`).
+
+---
+
+## 6. MCP integration surface
+
+The MCP server (`mcp/bylaw_retrieval/server.py`) is a thin FastMCP
+wrapper over `RetrievalService`. It exposes five tools to an external
+LLM client (Claude Desktop, ChatGPT custom action, or anything that
+speaks MCP). The same retrieval core also fronts a plain HTTP API
+(`mcp/bylaw_retrieval/api/app.py`) and is wrapped in OpenAI-specific
+tool schemas for Responses-API tool calling
+(`mcp/bylaw_retrieval/openai_tools.py`).
+
+```mermaid
+graph LR
+    LLM["LLM client<br/>Claude Desktop, ChatGPT,<br/>OpenAI Responses API"]
+    Transport["Transport<br/>stdio, streamable HTTP,<br/>or HTTP REST"]
+    MCP["MCP server<br/>create_mcp_server<br/>FastMCP wrapper"]
+    HTTP["HTTP API<br/>create_app<br/>FastAPI"]
+    Tools["Tool surface<br/>list_documents,<br/>get_document_outline,<br/>lookup_citation,<br/>search_bylaw_evidence,<br/>evaluate_submission_against_bylaws"]
+    Service["RetrievalService<br/>mcp/bylaw_retrieval/retrieval/service.py"]
+    Eval["EvaluatorService<br/>compliance/evaluator.py"]
+    DB["Postgres<br/>layer1 + layer2 tables"]
+
+    LLM --> Transport
+    Transport --> MCP
+    Transport --> HTTP
+    MCP --> Tools
+    HTTP --> Tools
+    Tools --> Service
+    Tools --> Eval
+    Service --> DB
+    Eval --> Service
+    Eval --> DB
+```
+
+Tool surface — five tools mirrored across MCP and HTTP:
+
+| Tool | Returns | Defined at |
+| --- | --- | --- |
+| `list_documents` | Ingested bylaws (municipality / name / consolidation date) | `server.py:87`, `api/app.py:32` |
+| `get_document_outline` | Citation map of a document | `server.py:98`, `api/app.py:42` |
+| `lookup_citation` | One fragment by citation path + neighbours | `server.py:113`, `api/app.py:65` |
+| `search_bylaw_evidence` | Multi-channel retrieval with optional location slot | `server.py:133`, `api/app.py:59` |
+| `evaluate_submission_against_bylaws` | Run the evaluator against ad-hoc attribute inputs | `server.py:226` (MCP only) |
+
+Design notes embedded in the server prompt
+(`mcp/bylaw_retrieval/server.py:52-84`):
+
+- **Evidence not verdicts.** Every tool returns citation-grounded
+  fragments. The MCP server's instructions explicitly forbid the
+  client from presenting evaluator output as a final ruling without
+  the citing clause.
+- **Address-aware queries.** Clients must pass a structured `location`
+  slot when the user mentions an address — text-only matching
+  silently skips zone / FAR / heritage datasets, which is almost
+  always the wrong answer.
+- **`--latest-only` scope.** The CLI flag hard-scopes the server to
+  the most recently ingested document so a single-document pilot
+  (Halifax Regional Centre LUB) can't accidentally surface other
+  bylaws (`mcp/bylaw_retrieval/server.py:26`,
+  `latest_document_id_resolver` at `retrieval/service.py:51`).
+- **OpenAI tool schemas are separate.**
+  `mcp/bylaw_retrieval/openai_tools.py:build_openai_tool_specs`
+  generates Chat-Completions and Responses-API tool schemas from the
+  same Pydantic request models so MCP and OpenAI tool-calling stay in
+  sync without duplicating the retrieval contract.
+
+The advisor's chat tool loop is structurally identical to the MCP
+surface — it just embeds the tools in-process instead of going across
+a transport. `build_bylaw_tools` (`src/advisor/chat/tools.py:377`)
+constructs handlers around a `RetrievalService` factory that the
+advisor binds per request via `session_scope`.
+
+---
+
+## 7. Deployment topology
+
+Production is a single Hetzner CX22 VPS in Nuremberg running four
+Docker containers behind a custom Caddy. The full operator workflow
+is in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md); the topology below is
+the canonical view.
+
+```mermaid
+graph TD
+    Internet["Public internet"]
+    DNS["DNS<br/>agenticbylawsystems.com<br/>api.agenticbylawsystems.com"]
+    Caddy["caddy container<br/>bylaw-caddy:latest<br/>Caddyfile + rate_limit"]
+    Web["web container<br/>ghcr.io/.../bylaw-web<br/>Next.js standalone"]
+    Advisor["advisor container<br/>ghcr.io/.../bylaw-advisor<br/>FastAPI + uvicorn"]
+    Postgres["postgres container<br/>bylaw-postgres:latest<br/>pg16 + pgvector + PostGIS"]
+    Volume["Docker volume<br/>bylaw_bylaw_postgres_data"]
+    Anthropic["Anthropic API<br/>claude-opus"]
+    Clerk["Clerk auth<br/>JWKS verify"]
+    Google["Google Maps<br/>geocoder"]
+    GHCR["ghcr.io image registry"]
+    Operator["Operator laptop<br/>ssh bylaw-prod"]
+
+    Internet --> DNS
+    DNS --> Caddy
+    Caddy -->|host: agenticbylawsystems.com| Web
+    Caddy -->|host: api.agenticbylawsystems.com| Advisor
+    Web -->|http://advisor:8000| Advisor
+    Advisor --> Postgres
+    Postgres --> Volume
+    Advisor -->|HTTPS| Anthropic
+    Advisor -->|JWKS fetch| Clerk
+    Advisor -->|HTTPS| Google
+    Operator -->|docker push linux/amd64| GHCR
+    Operator -->|ssh + docker compose pull| Caddy
+    GHCR --> Web
+    GHCR --> Advisor
+```
+
+Operational facts pulled from `docker-compose.yml`, `Caddyfile`, and
+`docs/DEPLOYMENT.md`:
+
+- **TLS at the edge.** Caddy terminates Let's Encrypt certs (HTTP-01)
+  and routes by `Host` header. Two hostnames, two rate-limit zones
+  (`Caddyfile:48-74`): per-IP 120 req/min globally and a tight
+  `POST /v1/chat` cap at 10 req/min.
+- **No cloud control plane.** No Kubernetes, no managed Postgres.
+  `/srv/bylaw/.env` is the single source of truth for secrets
+  (`docs/DEPLOYMENT.md:152`). Backups are nightly `pg_dump` to
+  `/srv/bylaw/backups/`.
+- **Locally-built data plane images.** Caddy and Postgres are built on
+  the server from `Dockerfile.caddy` / `Dockerfile.postgres` because
+  the custom Caddy needs the `caddy-ratelimit` plugin and Postgres
+  needs pgvector + PostGIS together
+  (`docs/DEPLOYMENT.md:92-103`).
+- **Containers are hardened.** UID 1000 / 1001, `cap_drop: [ALL]`,
+  `read_only: true`, `no-new-privileges:true`, `mem_limit` /
+  `pids_limit` caps (`docs/DEPLOYMENT.md:43`).
+- **Statement timeouts in the DB.** Postgres runs with
+  `idle_in_transaction_session_timeout=60000` and
+  `statement_timeout=120000` so a stuck advisor session can't wedge
+  the database indefinitely (`docker-compose.yml:21-26`).
+- **Maintenance window.** Container-touching changes wait for 23:00
+  AST; build/push/pull is fine anytime (user-memory:
+  `project_maintenance_window`).
+- **Deploy loop.** Operator builds `--platform linux/amd64` on
+  Apple-Silicon laptop, pushes a bumped semver tag to GHCR,
+  `sed -i` updates `/srv/bylaw/docker-compose.yml`, then
+  `docker compose pull && docker compose up -d <svc>`. Old image
+  layers stay on disk so rollback is a tag swap
+  (`docs/DEPLOYMENT.md:107-150`).
+- **Dev parity is high.** Local `docker-compose.yml` runs the same
+  Postgres image; `make e2e` drives a full Next.js + FastAPI +
+  Postgres + MockGateway stack against the same retrieval core. Each
+  worktree can run its own copy by exporting a unique
+  `PG_PORT / E2E_FASTAPI_PORT / E2E_WEB_PORT` triplet
+  (`CLAUDE.md` testing section).
+
+### Configuration boundary
+
+- **Web → advisor auth.** In dev (`uvicorn advisor.api.dev:app`), the
+  Next proxy injects `X-Test-User-Id` and FastAPI's auth dependency
+  honours it because `CLERK_JWKS_URL` is unset. In prod
+  (`uvicorn advisor.api.main:app`), the Next proxy mints a Clerk
+  session JWT and FastAPI validates against Clerk's JWKS
+  (`src/advisor/auth/clerk_backend.py`,
+  `src/advisor/auth/jwks.py`).
+- **Per-process mode.** The dev backend rejects `Authorization`; the
+  prod backend rejects `X-Test-User-Id`. Mixing modes 401s every
+  request (`README.md:419-428`).
+- **Layer 2 LLM endpoint.** `LAYER2_LLM_BASE_URL` /
+  `LAYER2_LLM_API_KEY` / `LAYER2_LLM_MODEL` swap between mock,
+  OpenAI-compatible, and Anthropic backends without code changes
+  (`README.md:143-146`, `src/advisor/llm/registry.py`).
+
+---
+
+## Appendix — how this doc was produced
+
+- Source survey: file enumeration under `src/`, `mcp/`, `alembic/`,
+  `web/`, plus `docs/architecture.md`, `docs/DEPLOYMENT.md`, and
+  `README.md`.
+- Each Mermaid block in this file was validated by piping it through
+  `npx -y @mermaid-js/mermaid-cli -i <tmp> -o /tmp/out.svg` before
+  merge. The validation script is committed at
+  `scripts/validate_tdd_mermaid.sh` so this doc can be re-verified at
+  any time (`./scripts/validate_tdd_mermaid.sh docs/TDD.md`).
+- The companion `docs/TDD.html` is a single self-contained file that
+  loads `mermaid.min.js` from `cdn.jsdelivr.net` and renders the same
+  fenced blocks on page load. No build step required.
