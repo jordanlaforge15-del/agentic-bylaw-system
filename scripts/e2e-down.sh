@@ -40,12 +40,7 @@ stop_pid() {
   # lsof lookup ensures teardown still finds and kills the holder.
   if { [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; } && [[ -n "$fallback_port" ]]; then
     local lsof_pid
-    # `|| true` keeps the assignment exit-0 when nothing is listening on
-    # the port. Without it, `set -e` + `pipefail` would abort the entire
-    # teardown after the very first stop_pid call on a clean machine —
-    # which contradicts the "idempotent and safe to run when nothing is
-    # up" promise in CLAUDE.md.
-    lsof_pid="$(lsof -iTCP:"$fallback_port" -sTCP:LISTEN -tnP 2>/dev/null | head -1 || true)"
+    lsof_pid="$(lsof -iTCP:"$fallback_port" -sTCP:LISTEN -tnP 2>/dev/null | head -1)"
     if [[ -n "$lsof_pid" ]]; then
       echo "${label}: pidfile missing/stale — using :${fallback_port} holder PID ${lsof_pid}"
       pid="$lsof_pid"
