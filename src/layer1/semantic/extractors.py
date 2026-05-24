@@ -72,6 +72,19 @@ KNOWN_ZONE_CODES = {
     "WA",
 }
 ZONE_RE = re.compile(r"\b[A-Z]{1,4}-?\s?\d[A-Z]?(?:-?\s?[A-Z])?\b|\b(?:DD|DH|COR|CLI|LI|HRI|INS|DND|PCF|RPK|WA)\b", re.I)
+# Substrings that match ZONE_RE but are NOT real zone codes. Most common
+# sources of false positives on real municipal bylaws:
+#   1. Amendment markers: "(RC-May 9/24)", "(E-Jun 13/24)" → MAY-9, JUN-13
+#   2. Schedule labels: "Schedule ZM-1", "ZM-2" → ZM-1, ZM-2 (which the
+#      parser correctly captures as a schedule but the zone regex also
+#      grabs as a "zone code"). See ABS-104.
+_MONTH_PREFIX = (
+    r"Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec"
+)
+_ZONE_NOISE_RE = re.compile(
+    rf"^(?:(?:{_MONTH_PREFIX})\s*-?\s*\d{{1,2}}|ZM-?\s?\d{{1,3}})$",
+    re.IGNORECASE,
+)
 CONDITION_MARKER_RE = re.compile(r"[①-㉟]|\[\d+\]")
 TABLE_REF_RE = re.compile(r"\bTable\s+\d+[A-Z]?\b", re.I)
 SECTION_REF_RE = re.compile(r"\b(?:Section|Subsection|Schedule)\s+[A-Za-z0-9.\-()]+\b", re.I)
@@ -175,6 +188,12 @@ def extract_zones(
     for match in pattern.finditer(text):
         raw = match.group(0)
         if re.fullmatch(r"m\s*2|m²", raw, flags=re.I):
+            continue
+        # ABS-104: drop common false-positive substrings (month-abbrev
+        # amendment markers, ZM-N schedule labels). These match the zone
+        # regex but appear hundreds of times in bylaws that use those
+        # conventions, and on a doc that doesn't they cost nothing.
+        if _ZONE_NOISE_RE.fullmatch(raw.strip().replace(" ", "")):
             continue
         zones.add(normalize_zone(raw, known_zone_codes=known_zone_codes))
     return sorted(zones)

@@ -210,6 +210,38 @@ def test_zone_extraction_does_not_treat_square_metres_as_zone():
     assert extract_zones("Minimum 1 parking space per 100 m2 of floor area") == []
 
 
+# --------------------------------------------------------------------- ABS-104
+# Mainland Halifax LUB has amendment markers like "(RC-May 9/24)" and
+# schedule labels "Schedule ZM-1" throughout. The zone regex matched
+# substrings of these (MAY-9, ZM-1, etc.) and emitted them as zone
+# entities. Add universal exclusions.
+
+def test_abs104_amendment_month_markers_excluded():
+    # Real Mainland-style amendment marker context.
+    text = "Single Family Dwelling permitted (RC-May 9/24; E-Jun 13/24)."
+    zones = extract_zones(text)
+    assert "MAY-9" not in zones
+    assert "JUN-13" not in zones
+    assert "MAY" not in zones
+
+
+def test_abs104_schedule_zm_labels_excluded():
+    text = "see Schedule ZM-1 and Schedule ZM-2 for boundary delineation"
+    zones = extract_zones(text)
+    assert "ZM-1" not in zones
+    assert "ZM-2" not in zones
+
+
+def test_abs104_real_zones_still_extracted():
+    """The exclusions must not collateral-damage actual zone codes."""
+    text = "R-1 zone permits ER-1 and CEN-2 uses; CDD-1 not permitted."
+    zones = extract_zones(text)
+    assert "R-1" in zones
+    assert "ER-1" in zones
+    assert "CEN-2" in zones
+    assert "CDD-1" in zones
+
+
 def _add_table_rows(session, table_id: int, rows: list[list[str]]) -> None:
     for row_index, row in enumerate(rows):
         for col_index, text in enumerate(row):
