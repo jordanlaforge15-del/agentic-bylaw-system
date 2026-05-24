@@ -1,11 +1,9 @@
 import { readFile } from "fs/promises";
-import { join } from "path";
-
-const LOG_PATH = join(process.cwd(), "..", ".night-manager", "night_manager.log");
+import { LOG_PATH } from "../paths";
 
 export async function GET() {
   try {
-    const raw = await readFile(LOG_PATH, "utf-8");
+    const raw = await readFile(LOG_PATH(), "utf-8");
     const lines = raw
       .trim()
       .split("\n")

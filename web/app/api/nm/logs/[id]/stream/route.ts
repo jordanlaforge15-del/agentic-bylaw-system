@@ -1,9 +1,8 @@
 import { readFile, stat } from "fs/promises";
 import { join } from "path";
+import { NM_DIR, LOGS_DIR, STATE_PATH } from "../../../paths";
 
-const NM_DIR = join(process.cwd(), "..", ".night-manager");
-
-function findLogPath(id: string, stateJson: string | null): string | null {
+function findLogPath(id: string, stateJson: string | null): string {
   if (stateJson) {
     try {
       const state = JSON.parse(stateJson);
@@ -11,13 +10,13 @@ function findLogPath(id: string, stateJson: string | null): string | null {
       if (issue?.log_file) {
         const lf = issue.log_file;
         if (lf.startsWith("/")) return lf;
-        return join(process.cwd(), "..", lf);
+        return join(NM_DIR(), "..", lf);
       }
     } catch {
       // fall through
     }
   }
-  return join(NM_DIR, "logs", `${id}.jsonl`);
+  return join(LOGS_DIR(), `${id}.jsonl`);
 }
 
 function parseStreamEvent(line: string) {
@@ -26,14 +25,8 @@ function parseStreamEvent(line: string) {
     if (ev.type === "assistant" && ev.message?.content) {
       for (const block of ev.message.content) {
         if (block.type === "tool_use") {
-          const args = block.input
-            ? summarizeInput(block.input)
-            : "";
-          return {
-            kind: "tool",
-            name: block.name ?? "?",
-            args,
-          };
+          const args = block.input ? summarizeInput(block.input) : "";
+          return { kind: "tool", name: block.name ?? "?", args };
         }
         if (block.type === "text" && block.text) {
           return { kind: "text", text: block.text };
@@ -41,7 +34,10 @@ function parseStreamEvent(line: string) {
       }
     }
     if (ev.type === "system" && ev.subtype === "init") {
-      return { kind: "system", text: `session started · model=${ev.model ?? "?"}` };
+      return {
+        kind: "system",
+        text: `session started · model=${ev.model ?? "?"}`,
+      };
     }
     return null;
   } catch {
@@ -70,24 +66,17 @@ export async function GET(
 
   let stateRaw: string | null = null;
   try {
-    stateRaw = await readFile(join(NM_DIR, "state.json"), "utf-8");
+    stateRaw = await readFile(STATE_PATH(), "utf-8");
   } catch {
     // no state file
   }
 
   const logPath = findLogPath(id, stateRaw);
-  if (!logPath) {
-    return new Response("data: []\n\n", {
-      headers: sseHeaders(),
-    });
-  }
 
   try {
     await stat(logPath);
   } catch {
-    return new Response("data: []\n\n", {
-      headers: sseHeaders(),
-    });
+    return new Response("data: []\n\n", { headers: sseHeaders() });
   }
 
   const encoder = new TextEncoder();

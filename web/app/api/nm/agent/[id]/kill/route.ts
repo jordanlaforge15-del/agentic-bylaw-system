@@ -1,8 +1,6 @@
 import { readFile } from "fs/promises";
-import { join } from "path";
 import { exec } from "child_process";
-
-const STATE_PATH = join(process.cwd(), "..", ".night-manager", "state.json");
+import { STATE_PATH } from "../../../paths";
 
 export async function POST(
   _request: Request,
@@ -11,7 +9,7 @@ export async function POST(
   const { id } = await params;
 
   try {
-    const raw = await readFile(STATE_PATH, "utf-8");
+    const raw = await readFile(STATE_PATH(), "utf-8");
     const state = JSON.parse(raw);
     const issue = state.issues?.[id];
 

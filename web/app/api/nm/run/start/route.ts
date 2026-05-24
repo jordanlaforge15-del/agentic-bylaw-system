@@ -1,7 +1,5 @@
 import { exec } from "child_process";
-import { join } from "path";
-
-const PROJECT_ROOT = join(process.cwd(), "..");
+import { PROJECT_ROOT } from "../../paths";
 
 export async function POST(request: Request) {
   const body = await request.json();
@@ -26,7 +24,7 @@ export async function POST(request: Request) {
   const cmd = `./scripts/start-night-manager.sh ${args.join(" ")}`;
 
   return new Promise<Response>((resolve) => {
-    exec(cmd, { cwd: PROJECT_ROOT, env: process.env }, (error) => {
+    exec(cmd, { cwd: PROJECT_ROOT(), env: process.env }, (error) => {
       if (error) {
         resolve(
           Response.json({ ok: false, error: error.message }, { status: 500 }),
