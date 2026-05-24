@@ -55,7 +55,9 @@ export function TopBar({
             </div>
             <div className="nm-topbar__stat">
               <span>ELAPSED</span>
-              <span className="nm-display">{fmtElapsed(elapsedMs)}</span>
+              <span className="nm-display" suppressHydrationWarning>
+                {fmtElapsed(elapsedMs)}
+              </span>
             </div>
             <div className="nm-topbar__stat">
               <span>AGENTS</span>
@@ -80,12 +82,14 @@ export function TopBar({
       <div className="nm-topbar__right">
         <div className="nm-topbar__clock">
           <span className="nm-topbar__clock-lbl">LOCAL TIME</span>
-          <span className="nm-display">{fmtClock(now)}</span>
+          <span className="nm-display" suppressHydrationWarning>
+            {now ? fmtClock(now) : "--:--:--"}
+          </span>
         </div>
         <div className="nm-topbar__clock">
           <span className="nm-topbar__clock-lbl">UTC</span>
-          <span className="nm-display">
-            {new Date(now).toISOString().slice(11, 19)}
+          <span className="nm-display" suppressHydrationWarning>
+            {now ? new Date(now).toISOString().slice(11, 19) : "--:--:--"}
           </span>
         </div>
       </div>

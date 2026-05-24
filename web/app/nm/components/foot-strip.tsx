@@ -33,7 +33,9 @@ export function FootStrip({
         <span>BUILD &middot; 2026.05.22</span>
       </div>
       <div className="nm-foot__cell nm-foot__cell--right">
-        <span className="nm-cursor">SYNCED {fmtClock(now)}</span>
+        <span className="nm-cursor" suppressHydrationWarning>
+          SYNCED {now ? fmtClock(now) : "--:--:--"}
+        </span>
       </div>
     </div>
   );

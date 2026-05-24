@@ -7,8 +7,9 @@ import type { RunState, LogEvent, ReportSummary } from "./types";
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export function useTick(intervalMs = 1000): number {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(0);
   useEffect(() => {
+    setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), intervalMs);
     return () => clearInterval(id);
   }, [intervalMs]);
