@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { Issue } from "../lib/types";
+import type { Issue, ParsedLogEvent } from "../lib/types";
 import { STATUS_TONE } from "../lib/status";
 import { fmtElapsed, fmtClock, parseISO } from "../lib/format";
 import { useTick, useLogStream } from "../lib/hooks";
@@ -19,13 +19,17 @@ export function IssueDetail({ issue }: { issue: Issue }) {
   const isLive =
     issue.status === "in_progress" || issue.status === "reviewing";
   const elapsedMs = isLive
-    ? startedMs
+    ? startedMs && now
       ? now - startedMs
       : null
     : completedMs && startedMs
       ? completedMs - startedMs
       : null;
   const tone = STATUS_TONE[issue.status];
+
+  const lastTool = [...logEvents]
+    .reverse()
+    .find((e) => e.kind === "tool");
 
   return (
     <div className="nm-col" style={{ gap: 12 }}>
@@ -81,7 +85,12 @@ export function IssueDetail({ issue }: { issue: Issue }) {
             </div>
             <div
               className="nm-row"
-              style={{ gap: 18, marginTop: 2, fontSize: 11, color: "var(--text-mute)" }}
+              style={{
+                gap: 18,
+                marginTop: 2,
+                fontSize: 11,
+                color: "var(--text-mute)",
+              }}
             >
               <span>
                 <b className="nm-dim">branch &#8250;</b>{" "}
@@ -102,13 +111,25 @@ export function IssueDetail({ issue }: { issue: Issue }) {
               alignItems: "center",
             }}
           >
-            <Link href="/nm" className="nm-btn nm-btn--ghost" style={{ textDecoration: "none" }}>
+            <Link
+              href="/nm"
+              className="nm-btn nm-btn--ghost"
+              style={{ textDecoration: "none" }}
+            >
               &larr; Back
             </Link>
             {isLive && (
               <>
-                <ActionButton label="&#9654; RETRY" endpoint="retry" issueId={issue.identifier} />
-                <ActionButton label="&#8631; SKIP" endpoint="skip" issueId={issue.identifier} />
+                <ActionButton
+                  label="&#9654; RETRY"
+                  endpoint="retry"
+                  issueId={issue.identifier}
+                />
+                <ActionButton
+                  label="&#8631; SKIP"
+                  endpoint="skip"
+                  issueId={issue.identifier}
+                />
                 <ActionButton
                   label="&#9632; KILL"
                   endpoint={`/api/nm/agent/${issue.identifier}/kill`}
@@ -118,7 +139,12 @@ export function IssueDetail({ issue }: { issue: Issue }) {
               </>
             )}
             {issue.status === "failed" && (
-              <ActionButton label="&#9654; RETRY" endpoint="retry" issueId={issue.identifier} primary />
+              <ActionButton
+                label="&#9654; RETRY"
+                endpoint="retry"
+                issueId={issue.identifier}
+                primary
+              />
             )}
           </div>
         </div>
@@ -140,7 +166,11 @@ export function IssueDetail({ issue }: { issue: Issue }) {
                       textTransform: "uppercase",
                     }}
                   >
-                    E2E TEST FAILURE
+                    {issue.error.toLowerCase().includes("e2e")
+                      ? "E2E TEST FAILURE"
+                      : issue.error.toLowerCase().includes("review")
+                        ? "CODE REVIEW FAILURE"
+                        : "AGENT FAILURE"}
                   </div>
                   <div>{issue.error}</div>
                   <div
@@ -150,7 +180,7 @@ export function IssueDetail({ issue }: { issue: Issue }) {
                       color: "var(--text-mute)",
                     }}
                   >
-                    attempts {issue.attempts} / 2 &middot; review attempts{" "}
+                    attempts {issue.attempts} &middot; review attempts{" "}
                     {issue.review_attempts}
                   </div>
                 </div>
@@ -170,6 +200,12 @@ export function IssueDetail({ issue }: { issue: Issue }) {
                   </span>
                 )}
                 {logEvents.length} events
+                {issue.log_file && (
+                  <span className="nm-mute">
+                    {" "}
+                    &middot; {issue.log_file.split("/").pop()}
+                  </span>
+                )}
               </span>
             }
             flush
@@ -189,24 +225,7 @@ export function IssueDetail({ issue }: { issue: Issue }) {
                 </div>
               )}
               {logEvents.map((ev, i) => (
-                <div
-                  key={i}
-                  className={`nm-fulllog__ev nm-fulllog__ev--${ev.kind}`}
-                >
-                  <span className="nm-fulllog__t">+{ev.t}</span>
-                  {ev.kind === "tool" && (
-                    <span>
-                      <span className="nm-fulllog__name">{ev.name}</span>
-                      <span className="nm-fulllog__args">{ev.args}</span>
-                    </span>
-                  )}
-                  {ev.kind === "assistant" && (
-                    <span className="nm-fulllog__txt">{ev.text}</span>
-                  )}
-                  {ev.kind === "review" && (
-                    <span className="nm-fulllog__txt">{ev.text}</span>
-                  )}
-                </div>
+                <LogEventRow key={i} ev={ev} />
               ))}
               {isLive && (
                 <div className="nm-fulllog__ev">
@@ -221,9 +240,9 @@ export function IssueDetail({ issue }: { issue: Issue }) {
             id="DIFF"
             title="WORKING DIFF"
             right={
-              <span>
-                HEAD &rarr; agent/{issue.identifier}
-              </span>
+              issue.branch ? (
+                <span>HEAD &rarr; {issue.branch}</span>
+              ) : null
             }
             flush
           >
@@ -278,14 +297,32 @@ export function IssueDetail({ issue }: { issue: Issue }) {
               </span>
               <span className="nm-kv-grid__k">PID</span>
               <span className="nm-kv-grid__v">
-                {issue.pid ?? "—"}
+                {issue.pid || "—"}
               </span>
+              <span className="nm-kv-grid__k">Session</span>
+              <span
+                className="nm-kv-grid__v nm-truncate"
+                style={{ fontSize: 10 }}
+              >
+                {issue.session_id || "—"}
+              </span>
+              {lastTool && (
+                <>
+                  <span className="nm-kv-grid__k">Last Tool</span>
+                  <span className="nm-kv-grid__v nm-info">
+                    {lastTool.name}
+                  </span>
+                </>
+              )}
               {elapsedMs != null && (
                 <>
                   <span className="nm-kv-grid__k">
                     {isLive ? "Elapsed" : "Duration"}
                   </span>
-                  <span className="nm-kv-grid__v nm-prim">
+                  <span
+                    className="nm-kv-grid__v nm-prim"
+                    suppressHydrationWarning
+                  >
                     {fmtElapsed(elapsedMs)}
                   </span>
                 </>
@@ -312,7 +349,7 @@ export function IssueDetail({ issue }: { issue: Issue }) {
                 />
               ) : isLive ? (
                 <TimelineEvent
-                  t={fmtClock(now)}
+                  t={now ? fmtClock(now) : "—"}
                   txt="Coding in progress"
                   tone="info"
                   pulse
@@ -322,11 +359,7 @@ export function IssueDetail({ issue }: { issue: Issue }) {
               )}
               {issue.review_attempts > 0 && (
                 <TimelineEvent
-                  t={
-                    completedMs
-                      ? fmtClock(completedMs + 30000)
-                      : "—"
-                  }
+                  t={completedMs ? fmtClock(completedMs + 30000) : "—"}
                   txt={`Review pass ${issue.review_attempts}`}
                   done={issue.status !== "reviewing"}
                   tone={
@@ -346,10 +379,14 @@ export function IssueDetail({ issue }: { issue: Issue }) {
                   done
                   tone="ok"
                 />
-              ) : issue.status === "failed" ? (
+              ) : issue.status === "failed" || issue.status === "blocked" ? (
                 <TimelineEvent
                   t={completedMs ? fmtClock(completedMs) : "—"}
-                  txt="Marked failed"
+                  txt={
+                    issue.status === "blocked"
+                      ? "Marked blocked"
+                      : "Marked failed"
+                  }
                   done
                   tone="err"
                 />
@@ -380,29 +417,41 @@ export function IssueDetail({ issue }: { issue: Issue }) {
                 issueId={issue.identifier}
                 fullWidth
               />
-              <ActionButton
-                label="&#9654; Open worktree in editor"
-                endpoint="editor"
-                issueId={issue.identifier}
-                fullWidth
-              />
-              <ActionButton
-                label="&#9654; Tail JSONL in terminal"
-                endpoint="tail"
-                issueId={issue.identifier}
-                fullWidth
-              />
-              <ActionButton
-                label="&#9632; SIGTERM agent process"
-                endpoint={`/api/nm/agent/${issue.identifier}/kill`}
-                issueId={issue.identifier}
-                danger
-                fullWidth
-              />
+              {issue.pid > 0 && (
+                <ActionButton
+                  label="&#9632; SIGTERM agent process"
+                  endpoint={`/api/nm/agent/${issue.identifier}/kill`}
+                  issueId={issue.identifier}
+                  danger
+                  fullWidth
+                />
+              )}
             </div>
           </Panel>
         </div>
       </div>
+    </div>
+  );
+}
+
+function LogEventRow({ ev }: { ev: ParsedLogEvent }) {
+  return (
+    <div
+      className={`nm-fulllog__ev nm-fulllog__ev--${ev.kind === "text" ? "assistant" : ev.kind}`}
+    >
+      <span className="nm-fulllog__t">{ev.ts || "·"}</span>
+      {ev.kind === "tool" && (
+        <span>
+          <span className="nm-fulllog__name">{ev.name}</span>
+          <span className="nm-fulllog__args">{ev.args}</span>
+        </span>
+      )}
+      {ev.kind === "text" && (
+        <span className="nm-fulllog__txt">{ev.text}</span>
+      )}
+      {ev.kind === "system" && (
+        <span style={{ color: "var(--text-mute)" }}>{ev.text}</span>
+      )}
     </div>
   );
 }
@@ -435,11 +484,12 @@ function TimelineEvent({
           background: pending ? "transparent" : dotColor,
           border: pending ? "1px dashed var(--text-mute)" : "none",
           animation: pulse ? "nm-pulse 1.4s ease-in-out infinite" : "none",
-          boxShadow:
-            !pending && tone ? `0 0 8px ${dotColor}` : "none",
+          boxShadow: !pending && tone ? `0 0 8px ${dotColor}` : "none",
         }}
       />
-      <span className="nm-timeline__t">{t}</span>
+      <span className="nm-timeline__t" suppressHydrationWarning>
+        {t}
+      </span>
       <span
         className="nm-timeline__txt"
         style={{ color: pending ? "var(--text-mute)" : "var(--text)" }}
@@ -483,7 +533,11 @@ function ActionButton({
     <button
       className={cls}
       onClick={handleClick}
-      style={fullWidth ? { width: "100%", justifyContent: "center" } : undefined}
+      style={
+        fullWidth
+          ? { width: "100%", justifyContent: "center" }
+          : undefined
+      }
     >
       {label}
     </button>

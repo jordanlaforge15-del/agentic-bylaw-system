@@ -2,11 +2,11 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import type { RunState, Issue, Group, Status } from "../lib/types";
+import type { RunState, Issue, Group, SystemLogEntry } from "../lib/types";
 import { STATUS_LABEL, STATUS_TONE, GROUP_TONE } from "../lib/status";
 import type { GroupState } from "../lib/status";
 import { fmtElapsed, fmtMinutes, fmtClock, parseISO } from "../lib/format";
-import { useTick, useStreamingLog } from "../lib/hooks";
+import { useTick, useOrchestratorLog } from "../lib/hooks";
 import { Panel } from "./panel";
 import { Dot } from "./dot";
 import { StatusPill } from "./status-pill";
@@ -14,6 +14,7 @@ import { KPI } from "./kpi";
 
 export function Dashboard({ state }: { state: RunState }) {
   const now = useTick(1000);
+  const orchestratorLog = useOrchestratorLog();
   const all = Object.values(state.issues);
   const counts = useMemo(() => {
     const c: Record<string, number> = {
@@ -31,7 +32,7 @@ export function Dashboard({ state }: { state: RunState }) {
   }, [all]);
 
   const startedMs = new Date(state.started_at).getTime();
-  const elapsedMs = now - startedMs;
+  const elapsedMs = now ? now - startedMs : 0;
   const total = all.length;
   const processed = counts.merged + counts.failed + counts.blocked;
   const remaining = total - processed;
@@ -74,10 +75,11 @@ export function Dashboard({ state }: { state: RunState }) {
           flush
           className="nm-dash__plan"
         >
-          {state.plan.map((group) => (
+          {state.plan.map((group, idx) => (
             <PlanRow
-              key={group.group}
+              key={idx}
               group={group}
+              groupNum={idx + 1}
               issues={state.issues}
             />
           ))}
@@ -113,7 +115,12 @@ export function Dashboard({ state }: { state: RunState }) {
           </div>
         </Panel>
 
-        <SidePanels now={now} counts={counts} state={state} />
+        <SidePanels
+          now={now}
+          counts={counts}
+          state={state}
+          orchestratorLog={orchestratorLog}
+        />
       </div>
     </div>
   );
@@ -121,9 +128,11 @@ export function Dashboard({ state }: { state: RunState }) {
 
 function PlanRow({
   group,
+  groupNum,
   issues,
 }: {
   group: Group;
+  groupNum: number;
   issues: Record<string, Issue>;
 }) {
   const slots = group.parallel
@@ -141,16 +150,18 @@ function PlanRow({
 
   const groupState: GroupState = group.deploy
     ? "deploy"
-    : slots.every((s) => s.status === "merged")
-      ? "complete"
-      : slots.some(
-            (s) =>
-              s.status === "in_progress" || s.status === "reviewing",
-          )
-        ? "active"
-        : slots.every((s) => s.status === "queued")
-          ? "queued"
-          : "mixed";
+    : slots.length === 0
+      ? "queued"
+      : slots.every((s) => s.status === "merged")
+        ? "complete"
+        : slots.some(
+              (s) =>
+                s.status === "in_progress" || s.status === "reviewing",
+            )
+          ? "active"
+          : slots.every((s) => s.status === "queued")
+            ? "queued"
+            : "mixed";
 
   const groupTone = GROUP_TONE[groupState];
 
@@ -161,7 +172,7 @@ function PlanRow({
       <div className="nm-plan-row__label">
         <span className="nm-plan-row__tag">GROUP</span>
         <span className="nm-plan-row__name">
-          G{String(group.group).padStart(2, "0")}
+          G{String(groupNum).padStart(2, "0")}
         </span>
         <span className="nm-up" style={{ marginTop: 4 }}>
           <Dot tone={groupTone} pulse={groupState === "active"} />{" "}
@@ -175,7 +186,7 @@ function PlanRow({
             <span className="nm-prim">&#9650;</span>
             DEPLOY &middot; PROMOTE DEV &rarr; STAGING &rarr; PROD
             <span className="nm-mute">
-              awaiting groups 1&ndash;{group.group - 1}
+              awaiting groups 1&ndash;{groupNum - 1}
             </span>
           </div>
         ) : (
@@ -264,7 +275,7 @@ function PlanSlot({ issue }: { issue: Issue }) {
 
 function AgentCard({ issue, now }: { issue: Issue; now: number }) {
   const startedMs = parseISO(issue.started_at);
-  const elapsedMs = startedMs ? now - startedMs : 0;
+  const elapsedMs = startedMs && now ? now - startedMs : 0;
   const tone = STATUS_TONE[issue.status];
 
   return (
@@ -283,7 +294,9 @@ function AgentCard({ issue, now }: { issue: Issue; now: number }) {
         <div className="nm-agent-card__meta">
           <span>
             <b>elapsed</b>{" "}
-            <span className="nm-prim">{fmtElapsed(elapsedMs)}</span>
+            <span className="nm-prim" suppressHydrationWarning>
+              {fmtElapsed(elapsedMs)}
+            </span>
           </span>
           <span>
             <b>attempt</b> {issue.attempts}
@@ -295,27 +308,18 @@ function AgentCard({ issue, now }: { issue: Issue; now: number }) {
               className="nm-truncate"
               style={{ display: "inline-block", maxWidth: 130 }}
             >
-              {issue.branch?.replace("agent/", "")}
+              {issue.branch?.replace("agent/", "") || "—"}
             </span>
           </span>
           <span>
-            <b>ports</b> {issue.ports?.web}/{issue.ports?.api}
+            <b>ports</b> {issue.ports ? `${issue.ports.web}/${issue.ports.api}` : "—"}
           </span>
         </div>
 
-        {issue.currentTool && (
+        {issue.pid > 0 && (
           <div className="nm-agent-card__current">
             <div className="nm-agent-card__current-lbl">
-              &#9654; Current tool call
-            </div>
-            <div className="nm-agent-card__current-val">
-              <span className="nm-info" style={{ fontWeight: 500 }}>
-                {issue.currentTool}
-              </span>
-              <span className="nm-mute"> &middot; </span>
-              <span className="nm-dim" style={{ wordBreak: "break-all" }}>
-                {issue.currentTarget}
-              </span>
+              PID {issue.pid}
             </div>
           </div>
         )}
@@ -369,11 +373,17 @@ function SidePanels({
   now,
   counts,
   state,
+  orchestratorLog,
 }: {
   now: number;
   counts: Record<string, number>;
   state: RunState;
+  orchestratorLog: SystemLogEntry[];
 }) {
+  const activeWorktrees = Object.values(state.issues).filter(
+    (i) => i.worktree,
+  ).length;
+
   return (
     <div className="nm-dash__side">
       <Panel
@@ -384,12 +394,28 @@ function SidePanels({
       >
         <div className="nm-syslog">
           <div className="nm-syslog__ln nm-syslog__ln--info">
-            <span className="nm-syslog__t">{fmtClock(now)}</span>
+            <span className="nm-syslog__t" suppressHydrationWarning>
+              {now ? fmtClock(now) : "--:--:--"}
+            </span>
             <span className="nm-syslog__lvl">live</span>
             <span className="nm-syslog__msg nm-cursor">
               polling state.json
             </span>
           </div>
+          {orchestratorLog
+            .slice()
+            .reverse()
+            .slice(0, 20)
+            .map((ln, i) => (
+              <div
+                key={i}
+                className={`nm-syslog__ln nm-syslog__ln--${ln.level}`}
+              >
+                <span className="nm-syslog__t">{ln.t}</span>
+                <span className="nm-syslog__lvl">{ln.level}</span>
+                <span className="nm-syslog__msg">{ln.msg}</span>
+              </div>
+            ))}
         </div>
       </Panel>
 
@@ -402,15 +428,37 @@ function SidePanels({
             gap: 12,
           }}
         >
-          <Signal label="LINEAR API" tone="ok" value="OK" />
           <Signal
             label="GIT WORKTREE POOL"
             tone="ok"
-            value={`${counts.in_progress + counts.reviewing}/10 in use`}
+            value={`${activeWorktrees} active`}
           />
-          <Signal label="ANTHROPIC API" tone="ok" value="OK" />
-          <Signal label="PORT POOL" tone="ok" value="free" />
-          <Signal label="DEPLOY GATE" tone="queued" value="pending" />
+          <Signal
+            label="MAX AGENTS"
+            tone="ok"
+            value={`${state.config.max_agents}`}
+          />
+          <Signal
+            label="MODEL"
+            tone="ok"
+            value={state.config.model.toUpperCase()}
+          />
+          <Signal
+            label="DEPLOY GATE"
+            tone={state.config.deploy ? "info" : "queued"}
+            value={state.config.deploy ? "armed" : "off"}
+          />
+          <Signal
+            label="ISSUES"
+            tone={
+              counts.failed > 0
+                ? "warn"
+                : counts.in_progress > 0
+                  ? "info"
+                  : "ok"
+            }
+            value={`${counts.merged}m ${counts.failed}f ${counts.in_progress + counts.reviewing}r ${counts.queued}q`}
+          />
         </div>
       </Panel>
     </div>

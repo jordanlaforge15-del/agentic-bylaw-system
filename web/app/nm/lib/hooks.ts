@@ -2,7 +2,12 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import useSWR from "swr";
-import type { RunState, LogEvent, ReportSummary } from "./types";
+import type {
+  RunState,
+  ParsedLogEvent,
+  ReportSummary,
+  SystemLogEntry,
+} from "./types";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -34,26 +39,17 @@ export function useReports() {
   return { reports: data ?? [], error, isLoading };
 }
 
-export function useStreamingLog(
-  events: LogEvent[],
-  intervalMs = 1800,
-  startCount?: number,
-): LogEvent[] {
-  const initial = startCount ?? events.length;
-  const [count, setCount] = useState(initial);
-  useEffect(() => {
-    if (count >= events.length) return;
-    const id = setTimeout(
-      () => setCount((c) => Math.min(c + 1, events.length)),
-      intervalMs,
-    );
-    return () => clearTimeout(id);
-  }, [count, events.length, intervalMs]);
-  return events.slice(0, count);
+export function useOrchestratorLog() {
+  const { data } = useSWR<SystemLogEntry[]>(
+    "/api/nm/orchestrator-log",
+    fetcher,
+    { refreshInterval: 5000 },
+  );
+  return data ?? [];
 }
 
 export function useLogStream(issueId: string | null) {
-  const [events, setEvents] = useState<LogEvent[]>([]);
+  const [events, setEvents] = useState<ParsedLogEvent[]>([]);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -63,7 +59,7 @@ export function useLogStream(issueId: string | null) {
     esRef.current = es;
     es.onmessage = (e) => {
       try {
-        const event = JSON.parse(e.data) as LogEvent;
+        const event = JSON.parse(e.data) as ParsedLogEvent;
         setEvents((prev) => [...prev, event]);
       } catch {
         // skip malformed

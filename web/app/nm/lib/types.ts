@@ -10,25 +10,22 @@ export type Issue = {
   identifier: string;
   title: string;
   status: Status;
-  branch: string | null;
-  worktree: string | null;
+  branch: string;
+  worktree: string;
   ports: { pg: number; api: number; web: number } | null;
-  session_id: string | null;
-  pid: number | null;
-  log_file: string | null;
+  session_id: string;
+  pid: number;
+  log_file: string;
   attempts: number;
   review_attempts: number;
   started_at: string | null;
   completed_at: string | null;
   merged_at: string | null;
   error: string | null;
-  currentTool?: string | null;
-  currentTarget?: string | null;
-  summary?: string | null;
+  linear_id: string;
 };
 
 export type Group = {
-  group: number;
   parallel: string[];
   deploy: boolean;
 };
@@ -48,9 +45,24 @@ export type RunState = {
   issues: Record<string, Issue>;
 };
 
-export type LogEvent = {
-  t: string;
-  kind: "tool" | "assistant" | "review";
+export type RawStreamEvent = {
+  type: "assistant" | "user" | "system" | "result";
+  subtype?: string;
+  message?: {
+    content?: Array<{
+      type: string;
+      name?: string;
+      input?: Record<string, unknown>;
+      text?: string;
+      thinking?: string;
+    }>;
+  };
+  session_id?: string;
+};
+
+export type ParsedLogEvent = {
+  ts: string;
+  kind: "tool" | "text" | "thinking" | "system";
   name?: string;
   args?: string;
   text?: string;
