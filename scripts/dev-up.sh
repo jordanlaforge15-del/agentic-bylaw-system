@@ -126,7 +126,6 @@ log "Starting FastAPI advisor on :${DEV_FASTAPI_PORT}"
 (
   PYTHONUNBUFFERED=1 \
   PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" \
-  ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
   DATABASE_URL="$DATABASE_URL" \
   ADVISOR_DEMO_USER_ID="$DEV_USER_ID" \
   "${REPO_ROOT}/.venv/bin/uvicorn" advisor.api.dev:app \

@@ -20,7 +20,7 @@ What it does:
    ``cache_read_input_tokens > 0`` on the second iteration.
 
 Run:
-    ANTHROPIC_API_KEY=sk-... python scripts/verify_prompt_cache.py
+    python scripts/verify_prompt_cache.py
 
 Exits 0 on success, 1 on failure or missing key.
 """
