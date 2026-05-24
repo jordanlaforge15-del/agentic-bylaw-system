@@ -22,13 +22,17 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_ROOT"
 
-# Load .env if it exists
+# Load .env if it exists (for LINEAR_API_KEY).
+# IMPORTANT: unset ANTHROPIC_API_KEY afterward — if it leaks into the
+# environment, `claude -p` uses it (billed per-token at API rates)
+# instead of the operator's Max/Pro subscription.
 if [ -f .env ]; then
     set -a
     # shellcheck source=/dev/null
     source .env
     set +a
 fi
+unset ANTHROPIC_API_KEY 2>/dev/null || true
 
 if [ -z "${LINEAR_API_KEY:-}" ]; then
     echo "ERROR: LINEAR_API_KEY not set. Add it to .env or export it." >&2
