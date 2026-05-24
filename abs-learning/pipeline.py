@@ -10,8 +10,9 @@ write to any database.
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
+from agents._claude_code_client import ClaudeCodeClient
 from agents.discovery import companions_from_sources
 from agents.semantic_mapper import SemanticMapperAgent
 from agents.structure_analyst import StructureAnalystAgent
@@ -25,6 +26,23 @@ from manifest.models import (
 
 CITATION_RESOLUTION_THRESHOLD = 0.80
 ZONE_COMPLETENESS_THRESHOLD = 0.85
+
+
+def make_default_llm_client() -> Any:
+    """Default LLM client for the learning pipeline.
+
+    Returns :class:`ClaudeCodeClient` — calls go through ``claude -p``
+    against the user's Claude Code subscription instead of the Anthropic
+    API. The shim shape matches the SDK's ``client.messages.create(...)``
+    surface, so the agents are unchanged.
+
+    To switch back to the Anthropic SDK (per-token API billing), import
+    and instantiate ``anthropic.Anthropic()`` at the call site and pass
+    it as ``anthropic_client=`` to :func:`run_learning_pipeline`. There
+    is intentionally no env var toggle and no auto-detection — see
+    ABS-107 for rationale ("no surprise API charges").
+    """
+    return ClaudeCodeClient()
 
 
 def _find_primary_source(sources: List[SourceDocument]) -> Optional[SourceDocument]:
@@ -42,16 +60,24 @@ def run_learning_pipeline(
     municipality: Municipality,
     sources: List[SourceDocument],
     citation_samples: List[str],
-    anthropic_client,
     retrieval_client,
+    anthropic_client: Optional[Any] = None,
     manifest_version: str = "0.1.0",
 ) -> CityIntakeManifest:
     """Run StructureAnalyst → SemanticMapper → Validation for one city.
+
+    When ``anthropic_client`` is None (the default), uses
+    :func:`make_default_llm_client` — which today returns a
+    :class:`ClaudeCodeClient` that routes through ``claude -p`` against
+    the user's Claude Code subscription. Pass an explicit
+    ``anthropic.Anthropic()`` instance to use the per-token API path.
 
     Returns a draft :class:`CityIntakeManifest`. Sets ``pipeline_ready``
     to ``True`` only when the validation status is ``"PASS"``. Catches
     per-agent exceptions and records them as manifest-level flags.
     """
+    if anthropic_client is None:
+        anthropic_client = make_default_llm_client()
     primary = _find_primary_source(sources)
     if primary is None:
         raise ValueError(
