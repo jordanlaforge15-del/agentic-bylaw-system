@@ -639,11 +639,23 @@ class DiscoveryAgent:
         municipality: Municipality,
     ) -> List[Dict[str, Any]]:
         user_text = _format_classifier_prompt(municipality, batch)
+        # CLASSIFIER_SYSTEM_PROMPT and the tool schema (with its enum of
+        # canonical document_types, formats, access_methods) are static
+        # across every batch. Cache them so calls 2-N pay 10% of the
+        # static-prefix input cost. See ABS-94.
         response = self.client.messages.create(
             model=self.model,
             max_tokens=4096,
-            system=CLASSIFIER_SYSTEM_PROMPT,
-            tools=[_CLASSIFIER_TOOL_SCHEMA],
+            system=[
+                {
+                    "type": "text",
+                    "text": CLASSIFIER_SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+            tools=[
+                {**_CLASSIFIER_TOOL_SCHEMA, "cache_control": {"type": "ephemeral"}}
+            ],
             tool_choice={"type": "tool", "name": CLASSIFIER_TOOL_NAME},
             messages=[{"role": "user", "content": user_text}],
         )
@@ -670,11 +682,27 @@ class DiscoveryAgent:
         names_by_url = {c.url: c.document_name for c in classified}
         user_text = _format_parent_prompt(municipality, classified)
         try:
+            # Parent resolver is typically called once per discovery run,
+            # so caching benefit is smaller here — but if it ever gets
+            # called twice on retries the cached prefix still helps, and
+            # being consistent across the three agents simplifies the
+            # mental model. See ABS-94.
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=2048,
-                system=PARENT_RESOLVER_SYSTEM_PROMPT,
-                tools=[_PARENT_RESOLVER_TOOL_SCHEMA],
+                system=[
+                    {
+                        "type": "text",
+                        "text": PARENT_RESOLVER_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+                tools=[
+                    {
+                        **_PARENT_RESOLVER_TOOL_SCHEMA,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 tool_choice={
                     "type": "tool",
                     "name": PARENT_RESOLVER_TOOL_NAME,

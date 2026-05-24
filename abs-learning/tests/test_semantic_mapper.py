@@ -649,3 +649,26 @@ def test_abs90_pick_canonical_type_winner_helper():
     assert _pick_canonical_type_winner(
         OrderedDict([("unknown", 1)])
     ) == "unknown"
+
+
+# --------------------------------------------------------------------- ABS-94
+def test_abs94_call_tool_sends_cache_control_on_system_and_tool():
+    """SemanticMapper makes ~6+ calls per bylaw with identical system
+    prompt + tool schema. Asserting cache_control is on the payload is
+    the only verification possible without paying for a real run."""
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = _zones_response([])
+    agent = SemanticMapperAgent(fake_client)
+    agent._call_tool(
+        system_prompt="some static system prompt",
+        tool_schema={"name": ZONES_TOOL_NAME, "input_schema": {}},
+        tool_name=ZONES_TOOL_NAME,
+        user_text="window text",
+    )
+    kwargs = fake_client.messages.create.call_args.kwargs
+    assert isinstance(kwargs["system"], list)
+    assert kwargs["system"][0]["text"] == "some static system prompt"
+    assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert kwargs["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    # Tool schema fields should still be present (we just spread + add cache).
+    assert kwargs["tools"][0]["name"] == ZONES_TOOL_NAME

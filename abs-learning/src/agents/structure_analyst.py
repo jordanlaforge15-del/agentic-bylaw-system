@@ -196,11 +196,21 @@ class StructureAnalystAgent:
             f"{window.get('end_page', '?')}):\n\n{text}"
         )
 
+        # System prompt + tool schema are static across every window call;
+        # mark them cacheable so the per-window LLM cost drops to roughly
+        # (per-window text) + (cached-prefix at 10% read cost) instead of
+        # paying for the full ~3-5K prefix on every call. See ABS-94.
         response = self.client.messages.create(
             model=self.model,
             max_tokens=2048,
-            system=SYSTEM_PROMPT,
-            tools=[_TOOL_SCHEMA],
+            system=[
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+            tools=[{**_TOOL_SCHEMA, "cache_control": {"type": "ephemeral"}}],
             tool_choice={"type": "tool", "name": _TOOL_NAME},
             messages=[{"role": "user", "content": user_message}],
         )
