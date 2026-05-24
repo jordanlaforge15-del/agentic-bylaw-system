@@ -1,0 +1,102 @@
+"use client";
+
+import { useState, useEffect, useRef, useCallback } from "react";
+import useSWR from "swr";
+import type {
+  RunState,
+  ParsedLogEvent,
+  ReportSummary,
+  SystemLogEntry,
+} from "./types";
+
+const fetcher = (url: string) => fetch(url).then((r) => r.json());
+
+export function useTick(intervalMs = 1000): number {
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+export function useNmState() {
+  const { data, error, isLoading, mutate } = useSWR<RunState | null>(
+    "/api/nm/state",
+    fetcher,
+    { refreshInterval: 2000, revalidateOnFocus: true },
+  );
+  return { state: data ?? null, error, isLoading, mutate };
+}
+
+export function useReports() {
+  const { data, error, isLoading } = useSWR<ReportSummary[]>(
+    "/api/nm/reports",
+    fetcher,
+    { refreshInterval: 10000 },
+  );
+  return { reports: data ?? [], error, isLoading };
+}
+
+export function useOrchestratorLog() {
+  const { data } = useSWR<SystemLogEntry[]>(
+    "/api/nm/orchestrator-log",
+    fetcher,
+    { refreshInterval: 5000 },
+  );
+  return data ?? [];
+}
+
+export function useLogStream(issueId: string | null) {
+  const [events, setEvents] = useState<ParsedLogEvent[]>([]);
+  const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    if (!issueId) return;
+    setEvents([]);
+    const es = new EventSource(`/api/nm/logs/${issueId}/stream`);
+    esRef.current = es;
+    es.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data) as ParsedLogEvent;
+        setEvents((prev) => [...prev, event]);
+      } catch {
+        // skip malformed
+      }
+    };
+    es.onerror = () => {
+      es.close();
+    };
+    return () => {
+      es.close();
+    };
+  }, [issueId]);
+
+  return events;
+}
+
+export function useNmTheme() {
+  const [theme, setThemeState] = useState<string>("vanguard");
+
+  useEffect(() => {
+    const saved = localStorage.getItem("nm:theme");
+    if (saved === "apollo" || saved === "vanguard" || saved === "red_october") {
+      setThemeState(saved);
+    }
+  }, []);
+
+  const setTheme = useCallback((next: string) => {
+    setThemeState(next);
+    localStorage.setItem("nm:theme", next);
+    const el = document.getElementById("nm-root");
+    if (el) {
+      el.setAttribute("data-nm-theme", next);
+      el.style.display = "none";
+      void el.offsetHeight;
+      el.style.display = "";
+    }
+  }, []);
+
+  return { theme, setTheme };
+}
