@@ -171,3 +171,31 @@ def test_merge_patterns_confidence_reduced_by_conflicts():
 
     assert merged.confidence < 0.9
     assert abs(merged.confidence - 0.85) < 1e-6
+
+
+# --------------------------------------------------------------------- ABS-94
+def test_abs94_extract_patterns_sends_cache_control_on_system_and_tool():
+    """StructureAnalyst makes ~4 calls per bylaw with identical system
+    prompt + tool schema. Verify cache_control is on the request payload."""
+    payload = {
+        "hierarchy": [],
+        "schedule_patterns": [],
+        "table_caption_pattern": None,
+        "citation_example": "",
+        "separator": " > ",
+        "flags": [],
+        "confidence": 0.0,
+    }
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = make_response(payload)
+    agent = StructureAnalystAgent(fake_client)
+    agent._extract_patterns_from_window(
+        window={"text": "stub", "window_index": 0,
+                "start_page": 1, "end_page": 25}
+    )
+    kwargs = fake_client.messages.create.call_args.kwargs
+    assert isinstance(kwargs["system"], list)
+    assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert kwargs["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    # Tool name preserved (not clobbered by spread + add).
+    assert kwargs["tools"][0]["name"] == "report_citation_hierarchy"

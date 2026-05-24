@@ -463,11 +463,22 @@ class SemanticMapperAgent:
         tool_name: str,
         user_text: str,
     ) -> Dict[str, Any]:
+        # System prompt + tool schema are static across every window call
+        # for a given (system_prompt, tool_schema) pair. SemanticMapper
+        # calls this 6+ times per bylaw (one per zone window) with the
+        # SAME prompt + schema — caching the prefix saves ~90% of the
+        # per-call input cost on calls 2-N. See ABS-94.
         response = self.client.messages.create(
             model=self.model,
             max_tokens=2048,
-            system=system_prompt,
-            tools=[tool_schema],
+            system=[
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+            tools=[{**tool_schema, "cache_control": {"type": "ephemeral"}}],
             tool_choice={"type": "tool", "name": tool_name},
             messages=[{"role": "user", "content": user_text}],
         )

@@ -31,6 +31,7 @@ from layer1.semantic.extractors import (
     extract_table_refs,
     extract_uses,
     extract_zones,
+    looks_like_section_label,
     looks_like_use_label,
     normalize_use,
     reset_profile_overlay,
@@ -223,6 +224,46 @@ def _extract_fragment_entities(
             )
 
 
+# ABS-106: Bylaws that don't use circled-number / [N] markers (e.g.
+# Halifax Mainland LUB) still have conditions expressed in plain prose.
+# This heuristic fires on fragments whose text contains a conditional
+# discourse marker (subject to, provided that, only if, where the,
+# notwithstanding, in addition to) paired with permission/restriction
+# language. Returns a synthetic marker derived from citation_path so
+# downstream consumers can still address the fact.
+_PROSE_CONDITION_RE = re.compile(
+    r"\b(subject\s+to|provided\s+that|provided\s+however|only\s+if|"
+    r"only\s+where|except\s+(?:where|when)|notwithstanding|"
+    r"in\s+addition\s+to|where\s+the)\b",
+    re.IGNORECASE,
+)
+_PERMISSION_LANGUAGE_RE = re.compile(
+    r"\b(permitted|prohibited|allowed|shall\s+not|may\s+not|"
+    r"required|approval|approved)\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_prose_condition_markers(fragment: SourceFragment) -> list[str]:
+    """ABS-106: heuristic detection of prose-only condition fragments.
+
+    Returns a list of synthetic markers (typically one per fragment) if
+    the fragment expresses a condition via prose rather than a circled
+    number or [N] marker. Empty list if not a condition.
+    """
+    text = fragment.text or ""
+    if len(text) < 30:
+        return []
+    if not _PROSE_CONDITION_RE.search(text):
+        return []
+    if not _PERMISSION_LANGUAGE_RE.search(text):
+        return []
+    # Synthetic marker derived from citation_path so multiple synthetic
+    # conditions from the same bylaw are still distinguishable downstream.
+    citation = (fragment.citation_path or f"fragment:{fragment.id}").strip()
+    return [f"prose:{citation}"]
+
+
 def _extract_condition_definition(
     session: Session,
     report: SemanticEnrichmentReport,
@@ -230,6 +271,10 @@ def _extract_condition_definition(
     fragment: SourceFragment,
 ) -> None:
     markers = extract_condition_refs(fragment.text)
+    if not markers:
+        # ABS-106: fall back to prose-heuristic detection for bylaws
+        # that don't use circled-number / [N] marker conventions.
+        markers = _detect_prose_condition_markers(fragment)
     if not markers:
         return
     for marker in markers:
@@ -334,13 +379,44 @@ def _enrich_table(
         _extract_dimensional_table_facts(session, report, cache, table, rows)
 
 
+_QUOTE_CHARS = "'\"‘’“”`"
+_LEADING_QUOTE_RE = re.compile(rf"^[{_QUOTE_CHARS}]\s*")
+# Strip qualifying clauses that intervene between the quoted term and "means".
+# Real examples from Halifax Mainland LUB:
+#   "'X' hereinafter referred to as Y, means ..."
+#   '"Height" when applied to a building, means ...'
+_QUALIFIER_CLAUSE_RE = re.compile(
+    rf"[{_QUOTE_CHARS}]?\s*"
+    r"(?:hereinafter\s+referred\s+to\s+as\s+[^,]+"
+    r"|when\s+applied\s+to\s+[^,]+)"
+    r"\s*,\s*",
+    re.IGNORECASE,
+)
+# Strip a trailing quote that closes the captured term, just before "means".
+_TRAILING_QUOTE_BEFORE_MEANS_RE = re.compile(
+    rf"[{_QUOTE_CHARS}]\s+means\b"
+)
+
+
+def _normalize_definition_text(text: str) -> str:
+    """Strip quoted-term wrapping + qualifying clauses so a "TERM means ..."
+    regex can match Halifax Mainland-style definitions (ABS-103).
+    """
+    out = text.lstrip()
+    out = _LEADING_QUOTE_RE.sub("", out, count=1)
+    out = _QUALIFIER_CLAUSE_RE.sub(" ", out, count=1)
+    out = _TRAILING_QUOTE_BEFORE_MEANS_RE.sub(" means", out, count=1)
+    return out
+
+
 def _extract_definition_fact(
     session: Session,
     report: SemanticEnrichmentReport,
     cache: dict[tuple[str, str], SemanticEntity],
     fragment: SourceFragment,
 ) -> None:
-    match = re.match(r"\s*([A-Z][A-Za-z0-9 /'()-]{1,80}?)\s+means\s+(.+)", fragment.text)
+    normalized_text = _normalize_definition_text(fragment.text)
+    match = re.match(r"\s*([A-Z][A-Za-z0-9 /'()-]{1,80}?)\s+means\s+(.+)", normalized_text)
     if not match:
         return
     term = normalize_use(match.group(1))
@@ -392,12 +468,25 @@ def _classify_table(
     headers = [_cell_text(cell) for cell in rows.get(_header_row_index(rows), [])]
     zone_density = _zone_density(headers)
     use_density = sum(1 for label in row_labels if looks_like_use_label(label)) / max(len(row_labels), 1)
+    # ABS-105: bylaws that index permission/parking matrices by section
+    # number (e.g. Halifax Mainland LUB row labels: "11(1)", "5A", "28AO(1)")
+    # don't trigger the use_density signal — the rows aren't use-class
+    # named, they're section refs. Track section-label density separately
+    # so the classifier can recognize the same "rows × zones → permission"
+    # shape on that convention.
+    section_label_density = sum(
+        1 for label in row_labels if looks_like_section_label(label)
+    ) / max(len(row_labels), 1)
     standard_density = sum(1 for text in headers + row_labels if extract_standards(text)) / max(len(headers) + len(row_labels), 1)
     context_density = sum(1 for text in headers + row_labels if extract_development_contexts(text)) / max(
         len(headers) + len(row_labels), 1
     )
     parking_signal = "parking" in caption or any("parking" in text.lower() for text in headers + row_labels)
-    if ("permitted uses by zone" in caption or (zone_density >= 0.4 and use_density >= 0.35)) and not parking_signal:
+    if (
+        "permitted uses by zone" in caption
+        or (zone_density >= 0.4 and use_density >= 0.35)
+        or (zone_density >= 0.3 and section_label_density >= 0.5)
+    ) and not parking_signal:
         return "permission_matrix", "use", "zone", "permission_marker", 0.9
     if parking_signal and (zone_density >= 0.2 or standard_density >= 0.2):
         return "parking_matrix", "use", "standard", "requirement", 0.75
@@ -441,20 +530,36 @@ def _extract_permission_table_facts(
         if row_index == header_idx or _is_repeated_header_row(row_cells):
             continue
         row_label = _row_label(row_cells)
-        if not looks_like_use_label(row_label):
+        is_use_label = looks_like_use_label(row_label)
+        is_section_label = (not is_use_label) and looks_like_section_label(row_label)
+        if not (is_use_label or is_section_label):
             continue
+        # ABS-105: when the row is a section-number label (no use-class
+        # wording), still create a "use" entity but mark it section-keyed
+        # so downstream consumers know this is a placeholder pending
+        # resolution to the section's defined_term.
+        if is_section_label:
+            canonical_use_name = f"section:{row_label.strip()}"
+            row_confidence = 0.7
+        else:
+            canonical_use_name = normalize_use(row_label)
+            row_confidence = 0.9
         use_entity = _get_or_create_entity(
             session,
             report,
             cache,
             document_id=table.document_id,
             entity_type="use",
-            canonical_name=normalize_use(row_label),
+            canonical_name=canonical_use_name,
             source_text=row_label,
-            confidence=0.9,
-            metadata={"source_table_id": table.id, "row_index": row_index},
+            confidence=row_confidence,
+            metadata={
+                "source_table_id": table.id,
+                "row_index": row_index,
+                "section_keyed": is_section_label,
+            },
         )
-        _add_axis_binding(session, report, table, "row", row_index, use_entity, row_label, 0.9)
+        _add_axis_binding(session, report, table, "row", row_index, use_entity, row_label, row_confidence)
         for cell in row_cells[1:]:
             marker = cell.text.strip()
             if not marker:
@@ -633,20 +738,35 @@ def _extract_parking_table_facts(
         if row_index == header_idx or _is_repeated_header_row(row_cells):
             continue
         row_label = _row_label(row_cells)
-        if not looks_like_use_label(row_label):
+        is_use_label = looks_like_use_label(row_label)
+        is_section_label = (not is_use_label) and looks_like_section_label(row_label)
+        if not (is_use_label or is_section_label):
             continue
+        # ABS-105: same section-keyed placeholder treatment as in the
+        # permission_matrix extractor — parking tables in Mainland Halifax
+        # LUB are indexed by section number, not use-class name.
+        if is_section_label:
+            canonical_use_name = f"section:{row_label.strip()}"
+            row_confidence = 0.7
+        else:
+            canonical_use_name = normalize_use(row_label)
+            row_confidence = 0.88
         use_entity = _get_or_create_entity(
             session,
             report,
             cache,
             document_id=table.document_id,
             entity_type="use",
-            canonical_name=normalize_use(row_label),
+            canonical_name=canonical_use_name,
             source_text=row_label,
-            confidence=0.88,
-            metadata={"source_table_id": table.id, "row_index": row_index},
+            confidence=row_confidence,
+            metadata={
+                "source_table_id": table.id,
+                "row_index": row_index,
+                "section_keyed": is_section_label,
+            },
         )
-        _add_axis_binding(session, report, table, "row", row_index, use_entity, row_label, 0.88)
+        _add_axis_binding(session, report, table, "row", row_index, use_entity, row_label, row_confidence)
         for cell in row_cells[1:]:
             value = cell.text.strip()
             zone_entity = zone_entities.get(cell.col_index)

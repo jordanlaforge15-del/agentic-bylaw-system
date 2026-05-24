@@ -1069,3 +1069,58 @@ def test_classifier_raises_when_no_tool_use_block():
             ],
             _municipality(),
         )
+
+
+# --------------------------------------------------------------------- ABS-94
+# Anthropic prompt caching — the classifier + parent-resolver system prompts
+# and their tool schemas are static across calls. Asserting cache_control is
+# on the request payload is the only verification we can do without burning
+# real API tokens; live cache_read_input_tokens checking requires a paid run.
+
+def test_abs94_classifier_sends_cache_control_on_system_and_tool():
+    fake_llm = MagicMock()
+    fake_llm.messages.create.return_value = _stub_classifier_response([])
+    agent = DiscoveryAgent(fake_llm, http_client=_httpx_client({}))
+    agent._classify_batch(
+        [
+            CrawledCandidate(
+                url="https://example.com/x.pdf", link_text="X",
+                discovered_on="https://example.com/", is_pdf=True,
+            )
+        ],
+        _municipality(),
+    )
+    kwargs = fake_llm.messages.create.call_args.kwargs
+    assert isinstance(kwargs["system"], list), (
+        f"system must be a list of blocks for cache_control, got {type(kwargs['system'])}"
+    )
+    assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert kwargs["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_abs94_parent_resolver_sends_cache_control_on_system_and_tool():
+    fake_llm = MagicMock()
+    fake_llm.messages.create.return_value = _stub_parent_response([])
+    agent = DiscoveryAgent(fake_llm, http_client=_httpx_client({}))
+    # _resolve_parents short-circuits if no child-like docs are present;
+    # construct two classified candidates with one schedule + one bylaw.
+    from agents.discovery import _ClassifiedCandidate
+    classified = [
+        _ClassifiedCandidate(
+            url="https://example.com/lub.pdf", document_name="LUB",
+            document_type="bylaw", document_role="primary",
+            format="pdf", access_method="direct_download",
+            in_scope=True, confidence=0.9,
+        ),
+        _ClassifiedCandidate(
+            url="https://example.com/sched.pdf", document_name="Schedule A",
+            document_type="schedule", document_role="zoning map",
+            format="pdf", access_method="direct_download",
+            in_scope=True, confidence=0.9,
+        ),
+    ]
+    agent._resolve_parents(classified, _municipality())
+    kwargs = fake_llm.messages.create.call_args.kwargs
+    assert isinstance(kwargs["system"], list)
+    assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert kwargs["tools"][0]["cache_control"] == {"type": "ephemeral"}

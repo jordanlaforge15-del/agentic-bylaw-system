@@ -210,6 +210,192 @@ def test_zone_extraction_does_not_treat_square_metres_as_zone():
     assert extract_zones("Minimum 1 parking space per 100 m2 of floor area") == []
 
 
+# --------------------------------------------------------------------- ABS-104
+# Mainland Halifax LUB has amendment markers like "(RC-May 9/24)" and
+# schedule labels "Schedule ZM-1" throughout. The zone regex matched
+# substrings of these (MAY-9, ZM-1, etc.) and emitted them as zone
+# entities. Add universal exclusions.
+
+def test_abs104_amendment_month_markers_excluded():
+    # Real Mainland-style amendment marker context.
+    text = "Single Family Dwelling permitted (RC-May 9/24; E-Jun 13/24)."
+    zones = extract_zones(text)
+    assert "MAY-9" not in zones
+    assert "JUN-13" not in zones
+    assert "MAY" not in zones
+
+
+def test_abs104_schedule_zm_labels_excluded():
+    text = "see Schedule ZM-1 and Schedule ZM-2 for boundary delineation"
+    zones = extract_zones(text)
+    assert "ZM-1" not in zones
+    assert "ZM-2" not in zones
+
+
+def test_abs104_real_zones_still_extracted():
+    """The exclusions must not collateral-damage actual zone codes."""
+    text = "R-1 zone permits ER-1 and CEN-2 uses; CDD-1 not permitted."
+    zones = extract_zones(text)
+    assert "R-1" in zones
+    assert "ER-1" in zones
+    assert "CEN-2" in zones
+    assert "CDD-1" in zones
+
+
+# --------------------------------------------------------------------- ABS-103
+# Mainland Halifax LUB's definitions use a leading-quote convention that the
+# original regex (`^\s*[A-Z]...means`) rejected. Strip leading quote, trailing
+# quote-before-means, and interposing qualifier clauses before matching.
+
+def test_abs103_normalize_definition_text_strips_leading_quote_and_space():
+    from layer1.semantic.enrichment import _normalize_definition_text
+    assert _normalize_definition_text(
+        "' ACCESSORY HEN USE ' means the keeping of hens"
+    ) == "ACCESSORY HEN USE  means the keeping of hens"
+
+
+def test_abs103_normalize_definition_text_strips_hereinafter_clause():
+    from layer1.semantic.enrichment import _normalize_definition_text
+    src = (
+        "'Construction and demolition materials disposal site' "
+        "hereinafter referred to as a C&D Disposal Site, means land"
+    )
+    out = _normalize_definition_text(src)
+    assert "hereinafter" not in out
+    assert "C&D Disposal Site" not in out
+    assert "means land" in out
+    assert out.startswith("Construction")
+
+
+def test_abs103_normalize_definition_text_strips_when_applied_clause():
+    from layer1.semantic.enrichment import _normalize_definition_text
+    out = _normalize_definition_text(
+        '"Height" when applied to a building, means the vertical distance'
+    )
+    assert "when applied to" not in out
+    assert out.startswith("Height")
+    assert " means " in out
+
+
+def test_abs103_normalize_definition_text_preserves_clean_rc_format():
+    """RC's already-clean Term means... format should pass through unchanged."""
+    from layer1.semantic.enrichment import _normalize_definition_text
+    src = "Accessory Parking Lot means a parking lot, not contained within"
+    assert _normalize_definition_text(src) == src
+
+
+def test_abs103_normalize_definition_text_handles_smart_quotes():
+    """Some PDFs use smart quotes (curly) instead of straight ones."""
+    from layer1.semantic.enrichment import _normalize_definition_text
+    out = _normalize_definition_text("‘HEN’ means adult female chicken")
+    assert out.startswith("HEN")
+    assert " means adult female chicken" in out
+
+
+# --------------------------------------------------------------------- ABS-105
+# Section-number row labels — bylaws that index permission/parking tables
+# by section number (Mainland LUB: "11(1)", "5A", "28AO(1)", "62EB") instead
+# of use-class name should still trigger table extraction.
+
+def test_abs105_looks_like_section_label_recognizes_common_shapes():
+    from layer1.semantic.extractors import looks_like_section_label
+    # Plain section + numeric subsection.
+    assert looks_like_section_label("11(1)")
+    assert looks_like_section_label("5A")
+    assert looks_like_section_label("28AO(1)")
+    assert looks_like_section_label("62EB")
+    assert looks_like_section_label("3")
+    assert looks_like_section_label("13AA")
+    # With clause-letter suffix.
+    assert looks_like_section_label("11(1)(a)")
+    # With surrounding whitespace.
+    assert looks_like_section_label("  11(1)  ")
+
+
+def test_abs105_looks_like_section_label_rejects_use_names():
+    from layer1.semantic.extractors import looks_like_section_label
+    assert not looks_like_section_label("Accessory Use")
+    assert not looks_like_section_label("Single Family Dwelling")
+    assert not looks_like_section_label("")
+    assert not looks_like_section_label("Schedule A")
+    # A zone code looks similar (R-1) but has a hyphen — shouldn't match.
+    assert not looks_like_section_label("R-1")
+    # Section refs with the literal word "Section" don't match — those go
+    # through extract_section_refs upstream.
+    assert not looks_like_section_label("Section 11(1)")
+
+
+# --------------------------------------------------------------------- ABS-106
+# Prose-only conditions — bylaws (e.g. Halifax Mainland LUB) that don't use
+# circled-number / [N] markers still express conditions in plain prose.
+
+def _stub_fragment(text: str, citation: str = "Section 7"):
+    """Lightweight stand-in for a SourceFragment for unit-testing the
+    prose-condition detector (which doesn't need a real ORM object)."""
+    from types import SimpleNamespace
+    return SimpleNamespace(text=text, citation_path=citation, id=999)
+
+
+def test_abs106_prose_condition_subject_to_with_permission_lang():
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment(
+        "A retail use is permitted subject to the approval of the "
+        "Development Officer pursuant to Section 11(1).",
+        citation="Section 11(1)",
+    )
+    markers = _detect_prose_condition_markers(frag)
+    assert markers == ["prose:Section 11(1)"]
+
+
+def test_abs106_prose_condition_provided_that_with_prohibition():
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment(
+        "Adult entertainment uses shall not be permitted provided that "
+        "they are within 200 metres of a school.",
+        citation="Section 28AO(1)",
+    )
+    markers = _detect_prose_condition_markers(frag)
+    assert markers == ["prose:Section 28AO(1)"]
+
+
+def test_abs106_prose_condition_notwithstanding_with_required():
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment(
+        "Notwithstanding Section 9, a development permit is required "
+        "for any expansion of an existing non-conforming use.",
+        citation="Section 9(2)",
+    )
+    markers = _detect_prose_condition_markers(frag)
+    assert markers == ["prose:Section 9(2)"]
+
+
+def test_abs106_prose_condition_rejects_fragments_without_permission_lang():
+    """'Subject to' alone (without permission/restriction wording) is too
+    weak a signal to fire — would over-flag definitional fragments."""
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment(
+        "Subject to the policy direction outlined in Section 4."
+    )
+    assert _detect_prose_condition_markers(frag) == []
+
+
+def test_abs106_prose_condition_rejects_fragments_without_discourse_marker():
+    """Plain permission language without a conditional marker shouldn't
+    fire — those are vanilla permission statements, not conditions."""
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment(
+        "A single family dwelling is permitted in the R-1 zone."
+    )
+    assert _detect_prose_condition_markers(frag) == []
+
+
+def test_abs106_prose_condition_rejects_short_fragments():
+    """Length filter prevents matching against fragmentary text (titles, etc.)."""
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment("Subject to permitted.")
+    assert _detect_prose_condition_markers(frag) == []
+
+
 def _add_table_rows(session, table_id: int, rows: list[list[str]]) -> None:
     for row_index, row in enumerate(rows):
         for col_index, text in enumerate(row):
