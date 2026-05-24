@@ -132,6 +132,7 @@ async def spawn_agent(
         "--append-system-prompt", DEV_AGENT_SYSTEM_PROMPT,
         "--session-id", session_id,
         "--model", config.model,
+        "--max-budget-usd", "10",
         prompt,
     ]
 
@@ -186,6 +187,7 @@ async def resume_agent(
         "--allowedTools", ALLOWED_TOOLS,
         "--resume", issue.session_id,
         "--model", config.model,
+        "--max-budget-usd", "10",
         feedback,
     ]
 
