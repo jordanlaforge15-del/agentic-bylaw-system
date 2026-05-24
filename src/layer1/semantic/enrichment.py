@@ -224,6 +224,46 @@ def _extract_fragment_entities(
             )
 
 
+# ABS-106: Bylaws that don't use circled-number / [N] markers (e.g.
+# Halifax Mainland LUB) still have conditions expressed in plain prose.
+# This heuristic fires on fragments whose text contains a conditional
+# discourse marker (subject to, provided that, only if, where the,
+# notwithstanding, in addition to) paired with permission/restriction
+# language. Returns a synthetic marker derived from citation_path so
+# downstream consumers can still address the fact.
+_PROSE_CONDITION_RE = re.compile(
+    r"\b(subject\s+to|provided\s+that|provided\s+however|only\s+if|"
+    r"only\s+where|except\s+(?:where|when)|notwithstanding|"
+    r"in\s+addition\s+to|where\s+the)\b",
+    re.IGNORECASE,
+)
+_PERMISSION_LANGUAGE_RE = re.compile(
+    r"\b(permitted|prohibited|allowed|shall\s+not|may\s+not|"
+    r"required|approval|approved)\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_prose_condition_markers(fragment: SourceFragment) -> list[str]:
+    """ABS-106: heuristic detection of prose-only condition fragments.
+
+    Returns a list of synthetic markers (typically one per fragment) if
+    the fragment expresses a condition via prose rather than a circled
+    number or [N] marker. Empty list if not a condition.
+    """
+    text = fragment.text or ""
+    if len(text) < 30:
+        return []
+    if not _PROSE_CONDITION_RE.search(text):
+        return []
+    if not _PERMISSION_LANGUAGE_RE.search(text):
+        return []
+    # Synthetic marker derived from citation_path so multiple synthetic
+    # conditions from the same bylaw are still distinguishable downstream.
+    citation = (fragment.citation_path or f"fragment:{fragment.id}").strip()
+    return [f"prose:{citation}"]
+
+
 def _extract_condition_definition(
     session: Session,
     report: SemanticEnrichmentReport,
@@ -231,6 +271,10 @@ def _extract_condition_definition(
     fragment: SourceFragment,
 ) -> None:
     markers = extract_condition_refs(fragment.text)
+    if not markers:
+        # ABS-106: fall back to prose-heuristic detection for bylaws
+        # that don't use circled-number / [N] marker conventions.
+        markers = _detect_prose_condition_markers(fragment)
     if not markers:
         return
     for marker in markers:

@@ -325,6 +325,77 @@ def test_abs105_looks_like_section_label_rejects_use_names():
     assert not looks_like_section_label("Section 11(1)")
 
 
+# --------------------------------------------------------------------- ABS-106
+# Prose-only conditions — bylaws (e.g. Halifax Mainland LUB) that don't use
+# circled-number / [N] markers still express conditions in plain prose.
+
+def _stub_fragment(text: str, citation: str = "Section 7"):
+    """Lightweight stand-in for a SourceFragment for unit-testing the
+    prose-condition detector (which doesn't need a real ORM object)."""
+    from types import SimpleNamespace
+    return SimpleNamespace(text=text, citation_path=citation, id=999)
+
+
+def test_abs106_prose_condition_subject_to_with_permission_lang():
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment(
+        "A retail use is permitted subject to the approval of the "
+        "Development Officer pursuant to Section 11(1).",
+        citation="Section 11(1)",
+    )
+    markers = _detect_prose_condition_markers(frag)
+    assert markers == ["prose:Section 11(1)"]
+
+
+def test_abs106_prose_condition_provided_that_with_prohibition():
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment(
+        "Adult entertainment uses shall not be permitted provided that "
+        "they are within 200 metres of a school.",
+        citation="Section 28AO(1)",
+    )
+    markers = _detect_prose_condition_markers(frag)
+    assert markers == ["prose:Section 28AO(1)"]
+
+
+def test_abs106_prose_condition_notwithstanding_with_required():
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment(
+        "Notwithstanding Section 9, a development permit is required "
+        "for any expansion of an existing non-conforming use.",
+        citation="Section 9(2)",
+    )
+    markers = _detect_prose_condition_markers(frag)
+    assert markers == ["prose:Section 9(2)"]
+
+
+def test_abs106_prose_condition_rejects_fragments_without_permission_lang():
+    """'Subject to' alone (without permission/restriction wording) is too
+    weak a signal to fire — would over-flag definitional fragments."""
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment(
+        "Subject to the policy direction outlined in Section 4."
+    )
+    assert _detect_prose_condition_markers(frag) == []
+
+
+def test_abs106_prose_condition_rejects_fragments_without_discourse_marker():
+    """Plain permission language without a conditional marker shouldn't
+    fire — those are vanilla permission statements, not conditions."""
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment(
+        "A single family dwelling is permitted in the R-1 zone."
+    )
+    assert _detect_prose_condition_markers(frag) == []
+
+
+def test_abs106_prose_condition_rejects_short_fragments():
+    """Length filter prevents matching against fragmentary text (titles, etc.)."""
+    from layer1.semantic.enrichment import _detect_prose_condition_markers
+    frag = _stub_fragment("Subject to permitted.")
+    assert _detect_prose_condition_markers(frag) == []
+
+
 def _add_table_rows(session, table_id: int, rows: list[list[str]]) -> None:
     for row_index, row in enumerate(rows):
         for col_index, text in enumerate(row):
