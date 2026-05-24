@@ -242,6 +242,56 @@ def test_abs104_real_zones_still_extracted():
     assert "CDD-1" in zones
 
 
+# --------------------------------------------------------------------- ABS-103
+# Mainland Halifax LUB's definitions use a leading-quote convention that the
+# original regex (`^\s*[A-Z]...means`) rejected. Strip leading quote, trailing
+# quote-before-means, and interposing qualifier clauses before matching.
+
+def test_abs103_normalize_definition_text_strips_leading_quote_and_space():
+    from layer1.semantic.enrichment import _normalize_definition_text
+    assert _normalize_definition_text(
+        "' ACCESSORY HEN USE ' means the keeping of hens"
+    ) == "ACCESSORY HEN USE  means the keeping of hens"
+
+
+def test_abs103_normalize_definition_text_strips_hereinafter_clause():
+    from layer1.semantic.enrichment import _normalize_definition_text
+    src = (
+        "'Construction and demolition materials disposal site' "
+        "hereinafter referred to as a C&D Disposal Site, means land"
+    )
+    out = _normalize_definition_text(src)
+    assert "hereinafter" not in out
+    assert "C&D Disposal Site" not in out
+    assert "means land" in out
+    assert out.startswith("Construction")
+
+
+def test_abs103_normalize_definition_text_strips_when_applied_clause():
+    from layer1.semantic.enrichment import _normalize_definition_text
+    out = _normalize_definition_text(
+        '"Height" when applied to a building, means the vertical distance'
+    )
+    assert "when applied to" not in out
+    assert out.startswith("Height")
+    assert " means " in out
+
+
+def test_abs103_normalize_definition_text_preserves_clean_rc_format():
+    """RC's already-clean Term means... format should pass through unchanged."""
+    from layer1.semantic.enrichment import _normalize_definition_text
+    src = "Accessory Parking Lot means a parking lot, not contained within"
+    assert _normalize_definition_text(src) == src
+
+
+def test_abs103_normalize_definition_text_handles_smart_quotes():
+    """Some PDFs use smart quotes (curly) instead of straight ones."""
+    from layer1.semantic.enrichment import _normalize_definition_text
+    out = _normalize_definition_text("‘HEN’ means adult female chicken")
+    assert out.startswith("HEN")
+    assert " means adult female chicken" in out
+
+
 def _add_table_rows(session, table_id: int, rows: list[list[str]]) -> None:
     for row_index, row in enumerate(rows):
         for col_index, text in enumerate(row):

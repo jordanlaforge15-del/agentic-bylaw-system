@@ -334,13 +334,44 @@ def _enrich_table(
         _extract_dimensional_table_facts(session, report, cache, table, rows)
 
 
+_QUOTE_CHARS = "'\"‘’“”`"
+_LEADING_QUOTE_RE = re.compile(rf"^[{_QUOTE_CHARS}]\s*")
+# Strip qualifying clauses that intervene between the quoted term and "means".
+# Real examples from Halifax Mainland LUB:
+#   "'X' hereinafter referred to as Y, means ..."
+#   '"Height" when applied to a building, means ...'
+_QUALIFIER_CLAUSE_RE = re.compile(
+    rf"[{_QUOTE_CHARS}]?\s*"
+    r"(?:hereinafter\s+referred\s+to\s+as\s+[^,]+"
+    r"|when\s+applied\s+to\s+[^,]+)"
+    r"\s*,\s*",
+    re.IGNORECASE,
+)
+# Strip a trailing quote that closes the captured term, just before "means".
+_TRAILING_QUOTE_BEFORE_MEANS_RE = re.compile(
+    rf"[{_QUOTE_CHARS}]\s+means\b"
+)
+
+
+def _normalize_definition_text(text: str) -> str:
+    """Strip quoted-term wrapping + qualifying clauses so a "TERM means ..."
+    regex can match Halifax Mainland-style definitions (ABS-103).
+    """
+    out = text.lstrip()
+    out = _LEADING_QUOTE_RE.sub("", out, count=1)
+    out = _QUALIFIER_CLAUSE_RE.sub(" ", out, count=1)
+    out = _TRAILING_QUOTE_BEFORE_MEANS_RE.sub(" means", out, count=1)
+    return out
+
+
 def _extract_definition_fact(
     session: Session,
     report: SemanticEnrichmentReport,
     cache: dict[tuple[str, str], SemanticEntity],
     fragment: SourceFragment,
 ) -> None:
-    match = re.match(r"\s*([A-Z][A-Za-z0-9 /'()-]{1,80}?)\s+means\s+(.+)", fragment.text)
+    normalized_text = _normalize_definition_text(fragment.text)
+    match = re.match(r"\s*([A-Z][A-Za-z0-9 /'()-]{1,80}?)\s+means\s+(.+)", normalized_text)
     if not match:
         return
     term = normalize_use(match.group(1))
