@@ -292,6 +292,39 @@ def test_abs103_normalize_definition_text_handles_smart_quotes():
     assert " means adult female chicken" in out
 
 
+# --------------------------------------------------------------------- ABS-105
+# Section-number row labels — bylaws that index permission/parking tables
+# by section number (Mainland LUB: "11(1)", "5A", "28AO(1)", "62EB") instead
+# of use-class name should still trigger table extraction.
+
+def test_abs105_looks_like_section_label_recognizes_common_shapes():
+    from layer1.semantic.extractors import looks_like_section_label
+    # Plain section + numeric subsection.
+    assert looks_like_section_label("11(1)")
+    assert looks_like_section_label("5A")
+    assert looks_like_section_label("28AO(1)")
+    assert looks_like_section_label("62EB")
+    assert looks_like_section_label("3")
+    assert looks_like_section_label("13AA")
+    # With clause-letter suffix.
+    assert looks_like_section_label("11(1)(a)")
+    # With surrounding whitespace.
+    assert looks_like_section_label("  11(1)  ")
+
+
+def test_abs105_looks_like_section_label_rejects_use_names():
+    from layer1.semantic.extractors import looks_like_section_label
+    assert not looks_like_section_label("Accessory Use")
+    assert not looks_like_section_label("Single Family Dwelling")
+    assert not looks_like_section_label("")
+    assert not looks_like_section_label("Schedule A")
+    # A zone code looks similar (R-1) but has a hyphen — shouldn't match.
+    assert not looks_like_section_label("R-1")
+    # Section refs with the literal word "Section" don't match — those go
+    # through extract_section_refs upstream.
+    assert not looks_like_section_label("Section 11(1)")
+
+
 def _add_table_rows(session, table_id: int, rows: list[list[str]]) -> None:
     for row_index, row in enumerate(rows):
         for col_index, text in enumerate(row):

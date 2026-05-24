@@ -270,3 +270,22 @@ def looks_like_use_label(text: str) -> bool:
         or normalized.endswith(" suite")
         or normalized.endswith(" unit")
     )
+
+
+# Bare section-number labels like "11(1)", "5A", "28AO(1)", "62EB". Used by
+# bylaws that index permission/parking tables by section number rather than
+# use-class name (Halifax Mainland LUB is an example). ABS-105.
+_SECTION_LABEL_RE = re.compile(
+    r"^\s*\d{1,3}[A-Z]{0,4}"
+    r"(?:\(\d{1,3}\))?"
+    r"(?:\([a-z]{1,4}\))?"
+    r"\s*$",
+    re.IGNORECASE,
+)
+
+
+def looks_like_section_label(text: str) -> bool:
+    """True if ``text`` is a bare bylaw section label like ``11(1)`` or ``28AO``."""
+    if not text:
+        return False
+    return bool(_SECTION_LABEL_RE.match(text))
