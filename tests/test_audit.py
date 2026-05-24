@@ -125,3 +125,75 @@ def test_audit_includes_parent_fragment_context(tmp_path: Path):
     assert fragment["parent_fragment_context"]["visible_on_current_page"] is False
     assert fragment["continuation_from_prior_page"] is True
     assert fragment["ancestor_chain"][0]["id"] == 1
+
+
+# --------------------------------------------------------------------- ABS-109
+# The --llm audit path now routes through Claude Code headless mode
+# (`claude -p --json-schema`) instead of OpenAI's responses API. Mock the
+# subprocess and verify the auditor produces a valid LlmAuditReview.
+
+def test_abs109_claude_code_auditor_review_returns_valid_review():
+    """Smoke test the in-process plumbing — auditor builds prompt, calls
+    call_claude_p_with_schema (mocked), validates the result."""
+    import json
+    from unittest.mock import MagicMock, patch
+    from layer1.pipeline.audit import ClaudeCodeLayer1Auditor
+    from layer1.models.schemas import (
+        DeterministicPageCheck,
+        LlmAuditReview,
+        PageAuditSnapshot,
+    )
+
+    snapshot = PageAuditSnapshot(
+        page_number=3,
+        risk_score=2,
+        risk_reasons=["unaccounted_blocks"],
+        deterministic_checks=[
+            DeterministicPageCheck(
+                name="block_coverage", severity="warn", detail="2 blocks unmapped",
+            ),
+        ],
+        page_block_count=0,
+        fragment_count=0,
+        table_count=0,
+        cross_reference_count=0,
+        source_page_text="Section 7. Use restrictions...",
+        page_blocks=[],
+        fragments=[],
+        tables=[],
+        cross_references=[],
+    )
+
+    fake_response = json.dumps({
+        "type": "result", "is_error": False, "result": "",
+        "structured_output": {
+            "verdict": "ok_with_concerns",
+            "confidence": 0.8,
+            "summary": "Two paragraph blocks not mapped to fragments.",
+            "suspected_issues": ["unmapped_blocks"],
+            "recommended_human_review": True,
+        },
+    })
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=fake_response, stderr="")
+        auditor = ClaudeCodeLayer1Auditor(model="advisory-only")
+        review = auditor.review(snapshot)
+
+    assert isinstance(review, LlmAuditReview)
+    assert review.verdict == "ok_with_concerns"
+    assert review.confidence == 0.8
+    assert review.recommended_human_review is True
+
+    # The CLI invocation should carry the audit JSON schema as --json-schema.
+    cmd = mock_run.call_args.args[0]
+    assert "--json-schema" in cmd
+    schema = json.loads(cmd[cmd.index("--json-schema") + 1])
+    assert "verdict" in schema["properties"]
+    assert "recommended_human_review" in schema["required"]
+
+
+def test_abs109_openai_auditor_name_still_imports_for_back_compat():
+    """Any external script that imported OpenAILayer1Auditor should still
+    resolve to the renamed Claude Code class — same instance behavior."""
+    from layer1.pipeline import audit as audit_mod
+    assert audit_mod.OpenAILayer1Auditor is audit_mod.ClaudeCodeLayer1Auditor
