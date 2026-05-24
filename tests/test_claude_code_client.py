@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agents._claude_code_client import (
+from layer1._claude_code_client import (
     ClaudeCodeBackendError,
     ClaudeCodeClient,
 )
@@ -68,7 +68,7 @@ def _call_create(client: ClaudeCodeClient, *, user_text: str = "hi"):
 def test_translates_successful_response_to_tool_use_shape():
     """Happy path: claude -p returns structured_output → shim returns an
     object whose .content[0] mimics an Anthropic SDK tool_use block."""
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.return_value = _completed(_success_payload({"answer": "42"}))
         client = ClaudeCodeClient()
         response = _call_create(client)
@@ -83,7 +83,7 @@ def test_cli_invocation_uses_required_flags():
     """The subprocess call must include --output-format json and the
     schema JSON via --json-schema, with the prompt as the second arg
     after `-p`."""
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.return_value = _completed(_success_payload({"answer": "ok"}))
         client = ClaudeCodeClient(cli_path="/usr/local/bin/claude")
         _call_create(client, user_text="what's the deal")
@@ -100,7 +100,7 @@ def test_cli_invocation_uses_required_flags():
 def test_prompt_includes_system_and_user_and_tool_name():
     """The combined prompt must carry the system text, the user text, and
     the tool name so the model knows what to fill out."""
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.return_value = _completed(_success_payload({"answer": "ok"}))
         client = ClaudeCodeClient()
         _call_create(client, user_text="USER_MARKER_42")
@@ -115,7 +115,7 @@ def test_flattens_sdk_style_system_blocks_with_cache_control():
     """ABS-94 introduces system blocks like [{"type":"text","text":...,
     "cache_control":...}]. Shim should reduce to the joined text and
     silently drop cache_control (Claude Code does its own caching)."""
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.return_value = _completed(_success_payload({"answer": "ok"}))
         client = ClaudeCodeClient()
         client.messages.create(
@@ -141,7 +141,7 @@ def test_flattens_sdk_style_system_blocks_with_cache_control():
 # ---------------------------------------------------------------- failure
 def test_loud_failure_on_nonzero_exit_after_retries():
     """Subprocess non-zero exit → retry up to max_retries → raise."""
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.return_value = _completed("", returncode=1, stderr="boom")
         client = ClaudeCodeClient(max_retries=3)
         with pytest.raises(ClaudeCodeBackendError, match=r"after 3 attempts"):
@@ -151,7 +151,7 @@ def test_loud_failure_on_nonzero_exit_after_retries():
 
 def test_loud_failure_on_invalid_json_stdout():
     """If claude -p emits non-JSON stdout, raise without falling back."""
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.return_value = _completed("not even json{")
         client = ClaudeCodeClient(max_retries=1)
         with pytest.raises(ClaudeCodeBackendError, match=r"not valid JSON"):
@@ -160,7 +160,7 @@ def test_loud_failure_on_invalid_json_stdout():
 
 def test_loud_failure_on_missing_structured_output():
     """If the response is valid JSON but lacks structured_output, raise."""
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.return_value = _completed(json.dumps({
             "is_error": False, "result": "plain text response, no schema",
         }))
@@ -171,7 +171,7 @@ def test_loud_failure_on_missing_structured_output():
 
 def test_loud_failure_on_is_error_true():
     """is_error=true in the response → raise immediately on that attempt."""
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.return_value = _completed(json.dumps({
             "is_error": True, "result": "rate limited", "api_error_status": "429",
         }))
@@ -182,7 +182,7 @@ def test_loud_failure_on_is_error_true():
 
 def test_retry_succeeds_after_one_failure():
     """First attempt fails (non-zero exit), second succeeds. Result returned."""
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.side_effect = [
             _completed("", returncode=1, stderr="transient"),
             _completed(_success_payload({"answer": "recovered"})),
@@ -196,7 +196,7 @@ def test_retry_succeeds_after_one_failure():
 def test_retry_prompt_appends_error_for_repair():
     """The second attempt's prompt should include the previous error so
     the model can self-correct."""
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.side_effect = [
             _completed("garbage{"),
             _completed(_success_payload({"answer": "ok"})),
@@ -208,7 +208,7 @@ def test_retry_prompt_appends_error_for_repair():
 
 
 def test_loud_failure_on_timeout():
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=5)
         client = ClaudeCodeClient(max_retries=1, timeout_s=5)
         with pytest.raises(ClaudeCodeBackendError, match=r"timed out"):
@@ -216,7 +216,7 @@ def test_loud_failure_on_timeout():
 
 
 def test_loud_failure_on_missing_cli():
-    with patch("agents._claude_code_client.subprocess.run") as mock_run:
+    with patch("layer1._claude_code_client.subprocess.run") as mock_run:
         mock_run.side_effect = FileNotFoundError()
         client = ClaudeCodeClient(max_retries=1, cli_path="/nonexistent/claude")
         with pytest.raises(ClaudeCodeBackendError, match=r"not found"):

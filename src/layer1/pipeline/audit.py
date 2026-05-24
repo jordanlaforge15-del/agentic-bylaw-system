@@ -40,7 +40,7 @@ def audit_document_pages(
     selected_pages = page_numbers or select_audit_pages(snapshots, sample_size=sample_size)
     selected_snapshots = [by_page[page] for page in selected_pages if page in by_page]
 
-    reviewer = OpenAILayer1Auditor(model=llm_model or get_settings().audit_llm_model) if use_llm else None
+    reviewer = ClaudeCodeLayer1Auditor(model=llm_model or get_settings().audit_llm_model) if use_llm else None
     page_results: list[PageAuditResult] = []
     for snapshot in selected_snapshots:
         llm_review = reviewer.review(snapshot) if reviewer else None
@@ -332,49 +332,64 @@ def load_source_page_text(source_path: str, page_numbers: list[int]) -> dict[int
     }
 
 
-class OpenAILayer1Auditor:
+_AUDIT_REVIEW_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "verdict": {"type": "string"},
+        # NB: OpenAI's json_schema accepts ["number","null"] for nullable;
+        # Anthropic's parser is stricter and dislikes some union shapes.
+        # Use ["number","null"] for now; the retry/repair loop in
+        # call_claude_p_with_schema covers transient validation drift.
+        "confidence": {"type": ["number", "null"]},
+        "summary": {"type": "string"},
+        "suspected_issues": {"type": "array", "items": {"type": "string"}},
+        "recommended_human_review": {"type": "boolean"},
+    },
+    "required": [
+        "verdict",
+        "confidence",
+        "summary",
+        "suspected_issues",
+        "recommended_human_review",
+    ],
+}
+
+
+class ClaudeCodeLayer1Auditor:
+    """Page-level Layer 1 extraction reviewer that routes through Claude Code
+    headless mode (`claude -p --json-schema`) instead of the OpenAI API.
+
+    Under a Claude Max subscription this is billed against the subscription
+    pool rather than per-token via OPENAI_API_KEY. Same prompt, same JSON
+    schema, same :class:`LlmAuditReview` output shape — only the provider
+    plumbing differs (per the user's instruction on ABS-109: "other than
+    API plumbing, it shouldn't matter which LLM provider is called").
+
+    ``model`` is currently advisory only — ``claude -p`` picks the model
+    from the user's Claude Code config and routes Haiku/Opus internally.
+    The argument is preserved for backward compatibility with the
+    AUDIT_LLM_MODEL env var and the --model CLI flag, and reported on
+    the produced ``DocumentAuditReport.llm_model`` field.
+    """
+
     def __init__(self, model: str):
         self.model = model
-        try:
-            from openai import OpenAI
-        except ImportError as exc:  # pragma: no cover - dependency/runtime edge
-            raise RuntimeError("openai package is required for --llm audit mode") from exc
-        self._client = OpenAI()
 
     def review(self, snapshot: PageAuditSnapshot) -> LlmAuditReview:
+        # Lazy import keeps the audit module importable even when the
+        # `claude` CLI isn't installed — failure is deferred until the
+        # user actually invokes `audit-page --llm`.
+        from layer1._claude_code_client import call_claude_p_with_schema
+
         prompt = _build_audit_prompt(snapshot)
-        response = self._client.responses.create(
-            model=self.model,
-            input=prompt,
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "layer1_page_audit_review",
-                    "schema": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "verdict": {"type": "string"},
-                            "confidence": {"type": ["number", "null"]},
-                            "summary": {"type": "string"},
-                            "suspected_issues": {"type": "array", "items": {"type": "string"}},
-                            "recommended_human_review": {"type": "boolean"},
-                        },
-                        "required": [
-                            "verdict",
-                            "confidence",
-                            "summary",
-                            "suspected_issues",
-                            "recommended_human_review",
-                        ],
-                    },
-                }
-            },
-        )
-        content = getattr(response, "output_text", None)
-        if not content:
-            raise RuntimeError("LLM audit returned no structured content")
-        return LlmAuditReview.model_validate_json(content)
+        structured = call_claude_p_with_schema(prompt, _AUDIT_REVIEW_JSON_SCHEMA)
+        return LlmAuditReview.model_validate(structured)
+
+
+# Backward-compat alias — any external script that imported the previous
+# name still works. New code should use ClaudeCodeLayer1Auditor.
+OpenAILayer1Auditor = ClaudeCodeLayer1Auditor
 
 
 def _build_audit_prompt(snapshot: PageAuditSnapshot) -> str:
