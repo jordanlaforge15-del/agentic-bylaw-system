@@ -35,7 +35,7 @@ GROUND_TRUTH_CLAUSES = [
         page_start=5,
         reading_order_start=5,
         text="The minimum side yard shall not be less than 1.2 metres.",
-        attribute_tags=["side_setback_m"],
+        attribute_tags=["side_setback_left_m"],
     ),
     dict(
         citation_label="4.7.1",
@@ -43,7 +43,7 @@ GROUND_TRUTH_CLAUSES = [
         page_start=6,
         reading_order_start=6,
         text="The maximum lot coverage shall not exceed 35 percent.",
-        attribute_tags=["lot_coverage_pct"],
+        attribute_tags=["lot_coverage_percent"],
     ),
 ]
 
