@@ -21,8 +21,8 @@ test.describe("error boundaries", () => {
   test("error boundary: unhandled render error shows fallback UI with retry", async ({
     page,
   }) => {
-    // The __test-throw page throws during render, triggering error.tsx.
-    await page.goto("/__test-throw");
+    // The /e2e-throw page throws during render, triggering error.tsx.
+    await page.goto("/e2e-throw");
 
     await expect(
       page.getByRole("heading", { name: /unexpected error/i }),
