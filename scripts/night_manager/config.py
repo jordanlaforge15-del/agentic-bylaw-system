@@ -27,13 +27,7 @@ WORKTREE_ROOT = REPO_ROOT / ".claude" / "worktrees"
 
 ALLOWED_TOOLS = ",".join([
     "Read", "Write", "Edit", "Glob", "Grep", "Agent",
-    "Bash(git *)", "Bash(make *)", "Bash(npm *)", "Bash(npx *)",
-    "Bash(python *)", "Bash(.venv/bin/*)", "Bash(cd *)", "Bash(ls *)",
-    "Bash(cat *)", "Bash(find *)", "Bash(grep *)", "Bash(mkdir *)",
-    "Bash(cp *)", "Bash(mv *)", "Bash(head *)", "Bash(tail *)",
-    "Bash(wc *)", "Bash(sort *)", "Bash(diff *)", "Bash(docker compose *)",
-    "Bash(export *)", "Bash(echo *)", "Bash(touch *)", "Bash(chmod *)",
-    "Bash(./scripts/*)", "Bash(source *)", "Bash(pip *)",
+    "Bash",
 ])
 
 DEV_AGENT_SYSTEM_PROMPT = """\

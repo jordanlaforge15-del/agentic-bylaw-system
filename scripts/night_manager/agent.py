@@ -28,8 +28,8 @@ Port configuration: PG_PORT={pg_port} E2E_FASTAPI_PORT={api_port} E2E_WEB_PORT={
 Follow the SDLC in CLAUDE.md. When complete:
 1. Ensure all e2e tests pass (export the port env vars above before running tests)
 2. Commit all changes with descriptive messages prefixed [{identifier}]
-3. Update the Linear issue status to "In Review"
-4. Exit with a summary of what you implemented and test results\
+3. Exit with a summary of what you implemented and test results.
+   Do NOT call any Linear/MCP tools — the Night Manager handles all Linear updates.\
 """
 
 
@@ -146,6 +146,7 @@ async def spawn_agent(
         stdout=asyncio.subprocess.PIPE,
         stderr=log_fh,
         env=env,
+        limit=10 * 1024 * 1024,  # 10 MB — stream-json lines can be large
     )
     issue.pid = proc.pid or 0
     issue.mark_started()
@@ -200,6 +201,7 @@ async def resume_agent(
         stdout=asyncio.subprocess.PIPE,
         stderr=log_fh,
         env=env,
+        limit=10 * 1024 * 1024,  # 10 MB — stream-json lines can be large
     )
     issue.pid = proc.pid or 0
     issue.attempts += 1

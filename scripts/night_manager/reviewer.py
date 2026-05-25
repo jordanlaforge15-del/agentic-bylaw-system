@@ -225,8 +225,23 @@ async def revert_merge(issue: IssueState) -> tuple[bool, str]:
 
 
 async def run_dev_e2e() -> tuple[bool, str]:
-    """Run e2e on the dev branch (regression check after merge)."""
+    """Run e2e on the dev branch (regression check after merge).
+
+    Reinstalls Python deps first — a merge may have changed pyproject.toml
+    and the existing .venv won't have the new packages.
+    """
     env = {**os.environ}
+
+    pip_proc = await asyncio.create_subprocess_exec(
+        ".venv/bin/pip", "install", "-e", ".[dev,advisor]",
+        cwd=str(REPO_ROOT),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    pip_out, pip_err = await pip_proc.communicate()
+    if pip_proc.returncode != 0:
+        log.warning("pip install before dev e2e failed: %s", pip_err.decode()[:500])
 
     down_proc = await asyncio.create_subprocess_exec(
         "./scripts/e2e-down.sh",
