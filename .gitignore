@@ -1,6 +1,7 @@
 .env
 .venv
 .venv/
+backups/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -28,7 +29,8 @@ data/.cache/
 # Local scratch — never committed
 tmp/
 .claude/*
-# …except shared skills, which ship with the repo.
+# …except shared config and skills, which ship with the repo.
+!.claude/settings.json
 !.claude/skills/
 .DS_Store
 *.swp
