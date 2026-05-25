@@ -140,7 +140,7 @@ test.describe("Night Manager — Dashboard", () => {
   test("renders KPI strip and execution plan", async ({ page }) => {
     await gotoNm(page);
     await expect(page.locator(".nm-topbar__title")).toHaveText("NIGHT MANAGER");
-    await expect(page.getByText("EXECUTION PLAN")).toBeVisible();
+    await expect(page.getByText("EXECUTION PLAN", { exact: true })).toBeVisible();
     await expect(page.getByText("ACTIVE AGENTS")).toBeVisible();
   });
 
@@ -306,7 +306,7 @@ test.describe("Night Manager — No active run", () => {
       }),
     );
     await page.goto(NM_BASE);
-    await expect(page.getByText("NO ACTIVE RUN")).toBeVisible();
+    await expect(page.getByText("NO ACTIVE RUN").first()).toBeVisible();
     await expect(
       page.getByRole("link", { name: /NEW RUN/ }),
     ).toBeVisible();
