@@ -3,7 +3,7 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci && npm audit --omit=dev --audit-level=critical
 
 FROM node:22-alpine AS builder
 WORKDIR /app

@@ -32,7 +32,10 @@ COPY mcp ./mcp
 # No [dev], no [parsers], no [mcp] extras.
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip "setuptools<82" wheel \
-    && /opt/venv/bin/pip install ".[advisor]"
+    && /opt/venv/bin/pip install ".[advisor]" \
+    && /opt/venv/bin/pip install pip-audit \
+    && /opt/venv/bin/pip-audit --strict --desc on \
+    && /opt/venv/bin/pip uninstall -y pip-audit
 
 # ============================================================================
 # Stage 2 — runtime
