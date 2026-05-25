@@ -224,17 +224,42 @@ async def revert_merge(issue: IssueState) -> tuple[bool, str]:
     return True, f"Reverted merge of {issue.identifier}"
 
 
-async def run_dev_e2e() -> tuple[bool, str]:
-    """Run e2e on the dev branch (regression check after merge).
+async def run_dev_e2e(issue: IssueState) -> tuple[bool, str]:
+    """Run post-merge regression e2e from the agent's worktree.
 
-    Reinstalls Python deps first — a merge may have changed pyproject.toml
-    and the existing .venv won't have the new packages.
+    After merge_to_dev lands the branch on dev, we pull dev into the
+    worktree so it has the merged state, then run `make e2e` there.
+    This avoids the Next.js 16 same-directory conflict that kills the
+    e2e server when a dev server is already running on the main checkout.
     """
-    env = {**os.environ}
+    worktree = issue.worktree
+    ports = issue.ports
+    assert worktree and ports
+
+    env = {
+        **os.environ,
+        "PG_PORT": str(ports.pg),
+        "E2E_FASTAPI_PORT": str(ports.api),
+        "E2E_WEB_PORT": str(ports.web),
+        "E2E_API_URL": f"http://127.0.0.1:{ports.api}",
+        "E2E_BASE_URL": f"http://localhost:{ports.web}",
+        "DATABASE_URL": f"postgresql+psycopg://layer1:layer1@localhost:{ports.pg}/layer1_test",
+    }
+
+    for cmd in [
+        ["git", "checkout", "dev"],
+        ["git", "pull", "--ff-only", "origin", "dev"],
+    ]:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=worktree,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
 
     pip_proc = await asyncio.create_subprocess_exec(
         ".venv/bin/pip", "install", "-e", ".[dev,advisor]",
-        cwd=str(REPO_ROOT),
+        cwd=worktree,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
@@ -245,7 +270,7 @@ async def run_dev_e2e() -> tuple[bool, str]:
 
     down_proc = await asyncio.create_subprocess_exec(
         "./scripts/e2e-down.sh",
-        cwd=str(REPO_ROOT),
+        cwd=worktree,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
@@ -254,7 +279,7 @@ async def run_dev_e2e() -> tuple[bool, str]:
 
     proc = await asyncio.create_subprocess_exec(
         "make", "e2e",
-        cwd=str(REPO_ROOT),
+        cwd=worktree,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         env=env,

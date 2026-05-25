@@ -209,7 +209,7 @@ async def _execute(
                 continue
 
             log.info("Running regression e2e on dev after merging %s", ident)
-            reg_passed, reg_output = await run_dev_e2e()
+            reg_passed, reg_output = await run_dev_e2e(issue)
             if not reg_passed:
                 log.warning("Regression detected after merging %s, reverting", ident)
                 rev_ok, rev_msg = await revert_merge(issue)
