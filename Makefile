@@ -1,4 +1,4 @@
-.PHONY: install test lint db-up db-down migrate init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install
+.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install
 
 DB_URL ?= postgresql+psycopg://layer1:layer1@localhost:5432/layer1
 
@@ -10,6 +10,14 @@ test:
 
 lint:
 	ruff check src tests
+
+audit:
+	pip-audit
+
+audit-npm:
+	cd web && npm audit --omit=dev
+
+audit-all: audit audit-npm
 
 db-up:
 	docker compose up -d postgres
