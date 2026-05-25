@@ -81,10 +81,6 @@ dev = [
   "pytest-cov>=5.0",
   "pytest-asyncio>=0.23",
   "ruff>=0.5",
-  # abs-learning/src/agents/discovery.py imports tldextract at module level;
-  # the e2e server (advisor.api.e2e_server) puts abs-learning on sys.path,
-  # so tldextract must be available in the venv for `make e2e` to work.
-  "tldextract>=5.0",
 ]
 
 [project.scripts]
