@@ -52,6 +52,7 @@ from fastapi import FastAPI
 
 from advisor.api.app import create_app
 from advisor.api.auth import resolve_or_create_user
+from advisor.api.sentry import init_sentry
 from advisor.auth.clerk import ClerkVerifier
 from advisor.auth.fastapi import clerk_session_dependency
 from advisor.auth.settings import build_verifier as build_clerk_verifier
@@ -152,6 +153,7 @@ def build_app() -> FastAPI:
     :func:`advisor.api.app.create_app` directly with their own
     fixtures rather than going through this builder.
     """
+    init_sentry()
     gateway = build_gateway()
     verifier = _build_verifier_or_none()
     billing_settings = get_billing_settings()

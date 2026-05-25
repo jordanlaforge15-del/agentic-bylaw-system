@@ -421,8 +421,13 @@ def create_app(
     async def healthz():
         from fastapi.responses import JSONResponse  # noqa: PLC0415
 
+        from advisor.api.sentry import is_sentry_enabled  # noqa: PLC0415
+
         db_status = _check_db()
-        checks = {"database": db_status}
+        checks = {
+            "database": db_status,
+            "error_tracking": "sentry" if is_sentry_enabled() else "disabled",
+        }
         if db_status == "unreachable":
             return JSONResponse(
                 content={"status": "degraded", "checks": checks},

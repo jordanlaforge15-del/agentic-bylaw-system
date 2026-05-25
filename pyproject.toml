@@ -33,6 +33,7 @@ advisor = [
   "uvicorn>=0.30",
   "sse-starlette>=2.0",
   "pyjwt[crypto]>=2.8",
+  "sentry-sdk[fastapi]>=2.0",
   "stripe>=10.0",
   "svix>=1.40",
   # python-multipart is required by FastAPI for any multipart/form-data
