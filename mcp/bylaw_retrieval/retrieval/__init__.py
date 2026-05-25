@@ -13,6 +13,7 @@ from bylaw_retrieval.retrieval.service import (
     DocumentIdResolver,
     RetrievalService,
     latest_document_id_resolver,
+    latest_per_bylaw_resolver,
 )
 
 __all__ = [
@@ -28,5 +29,6 @@ __all__ = [
     "RetrievalResponse",
     "RetrievalService",
     "latest_document_id_resolver",
+    "latest_per_bylaw_resolver",
 ]
 

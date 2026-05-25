@@ -42,10 +42,12 @@ from layer2.retrieval.spatial import ResolvedLocation, query_features
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
-# Resolver signature: takes a session, returns a document_id (or None if no
-# document exists yet). Called per-request so a fresh ingest mid-session is
-# picked up without a server restart.
-DocumentIdResolver = Callable[[Session], int | None]
+# Resolver signature: takes a session, returns document id(s) to scope
+# retrieval to (or None if no document exists / no scoping desired).
+# Called per-request so a fresh ingest mid-session is picked up without
+# a server restart.  Returning a single int pins to one document;
+# returning a list pins to the union of those documents.
+DocumentIdResolver = Callable[[Session], int | list[int] | None]
 
 
 def latest_document_id_resolver(session: Session) -> int | None:
@@ -67,6 +69,34 @@ def latest_document_id_resolver(session: Session) -> int | None:
     )
 
 
+def latest_per_bylaw_resolver(session: Session) -> list[int] | None:
+    """Return the id of the most recently ingested document *per bylaw*.
+
+    Groups documents by ``(municipality, bylaw_name)`` and picks the
+    newest ingest of each (largest ``ingestion_timestamp``, ties broken
+    by ``id`` descending).  This lets a multi-bylaw deployment search
+    across all active bylaws while still de-duplicating re-ingests of
+    the same bylaw — the common dev-workflow concern that
+    ``latest_document_id_resolver`` was built for, generalized.
+
+    Returns ``None`` when no documents exist (so the caller can
+    distinguish "no documents at all" from "an empty scope").
+    """
+    from sqlalchemy import func  # noqa: PLC0415
+
+    window = func.row_number().over(
+        partition_by=[Document.municipality, Document.bylaw_name],
+        order_by=[desc(Document.ingestion_timestamp), desc(Document.id)],
+    ).label("rn")
+    subq = select(Document.id.label("doc_id"), window).subquery()
+    ids = (
+        session.execute(select(subq.c.doc_id).where(subq.c.rn == 1))
+        .scalars()
+        .all()
+    )
+    return list(ids) if ids else None
+
+
 class RetrievalService:
     def __init__(
         self,
@@ -85,10 +115,15 @@ class RetrievalService:
         self.session = session
         self._default_document_id_resolver = default_document_id_resolver
 
-    def _resolve_default_document_id(self) -> int | None:
+    def _resolve_default_document_ids(self) -> list[int] | None:
         if self._default_document_id_resolver is None:
             return None
-        return self._default_document_id_resolver(self.session)
+        result = self._default_document_id_resolver(self.session)
+        if result is None:
+            return None
+        if isinstance(result, int):
+            return [result]
+        return result
 
     def _dialect_name(self) -> str:
         """Return the bound engine's dialect name (e.g. 'postgresql', 'sqlite').
@@ -107,14 +142,14 @@ class RetrievalService:
         limit: int = 50,
     ) -> list[DocumentSummary]:
         stmt = select(Document).order_by(Document.municipality, Document.bylaw_name, Document.id)
-        # Hard scope: when a default document is configured (--latest-only),
-        # it ALWAYS pins the result set. Other filters AND with it. A query
+        # Hard scope: when a default document resolver is configured, it
+        # ALWAYS pins the result set. Other filters AND with it. A query
         # that asks for a different bylaw/municipality returns empty rather
         # than crossing into a stale or superseded ingest — better empty
         # than wrong.
-        default_id = self._resolve_default_document_id()
-        if default_id is not None:
-            stmt = stmt.where(Document.id == default_id)
+        default_ids = self._resolve_default_document_ids()
+        if default_ids is not None:
+            stmt = stmt.where(Document.id.in_(default_ids))
         if municipality:
             stmt = stmt.where(Document.municipality.ilike(f"%{municipality}%"))
         if bylaw_name:
@@ -154,11 +189,11 @@ class RetrievalService:
 
     def lookup_citation(self, request: CitationLookupRequest) -> RetrievalMatch:
         stmt = select(SourceFragment).where(SourceFragment.citation_path == request.citation_path)
-        # Hard scope: default document id ANDs with the request's
+        # Hard scope: default document ids AND with the request's
         # document_id. See _fragment_scope_statement for rationale.
-        default_id = self._resolve_default_document_id()
-        if default_id is not None:
-            stmt = stmt.where(SourceFragment.document_id == default_id)
+        default_ids = self._resolve_default_document_ids()
+        if default_ids is not None:
+            stmt = stmt.where(SourceFragment.document_id.in_(default_ids))
         if request.document_id is not None:
             stmt = stmt.where(SourceFragment.document_id == request.document_id)
         fragments = self.session.execute(stmt.order_by(SourceFragment.id).limit(2)).scalars().all()
@@ -356,9 +391,9 @@ class RetrievalService:
             .join(Document, Document.id == SourceFragment.document_id)
             .where(ExternalDataset.linked_fragment_id.is_not(None))
         )
-        default_id = self._resolve_default_document_id()
-        if default_id is not None:
-            dataset_stmt = dataset_stmt.where(SourceFragment.document_id == default_id)
+        default_ids = self._resolve_default_document_ids()
+        if default_ids is not None:
+            dataset_stmt = dataset_stmt.where(SourceFragment.document_id.in_(default_ids))
         if request.document_id is not None:
             dataset_stmt = dataset_stmt.where(SourceFragment.document_id == request.document_id)
         if request.municipality:
@@ -488,14 +523,14 @@ class RetrievalService:
             .order_by(SourceFragment.page_start, SourceFragment.reading_order_start, SourceFragment.id)
         )
         # Hard scope: when the deployment has configured a default document
-        # (--latest-only), that document_id is ALWAYS pinned. Any request
-        # filter (document_id, municipality, bylaw_name) ANDs with it. A
-        # request asking for a different document or bylaw therefore
+        # resolver, those document ids are ALWAYS pinned. Any request
+        # filter (document_id, municipality, bylaw_name) ANDs with them.
+        # A request asking for a different document or bylaw therefore
         # returns empty rather than leaking into a stale or superseded
         # ingest — better empty than wrong.
-        default_id = self._resolve_default_document_id()
-        if default_id is not None:
-            stmt = stmt.where(SourceFragment.document_id == default_id)
+        default_ids = self._resolve_default_document_ids()
+        if default_ids is not None:
+            stmt = stmt.where(SourceFragment.document_id.in_(default_ids))
         if request.document_id is not None:
             stmt = stmt.where(SourceFragment.document_id == request.document_id)
         if request.municipality:

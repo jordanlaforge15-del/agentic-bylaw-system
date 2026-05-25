@@ -41,11 +41,11 @@ class Layer2Settings(BaseSettings):
         default=None, alias="GOOGLE_MAPS_API_KEY"
     )
     google_maps_region_bias: str = Field(default="ca", alias="GOOGLE_MAPS_REGION_BIAS")
-    # Hard-filter on geocoding results. country:CA prevents Google from
-    # falling back to non-Canadian matches for ambiguous addresses. Override
-    # via env to narrow further (e.g. country:CA|locality:Halifax).
+    # Hard-filter on geocoding results. Narrowed to Nova Scotia so
+    # ambiguous street names (Rosemount Ave, South St, etc.) resolve to
+    # HRM instead of Toronto or other Canadian cities.
     google_maps_components: str = Field(
-        default="country:CA", alias="GOOGLE_MAPS_COMPONENTS"
+        default="country:CA|administrative_area:NS", alias="GOOGLE_MAPS_COMPONENTS"
     )
     google_maps_request_timeout_s: float = Field(
         default=5.0, alias="GOOGLE_MAPS_REQUEST_TIMEOUT_S"

@@ -87,7 +87,7 @@ def _default_retrieval_service_factory() -> Callable[[], Any]:
     """
     from bylaw_retrieval.retrieval import (  # noqa: PLC0415 — lazy import
         RetrievalService,
-        latest_document_id_resolver,
+        latest_per_bylaw_resolver,
     )
     from layer1.db.session import session_scope  # noqa: PLC0415
 
@@ -96,7 +96,7 @@ def _default_retrieval_service_factory() -> Callable[[], Any]:
         with session_scope() as session:
             yield RetrievalService(
                 session,
-                default_document_id_resolver=latest_document_id_resolver,
+                default_document_id_resolver=latest_per_bylaw_resolver,
             )
 
     return factory
