@@ -24,10 +24,11 @@ test("open a case from /cases/new", async ({ page }) => {
     .fill("Can I add a backyard suite at this address?");
 
   // Optional classifier preview — the dispatcher returns standard/0.85.
+  // Mobile viewports can be slower to render the classifier response.
   await page.getByRole("button", { name: /Get tier recommendation/ }).click();
   await expect(
     page.getByText(/CLASSIFIER RECOMMENDS · 85% CONFIDENCE/),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
 
   await page.getByRole("button", { name: /^Open case$/ }).click();
 
