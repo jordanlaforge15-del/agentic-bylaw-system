@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter_Tight, JetBrains_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { SentryInit } from "../components/sentry-init";
 import "./globals.css";
 
 const interTight = Inter_Tight({
@@ -63,7 +64,10 @@ export default function RootLayout({
         <head>
           <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
         </head>
-        <body className="bg-surface text-text font-sans">{children}</body>
+        <body className="bg-surface text-text font-sans">
+          <SentryInit />
+          {children}
+        </body>
       </html>
     </ClerkProvider>
   );

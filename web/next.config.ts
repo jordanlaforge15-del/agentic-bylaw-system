@@ -11,6 +11,11 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/admin/invites/**": ["./node_modules/nodemailer/**/*"],
   },
+  // Generate source maps in production so Sentry can symbolicate
+  // stack traces. The maps are served alongside the JS files but are
+  // only fetched when a browser's devtools are open — no performance
+  // cost for regular users.
+  productionBrowserSourceMaps: true,
 };
 
 export default nextConfig;
