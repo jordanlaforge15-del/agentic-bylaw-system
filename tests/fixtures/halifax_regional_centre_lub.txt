@@ -1,0 +1,77 @@
+Halifax Regional Municipality
+Regional Centre Land Use By-Law
+Part I Administration
+1 This By-law enables:
+(a) as-of-right development;
+(b) the regulation of land use and development within the Regional Centre Plan Area.
+2 The Regional Centre Plan Area includes the Halifax Peninsula and Dartmouth inside the Circumferential Highway.
+3 In this By-law:
+(a) "dwelling unit" means a self-contained living quarters with a private entrance;
+(b) "secondary suite" means a dwelling unit accessory to a single-unit dwelling on the same lot;
+(c) "home occupation" means an occupation carried on within a dwelling unit by a resident;
+(d) "lot coverage" means the percentage of lot area covered by buildings.
+9 Development Permit Exemptions
+The following do not require a development permit:
+(a) interior renovations that do not change the use;
+(b) exterior maintenance using the same materials;
+(c) fences under 2 metres in a rear or side yard;
+(d) accessory buildings under 20 square metres in a rear yard;
+(r) an internal conversion of a building with a commercial use in a DD or DH zone.
+15 Matters Subject to Site Plan Approval
+(a) parking layout and access;
+(b) landscaping and screening;
+(c) building design in heritage conservation districts;
+(h) applicability of general design requirements for a new construction on a registered heritage property.
+26 Diagrams
+(a) The diagrams in this By-law are for illustration only;
+(b) do not form a part of this By-law; and
+(c) shall not be used in the interpretation of this By-law.
+Part II Zones and Use Permissions
+30 The following zones are established for the Regional Centre Plan Area:
+(a) CEN-1 Centre 1 Zone;
+(b) CEN-2 Centre 2 Zone;
+(c) COR Corridor Zone;
+(d) DD Downtown Dartmouth Zone;
+(e) DH Downtown Halifax Zone;
+(f) ER-1 Established Residential 1 Zone;
+(g) ER-2 Established Residential 2 Zone;
+(h) ER-3 Established Residential 3 Zone;
+(i) HR-1 Higher Order Residential 1 Zone;
+(j) HR-2 Higher Order Residential 2 Zone;
+(k) INS Institutional Zone;
+(l) RPK Regional Park Zone.
+Table 1A Use Permissions Residential | Zone | single-unit dwelling | secondary suite | multi-unit dwelling | home occupation | daycare; ER-1 | ER-1 | P | P | N | P | N; ER-2 | ER-2 | P | P | N | P | N; ER-3 | ER-3 | P | P | P | P | P; HR-1 | HR-1 | P | P | P | P | P; HR-2 | HR-2 | N | N | P | N | P
+Table 1B Use Permissions Centre and Corridor | Zone | single-unit dwelling | secondary suite | multi-unit dwelling | home occupation | daycare; CEN-1 | CEN-1 | N | N | P | N | P; CEN-2 | CEN-2 | N | N | P | N | P; COR | COR | N | N | P | N | P; DD | DD | N | N | P | N | P; DH | DH | N | N | P | N | P
+49 Combination of Uses in Established Residential Zones
+In the ER-1, ER-2, and ER-3 zones the following uses may be combined on a single lot:
+(a) home occupation use;
+(b) secondary suite use.
+Part III Standards
+Table 3 Setback Standards Residential | Zone | Front Setback | Side Setback | Rear Setback; ER-1 | ER-1 | 6.0 m | 1.2 m | 7.5 m; ER-2 | ER-2 | 6.0 m | 1.5 m | 7.5 m; ER-3 | ER-3 | 3.0 m | 1.2 m | 6.0 m; HR-1 | HR-1 | 3.0 m | 3.0 m | 3.0 m; HR-2 | HR-2 | 3.0 m | 3.0 m | 3.0 m
+Table 4 Setback Standards Centre and Corridor | Zone | Front Setback | Side Setback | Rear Setback; CEN-1 | CEN-1 | 0.0 m | 0.0 m | 3.0 m; CEN-2 | CEN-2 | 0.0 m | 0.0 m | 3.0 m; COR | COR | 3.0 m | 0.0 m | 3.0 m; DD | DD | 0.0 m | 0.0 m | 3.0 m; DH | DH | 0.0 m | 0.0 m | 3.0 m
+Table 5 Height and Lot Coverage | Zone | Maximum Height | Maximum Lot Coverage; ER-1 | ER-1 | 10.0 m | 35%; ER-2 | ER-2 | 11.0 m | 40%; ER-3 | ER-3 | 11.0 m | 45%; HR-1 | HR-1 | 20.0 m | 60%; HR-2 | HR-2 | 25.0 m | 65%; CEN-1 | CEN-1 | as per Schedule 15 | 80%; CEN-2 | CEN-2 | as per Schedule 15 | 80%; COR | COR | as per Schedule 15 | 70%; DD | DD | as per Schedule 15 | 80%; DH | DH | as per Schedule 15 | 90%
+Part IV Overlays
+110 Heritage Conservation District Overlay
+(a) Heritage conservation districts are identified on Schedule 22.
+(b) Within a heritage conservation district, no development permit shall be issued for the demolition of a registered heritage property without the approval of the Heritage Advisory Committee.
+(c) New construction within a heritage conservation district shall be sympathetic to the character of the district.
+111 Height Precinct Overlay
+(a) Maximum building heights in the CEN-1, CEN-2, COR, DD, and DH zones are governed by the height precinct identified on Schedule 15.
+(b) Where Schedule 15 specifies a maximum height, that height prevails over Table 5.
+112 Floor Area Ratio Overlay
+(a) Maximum floor area ratios in the CEN-1, CEN-2, COR, DD, and DH zones are governed by Schedule 17.
+(b) Bonus zoning incentives for affordable housing are shown on Schedule 50.
+Part V Parking
+120 Off-Street Parking Requirements
+(a) A residential development shall provide a minimum of 1 parking space per dwelling unit.
+(b) Despite clause (a), no off-street parking is required for a development in the CEN-1, CEN-2, DH, or DD zone.
+(c) A non-residential development shall provide parking at the ratios in Table 8.
+(d) Bicycle parking shall be provided at a minimum of 1 space per 4 dwelling units.
+Schedule 15
+Height Precinct Map: maximum building heights for each precinct area.
+Schedule 17
+Floor Area Ratio Precinct Map: maximum floor area ratios for each precinct area.
+Schedule 22
+Heritage Conservation District Map: boundaries of heritage conservation districts.
+Schedule 50
+Bonus Zoning District Map: areas eligible for bonus zoning incentives.
