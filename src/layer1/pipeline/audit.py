@@ -326,9 +326,6 @@ def score_page_risk(
     return score, reasons, checks
 
 
-_MAX_NON_NORMATIVE_SCORE = 5
-
-
 def _is_non_normative_page(page_fragments: list[SourceFragment]) -> bool:
     """Detect pages dominated by non-normative content (amendment-history tables,
     schedule appendix metadata) that inflate risk scores without audit value.
