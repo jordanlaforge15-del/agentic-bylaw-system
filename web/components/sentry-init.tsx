@@ -1,6 +1,5 @@
 "use client";
 
-import * as Sentry from "@sentry/nextjs";
 import { useEffect, useRef } from "react";
 
 export function SentryInit() {
@@ -11,13 +10,16 @@ export function SentryInit() {
     const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
     if (!dsn) return;
 
-    Sentry.init({
-      dsn,
-      environment: process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ?? "production",
-      tracesSampleRate: 0.1,
-      sendDefaultPii: false,
+    import("@sentry/nextjs").then((Sentry) => {
+      Sentry.init({
+        dsn,
+        environment:
+          process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ?? "production",
+        tracesSampleRate: 0.1,
+        sendDefaultPii: false,
+      });
+      initialized.current = true;
     });
-    initialized.current = true;
   }, []);
 
   return null;

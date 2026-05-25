@@ -1,10 +1,10 @@
-import * as Sentry from "@sentry/nextjs";
 import type { Instrumentation } from "next";
 
-export function register() {
+export async function register() {
   const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
   if (!dsn) return;
 
+  const Sentry = await import("@sentry/nextjs");
   Sentry.init({
     dsn,
     environment: process.env.SENTRY_ENVIRONMENT ?? "production",
@@ -23,6 +23,7 @@ export const onRequestError: Instrumentation.onRequestError = async (
 ) => {
   if (!process.env.NEXT_PUBLIC_SENTRY_DSN) return;
 
+  const Sentry = await import("@sentry/nextjs");
   Sentry.captureException(err, {
     tags: {
       routerKind: context.routerKind,
