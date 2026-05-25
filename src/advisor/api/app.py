@@ -385,6 +385,20 @@ def create_app(
             )
         )
 
+        # General feedback router (ABS-129) — non-message-specific
+        # feedback from the app shell form.
+        from advisor.api.feedback_router import (  # noqa: PLC0415
+            build_feedback_router,
+        )
+
+        app.include_router(
+            build_feedback_router(
+                db_session_factory=db_session_factory,
+                user_dependency=require_user,
+                user_resolver=_resolve_user_via_db,
+            )
+        )
+
     # Clerk webhook router. Only mounted when both the secret and a DB
     # factory are wired — the route needs a real DB to write user-row
     # changes against, and without the secret we have no way to verify
