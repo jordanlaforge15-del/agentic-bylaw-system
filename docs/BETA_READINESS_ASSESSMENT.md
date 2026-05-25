@@ -326,3 +326,148 @@ this means user-facing failures can go undetected for hours.
 | 15 | Observability | Implement structured logging with centralized aggregation | Medium |
 | 16 | UX | Add custom error.tsx and not-found.tsx pages | Medium |
 | 17 | Analytics | Define and instrument SLIs/SLOs | Medium |
+
+---
+
+## Linear Issues to Create
+
+All issues should be created under the **Beta Release Readiness** project
+in Linear, team **ABS**.
+
+### Issue 1 — Establish limited liability entity (incorporation)
+- **Priority:** Urgent
+- **Description:** The T&C describe the Provider as "an unincorporated
+  business operated as a sole proprietorship" (§1). Establish a limited
+  liability entity (NS or federal corporation) and update the T&C to
+  reference the new entity as the contracting party before public signups.
+
+### Issue 2 — Complete T&C legal counsel review and fill placeholders
+- **Priority:** Urgent
+- **Description:** docs/TERMS_AND_CONDITIONS.md is a pre-counsel-review
+  draft with bracketed placeholders (effective date, last-updated date,
+  mailing address, privacy-policy URL). A Nova Scotia lawyer must review
+  consumer-side enforceability of §7 (liability cap) and §17 (class-action
+  waiver) under the NS Consumer Protection Act. Fill all placeholder fields.
+
+### Issue 3 — Build chat message feedback UI (thumbs + flag)
+- **Priority:** High
+- **Description:** Backend feedback system exists
+  (src/layer2/feedback/service.py) with answer, claim, and retrieval
+  feedback models. No UI exists in the chat interface. Build: (a) thumbs
+  up/down on chat messages connected to submit_answer_feedback(), (b) a
+  flag/report button for detailed feedback (bad citation, wrong zone,
+  hallucination). The support page already references an "in-app flag
+  control" that doesn't exist yet.
+
+### Issue 4 — Implement availability monitoring with alerting
+- **Priority:** High
+- **Description:** No external uptime monitoring or alerting is configured.
+  Implement: (a) an external probe (UptimeRobot or equivalent) polling
+  /healthz every 60s, (b) Slack or email alerts on 2+ consecutive
+  failures, (c) basic SLO targets (99.5% availability, p95 chat latency
+  < 10s). Currently, a complete outage goes undetected until the operator
+  manually checks.
+
+### Issue 5 — Upgrade /healthz to deep health check
+- **Priority:** High
+- **Description:** The current /healthz endpoint
+  (src/advisor/api/app.py:405) returns a static 200 without verifying
+  database connectivity or any dependencies. Upgrade to verify DB access
+  (lightweight SELECT 1) and return degraded status if downstream services
+  are unreachable. Add a /readyz endpoint for post-startup checks.
+
+### Issue 6 — Integrate error tracking (Sentry or equivalent)
+- **Priority:** High
+- **Description:** No error tracking service is integrated on frontend or
+  backend. Production errors are invisible unless the operator tails
+  docker logs. Integrate Sentry (or equivalent) on both the FastAPI
+  backend and the Next.js frontend. Configure source maps for meaningful
+  stack traces.
+
+### Issue 7 — Add React error boundaries
+- **Priority:** High
+- **Description:** No error.tsx or not-found.tsx pages exist in the Next.js
+  app. Unhandled React errors crash to blank screen. Add: (a) root-level
+  error.tsx that catches and displays a user-friendly error message,
+  (b) not-found.tsx for custom 404 pages, (c) wire error boundaries to
+  the error tracking service from Issue 6.
+
+### Issue 8 — Add persistent disclaimer to main chat page
+- **Priority:** High
+- **Description:** The advisory-only banner
+  (web/components/product/advisory-only-banner.tsx) appears on submission
+  pages but NOT on the primary /app chat interface where most users
+  interact. Add a compact, persistent "research tool — not legal advice"
+  reminder visible on the chat page. The chat system message includes a
+  disclaimer but it scrolls out of view.
+
+### Issue 9 — Add dependency vulnerability scanning
+- **Priority:** High
+- **Description:** Neither pip audit nor npm audit runs in the build
+  pipeline. Add: (a) pip audit or safety check to the Python build,
+  (b) npm audit to the web build, (c) consider Dependabot or Renovate
+  for automated dependency update PRs. Dependencies are modern and pinned
+  but automated scanning is needed for ongoing security.
+
+### Issue 10 — Build aggregate usage analytics dashboard
+- **Priority:** Medium
+- **Description:** The admin analytics page (/admin/analytics) shows only
+  tier distribution and upgrade funnel. Build an expanded dashboard with:
+  daily/weekly active users, sessions per user, messages per session,
+  retention cohorts, credit consumption trends, funnel visualization
+  (signup → terms → first question → repeat → purchase).
+
+### Issue 11 — Add general feedback form (non-message-specific)
+- **Priority:** Medium
+- **Description:** Add a general feedback form accessible from the app
+  shell for non-message-specific feedback (UX issues, feature requests,
+  general satisfaction). This complements the per-message thumbs/flag
+  from Issue 3.
+
+### Issue 12 — Complete ground-truth evaluation for Halifax bylaws
+- **Priority:** Medium
+- **Description:** Layer 2 has an evaluation harness (src/layer2/eval/)
+  and a pilot scorecard exists (docs/pilot/pilot-scorecard.md), but no
+  systematic ground-truth evaluation against known bylaw interpretations
+  has been documented as complete. Build a test set of known-answer
+  queries covering setbacks, zones, overlays, and common interpretive
+  questions for the Halifax Regional Centre LUB.
+
+### Issue 13 — Automate database backups to offsite storage
+- **Priority:** Medium
+- **Description:** Database backups are manual pg_dump only — no cron, no
+  cloud storage, no verification. Set up automated hourly (or daily)
+  backups to Hetzner Storage Box with: (a) cron-based pg_dump,
+  (b) offsite transfer, (c) backup verification/restore test,
+  (d) retention policy (7 days daily, 4 weeks weekly).
+
+### Issue 14 — Set up basic CI/CD pipeline
+- **Priority:** Medium
+- **Description:** Builds and deploys are entirely manual (operator-driven
+  from laptop). Set up: (a) GitHub Actions for automated testing on push
+  to main/dev, (b) automated container image builds on main, (c) test
+  gates preventing merge of failing code. No auto-deploy to prod needed
+  initially.
+
+### Issue 15 — Implement structured logging with centralized aggregation
+- **Priority:** Medium
+- **Description:** Python uses stdlib logging.getLogger() with no
+  structured output (JSON), no trace correlation, no centralized
+  aggregation. Implement: (a) structured JSON logging with correlation
+  IDs, (b) a centralized log sink (CloudWatch, Datadog, or self-hosted
+  ELK), (c) configurable log levels per environment.
+
+### Issue 16 — Add custom error.tsx and not-found.tsx pages
+- **Priority:** Medium
+- **Description:** The Next.js app has no custom error or 404 pages.
+  Users hitting a bad URL see the default Next.js error screen. Add
+  branded error.tsx and not-found.tsx pages with navigation back to the
+  app. This is the UX complement to Issue 7 (error boundaries).
+
+### Issue 17 — Define and instrument SLIs/SLOs
+- **Priority:** Medium
+- **Description:** No service level indicators or objectives are defined.
+  Define targets for: (a) availability (e.g., 99.5%), (b) chat response
+  latency (e.g., p95 < 10s), (c) error rate (e.g., < 1% of requests).
+  Instrument the backend to emit these metrics and connect to the
+  monitoring from Issue 4.
