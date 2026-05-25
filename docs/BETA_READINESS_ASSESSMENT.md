@@ -291,7 +291,7 @@ this means user-facing failures can go undetected for hours.
 | Concern | Status |
 |---------|--------|
 | CI/CD pipeline | Not automated — manual build, push, SSH deploy |
-| Database backups | Local dev cron (`scripts/backup-dev-db.sh`) — no prod backup, no offsite storage |
+| Database backups | Manual `pg_dump` only — no cron, no cloud storage |
 | Rollback procedure | Documented but manual (edit compose, pull, up) |
 | Disaster recovery | Not tested |
 | Log retention | Container stdout only — lost on rotation |
@@ -433,13 +433,11 @@ in Linear, team **ABS**.
   queries covering setbacks, zones, overlays, and common interpretive
   questions for the Halifax Regional Centre LUB.
 
-### Issue 13 — Automate production database backups to offsite storage
+### Issue 13 — Automate database backups to offsite storage
 - **Priority:** Medium
-- **Description:** Local dev backup scripts exist (scripts/backup-dev-db.sh
-  with cron via scripts/install-backup-cron.sh) providing rotating 7-day
-  pg_dump from the Docker container — but no production backup pipeline
-  exists and no offsite storage is configured. Set up production backups
-  to Hetzner Storage Box with: (a) cron-based pg_dump on the prod server,
+- **Description:** Database backups are manual pg_dump only — no cron, no
+  cloud storage, no verification. Set up automated hourly (or daily)
+  backups to Hetzner Storage Box with: (a) cron-based pg_dump,
   (b) offsite transfer, (c) backup verification/restore test,
   (d) retention policy (7 days daily, 4 weeks weekly).
 
