@@ -8,7 +8,8 @@ gateway, in-memory sessions, RetrievalService bound to the configured
 DB URL).
 
 Endpoints:
-* ``GET /healthz`` — liveness check; no auth required.
+* ``GET /healthz`` — deep health check (DB connectivity via SELECT 1); no auth required.
+* ``GET /readyz`` — readiness probe (requires DB reachable); no auth required.
 * ``POST /v1/chat`` — send a message, get an SSE stream of events.
 * ``GET /v1/chat/sessions/{session_id}`` — debug endpoint that
   returns the message history; will be removed once the frontend
@@ -402,9 +403,45 @@ def create_app(
             )
         )
 
-    @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+    def _check_db() -> str:
+        """Return ``"ok"`` if the database answers a ``SELECT 1``, else ``"unreachable"``."""
+        if db_session_factory is None:
+            return "not_configured"
+        try:
+            from sqlalchemy import text  # noqa: PLC0415
+
+            with db_session_factory() as session:
+                session.execute(text("SELECT 1"))
+            return "ok"
+        except Exception:
+            logger.warning("healthz: database connectivity check failed", exc_info=True)
+            return "unreachable"
+
+    @app.get("/healthz", response_model=None)
+    async def healthz():
+        from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+        db_status = _check_db()
+        checks = {"database": db_status}
+        if db_status == "unreachable":
+            return JSONResponse(
+                content={"status": "degraded", "checks": checks},
+                status_code=503,
+            )
+        return JSONResponse(content={"status": "ok", "checks": checks})
+
+    @app.get("/readyz", response_model=None)
+    async def readyz():
+        from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+        db_status = _check_db()
+        checks = {"database": db_status}
+        if db_status != "ok":
+            return JSONResponse(
+                content={"status": "not_ready", "checks": checks},
+                status_code=503,
+            )
+        return JSONResponse(content={"status": "ready", "checks": checks})
 
     @app.post("/v1/chat")
     async def post_chat(

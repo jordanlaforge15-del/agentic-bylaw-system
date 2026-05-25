@@ -67,13 +67,151 @@ def _parse_sse_events(text: str) -> list[dict[str, str]]:
 # ----- tests ------------------------------------------------------------------
 
 
-def test_healthz_returns_ok():
-    """Liveness check — no auth required, returns 200."""
+def test_healthz_returns_ok_without_db():
+    """Without a db_session_factory the DB check is ``not_configured`` but
+    the overall status is still ``ok`` — the process is alive."""
     app = _make_app()
     with TestClient(app) as client:
         response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["checks"]["database"] == "not_configured"
+
+
+def test_healthz_returns_ok_with_healthy_db():
+    """When the DB is reachable, /healthz returns 200 with database=ok."""
+    from contextlib import contextmanager
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(bind=engine, future=True)
+
+    @contextmanager
+    def db_factory():
+        s = SessionLocal()
+        try:
+            yield s
+        finally:
+            s.close()
+
+    app = create_app(
+        gateway=MockGateway(scripted=[text_response("hi")]),
+        retrieval_service_factory=lambda: None,
+        session_store=InMemorySessionStore(),
+        persona_text="p",
+        db_session_factory=db_factory,
+    )
+    with TestClient(app) as client:
+        response = client.get("/healthz")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["checks"]["database"] == "ok"
+
+
+def test_healthz_returns_degraded_when_db_unreachable():
+    """When the DB factory raises, /healthz returns 503 with status=degraded."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def broken_db():
+        raise RuntimeError("connection refused")
+        yield  # noqa: unreachable — satisfies the generator protocol
+
+    app = create_app(
+        gateway=MockGateway(scripted=[text_response("hi")]),
+        retrieval_service_factory=lambda: None,
+        session_store=InMemorySessionStore(),
+        persona_text="p",
+        db_session_factory=broken_db,
+    )
+    with TestClient(app) as client:
+        response = client.get("/healthz")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["database"] == "unreachable"
+
+
+def test_readyz_returns_ready_with_healthy_db():
+    """When the DB is reachable, /readyz returns 200 with status=ready."""
+    from contextlib import contextmanager
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(bind=engine, future=True)
+
+    @contextmanager
+    def db_factory():
+        s = SessionLocal()
+        try:
+            yield s
+        finally:
+            s.close()
+
+    app = create_app(
+        gateway=MockGateway(scripted=[text_response("hi")]),
+        retrieval_service_factory=lambda: None,
+        session_store=InMemorySessionStore(),
+        persona_text="p",
+        db_session_factory=db_factory,
+    )
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["checks"]["database"] == "ok"
+
+
+def test_readyz_returns_not_ready_when_db_unreachable():
+    """When the DB factory raises, /readyz returns 503 with status=not_ready."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def broken_db():
+        raise RuntimeError("connection refused")
+        yield  # noqa: unreachable
+
+    app = create_app(
+        gateway=MockGateway(scripted=[text_response("hi")]),
+        retrieval_service_factory=lambda: None,
+        session_store=InMemorySessionStore(),
+        persona_text="p",
+        db_session_factory=broken_db,
+    )
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "not_ready"
+    assert body["checks"]["database"] == "unreachable"
+
+
+def test_readyz_returns_not_ready_without_db():
+    """/readyz with no db_session_factory returns 503 — readiness requires a DB."""
+    app = _make_app()
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "not_ready"
+    assert body["checks"]["database"] == "not_configured"
 
 
 def test_chat_without_user_id_returns_401():
