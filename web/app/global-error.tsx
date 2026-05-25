@@ -1,50 +1,73 @@
 "use client";
 
-import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
+import { reportError } from "@/lib/error-reporting";
 
 export default function GlobalError({
   error,
-  reset,
+  unstable_retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  unstable_retry: () => void;
 }) {
   useEffect(() => {
-    Sentry.captureException(error);
+    reportError(error);
   }, [error]);
 
   return (
     <html lang="en">
       <body
         style={{
+          margin: 0,
+          fontFamily:
+            '"Inter Tight", system-ui, sans-serif',
+          background: "#ffffff",
+          color: "#0a0a0a",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           minHeight: "100vh",
-          fontFamily: "system-ui, sans-serif",
-          background: "#0a0a0a",
-          color: "#fafafa",
+          padding: "24px",
         }}
       >
-        <div style={{ textAlign: "center", maxWidth: 480, padding: 24 }}>
-          <h2 style={{ fontSize: 24, marginBottom: 8 }}>
+        <div style={{ maxWidth: 420, textAlign: "center" }}>
+          <p
+            style={{
+              fontFamily: '"JetBrains Mono", monospace',
+              fontSize: 13,
+              color: "#7a7468",
+              letterSpacing: "0.05em",
+              textTransform: "uppercase",
+              marginBottom: 16,
+            }}
+          >
             Something went wrong
-          </h2>
-          <p style={{ color: "#a1a1aa", marginBottom: 24 }}>
-            An unexpected error occurred. The error has been reported and our
-            team will investigate.
+          </p>
+          <h1
+            style={{
+              fontSize: 28,
+              fontWeight: 700,
+              letterSpacing: "-0.02em",
+              margin: "0 0 12px",
+            }}
+          >
+            Unexpected error
+          </h1>
+          <p style={{ fontSize: 14, color: "#7a7468", lineHeight: 1.6 }}>
+            A critical error occurred. Please try again.
           </p>
           <button
-            onClick={reset}
+            onClick={() => unstable_retry()}
             style={{
-              padding: "10px 20px",
-              borderRadius: 6,
-              border: "1px solid #27272a",
-              background: "#18181b",
-              color: "#fafafa",
+              marginTop: 24,
+              padding: "11px 18px",
+              fontSize: 13.5,
+              fontWeight: 600,
+              fontFamily: '"Inter Tight", system-ui, sans-serif',
               cursor: "pointer",
-              fontSize: 14,
+              border: "1.5px solid #0a0a0a",
+              background: "#0a0a0a",
+              color: "#ffffff",
             }}
           >
             Try again
