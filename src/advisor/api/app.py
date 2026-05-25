@@ -250,15 +250,6 @@ def create_app(
 
     app = FastAPI(title="Halifax Bylaw Advisor", version="0.1.0")
 
-    from advisor.monitoring.middleware import LatencyMiddleware  # noqa: PLC0415
-    from advisor.monitoring.slo import LatencyTracker, SLOTargets  # noqa: PLC0415
-
-    latency_tracker = LatencyTracker()
-    slo_targets = SLOTargets()
-    app.add_middleware(LatencyMiddleware, tracker=latency_tracker)
-    app.state.latency_tracker = latency_tracker
-    app.state.slo_targets = slo_targets
-
     # Stash dependencies on app.state so route handlers can grab them
     # via ``request.app.state`` rather than closing over locals — that
     # keeps the routes inspectable and lets tests poke the store mid-
@@ -456,13 +447,6 @@ def create_app(
                 status_code=503,
             )
         return JSONResponse(content={"status": "ready", "checks": checks})
-
-    @app.get("/metrics", response_model=None)
-    async def metrics():
-        from fastapi.responses import JSONResponse  # noqa: PLC0415
-
-        data = latency_tracker.snapshot(slo_targets)
-        return JSONResponse(content=data)
 
     @app.post("/v1/chat")
     async def post_chat(
