@@ -26,8 +26,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0014_enforce_one_active_credit_per_case"
-down_revision = "0013_terms_acceptance"
+revision = "0015_enforce_one_active_credit_per_case"
+down_revision = "0014_compliance_schema"
 branch_labels = None
 depends_on = None
 
