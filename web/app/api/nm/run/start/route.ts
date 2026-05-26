@@ -39,6 +39,14 @@ export async function POST(request: Request) {
 
   const cmd = `./scripts/start-night-manager.sh ${args.join(" ")}`;
 
+  // ABS-153: test-mode bypass. When NM_TEST_MODE=1 (set by scripts/e2e-up.sh for
+  // the worktree's Next.js dev), short-circuit before exec so Playwright specs
+  // that exercise this endpoint never actually launch NM. The returned `cmd`
+  // lets tests assert on argument formatting / quoting without side effects.
+  if (process.env.NM_TEST_MODE === "1") {
+    return Response.json({ ok: true, testMode: true, cmd });
+  }
+
   return new Promise<Response>((resolve) => {
     exec(cmd, { cwd: PROJECT_ROOT(), env: process.env }, (error) => {
       if (error) {
