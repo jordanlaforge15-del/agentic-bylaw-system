@@ -1,9 +1,10 @@
-// Centralized error reporting. Currently logs to console; designed to
-// be wired to Sentry (or another service) when that integration lands.
-// All error boundaries funnel through here so the wiring is one-line.
+// Centralized error reporting. Funnels all error boundaries to Sentry
+// when NEXT_PUBLIC_SENTRY_DSN is set; no-ops silently otherwise.
 
 export function reportError(error: Error & { digest?: string }): void {
-  // When Sentry is integrated, replace this body with:
-  //   Sentry.captureException(error);
-  console.error("[ABS error-reporting]", error);
+  if (!process.env.NEXT_PUBLIC_SENTRY_DSN) return;
+
+  import("@sentry/nextjs")
+    .then((Sentry) => Sentry.captureException(error))
+    .catch(() => {});
 }
