@@ -310,6 +310,29 @@ docker compose -f /srv/bylaw/docker-compose.yml exec -T postgres \
 
 Tracked as a deploy follow-up: schedule this in cron and ship to a Hetzner Storage Box. For now, run by hand before risky migrations.
 
+### Running ops scripts
+
+Data processing scripts (e.g. `scripts/backfill_parcels.py`, `scripts/inspect_zoning_canonical.py`, `scripts/pilot_variance_report.py`) are built into the advisor image and can be run against the production database via:
+
+```bash
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor python scripts/<name>.py"
+```
+
+Examples:
+
+```bash
+# Backfill parcels from the GIS layer
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor python scripts/backfill_parcels.py"
+
+# Inspect the zoning bylaw canonical names
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor python scripts/inspect_zoning_canonical.py"
+
+# Generate variance report
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor python scripts/pilot_variance_report.py"
+```
+
+Scripts inherit the same database connection and environment variables (`.env` keys) as the running advisor container, so any `DATABASE_URL`, `GOOGLE_MAPS_API_KEY`, or other credentials needed are already available.
+
 ## Auth modes
 
 The advisor + web together support two auth modes, switched by env var presence:

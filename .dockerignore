@@ -60,5 +60,5 @@ Dockerfile*
 # --- Sample data not needed in the image ---
 ingest_15.json
 
-# --- Local dev scripts ---
-scripts
+# --- Scripts ARE needed in the runtime image for ops (ABS-84) ---
+# Previously excluded; re-included so backfill/inspection tools are available
