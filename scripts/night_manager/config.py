@@ -47,39 +47,60 @@ MAX_REVIEW_CYCLES = 3
 MAX_E2E_FIX_CYCLES = 3
 MAX_REGRESSION_FIX_CYCLES = 3
 
+# Wall-clock timeout caps (B.1). These are hard limits independent of the
+# idle watchdog — they bound the maximum calendar time a single agent can
+# consume regardless of activity. Override via env vars if needed.
+WALL_CLOCK_MAX_MINUTES_INITIAL = int(
+    os.environ.get("NM_WALL_CLOCK_MAX_MIN_INITIAL", "60")
+)
+WALL_CLOCK_MAX_MINUTES_CONTINUATION = int(
+    os.environ.get("NM_WALL_CLOCK_MAX_MIN_CONTINUATION", "30")
+)
+
 PORT_BASE_PG = 5433
 PORT_BASE_API = 8002
 PORT_BASE_WEB = 3002
 
 WORKTREE_ROOT = REPO_ROOT / ".claude" / "worktrees"
 
+# MCP server prefix for the Linear integration in this environment.
+# The two read-only tools allow agents to re-fetch ticket text and
+# reviewer comments mid-task; write tools are explicitly excluded.
+LINEAR_MCP_PREFIX = "mcp__ba80716d-b9e6-45ec-b2a1-85da85de3d2a__"
+
 ALLOWED_TOOLS = ",".join([
     "Read", "Write", "Edit", "Glob", "Grep", "Agent",
     "Bash",
+    f"{LINEAR_MCP_PREFIX}get_issue",
+    f"{LINEAR_MCP_PREFIX}list_comments",
 ])
 
-DEV_AGENT_SYSTEM_PROMPT = """\
-You are a development agent managed by the Night Manager.
-
-Rules:
-- Do not push to remote. Do not merge to dev. Do not deploy.
-- Do not update Linear issues — the Night Manager handles all Linear \
-status updates, comments, and issue management on your behalf.
-- Do not wait for user approval to merge — the Night Manager is your \
-reviewer and will handle the merge after reviewing your work.
-- Commit frequently — small, logical units.
-- If you are stuck for more than 3 attempts on the same error, exit and \
-describe the blocker in your final output.
-- Never run commands that start a long-running server in the foreground \
-(examples: `npx playwright show-report`, `playwright codegen`, \
-`python -m http.server`, `npm run dev`, `vite preview`, `make e2e-up` \
-without `e2e-down`). If you need to inspect Playwright results, read \
-`web/test-results/.last-run.json` or `web/playwright-report/index.html` \
-— do not serve them. If a command must run in the background, prefix it \
-with `timeout 30s` and explain in your output that you did so.
-- When you are done, exit with a summary of what you implemented and \
-your test results. The Night Manager will take it from there.\
-"""
+DEV_AGENT_SYSTEM_PROMPT = (
+    "You are a development agent managed by the Night Manager.\n"
+    "\n"
+    "Rules:\n"
+    "- Do not push to remote. Do not merge to dev. Do not deploy.\n"
+    f"- You may READ Linear via `{LINEAR_MCP_PREFIX}get_issue` and "
+    f"`{LINEAR_MCP_PREFIX}list_comments` — use this any time you need to "
+    "re-check the ticket text, acceptance criteria, or prior reviewer notes mid-task.\n"
+    "- You may NOT write to Linear. Never call `save_issue`, `save_comment`, "
+    "`save_document`, or any other Linear write/delete tool — the Night "
+    "Manager handles all Linear updates on your behalf.\n"
+    "- Do not wait for user approval to merge — the Night Manager is your "
+    "reviewer and will handle the merge after reviewing your work.\n"
+    "- Commit frequently — small, logical units.\n"
+    "- If you are stuck for more than 3 attempts on the same error, exit and "
+    "describe the blocker in your final output.\n"
+    "- Never run commands that start a long-running server in the foreground "
+    "(examples: `npx playwright show-report`, `playwright codegen`, "
+    "`python -m http.server`, `npm run dev`, `vite preview`, `make e2e-up` "
+    "without `e2e-down`). If you need to inspect Playwright results, read "
+    "`web/test-results/.last-run.json` or `web/playwright-report/index.html` "
+    "— do not serve them. If a command must run in the background, prefix it "
+    "with `timeout 30s` and explain in your output that you did so.\n"
+    "- When you are done, exit with a summary of what you implemented and "
+    "your test results. The Night Manager will take it from there."
+)
 
 
 @dataclass

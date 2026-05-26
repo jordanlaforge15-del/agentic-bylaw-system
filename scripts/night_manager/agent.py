@@ -15,6 +15,7 @@ from .config import (
     ALLOWED_TOOLS,
     BASH_TOOL_BUDGET_MINUTES,
     DEV_AGENT_SYSTEM_PROMPT,
+    LINEAR_MCP_PREFIX,
     NMConfig,
     PORT_BASE_API,
     PORT_BASE_PG,
@@ -22,6 +23,8 @@ from .config import (
     POST_SUCCESS_IDLE_MINUTES,
     REPO_ROOT,
     STUCK_TIMEOUT_MINUTES,
+    WALL_CLOCK_MAX_MINUTES_CONTINUATION,
+    WALL_CLOCK_MAX_MINUTES_INITIAL,
     WORKTREE_ROOT,
 )
 from .reviewer import _combine_streams
@@ -55,27 +58,31 @@ Follow the SDLC in CLAUDE.md. When complete:
 """
 
 
-CONTINUATION_PROMPT_TEMPLATE = """\
-Continue work on Linear issue {identifier}: {title}
-
-You already did one pass on this issue in this worktree — your prior commits
-are visible via `git log dev..HEAD`. The Night Manager is invoking you again
-because a downstream gate (code review, worktree e2e, or post-merge regression)
-flagged something that needs to be fixed.
-
-Worktree: {worktree_path}
-Branch:   {branch}
-Port configuration: PG_PORT={pg_port} E2E_FASTAPI_PORT={api_port} E2E_WEB_PORT={web_port}
-
-=== Feedback from the failing gate ===
-{feedback}
-=== End of feedback ===
-
-Read your prior commits to understand what you already did, address the
-feedback above, run the relevant tests, and commit. Follow the SDLC in
-CLAUDE.md. Do NOT call any Linear/MCP tools — the Night Manager handles
-all Linear updates.\
-"""
+CONTINUATION_PROMPT_TEMPLATE = (
+    "Continue work on Linear issue {{identifier}}: {{title}}\n"
+    "\n"
+    f"If you need ticket context or AC details, call `{LINEAR_MCP_PREFIX}get_issue`"
+    " with identifier `{identifier}`.\n"
+    "\n"
+    "You already did one pass on this issue in this worktree — your prior commits\n"
+    "are visible via `git log dev..HEAD`. The Night Manager is invoking you again\n"
+    "because a downstream gate (code review, worktree e2e, or post-merge regression)\n"
+    "flagged something that needs to be fixed.\n"
+    "\n"
+    "Worktree: {worktree_path}\n"
+    "Branch:   {branch}\n"
+    "Port configuration: PG_PORT={pg_port} E2E_FASTAPI_PORT={api_port} E2E_WEB_PORT={web_port}\n"
+    "\n"
+    "=== Feedback from the failing gate ===\n"
+    "{feedback}\n"
+    "=== End of feedback ===\n"
+    "\n"
+    "Read your prior commits to understand what you already did, address the\n"
+    "feedback above, run the relevant tests, and commit. Follow the SDLC in\n"
+    f"CLAUDE.md. You may read Linear (via `{LINEAR_MCP_PREFIX}get_issue` /\n"
+    f"`{LINEAR_MCP_PREFIX}list_comments`) but do NOT write to Linear — the\n"
+    "Night Manager handles all Linear updates."
+)
 
 
 def _build_agent_env(issue: IssueState) -> dict[str, str]:
@@ -267,7 +274,7 @@ async def spawn_agent(
         # tell parallel agents apart on a phone.
         "--remote-control", f"nm-{issue.identifier}",
         "--model", model,
-        "--max-budget-usd", str(config.agent_token_limit),
+        "--max-budget-usd", "200",  # B.1: effectively uncapped on Max subscriptions
     ]
     if effort != "high":
         cmd.extend(["--effort", effort])
@@ -288,9 +295,11 @@ async def spawn_agent(
     )
     issue.pid = proc.pid or 0
     issue.mark_started()
+    _schedule_wall_clock_watchdog(proc, issue, WALL_CLOCK_MAX_MINUTES_INITIAL)
     log.info(
-        "Spawned agent for %s (pid=%d, session=%s, model=%s, effort=%s)",
+        "Spawned agent for %s (pid=%d, session=%s, model=%s, effort=%s, wall_clock_max=%dmin)",
         issue.identifier, issue.pid, session_id, model, effort,
+        WALL_CLOCK_MAX_MINUTES_INITIAL,
     )
     return proc
 
@@ -338,7 +347,7 @@ async def resume_agent(
         # the mobile app threads this continuation onto the same session.
         "--remote-control", f"nm-{issue.identifier}",
         "--model", model,
-        "--max-budget-usd", str(config.agent_token_limit),
+        "--max-budget-usd", "200",  # B.1: effectively uncapped on Max subscriptions
     ]
     if effort != "high":
         cmd.extend(["--effort", effort])
@@ -358,9 +367,11 @@ async def resume_agent(
     )
     issue.pid = proc.pid or 0
     issue.attempts += 1
+    _schedule_wall_clock_watchdog(proc, issue, WALL_CLOCK_MAX_MINUTES_CONTINUATION)
     log.info(
-        "Resumed agent for %s (pid=%d, attempt=%d, mode=--resume)",
+        "Resumed agent for %s (pid=%d, attempt=%d, mode=--resume, wall_clock_max=%dmin)",
         issue.identifier, issue.pid, issue.attempts,
+        WALL_CLOCK_MAX_MINUTES_CONTINUATION,
     )
     return proc
 
@@ -384,6 +395,8 @@ async def _spawn_continuation(
     ports = issue.ports
     assert ports is not None
 
+    prior_reasoning = _extract_prior_reasoning(issue.log_file)
+
     prompt = CONTINUATION_PROMPT_TEMPLATE.format(
         identifier=issue.identifier,
         title=issue.title,
@@ -394,6 +407,13 @@ async def _spawn_continuation(
         web_port=ports.web,
         feedback=feedback,
     )
+    if prior_reasoning:
+        prompt = (
+            prompt
+            + "\n\n=== Prior agent reasoning (last ~50 lines) ===\n"
+            + prior_reasoning
+            + "\n=== End prior reasoning ==="
+        )
 
     env = _build_agent_env(issue)
 
@@ -413,7 +433,7 @@ async def _spawn_continuation(
         # the mobile app sees a single thread per issue across spawns.
         "--remote-control", f"nm-{issue.identifier}",
         "--model", model,
-        "--max-budget-usd", str(config.agent_token_limit),
+        "--max-budget-usd", "200",  # B.1: effectively uncapped on Max subscriptions
     ]
     if effort != "high":
         cmd.extend(["--effort", effort])
@@ -437,13 +457,96 @@ async def _spawn_continuation(
     # Clear completed_at so a subsequent resume_agent invocation will see
     # this as mid-flight rather than another consumed-session case.
     issue.completed_at = None
+    _schedule_wall_clock_watchdog(proc, issue, WALL_CLOCK_MAX_MINUTES_CONTINUATION)
     log.info(
-        "Spawned continuation for %s (pid=%d, attempt=%d, old_session=%s, new_session=%s)",
+        "Spawned continuation for %s (pid=%d, attempt=%d, old_session=%s, new_session=%s, wall_clock_max=%dmin)",
         issue.identifier, issue.pid, issue.attempts,
         old_session_id[:8] if old_session_id else "(none)",
         new_session_id[:8],
+        WALL_CLOCK_MAX_MINUTES_CONTINUATION,
     )
     return proc
+
+
+def _extract_prior_reasoning(log_file: str, tail_lines: int = 50) -> str:
+    """Extract the last *tail_lines* lines of text content from the agent's jsonl log.
+
+    Used by _spawn_continuation to give the fresh session a window into what
+    the previous agent was thinking.  Reads only text-type content blocks so
+    the output is human-readable prose rather than raw JSON.
+
+    Returns an empty string if the log file doesn't exist or can't be parsed.
+    """
+    if not log_file:
+        return ""
+    p = Path(log_file)
+    if not p.exists():
+        return ""
+
+    texts: list[str] = []
+    try:
+        for raw_line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                event = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            msg = event.get("message")
+            if not isinstance(msg, dict):
+                continue
+            for block in msg.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text", "").strip()
+                    if text:
+                        texts.append(text)
+    except OSError:
+        return ""
+
+    if not texts:
+        return ""
+
+    # Return the last tail_lines text snippets joined with blank lines.
+    return "\n\n".join(texts[-tail_lines:])
+
+
+def _schedule_wall_clock_watchdog(
+    proc: asyncio.subprocess.Process,
+    issue: IssueState,
+    max_minutes: int,
+) -> asyncio.Task[None]:
+    """Schedule a hard wall-clock kill for *proc* after *max_minutes*.
+
+    Independent of the idle watchdog in monitor_agent — this fires on
+    elapsed calendar time regardless of activity.  On timeout: SIGTERM
+    the wrapper, mark the issue failed with error_detail="agent_timeout",
+    and emit an ERROR log.
+
+    Returns the created Task so the caller can cancel it if the agent
+    finishes normally first (monitor_agent does this).
+    """
+    async def _wall_clock_kill() -> None:
+        await asyncio.sleep(max_minutes * 60)
+        if proc.returncode is not None:
+            # Process already exited — nothing to do.
+            return
+        log.error(
+            "night_manager.agent ERROR: Agent %s timed out after %dmin "
+            "(wall-clock) — killing wrapper",
+            issue.identifier, max_minutes,
+        )
+        try:
+            proc.send_signal(signal.SIGTERM)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                proc.kill()
+        except ProcessLookupError:
+            pass
+        issue.mark_failed("agent_timeout")
+
+    return asyncio.create_task(_wall_clock_kill())
 
 
 def _truncate(s: str, limit: int = 500) -> str:
