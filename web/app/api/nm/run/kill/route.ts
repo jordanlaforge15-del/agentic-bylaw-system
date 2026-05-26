@@ -1,8 +1,8 @@
-import { execFile } from "child_process";
+import { exec } from "child_process";
 
 export async function POST() {
   return new Promise<Response>((resolve) => {
-    execFile("tmux", ["kill-session", "-t", "night-manager"], (error) => {
+    exec("tmux kill-session -t night-manager", (error) => {
       if (error) {
         resolve(
           Response.json({ ok: false, error: error.message }, { status: 500 }),

@@ -1,4 +1,5 @@
 import { readFile } from "fs/promises";
+import { exec } from "child_process";
 import { STATE_PATH } from "../../../paths";
 
 export async function POST(
@@ -19,23 +20,20 @@ export async function POST(
       );
     }
 
-    const pid = Number(issue.pid);
-    if (!Number.isInteger(pid) || pid <= 0) {
-      return Response.json(
-        { ok: false, error: `Invalid PID for ${id}` },
-        { status: 400 },
-      );
-    }
-
-    try {
-      process.kill(pid, "SIGTERM");
-      return Response.json({ ok: true, pid });
-    } catch (killError) {
-      return Response.json(
-        { ok: false, error: String(killError) },
-        { status: 500 },
-      );
-    }
+    return new Promise<Response>((resolve) => {
+      exec(`kill -TERM ${issue.pid}`, (error) => {
+        if (error) {
+          resolve(
+            Response.json(
+              { ok: false, error: error.message },
+              { status: 500 },
+            ),
+          );
+        } else {
+          resolve(Response.json({ ok: true, pid: issue.pid }));
+        }
+      });
+    });
   } catch (e) {
     return Response.json(
       { ok: false, error: String(e) },
