@@ -1,5 +1,5 @@
 // Functional: verify that the root error boundary and custom 404 page
-// render user-friendly fallback UI instead of a blank screen.
+// render branded fallback UI instead of a blank screen.
 
 import { expect, test } from "../fixtures/test-env";
 
@@ -18,6 +18,15 @@ test.describe("error boundaries", () => {
     ).toBeVisible();
   });
 
+  test("404: branded ABS logo is present on the not-found page", async ({
+    page,
+  }) => {
+    await page.goto("/this-route-does-not-exist-e2e-brand");
+
+    // ABSLogo renders as a link wrapping "abs" text + accent rectangle
+    await expect(page.getByRole("link", { name: /abs home/i })).toBeVisible();
+  });
+
   test("error boundary: unhandled render error shows fallback UI with retry", async ({
     page,
   }) => {
@@ -32,8 +41,19 @@ test.describe("error boundaries", () => {
       page.getByRole("button", { name: /try again/i }),
     ).toBeVisible();
     await expect(
-      page.getByRole("link", { name: /home/i }),
+      page.getByRole("link", { name: "Home", exact: true }),
     ).toBeVisible();
+  });
+
+  test("error boundary: branded ABS logo is present on the error page", async ({
+    page,
+  }) => {
+    await page.goto("/e2e-throw");
+
+    await expect(
+      page.getByRole("heading", { name: /unexpected error/i }),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("link", { name: /abs home/i })).toBeVisible();
   });
 
   test("404: back-to-home link navigates to the landing page", async ({

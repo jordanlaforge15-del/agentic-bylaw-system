@@ -19,8 +19,7 @@ export default function GlobalError({
       <body
         style={{
           margin: 0,
-          fontFamily:
-            '"Inter Tight", system-ui, sans-serif',
+          fontFamily: '"Inter Tight", system-ui, sans-serif',
           background: "#ffffff",
           color: "#0a0a0a",
           display: "flex",
@@ -31,6 +30,37 @@ export default function GlobalError({
         }}
       >
         <div style={{ maxWidth: 420, textAlign: "center" }}>
+          {/* ABS wordmark inline — no Tailwind available at this error level */}
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              fontFamily: '"Inter Tight", system-ui, sans-serif',
+              fontWeight: 800,
+              fontSize: 32,
+              letterSpacing: "-0.06em",
+              marginBottom: 20,
+            }}
+          >
+            <span>abs</span>
+            <span
+              style={{
+                display: "inline-block",
+                width: 32 * 0.18,
+                height: 32 * 0.78,
+                marginLeft: 32 * 0.08,
+                background: "#c9f24c",
+              }}
+            />
+          </div>
+          <div
+            style={{
+              width: 48,
+              height: 2,
+              background: "#c9f24c",
+              margin: "0 auto 20px",
+            }}
+          />
           <p
             style={{
               fontFamily: '"JetBrains Mono", monospace',
