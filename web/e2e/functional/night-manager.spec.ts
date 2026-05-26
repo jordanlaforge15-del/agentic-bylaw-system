@@ -282,7 +282,7 @@ test.describe("Night Manager — Resume Last Run", () => {
     page,
   }) => {
     await page.goto(`${NM_BASE}/launch`);
-    const panel = page.locator("section").filter({ hasText: "RESUME LAST RUN" });
+    const panel = page.locator(".nm-panel").filter({ hasText: "RESUME LAST RUN" });
     await expect(panel).toBeVisible();
     // ABS-92 is failed, ABS-94 is reviewing — both must be listed.
     await expect(panel.getByText("ABS-92", { exact: true })).toBeVisible();
@@ -293,7 +293,7 @@ test.describe("Night Manager — Resume Last Run", () => {
 
   test("include-queued checkbox surfaces queued issues", async ({ page }) => {
     await page.goto(`${NM_BASE}/launch`);
-    const panel = page.locator("section").filter({ hasText: "RESUME LAST RUN" });
+    const panel = page.locator(".nm-panel").filter({ hasText: "RESUME LAST RUN" });
     const toggle = panel.getByTestId("resume-queued-toggle");
     await expect(toggle).toBeVisible();
     await toggle.locator("input[type=checkbox]").check();
@@ -316,11 +316,12 @@ test.describe("Night Manager — Resume Last Run", () => {
       await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) });
     });
     await page.goto(`${NM_BASE}/launch`);
-    const panel = page.locator("section").filter({ hasText: "RESUME LAST RUN" });
-    const row = panel.locator("div").filter({
-      has: page.getByText("ABS-94", { exact: true }),
-    }).first();
-    await row.getByRole("button", { name: "RESUME" }).click();
+    const panel = page.locator(".nm-panel").filter({ hasText: "RESUME LAST RUN" });
+    await page
+      .getByTestId("resume-row-ABS-94")
+      .getByRole("button", { name: "RESUME" })
+      .click();
+    void panel;
     await expect.poll(() => receivedCount).toBeGreaterThan(0);
     expect(captured.value).toMatchObject({ resumeIssue: "ABS-94", resume: false });
     expect(captured.value.resumeQueued).toBe(false);
@@ -340,7 +341,7 @@ test.describe("Night Manager — Resume Last Run", () => {
       await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) });
     });
     await page.goto(`${NM_BASE}/launch`);
-    const panel = page.locator("section").filter({ hasText: "RESUME LAST RUN" });
+    const panel = page.locator(".nm-panel").filter({ hasText: "RESUME LAST RUN" });
     await panel
       .getByTestId("resume-queued-toggle")
       .locator("input[type=checkbox]")

@@ -401,6 +401,7 @@ export default function LaunchPage() {
               {resumableIssues.map((iss) => (
                 <div
                   key={iss.identifier}
+                  data-testid={`resume-row-${iss.identifier}`}
                   style={{
                     display: "flex",
                     alignItems: "center",
