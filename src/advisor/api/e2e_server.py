@@ -52,6 +52,7 @@ if _ABS_LEARNING_SRC.is_dir():
 from advisor.api.app import create_app
 from advisor.db.models import InviteRequest, User
 from advisor.llm.mock import MockGateway
+from advisor.logging import CorrelationIdMiddleware, setup_logging
 from advisor.llm.mock_dispatcher import build_dispatcher
 from bylaw_retrieval.retrieval import LocationSlot, RetrievalService
 from layer1.db.base import Document, SemanticEntity, SourceFragment, utcnow
@@ -78,6 +79,7 @@ logger = logging.getLogger(__name__)
 
 def build_e2e_app() -> FastAPI:
     """Construct the test FastAPI app wired for end-to-end UI tests."""
+    setup_logging(json_output=False)
     gateway = MockGateway(callable_=build_dispatcher())
 
     # ABS-53: wire a real EvaluatorService into the submissions router
@@ -95,6 +97,7 @@ def build_e2e_app() -> FastAPI:
         db_session_factory=session_scope,
         submissions_evaluator_factory=_submissions_evaluator_factory,
     )
+    app.add_middleware(CorrelationIdMiddleware)
 
     origins_env = os.environ.get(
         "ADVISOR_E2E_CORS_ORIGINS", "http://localhost:3001"
@@ -112,8 +115,9 @@ def build_e2e_app() -> FastAPI:
             "X-Test-User-Full-Name",
             "Authorization",
             "Last-Event-ID",
+            "X-Correlation-ID",
         ],
-        expose_headers=["X-Session-Id"],
+        expose_headers=["X-Session-Id", "X-Correlation-ID"],
     )
 
     _mount_test_router(app)

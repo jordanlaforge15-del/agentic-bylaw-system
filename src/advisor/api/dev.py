@@ -59,6 +59,7 @@ from advisor.api.app import create_app
 from advisor.auth.clerk import ClerkVerifier
 from advisor.auth.settings import build_verifier as build_clerk_verifier
 from advisor.llm.registry import build_gateway
+from advisor.logging import CorrelationIdMiddleware, setup_logging
 from layer1.db.session import session_scope
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ def build_dev_app() -> FastAPI:
       Fast iteration mode — no Clerk credentials required, but sessions
       die on restart and quota enforcement is bypassed.
     """
+    setup_logging(json_output=False)
     gateway = build_gateway()
     verifier = _maybe_build_verifier()
     # When Clerk is on we want the full DB-backed user-resolution
@@ -111,6 +113,7 @@ def build_dev_app() -> FastAPI:
         verifier=verifier,
         db_session_factory=db_session_factory,
     )
+    app.add_middleware(CorrelationIdMiddleware)
 
     origins_env = os.environ.get(
         "ADVISOR_DEV_CORS_ORIGINS", "http://localhost:3000"
@@ -130,7 +133,7 @@ def build_dev_app() -> FastAPI:
             "Authorization",
             "Last-Event-ID",
         ],
-        expose_headers=["X-Session-Id"],
+        expose_headers=["X-Session-Id", "X-Correlation-ID"],
     )
 
     if verifier is None:
