@@ -366,7 +366,7 @@ test.describe("Night Manager — Reports", () => {
 
   test("shows in-progress stats for current run", async ({ page }) => {
     await gotoNm(page, "/reports");
-    await expect(page.getByText("Night Manager Run")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Night Manager Run/ })).toBeVisible();
     const strip = page.locator(".nm-stats-strip");
     await expect(strip.getByText("MERGED")).toBeVisible();
     await expect(strip.getByText("IN FLIGHT")).toBeVisible();
