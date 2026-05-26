@@ -60,5 +60,4 @@ Dockerfile*
 # --- Sample data not needed in the image ---
 ingest_15.json
 
-# --- Local dev scripts ---
-scripts
+# --- Local dev scripts are now included in the runtime image for ops tasks ---
