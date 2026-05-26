@@ -473,7 +473,12 @@
 
 /* ── UTILITIES ─────────────────────────────────────────── */
 .nm-row { display: flex; align-items: center; gap: 12px; }
+.nm-row--gap-6 { gap: 6px; }
+.nm-row--gap-14 { gap: 14px; }
+.nm-row--wrap { flex-wrap: wrap; }
 .nm-col { display: flex; flex-direction: column; gap: 8px; }
+.nm-col--gap-12 { gap: 12px; }
+.nm-col--min-0 { min-width: 0; }
 .nm-grow { flex: 1; min-width: 0; }
 .nm-up { text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px; color: var(--text-mute); }
 .nm-dim { color: var(--text-dim); }
@@ -486,6 +491,8 @@
 .nm-review-c { color: var(--review); }
 .nm-right { margin-left: auto; }
 .nm-truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nm-mt-1 { margin-top: 2px; }
+.nm-p-lg { padding: 16px; }
 
 /* ── KPI STRIP ─────────────────────────────────────────── */
 .nm-kpis {
@@ -771,6 +778,7 @@
 
 /* ── LAUNCH FORM ───────────────────────────────────────── */
 .nm-launch { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; }
+.nm-launch > .nm-col { gap: 12px; }
 .nm-form-row {
   display: grid;
   grid-template-columns: 200px 1fr;
@@ -783,6 +791,126 @@
 .nm-form-row__lbl-grp { display: flex; flex-direction: column; gap: 4px; }
 .nm-form-row__lbl { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text); }
 .nm-form-row__hint { color: var(--text-mute); font-size: 10.5px; }
+
+/* Launch form input widths */
+.nm-input-narrow { width: 80px; }
+.nm-input-label { max-width: 280px; }
+.nm-input-override { max-width: 200px; }
+
+/* Agent slot visualization */
+.nm-agent-slots { gap: 4px; }
+.nm-agent-slot {
+  width: 14px;
+  height: 22px;
+  border: 1px solid var(--line-2);
+  background: transparent;
+  transition: background 0.12s, box-shadow 0.12s;
+}
+.nm-agent-slot--active {
+  background: var(--primary);
+  box-shadow: var(--glow-soft);
+}
+
+/* Execution group row */
+.nm-group-row {
+  border: 1px solid var(--line-2);
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 12px;
+  align-items: center;
+  background: var(--bg-2);
+}
+.nm-group-num {
+  font-size: 18px;
+  letter-spacing: 0.04em;
+}
+
+/* Resume section */
+.nm-resume-section {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.nm-resume-header {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.nm-resume-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-2);
+  background: var(--bg-2);
+}
+.nm-resume-row__id {
+  font-size: 12px;
+  min-width: 70px;
+}
+.nm-resume-row__title {
+  font-size: 11px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nm-resume-row__status {
+  font-size: 10px;
+}
+.nm-resume-row__button {
+  font-size: 10px;
+  padding: 3px 8px;
+}
+.nm-resume-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 6px;
+  cursor: pointer;
+}
+.nm-resume-actions {
+  margin-top: 6px;
+}
+.nm-resume-button-full { width: 100%; }
+
+/* Command display */
+.nm-cmd-display {
+  font-size: 13px;
+  color: var(--text);
+  padding: 4px 0;
+  word-break: break-word;
+}
+
+/* Planned execution container */
+.nm-planned-container {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Deploy row */
+.nm-deploy-row {
+  border: 1px dashed var(--line-2);
+  padding: 10px 12px;
+  color: var(--text-mute);
+  text-align: center;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+/* Launch button row */
+.nm-launch-footer {
+  padding: 16px;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
 
 .nm-input {
   background: var(--bg);
