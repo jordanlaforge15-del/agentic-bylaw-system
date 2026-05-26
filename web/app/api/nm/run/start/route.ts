@@ -17,6 +17,7 @@ export async function POST(request: Request) {
     dryRun = false,
     resume = false,
     resumeIssue,
+    resumeQueued = false,
   } = body;
 
   const args = [
@@ -34,6 +35,7 @@ export async function POST(request: Request) {
   if (dryRun) args.push("--dry-run");
   if (resume) args.push("--resume");
   if (resumeIssue) args.push(`--resume-issue ${resumeIssue}`);
+  if (resumeQueued) args.push("--resume-queued");
 
   const cmd = `./scripts/start-night-manager.sh ${args.join(" ")}`;
 
