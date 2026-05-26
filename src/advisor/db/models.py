@@ -640,32 +640,6 @@ class InviteRequest(Base):
     notes: Mapped[str | None] = mapped_column(Text())
 
 
-class GeneralFeedback(Base):
-    """User-submitted general feedback (not tied to a specific message).
-
-    Captures UX issues, feature requests, and general satisfaction
-    feedback from the app shell's feedback form. Complements the
-    per-message thumbs/flag mechanism (ABS-128) with a free-form
-    channel for broader product feedback.
-    """
-
-    __tablename__ = "advisor_general_feedback"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("advisor_user.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    category: Mapped[str] = mapped_column(String(32), nullable=False)
-    body: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=utcnow
-    )
-
-    user: Mapped[User] = relationship()
-
-
 class TermsAcceptance(Base):
     """One row per (user, terms version) the user has clicked I Agree on.
 

@@ -18,7 +18,6 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AppHeader } from "@/components/product/app-header";
-import { FeedbackForm } from "@/components/product/feedback-form";
 import { Sidebar } from "@/components/product/sidebar";
 import { ChatThread } from "@/components/product/chat-thread";
 import { Composer } from "@/components/product/composer";
@@ -105,7 +104,6 @@ function ProductAppPageInner() {
   // user's explicit choice).
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [parcelOpen, setParcelOpen] = useState(false);
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   // Case-billing context. ``caseId`` is taken from the URL on mount
   // (the /cases/new flow redirects with ``?case_id=N``) and from the
@@ -550,7 +548,6 @@ function ProductAppPageInner() {
       <AppHeader
         reading={READING}
         onMenuClick={() => setSidebarOpen(true)}
-        onFeedbackClick={() => setFeedbackOpen(true)}
       />
       {/* AddressPill is mobile-only; renders nothing once lg or once
        * there's no parcel. */}
@@ -693,11 +690,6 @@ function ProductAppPageInner() {
           <ParcelPane parcel={parcel} inSheet />
         </Drawer>
       )}
-
-      <FeedbackForm
-        open={feedbackOpen}
-        onClose={() => setFeedbackOpen(false)}
-      />
     </div>
   );
 }
