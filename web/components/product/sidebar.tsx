@@ -15,6 +15,7 @@ import { UserButton, useUser } from "@clerk/nextjs";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 import { cn } from "@/lib/cn";
+import { GeneralFeedbackButton } from "@/components/product/general-feedback-button";
 
 // Inlined at build time (NEXT_PUBLIC_*). When unset OR set to a
 // placeholder (the example file ships "pk_test_replace-me"), we
@@ -188,6 +189,9 @@ export function Sidebar({
             </button>
           );
         })}
+      </div>
+      <div className="border-t border-hair px-4 py-2">
+        <GeneralFeedbackButton />
       </div>
       <div className="border-t border-hair px-4 py-3 flex items-center gap-2.5">
         {CLERK_ENABLED ? <ClerkProfile /> : <PlaceholderProfile />}
