@@ -14,14 +14,175 @@ from .state import IssueState
 log = logging.getLogger("night_manager.reviewer")
 
 
+# Path prefixes that mark a touched file as "test-only" for the
+# diff-vs-areas check (see `check_diff_touches_ticket_areas` and
+# ABS-160). A diff composed entirely of files under these prefixes,
+# against a ticket whose `areas` is non-empty and fully disjoint from
+# the touched paths, is treated as an off-topic test fix rather than a
+# legitimate deliverable. Keep this list narrow on purpose — anything
+# under `scripts/`, `web/app/`, `advisor/`, etc., is production code.
+TEST_ONLY_PATH_PREFIXES: tuple[str, ...] = (
+    "web/e2e/",
+    "tests/",
+)
+
+
+def _is_test_only_path(path: str) -> bool:
+    """Return True iff `path` lives entirely under a test directory.
+
+    Used by the diff-vs-areas reviewer gate to detect the ABS-160
+    failure mode where an agent commits unrelated test fixes under a
+    `[ABS-XX]` prefix while leaving the ticket's actual production
+    file untouched.
+    """
+    return any(path.startswith(prefix) for prefix in TEST_ONLY_PATH_PREFIXES)
+
+
+def _path_overlaps_area(path: str, area: str) -> bool:
+    """Return True iff `path` is under (or equals) `area`.
+
+    `area` is treated as a path prefix tag from the planner's
+    `touch_profile["areas"]` (e.g. "Dockerfile.advisor",
+    "scripts/night_manager", "pyproject.toml"). A bare filename
+    matches an exact-name diff entry; a directory-like tag matches
+    any file underneath it. Comparisons are case-sensitive — git
+    paths are case-sensitive on Linux/CI even if macOS is forgiving.
+    """
+    if not area:
+        return False
+    # Normalise: drop a trailing slash so "scripts/night_manager/" and
+    # "scripts/night_manager" behave identically. Don't strip leading
+    # `./` — the planner emits canonical project-relative paths.
+    norm_area = area.rstrip("/")
+    if path == norm_area:
+        return True
+    # Directory-style overlap: "scripts/night_manager" matches
+    # "scripts/night_manager/reviewer.py".
+    return path.startswith(norm_area + "/")
+
+
+def check_diff_touches_ticket_areas(
+    issue: IssueState,
+    changed_files: list[str],
+) -> tuple[bool, str]:
+    """Verify the agent's diff actually touches the ticket's declared areas.
+
+    Returns (ok, message). On `ok=False` the caller should fail the
+    review and surface `message` back to the user / dev agent.
+
+    The check only fires when ALL of the following are true:
+
+    1. The planner extracted a non-empty `touch_profile["areas"]` for
+       this issue. If the list is empty (planner skipped, or the
+       ticket genuinely lives across many files), we cannot make a
+       confident claim about scope drift — skip the gate.
+    2. `changed_files` is non-empty. An empty diff is handled higher
+       up in `code_review`.
+    3. Every changed file is under a `TEST_ONLY_PATH_PREFIXES` entry
+       (e.g. `web/e2e/...` or `tests/...`).
+    4. The intersection between `changed_files` and the ticket's
+       `areas` is empty — none of the touched files lives under any
+       declared area.
+
+    Conditions 3 and 4 together describe the ABS-160 failure mode
+    exactly: the agent shipped a test-only fix while the ticket's
+    production target (`Dockerfile.advisor`, `pyproject.toml`, ...)
+    is unchanged.
+    """
+    profile = issue.touch_profile or {}
+    raw_areas = profile.get("areas") or []
+    areas = [str(a).strip() for a in raw_areas if str(a).strip()]
+    if not areas:
+        # Planner did not produce an areas list — cannot apply the
+        # check without risking a false positive on legitimately
+        # scoped work whose planner output happened to lack areas.
+        return True, ""
+
+    if not changed_files:
+        # `code_review` handles the empty-diff case before us, but
+        # defend against a regression in caller ordering.
+        return True, ""
+
+    test_only = all(_is_test_only_path(p) for p in changed_files)
+    if not test_only:
+        # At least one production-code file was touched — fall through
+        # to the LLM reviewer for normal scrutiny.
+        return True, ""
+
+    # Diff is test-only. Check whether any test file genuinely lives
+    # under one of the ticket's declared areas (e.g. `tests/advisor`
+    # for an `advisor`-area ticket). Disjoint intersection is the
+    # ABS-160 fingerprint.
+    overlaps = any(
+        _path_overlaps_area(path, area)
+        for path in changed_files
+        for area in areas
+    )
+    if overlaps:
+        return True, ""
+
+    msg = (
+        f"Diff touches only test files. Ticket's `areas` ({areas}) are "
+        f"unchanged. Either the agent fixed the wrong thing or the "
+        f"`areas` field is wrong. Aborting merge.\n\n"
+        f"Touched paths:\n" + "\n".join(f"  - {p}" for p in changed_files)
+    )
+    return False, msg
+
+
+async def _git_changed_files(worktree: str) -> list[str]:
+    """Return `git diff --name-only dev...HEAD` as a list of paths.
+
+    Empty list on git failure rather than raising — the caller
+    treats no-files as "skip the areas gate", matching the empty-diff
+    branch in `code_review`. Errors are logged for forensics.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "git", "diff", "--name-only", "dev...HEAD",
+        cwd=worktree,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        err = stderr.decode("utf-8", errors="replace").strip()
+        log.warning(
+            "git diff --name-only failed in %s (rc=%d): %s",
+            worktree, proc.returncode, err,
+        )
+        return []
+    raw = stdout.decode("utf-8", errors="replace")
+    return [line for line in raw.splitlines() if line.strip()]
+
+
 async def code_review(issue: IssueState, config: NMConfig) -> tuple[bool, str]:
     """
     Run code review via claude -p in the issue's worktree.
 
     Returns (passed, feedback). If passed is False, feedback contains
     the review findings that should be sent back to the dev agent.
+
+    Before invoking the LLM reviewer, runs the ABS-160 diff-vs-areas
+    sanity check: if the ticket's planner-assigned `areas` is
+    non-empty and the diff touches *only* test files disjoint from
+    those areas, fail fast with a clear "wrong ticket" error. This
+    catches the failure mode where a stale-worktree agent commits
+    test fixes under the ticket's `[ABS-XX]` prefix without touching
+    the ticket's actual deliverable.
     """
     worktree = issue.worktree
+
+    # ABS-160: cheap, deterministic gate before paying for the LLM.
+    # Runs against `git diff --name-only` (path list only) rather than
+    # the full diff so it's effectively free.
+    changed_files = await _git_changed_files(worktree)
+    areas_ok, areas_msg = check_diff_touches_ticket_areas(issue, changed_files)
+    if not areas_ok:
+        log.warning(
+            "Review FAILED (diff-vs-areas) for %s: %s",
+            issue.identifier, areas_msg.splitlines()[0],
+        )
+        return False, areas_msg
 
     diff_proc = await asyncio.create_subprocess_exec(
         "git", "diff", "dev...HEAD",
