@@ -25,9 +25,10 @@ import { ThemeToggle } from "@/components/theme-toggle";
 type Props = {
   reading: { addr: string; zone: string };
   onMenuClick?: () => void;
+  onFeedbackClick?: () => void;
 };
 
-export function AppHeader({ reading, onMenuClick }: Props) {
+export function AppHeader({ reading, onMenuClick, onFeedbackClick }: Props) {
   return (
     <div className="border-b border-hair bg-surface flex items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3 safe-pt safe-px gap-2">
       <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
@@ -67,6 +68,16 @@ export function AppHeader({ reading, onMenuClick }: Props) {
           VERIFIED 2026·05·06
         </Mono>
         <ThemeToggle size="sm" />
+        {onFeedbackClick && (
+          <Btn
+            variant="quiet"
+            size="sm"
+            onClick={onFeedbackClick}
+            data-testid="feedback-trigger"
+          >
+            Feedback
+          </Btn>
+        )}
         <Link href="/billing" className="hidden sm:contents">
           <Btn variant="quiet" size="sm">
             Account
