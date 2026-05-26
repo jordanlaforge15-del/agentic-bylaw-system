@@ -44,15 +44,6 @@ export async function POST(request: Request) {
   // that exercise this endpoint never actually launch NM. The returned `cmd`
   // lets tests assert on argument formatting / quoting without side effects.
   if (process.env.NM_TEST_MODE === "1") {
-    const parts: string[] = ["./scripts/start-night-manager.sh"];
-    for (let i = 0; i < argv.length; i++) {
-      if (argv[i] === "--label" && i + 1 < argv.length) {
-        parts.push(argv[i], `"${argv[++i]}"`);
-      } else {
-        parts.push(argv[i]);
-      }
-    }
-    const cmd = parts.join(" ");
     return Response.json({ ok: true, testMode: true, cmd });
   }
 
