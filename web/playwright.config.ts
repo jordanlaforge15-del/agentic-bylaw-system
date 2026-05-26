@@ -34,10 +34,17 @@ export default defineConfig({
   // Tests don't share state; parallelizing across files is safe and
   // the DB seed gives the demo user enough credits for concurrent
   // cases. If we ever introduce per-user contention, drop this to 1.
+  //
+  // Local workers capped at 4 (not auto/unlimited): WebKit projects hold
+  // an HTTP/1.1 SSE connection open per turn, and Safari's per-origin
+  // connection cap is ~6. With >4 concurrent workers the SSE slots can
+  // exhaust, queuing React effect fetches behind the stream and pushing
+  // `toContainText` past its deadline — the ABS-6 flake. CI already uses
+  // 2 workers; 4 local gives enough parallelism without the congestion.
   fullyParallel: true,
   forbidOnly: isCI,
   retries: isCI ? 1 : 0,
-  workers: isCI ? 2 : undefined,
+  workers: isCI ? 2 : 4,
   reporter: isCI
     ? [["list"], ["html", { open: "never" }]]
     : [["list"], ["html", { open: "never" }]],
