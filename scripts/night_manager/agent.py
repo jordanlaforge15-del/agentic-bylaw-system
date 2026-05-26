@@ -165,6 +165,19 @@ async def spawn_agent(
     description: str | None = None,
 ) -> asyncio.subprocess.Process:
     """Launch a claude -p subprocess for the issue."""
+    # ABS-150: any re-spawn (attempts > 0) means the prior session_id was
+    # consumed by Claude Code — whether NM observed completion (and set
+    # completed_at) or missed it due to a kernel panic / SIGKILL before
+    # state.save(). Reusing a consumed session_id is rejected by the CLI
+    # with "Session ID already in use" before any API call. Allocate a
+    # fresh UUID on every re-spawn; ABS-145's resume_agent gate handled
+    # only the completed_at-set case.
+    if issue.attempts > 0 and issue.session_id:
+        log.info(
+            "Re-spawn for %s: dropping consumed session_id %s",
+            issue.identifier, issue.session_id[:8],
+        )
+        issue.session_id = ""
     session_id = issue.session_id or str(uuid.uuid4())
     issue.session_id = session_id
 

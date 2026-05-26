@@ -543,6 +543,104 @@ class TestResumeAgentRouting:
 
 
 # ---------------------------------------------------------------------------
+# ABS-150: spawn_agent rotates consumed session_id on re-spawn
+# ---------------------------------------------------------------------------
+
+
+class TestSpawnAgentSessionIdRotation:
+    """Regression for ABS-150: every re-spawn (attempts > 0) must drop the
+    prior session_id and allocate a fresh UUID. Consumed sessions are
+    rejected by Claude Code with `Session ID already in use`.
+
+    ABS-145's resume_agent fix only handled the `completed_at is not None`
+    case; a kernel panic between agent completion and state.save() leaves
+    completed_at=None while the session_id is still consumed (the actual
+    ABS-129 / ABS-135 situation in run nm-20260526-004610)."""
+
+    @pytest.mark.asyncio
+    async def test_respawn_rotates_session_id(self, tmp_path, monkeypatch):
+        """attempts>0 with stale session_id → fresh UUID, both in the
+        issue state and in the --session-id arg."""
+        from scripts.night_manager import agent as agent_mod
+        from scripts.night_manager.config import NMConfig
+
+        captured: dict = {}
+
+        async def fake_exec(*cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            class FakeProc:
+                pid = 12345
+                returncode = None
+            return FakeProc()
+
+        monkeypatch.setattr(
+            agent_mod.asyncio, "create_subprocess_exec", fake_exec
+        )
+
+        issue = _make_issue(identifier="ABS-129", status="failed")
+        issue.worktree = str(tmp_path)
+        issue.log_file = str(tmp_path / "agent.jsonl")
+        # Kernel-panic case: prior session was consumed by Claude Code
+        # (terminal_reason=completed) but NM never observed it, so
+        # completed_at stayed None. The gap ABS-145 didn't cover.
+        issue.session_id = "8087a195-fd62-44b7-bc92-3c3883ab7e35"
+        issue.attempts = 5
+        issue.completed_at = None
+
+        config = NMConfig(agent_model="sonnet", agent_effort="high")
+
+        await agent_mod.spawn_agent(issue, config, "desc")
+
+        cmd = captured["cmd"]
+        assert "--session-id" in cmd
+        new_session_id = cmd[cmd.index("--session-id") + 1]
+        assert new_session_id != "8087a195-fd62-44b7-bc92-3c3883ab7e35", (
+            "spawn_agent must rotate the consumed session_id on re-spawn"
+        )
+        assert issue.session_id == new_session_id, (
+            "Rotated session_id must persist onto the issue so state.json "
+            "reflects the new session"
+        )
+
+    @pytest.mark.asyncio
+    async def test_initial_spawn_does_not_rotate(self, tmp_path, monkeypatch):
+        """attempts=0 (first spawn) must NOT rotate — there's nothing to
+        rotate and the existing flow (use existing or uuid4) is correct."""
+        from scripts.night_manager import agent as agent_mod
+        from scripts.night_manager.config import NMConfig
+
+        captured: dict = {}
+
+        async def fake_exec(*cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            class FakeProc:
+                pid = 12345
+                returncode = None
+            return FakeProc()
+
+        monkeypatch.setattr(
+            agent_mod.asyncio, "create_subprocess_exec", fake_exec
+        )
+
+        issue = _make_issue(identifier="ABS-999", status="queued")
+        issue.worktree = str(tmp_path)
+        issue.log_file = str(tmp_path / "agent.jsonl")
+        issue.session_id = "pre-allocated-uuid"
+        issue.attempts = 0  # first spawn
+
+        config = NMConfig(agent_model="sonnet", agent_effort="high")
+
+        await agent_mod.spawn_agent(issue, config, "desc")
+
+        cmd = captured["cmd"]
+        assert "--session-id" in cmd
+        used_session_id = cmd[cmd.index("--session-id") + 1]
+        assert used_session_id == "pre-allocated-uuid", (
+            "Initial spawn must honor a pre-allocated session_id"
+        )
+
+
+# ---------------------------------------------------------------------------
 # ABS-149: spawn_agent enables --remote-control with nm-<identifier> label
 # ---------------------------------------------------------------------------
 
