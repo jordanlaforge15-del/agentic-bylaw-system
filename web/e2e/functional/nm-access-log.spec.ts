@@ -15,7 +15,7 @@
 // set by scripts/e2e-up.sh to "e2e-admin-pw".
 
 import { execSync } from "child_process";
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { test, expect } from "../fixtures/test-env";
 
@@ -80,23 +80,30 @@ function readLog(): AccessLogEntry[] {
     .filter((e): e is AccessLogEntry => e !== null);
 }
 
-test.describe("NM /api/nm/access-log instrumentation (ABS-155)", () => {
-  test.beforeAll(() => {
-    // Clear the shared access log before running this suite.
-    // The log file lives in the main repo (not the worktree) to support
-    // the NM dashboard across all worktrees (ABS-102). Without cleanup,
-    // parallel test runs accumulate entries and break log entry count
-    // assertions.
-    if (existsSync(ACCESS_LOG_PATH)) {
-      writeFileSync(ACCESS_LOG_PATH, "");
-    }
-  });
+// ABS-158: lookup entries by correlation id, not by position. The file is
+// shared across all linked worktrees (ABS-102 contract), so multiple parallel
+// e2e suites can be appending entries simultaneously. Position-based reads
+// (`log[log.length - 1]`, `before + 1 === after.length`) race against any
+// concurrent writer and produce non-deterministic failures inside NM's
+// regression e2e. Always pin to the correlation id the route returned.
+function findByCorrelationId(
+  log: AccessLogEntry[],
+  correlationId: string,
+): AccessLogEntry {
+  const match = log.find((e) => e.correlationId === correlationId);
+  if (!match) {
+    throw new Error(
+      `access-log entry for correlationId=${correlationId} not found ` +
+        `(file may have rotated mid-test, or the writer didn't flush)`,
+    );
+  }
+  return match;
+}
 
+test.describe("NM /api/nm/access-log instrumentation (ABS-155)", () => {
   test("POST /api/nm/run/start writes an NDJSON entry with correlation id", async ({
     request,
   }) => {
-    const before = readLog().length;
-
     const res = await request.post("/api/nm/run/start", {
       data: VALID_BODY,
     });
@@ -111,11 +118,9 @@ test.describe("NM /api/nm/access-log instrumentation (ABS-155)", () => {
     expect(body.correlationId).toBe(headerCorr);
 
     // The sync appendFileSync runs before the response is returned, so
-    // by the time we read the file the entry must be present.
-    const after = readLog();
-    expect(after.length).toBe(before + 1);
-    const entry = after[after.length - 1]!;
-    expect(entry.correlationId).toBe(headerCorr);
+    // by the time we read the file the entry must be present. We don't
+    // assert file length — other worktrees may be appending in parallel.
+    const entry = findByCorrelationId(readLog(), headerCorr!);
     expect(entry.route).toBe("/api/nm/run/start");
     expect(entry.method).toBe("POST");
     expect(entry.testMode).toBe(true);
@@ -133,15 +138,15 @@ test.describe("NM /api/nm/access-log instrumentation (ABS-155)", () => {
       data: { ...VALID_BODY, label: 'X"; rm -rf ~ #' },
     });
     expect(res.status()).toBe(400);
+    const body = await res.json();
+    const correlationId = body.correlationId as string;
 
-    const log = readLog();
-    const entry = log[log.length - 1]!;
+    const entry = findByCorrelationId(readLog(), correlationId);
     expect(entry.outcome).toBe("rejected");
     expect(entry.status).toBe(400);
-    // The whole-file readback must not contain the malicious label
-    // string anywhere in the entry we just wrote. This is the PII /
-    // caller-text exclusion AC: bodyFingerprint is agentModel + dryRun
-    // only.
+    // The entry we just wrote must not contain the malicious label
+    // string. This is the PII / caller-text exclusion AC: bodyFingerprint
+    // is agentModel + dryRun only.
     const serialized = JSON.stringify(entry);
     expect(serialized).not.toContain("rm -rf");
     expect(serialized).not.toContain('X"');
@@ -152,15 +157,17 @@ test.describe("NM /api/nm/access-log instrumentation (ABS-155)", () => {
   }) => {
     // Send a request with synthetic Authorization + Cookie headers and
     // a fingerprint-able body. The entry must record neither.
-    await request.post("/api/nm/run/start", {
+    const res = await request.post("/api/nm/run/start", {
       data: { ...VALID_BODY, label: "TOPSECRETLABEL_DO_NOT_LOG" },
       headers: {
         Authorization: "Bearer SHOULD_NEVER_APPEAR",
         Cookie: "session=COOKIE_SHOULD_NEVER_APPEAR",
       },
     });
-    const log = readLog();
-    const entry = log[log.length - 1]!;
+    const body = await res.json();
+    const correlationId = body.correlationId as string;
+
+    const entry = findByCorrelationId(readLog(), correlationId);
     const serialized = JSON.stringify(entry);
     expect(serialized).not.toContain("SHOULD_NEVER_APPEAR");
     expect(serialized).not.toContain("TOPSECRETLABEL_DO_NOT_LOG");
