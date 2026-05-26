@@ -570,6 +570,31 @@ class ChatMessageFeedback(Base):
     message: Mapped[ChatMessage] = relationship(back_populates="feedback")
 
 
+class GeneralFeedback(Base):
+    """App-wide feedback submitted by an authenticated user.
+
+    Not tied to any specific message or session — captures UX issues,
+    feature requests, general satisfaction, and other non-message
+    feedback. ``category`` is one of ``'ux_issue'``, ``'feature_request'``,
+    ``'general_satisfaction'``, or ``'other'``. ``message`` is required
+    free text (max 2000 chars).
+    """
+
+    __tablename__ = "advisor_general_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
 class UsageEvent(Base):
     """A single billable / observable event.
 
