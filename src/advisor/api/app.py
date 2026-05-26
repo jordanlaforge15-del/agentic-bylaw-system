@@ -250,14 +250,6 @@ def create_app(
 
     app = FastAPI(title="Halifax Bylaw Advisor", version="0.1.0")
 
-    from advisor.api.metrics import PrometheusMiddleware, metrics_response  # noqa: PLC0415
-
-    app.add_middleware(PrometheusMiddleware)
-
-    @app.get("/metrics", response_model=None, include_in_schema=False)
-    async def metrics():
-        return metrics_response()
-
     # Stash dependencies on app.state so route handlers can grab them
     # via ``request.app.state`` rather than closing over locals — that
     # keeps the routes inspectable and lets tests poke the store mid-
