@@ -11,6 +11,7 @@ import { Panel } from "./panel";
 import { Dot } from "./dot";
 import { StatusPill } from "./status-pill";
 import { KPI } from "./kpi";
+import { AccessLogPanel } from "./access-log-panel";
 
 export function Dashboard({ state }: { state: RunState }) {
   const now = useTick(1000);
@@ -418,6 +419,8 @@ function SidePanels({
             ))}
         </div>
       </Panel>
+
+      <AccessLogPanel />
 
       <Panel id="SIG-05" title="SIGNALS" flush>
         <div
