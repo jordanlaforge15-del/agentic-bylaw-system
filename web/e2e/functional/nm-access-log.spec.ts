@@ -14,6 +14,7 @@
 // by POSTing the e2e ADMIN_PASSWORD to /api/access. ADMIN_PASSWORD is
 // set by scripts/e2e-up.sh to "e2e-admin-pw".
 
+import { execSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { test, expect } from "../fixtures/test-env";
@@ -31,11 +32,17 @@ const VALID_BODY = {
   dryRun: true,
 };
 
-// The Next.js process resolves the access-log file path via
-// `git rev-parse --git-common-dir`, which lands at the worktree root
-// (process.cwd() for `next dev` is web/). The spec's process.cwd() is
-// also web/, so `..` from here is the same path.
-const ACCESS_LOG_PATH = join(process.cwd(), "..", ".night-manager", "api-access.log");
+// The Next.js process resolves the access-log file via `paths.ts`,
+// which calls `git rev-parse --git-common-dir` and joins `..`. In a
+// linked worktree that returns the MAIN repo's .git/ (by design — see
+// ABS-102: NM state lives at the main repo so the dashboard works from
+// any worktree). Resolve the same way here so the spec reads from the
+// same file the route writes to.
+const GIT_COMMON_DIR = execSync("git rev-parse --git-common-dir", {
+  cwd: process.cwd(),
+  encoding: "utf-8",
+}).trim();
+const ACCESS_LOG_PATH = join(GIT_COMMON_DIR, "..", ".night-manager", "api-access.log");
 
 const ADMIN_PASSWORD =
   process.env.E2E_ADMIN_PASSWORD || "e2e-admin-pw";
