@@ -44,6 +44,11 @@ def main() -> int:
     parser.add_argument("--user-id", default="demo-user-1")
     parser.add_argument("--email", default="demo@example.com")
     parser.add_argument("--credits-per-tier", type=int, default=100)
+    parser.add_argument(
+        "--unlimited",
+        action="store_true",
+        help="Set unlimited_credits=True on the user (ABS-12).",
+    )
     args = parser.parse_args()
 
     with session_scope() as db:
@@ -76,6 +81,12 @@ def main() -> int:
                 f"using existing advisor_user id={user.id} "
                 f"clerk_user_id={args.user_id}"
             )
+
+        if args.unlimited and not user.unlimited_credits:
+            user.unlimited_credits = True
+            print(f"set unlimited_credits=True on user {user.id}")
+        elif user.unlimited_credits and not args.unlimited:
+            pass  # leave existing flag untouched unless explicitly set
 
         for tier in TIERS:
             available = db.scalar(
