@@ -10,11 +10,27 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .config import ALLOWED_TOOLS, DEV_AGENT_SYSTEM_PROMPT, NMConfig, REPO_ROOT, WORKTREE_ROOT
+from .config import (
+    ALLOWED_TOOLS,
+    BASH_TOOL_BUDGET_MINUTES,
+    DEV_AGENT_SYSTEM_PROMPT,
+    NMConfig,
+    REPO_ROOT,
+    STUCK_TIMEOUT_MINUTES,
+    WORKTREE_ROOT,
+)
 from .reviewer import _combine_streams
 from .state import IssueState, NMState
 
 log = logging.getLogger("night_manager.agent")
+
+# Bash-aware grace strategy: per-tool budget (not PID/CPU liveness).
+# Rationale: claude-cli spawns Bash subprocesses in its own process tree
+# that we don't own, so /proc-style liveness would require psutil and a
+# cross-platform tree walk. Per-tool budget is event-only — we already
+# parse every stream-json line, so tracking the last unterminated tool_use
+# and giving Bash an extended ceiling stays in the same code path with no
+# new dependencies and is trivial to unit-test with a fake clock.
 
 
 DEV_AGENT_PROMPT_TEMPLATE = """\
@@ -223,60 +239,163 @@ async def resume_agent(
     return proc
 
 
+def _truncate(s: str, limit: int = 500) -> str:
+    """Truncate a string to `limit` chars, suffixing an ellipsis when cut."""
+    if len(s) <= limit:
+        return s
+    return s[:limit] + "..."
+
+
+def _log_kill_forensics(
+    issue: IssueState,
+    elapsed_secs: float,
+    last_assistant_text: str,
+    last_tool_use: dict[str, Any] | None,
+) -> None:
+    """Emit a forensics snapshot to the main NM log before SIGTERM.
+
+    Previously the only log line was "Agent X stuck for N minutes, killing",
+    which left post-mortems re-parsing the per-issue jsonl. We now surface
+    the last assistant text + the last tool_use (name + input) so the
+    operator can immediately see what the agent was doing when it stalled.
+    """
+    elapsed_min = elapsed_secs / 60.0
+    tool_summary = "(none)"
+    if last_tool_use is not None:
+        name = last_tool_use.get("name", "?")
+        raw_input = last_tool_use.get("input")
+        try:
+            input_str = json.dumps(raw_input, ensure_ascii=False) if raw_input is not None else ""
+        except (TypeError, ValueError):
+            input_str = str(raw_input)
+        tool_summary = f"{name} input={_truncate(input_str, 500)}"
+
+    log.warning(
+        "Agent %s stall forensics — elapsed=%.1fmin last_tool_use=%s last_assistant_text=%s",
+        issue.identifier,
+        elapsed_min,
+        tool_summary,
+        _truncate(last_assistant_text or "(none)", 500),
+    )
+
+
 async def monitor_agent(
     proc: asyncio.subprocess.Process,
     issue: IssueState,
-    timeout_minutes: int = 10,
+    timeout_minutes: int = STUCK_TIMEOUT_MINUTES,
+    bash_tool_budget_minutes: int = BASH_TOOL_BUDGET_MINUTES,
 ) -> tuple[int, str]:
     """
     Stream agent output, detect stuck state, return (exit_code, final_output).
 
     Writes each JSON event to the issue's log file and tracks the last
-    assistant message as the final output.
+    assistant message as the final output. When the last stream-json event
+    is an unterminated `tool_use` for `Bash`, the watchdog extends grace
+    to `bash_tool_budget_minutes` for that call — a long-running `make e2e`
+    legitimately emits no stdout for ~9 min and was misread as "stuck" in
+    ABS-121.
     """
     final_output = ""
-    last_activity = asyncio.get_event_loop().time()
+    loop = asyncio.get_event_loop()
+    last_activity = loop.time()
+    # Per-tool tracking: when an assistant message contains a tool_use, we
+    # remember the (id, name, input, start_time) of the most recent one.
+    # When a `user` message with a tool_result arrives whose tool_use_id
+    # matches, we mark that tool_use as terminated and clear the pending
+    # state — so the watchdog's "extended Bash budget" applies only while
+    # a Bash call is actually outstanding.
+    pending_tool: dict[str, Any] | None = None  # {id, name, input, started_at}
     log_path = Path(issue.log_file)
 
     assert proc.stdout is not None
 
     async def _read_stream() -> str:
-        nonlocal last_activity, final_output
+        nonlocal last_activity, final_output, pending_tool
         async for raw_line in proc.stdout:
             line = raw_line.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
 
-            last_activity = asyncio.get_event_loop().time()
+            now = loop.time()
+            last_activity = now
 
             with open(log_path, "a") as f:
                 f.write(line + "\n")
 
             try:
                 event = json.loads(line)
-                if event.get("type") == "assistant" and "message" in event:
-                    msg = event["message"]
-                    if isinstance(msg, dict):
-                        for block in msg.get("content", []):
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                final_output = block["text"]
-                    elif isinstance(msg, str):
-                        final_output = msg
-            except (json.JSONDecodeError, KeyError):
-                pass
+            except json.JSONDecodeError:
+                continue
+
+            etype = event.get("type")
+            if etype == "assistant" and "message" in event:
+                msg = event["message"]
+                if isinstance(msg, dict):
+                    for block in msg.get("content", []):
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get("type")
+                        if btype == "text":
+                            final_output = block.get("text", final_output)
+                        elif btype == "tool_use":
+                            pending_tool = {
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "input": block.get("input"),
+                                "started_at": now,
+                            }
+                elif isinstance(msg, str):
+                    final_output = msg
+            elif etype == "user" and "message" in event:
+                # tool_result terminates a pending tool_use
+                msg = event["message"]
+                if isinstance(msg, dict):
+                    for block in msg.get("content", []):
+                        if (
+                            isinstance(block, dict)
+                            and block.get("type") == "tool_result"
+                            and pending_tool is not None
+                            and block.get("tool_use_id") == pending_tool.get("id")
+                        ):
+                            pending_tool = None
+                            break
 
         return final_output
 
     async def _watchdog() -> None:
         nonlocal last_activity
-        timeout_secs = timeout_minutes * 60
+        default_timeout_secs = timeout_minutes * 60
+        bash_budget_secs = bash_tool_budget_minutes * 60
         while proc.returncode is None:
             await asyncio.sleep(30)
-            elapsed = asyncio.get_event_loop().time() - last_activity
-            if elapsed > timeout_secs:
+            now = loop.time()
+            elapsed = now - last_activity
+
+            # Bash-aware grace: if an unterminated Bash tool_use is in
+            # flight, measure budget against the tool's own start time
+            # rather than last_activity (which equals the tool_use event
+            # itself — and won't advance until the Bash call completes).
+            effective_timeout = default_timeout_secs
+            if pending_tool is not None and pending_tool.get("name") == "Bash":
+                tool_elapsed = now - pending_tool["started_at"]
+                if tool_elapsed <= bash_budget_secs:
+                    # Bash call still within its extended budget — let it run.
+                    continue
+                # Exceeded Bash budget — treat as stuck. Surface that the
+                # kill was budget-driven, not stdout-silence-driven.
+                effective_timeout = bash_budget_secs
+                elapsed = tool_elapsed
+
+            if elapsed > effective_timeout:
+                _log_kill_forensics(
+                    issue,
+                    elapsed_secs=elapsed,
+                    last_assistant_text=final_output,
+                    last_tool_use=pending_tool,
+                )
                 log.warning(
-                    "Agent %s stuck for %d minutes, killing",
-                    issue.identifier, timeout_minutes,
+                    "Agent %s stuck for %.1f minutes, killing",
+                    issue.identifier, elapsed / 60.0,
                 )
                 try:
                     proc.send_signal(signal.SIGTERM)
