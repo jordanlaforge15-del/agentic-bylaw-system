@@ -105,7 +105,7 @@ export default function LaunchPage() {
 
   return (
     <div className="nm-launch">
-      <div className="nm-col" style={{ gap: 12, minWidth: 0 }}>
+      <div className="nm-col nm-col--min-0">
         <Panel
           id="CFG-01"
           title="LAUNCH CONFIGURATION"
@@ -116,9 +116,9 @@ export default function LaunchPage() {
             label="Max parallel agents"
             hint="how many Claude Code processes can run concurrently (default 3)"
           >
-            <div className="nm-row" style={{ gap: 14 }}>
+            <div className="nm-row nm-row--gap-14">
               <input
-                className="nm-input"
+                className="nm-input nm-input-narrow"
                 type="number"
                 min={1}
                 max={10}
@@ -128,25 +128,16 @@ export default function LaunchPage() {
                     Math.max(1, Math.min(10, +e.target.value || 1)),
                   )
                 }
-                style={{ width: 80 }}
               />
-              <div className="nm-row" style={{ gap: 4 }}>
+              <div className="nm-row nm-agent-slots">
                 {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
                   <span
                     key={n}
-                    style={{
-                      width: 14,
-                      height: 22,
-                      border: "1px solid var(--line-2)",
-                      background:
-                        n <= maxAgents ? "var(--primary)" : "transparent",
-                      boxShadow:
-                        n <= maxAgents ? "var(--glow-soft)" : "none",
-                    }}
+                    className={`nm-agent-slot ${n <= maxAgents ? "nm-agent-slot--active" : ""}`}
                   />
                 ))}
               </div>
-              <span className="nm-mute" style={{ marginLeft: 8 }}>
+              <span className="nm-mute nm-right">
                 &asymp; {groups} groups
               </span>
             </div>
@@ -157,10 +148,9 @@ export default function LaunchPage() {
             hint="Linear label used to pull the issue queue"
           >
             <input
-              className="nm-input"
+              className="nm-input nm-input-label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              style={{ maxWidth: 280 }}
             />
           </FormRow>
 
@@ -203,14 +193,13 @@ export default function LaunchPage() {
             hint="estimated-USD cap per agent — Claude Code --max-budget-usd"
           >
             <input
-              className="nm-input"
+              className="nm-input nm-input-narrow"
               type="number"
               min={1}
               max={50}
               step={1}
               value={agentTokenLimit}
               onChange={(e) => setAgentTokenLimit(Math.max(1, +e.target.value || 1))}
-              style={{ width: 80 }}
             />
           </FormRow>
 
@@ -236,14 +225,13 @@ export default function LaunchPage() {
             hint="estimated-USD cap per review — Claude Code --max-budget-usd"
           >
             <input
-              className="nm-input"
+              className="nm-input nm-input-narrow"
               type="number"
               min={0.5}
               max={20}
               step={0.5}
               value={reviewerTokenLimit}
               onChange={(e) => setReviewerTokenLimit(Math.max(0.5, +e.target.value || 0.5))}
-              style={{ width: 80 }}
             />
           </FormRow>
 
@@ -267,11 +255,10 @@ export default function LaunchPage() {
             hint="optional · pulls only this issue and ignores label filter"
           >
             <input
-              className="nm-input"
+              className="nm-input nm-input-override"
               value={override}
               onChange={(e) => setOverride(e.target.value.toUpperCase())}
               placeholder="e.g. ABS-101"
-              style={{ maxWidth: 200 }}
             />
           </FormRow>
 
@@ -292,14 +279,7 @@ export default function LaunchPage() {
         </Panel>
 
         <Panel id="CMD-02" title="EFFECTIVE COMMAND" right={<span>copy</span>}>
-          <div
-            style={{
-              fontSize: 13,
-              color: "var(--text)",
-              padding: "4px 0",
-              wordBreak: "break-word",
-            }}
-          >
+          <div className="nm-cmd-display">
             <span className="nm-mute">$</span>{" "}
             <span className="nm-prim">./scripts/start-night-manager.sh</span>{" "}
             <span>--max-agents {maxAgents}</span>{" "}
@@ -316,61 +296,30 @@ export default function LaunchPage() {
         </Panel>
       </div>
 
-      <div className="nm-col" style={{ gap: 12, minWidth: 0 }}>
+      <div className="nm-col nm-col--gap-12 nm-col--min-0">
         <Panel
           id="PLN-04"
           title="PLANNED EXECUTION"
           flush
         >
-          <div
-            style={{
-              padding: 12,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
+          <div className="nm-planned-container">
             {Array.from({ length: groups }, (_, i) => (
-              <div
-                key={i}
-                style={{
-                  border: "1px solid var(--line-2)",
-                  padding: "8px 10px",
-                  display: "grid",
-                  gridTemplateColumns: "70px 1fr",
-                  gap: 12,
-                  alignItems: "center",
-                  background: "var(--bg-2)",
-                }}
-              >
+              <div key={i} className="nm-group-row">
                 <div>
                   <div className="nm-up">group</div>
-                  <div
-                    className="nm-prim"
-                    style={{ fontSize: 18, letterSpacing: "0.04em" }}
-                  >
+                  <div className="nm-prim nm-group-num">
                     G{String(i + 1).padStart(2, "0")}
                   </div>
                 </div>
-                <div className="nm-row" style={{ gap: 6, flexWrap: "wrap" }}>
-                  <span className="nm-pill" style={{ color: "var(--text-dim)" }}>
+                <div className="nm-row nm-row--gap-6 nm-row--wrap">
+                  <span className="nm-pill nm-dim">
                     {maxAgents} slots
                   </span>
                 </div>
               </div>
             ))}
             {deploy && (
-              <div
-                style={{
-                  border: "1px dashed var(--line-2)",
-                  padding: "10px 12px",
-                  color: "var(--text-mute)",
-                  textAlign: "center",
-                  letterSpacing: "0.12em",
-                  textTransform: "uppercase",
-                  fontSize: 11,
-                }}
-              >
+              <div className="nm-deploy-row">
                 &#9650; then DEPLOY &middot; dev &rarr; staging &rarr; prod
               </div>
             )}
@@ -384,17 +333,8 @@ export default function LaunchPage() {
             right={<span>{lastRun.run_id}</span>}
             flush
           >
-            <div
-              style={{
-                padding: 12,
-                display: "flex",
-                flexDirection: "column",
-                gap: 6,
-              }}
-            >
-              <div
-                style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}
-              >
+            <div className="nm-resume-section">
+              <div className="nm-resume-header">
                 {resumableIssues.length} failed/blocked issue
                 {resumableIssues.length !== 1 ? "s" : ""} from last run
               </div>
@@ -402,45 +342,23 @@ export default function LaunchPage() {
                 <div
                   key={iss.identifier}
                   data-testid={`resume-row-${iss.identifier}`}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "6px 8px",
-                    border: "1px solid var(--line-2)",
-                    background: "var(--bg-2)",
-                  }}
+                  className="nm-resume-row"
                 >
-                  <span
-                    className="nm-prim"
-                    style={{ fontSize: 12, minWidth: 70 }}
-                  >
+                  <span className="nm-prim nm-resume-row__id">
                     {iss.identifier}
                   </span>
-                  <span
-                    className="nm-mute"
-                    style={{
-                      fontSize: 11,
-                      flex: 1,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
+                  <span className="nm-mute nm-resume-row__title">
                     {iss.title}
                   </span>
                   <span
-                    className="nm-pill"
-                    style={{
-                      fontSize: 10,
-                      color: iss.status === "failed" ? "var(--red)" : "var(--amber)",
-                    }}
+                    className={`nm-pill nm-resume-row__status ${
+                      iss.status === "failed" ? "nm-err" : "nm-warn"
+                    }`}
                   >
                     {iss.status}
                   </span>
                   <button
-                    className="nm-btn nm-btn--ghost"
-                    style={{ fontSize: 10, padding: "3px 8px" }}
+                    className="nm-btn nm-btn--ghost nm-resume-row__button"
                     onClick={() => handleResume(iss.identifier)}
                     disabled={launching}
                   >
@@ -451,15 +369,7 @@ export default function LaunchPage() {
               {hasQueued && (
                 <label
                   data-testid="resume-queued-toggle"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    fontSize: 11,
-                    color: "var(--text-dim)",
-                    marginTop: 6,
-                    cursor: "pointer",
-                  }}
+                  className="nm-resume-checkbox"
                 >
                   <input
                     type="checkbox"
@@ -469,10 +379,9 @@ export default function LaunchPage() {
                   Include queued (never-started) issues
                 </label>
               )}
-              <div style={{ marginTop: 6 }}>
+              <div className="nm-resume-actions">
                 <button
-                  className="nm-btn nm-btn--prim"
-                  style={{ width: "100%" }}
+                  className="nm-btn nm-btn--prim nm-resume-button-full"
                   onClick={() => handleResume()}
                   disabled={launching || resumableIssues.length === 0}
                 >
@@ -488,24 +397,10 @@ export default function LaunchPage() {
         )}
 
         <Panel id="LCH-05" title="" flush>
-          <div
-            style={{
-              padding: 16,
-              display: "flex",
-              gap: 12,
-              alignItems: "center",
-              borderTop: "1px solid var(--line)",
-            }}
-          >
+          <div className="nm-row nm-launch-footer">
             <div className="nm-grow">
               <div className="nm-up">ready to launch</div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: "var(--text-dim)",
-                  marginTop: 2,
-                }}
-              >
+              <div className="nm-dim nm-mt-1">
                 {groups} groups &middot; {agentModel}/{agentEffort} &middot;{" "}
                 {deploy ? "deploy on" : "no deploy"}
               </div>
