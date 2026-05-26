@@ -182,7 +182,7 @@ test.describe("NM /api/nm/run/start test-mode bypass (ABS-153)", () => {
     dryRun: true,
   };
 
-  test("valid POST returns testMode=true and a non-empty cmd without spawning NM", async ({
+  test("valid POST returns testMode=true and argv without spawning NM", async ({
     request,
   }) => {
     const res = await request.post("/api/nm/run/start", { data: VALID_BODY });
@@ -190,34 +190,35 @@ test.describe("NM /api/nm/run/start test-mode bypass (ABS-153)", () => {
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body.testMode).toBe(true);
-    expect(typeof body.cmd).toBe("string");
-    expect(body.cmd).toContain("./scripts/start-night-manager.sh");
-    expect(body.cmd).toContain("--max-agents 3");
-    expect(body.cmd).toContain("--dry-run");
+    expect(Array.isArray(body.argv)).toBe(true);
+    expect(body.argv).toContain("--max-agents");
+    expect(body.argv).toContain("3");
+    expect(body.argv).toContain("--dry-run");
   });
 
-  test("POST with issue=ABS-XXX (the very payload that caused the 2026-05-26 incident) does NOT spawn an NM", async ({
+  test("POST with issue=ABS-XXX returns argv containing the issue flag", async ({
     request,
   }) => {
-    // The original incident POSTed { ...VALID_BODY, issue: "ABS-123" } and
-    // asserted not-400, which fired the launcher. With the bypass in place,
-    // the same payload returns testMode=true and never reaches exec().
     const res = await request.post("/api/nm/run/start", {
       data: { ...VALID_BODY, issue: "ABS-123" },
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.testMode).toBe(true);
-    expect(body.cmd).toContain("--issue ABS-123");
+    const idx = body.argv.indexOf("--issue");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(body.argv[idx + 1]).toBe("ABS-123");
   });
 
-  test("returned cmd preserves argument ordering and quoting for label", async ({
+  test("returned argv contains label as a separate element", async ({
     request,
   }) => {
     const res = await request.post("/api/nm/run/start", {
       data: { ...VALID_BODY, label: "Backlog" },
     });
     const body = await res.json();
-    expect(body.cmd).toContain('--label "Backlog"');
+    const idx = body.argv.indexOf("--label");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(body.argv[idx + 1]).toBe("Backlog");
   });
 });
