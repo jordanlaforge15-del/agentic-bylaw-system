@@ -118,11 +118,34 @@ Standard recipe for a code change to web or advisor:
    # or for advisor:
    ssh bylaw-prod "sed -i 's|bylaw-advisor:OLD|bylaw-advisor:NEW|' /srv/bylaw/docker-compose.yml"
    ```
+5a. **Advisor image preflight smoke (HARD GATE — advisor deploys only)**:
+    Pull the new image, then run `scripts/preflight_advisor_image.sh` before swapping
+    the container. If the smoke exits non-zero, **abort the deploy** — the old
+    container is still running and no rollback is needed.
+    ```bash
+    # Pull the new image on the server (layers stay cached for the actual up -d)
+    ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml pull advisor"
+
+    # Run the import smoke under prod-mirroring runtime constraints
+    ssh bylaw-prod "docker run --rm \
+      --read-only \
+      --tmpfs /tmp:size=64m,mode=1777 \
+      --env-file /srv/bylaw/.env \
+      --network bylaw_default \
+      --cap-drop ALL \
+      --security-opt no-new-privileges:true \
+      ghcr.io/jordanlaforge15-del/bylaw-advisor:NEW \
+      python -c 'import advisor.api.main'"
+    # Expect: exit 0. Any non-zero exit means a missing import or startup-time
+    # filesystem violation — do NOT proceed to step 6.
+    ```
+    See `scripts/preflight_advisor_image.sh` for the canonical script form with
+    help text and override env vars.
 6. **Pull & restart just that service**:
    ```bash
    ssh bylaw-prod "cd /srv/bylaw && docker compose pull web && docker compose up -d web"
-   # or advisor / both:
-   ssh bylaw-prod "cd /srv/bylaw && docker compose pull && docker compose up -d advisor"
+   # Advisor: pull was already done in step 5a; just recreate the container
+   ssh bylaw-prod "cd /srv/bylaw && docker compose up -d advisor"
    ```
 7. **Verify**: `curl` against the public endpoint, check `docker compose ps`, tail logs (`docker compose logs --tail 30 <svc>`). For chat changes, send a real query.
 8. **Merge to main** and push: `git checkout main && git merge --no-ff fix/... && git push origin main`.
