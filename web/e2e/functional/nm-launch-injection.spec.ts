@@ -1,6 +1,3 @@
-// ABS-143: Verify /api/nm/run/start rejects shell-injection payloads
-// and validates all user-controlled fields against allow-lists.
-
 import { test, expect } from "@playwright/test";
 
 const E2E_BASE_URL = process.env.E2E_BASE_URL || "http://localhost:3001";
