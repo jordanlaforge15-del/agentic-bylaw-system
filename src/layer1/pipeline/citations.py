@@ -11,7 +11,7 @@ PART_RE = re.compile(r"^\s*part\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNOREC
 SCHEDULE_RE = re.compile(r"^\s*schedule\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 APPENDIX_RE = re.compile(r"^\s*appendix\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 COMPOUND_SECTION_RE = re.compile(
-    r"^\s*((?:\d+(?:[A-Z]+\d+)*[A-Z]*)(?:\s*\([0-9A-Za-z]+\))*[A-Z]?)(?=\s|$)\s*(.*)$"
+    r"^\s*((?:\d+[A-Z]*)(?:\([0-9A-Za-z]+\))*[A-Z]?)(?=\s|$)\s*(.*)$"
 )
 SPLIT_COMPOUND_SECTION_RE = re.compile(r"^\s*(\d+)\s+([A-Z]{1,3})\b\s+(.*)$")
 NUMERIC_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,5})\b(?:[.)])?\s*(.*)$")
@@ -62,13 +62,12 @@ def parse_citation_label(text: str, profile: ParsingProfile | None = None) -> Ci
             title = split_compound.group(3).strip()
             if len(suffix) >= 2 or (title and title[:1].isupper()):
                 joined_label = f"{split_compound.group(1)}{suffix}"
-                joined_label, title = _absorb_leading_paren_tokens(joined_label, title)
                 parsed = _parse_compound_section_label(joined_label, title)
                 if parsed:
                     return parsed
         compound = COMPOUND_SECTION_RE.match(stripped)
         if compound:
-            label = re.sub(r"\s+", "", compound.group(1))
+            label = compound.group(1)
             title = compound.group(2).strip()
             parsed = _parse_compound_section_label(label, title)
             if parsed:
@@ -167,27 +166,6 @@ def _extract_label_token(match: re.Match[str]) -> str:
                 return value.strip().upper()
     # No groups: surface the whole match minus leading keyword.
     return re.sub(r"^[A-Za-z]+\s+", "", match.group(0)).strip().upper()
-
-
-_LEADING_PAREN_RE = re.compile(r"^\(([0-9A-Za-z]+)\)\s*")
-
-
-def _absorb_leading_paren_tokens(label: str, title: str) -> tuple[str, str]:
-    """Fold leading parenthetical tokens from *title* into *label*.
-
-    PDF extraction sometimes inserts whitespace between a compound section
-    number and its subsection parenthetical (``62EE (1)`` instead of
-    ``62EE(1)``).  When the SPLIT_COMPOUND_SECTION_RE path produces a bare
-    base label whose title starts with ``(N)``, this helper re-attaches those
-    tokens so the downstream parser sees ``62EE(1)`` as a single label.
-    """
-    while True:
-        m = _LEADING_PAREN_RE.match(title)
-        if not m:
-            break
-        label = f"{label}({m.group(1)})"
-        title = title[m.end():]
-    return label, title.strip()
 
 
 def _parse_compound_section_label(label: str, title: str) -> CitationMatch | None:
