@@ -119,6 +119,15 @@ class UpgradeFunnelResponse(BaseModel):
     rows: list[UpgradeFunnelRow]
 
 
+class SetUnlimitedCreditsRequest(BaseModel):
+    enabled: bool
+
+
+class SetUnlimitedCreditsResponse(BaseModel):
+    user_id: int
+    unlimited_credits: bool
+
+
 class RefundOrphanedReservationsResponse(BaseModel):
     refunded: int
 
@@ -232,6 +241,38 @@ def build_admin_router(
                 granted=len(credits),
                 tier=body.tier,
                 reason=body.reason,
+            )
+
+    @router.put(
+        "/users/{user_id}/unlimited-credits",
+        response_model=SetUnlimitedCreditsResponse,
+    )
+    def put_unlimited_credits(
+        user_id: int,
+        body: SetUnlimitedCreditsRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> SetUnlimitedCreditsResponse:
+        with _open_db() as db:
+            caller = user_resolver(auth_session, db)
+            _require_admin(caller)
+            target = db.get(User, user_id)
+            if target is None:
+                raise HTTPException(
+                    status_code=404, detail={"code": "user_not_found"}
+                )
+            target.unlimited_credits = body.enabled
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                commit()
+            logger.info(
+                "admin: set unlimited_credits=%s for user %d (caller=%s)",
+                body.enabled,
+                user_id,
+                caller.clerk_user_id,
+            )
+            return SetUnlimitedCreditsResponse(
+                user_id=target.id,
+                unlimited_credits=target.unlimited_credits,
             )
 
     @router.get("/cases", response_model=AdminCaseListResponse)
@@ -362,6 +403,7 @@ def build_dormant_admin_router() -> APIRouter:
         )
 
     router.add_api_route("/users/{user_id}/credits", _disabled, methods=["GET", "POST"])
+    router.add_api_route("/users/{user_id}/unlimited-credits", _disabled, methods=["PUT"])
     router.add_api_route("/cases", _disabled, methods=["GET"])
     router.add_api_route("/analytics/tier-distribution", _disabled, methods=["GET"])
     router.add_api_route("/analytics/upgrade-funnel", _disabled, methods=["GET"])

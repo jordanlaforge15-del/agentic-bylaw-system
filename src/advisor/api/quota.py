@@ -152,7 +152,9 @@ def reserve_credit_for_session(
         )
         return case_reserved
 
-    credit = _claim_available_credit(db, user_id=user.id, tier=tier)
+    credit = _claim_available_credit(
+        db, user_id=user.id, tier=tier, unlimited=user.unlimited_credits
+    )
     if credit is None:
         raise HTTPException(
             status_code=402,

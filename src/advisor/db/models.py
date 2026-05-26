@@ -37,6 +37,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -92,6 +93,9 @@ class User(Base):
     )
     stripe_customer_id: Mapped[str | None] = mapped_column(
         String(255), index=True
+    )
+    unlimited_credits: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     metadata_json: Mapped[dict] = mapped_column(
         MutableDict.as_mutable(json_type()), nullable=False, default=dict
