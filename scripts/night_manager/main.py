@@ -144,6 +144,44 @@ async def _run_resume(config: NMConfig) -> None:
 
     log.info("Resuming %d issues: %s", len(targets), targets)
 
+    # ABS-160: rebase each resumable worktree onto current origin/dev
+    # BEFORE re-spawning the continuation agent. Without this, a
+    # worktree forked an hour ago can fail `make e2e` on a since-merged
+    # spec fix; the resumed agent then "fixes" the spec under its own
+    # ticket prefix, the reviewer (LLM) approves the legitimate-looking
+    # diff, and the merge lands without the ticket's actual deliverable.
+    #
+    # Rebase failures (conflict) halt the resume for that issue. The
+    # issue is marked `blocked` with a clear reason and dropped from
+    # the target list — surfacing it for manual attention is safer
+    # than spawning a continuation against a half-rebased tree.
+    from .agent import rebase_worktree_onto_dev
+
+    rebase_blocked: list[str] = []
+    for ident in list(targets):
+        issue = state.issues[ident]
+        ok, rebase_msg = await rebase_worktree_onto_dev(issue)
+        if not ok:
+            log.error(
+                "ABS-160 rebase-on-resume blocked %s — skipping continuation spawn. "
+                "Detail: %s", ident, rebase_msg.splitlines()[0],
+            )
+            issue.mark_blocked(
+                f"rebase-on-resume onto origin/dev failed: {rebase_msg}"
+            )
+            rebase_blocked.append(ident)
+    if rebase_blocked:
+        targets = [t for t in targets if t not in rebase_blocked]
+        log.info(
+            "%d issue(s) dropped from resume due to rebase conflicts: %s",
+            len(rebase_blocked), rebase_blocked,
+        )
+
+    if not targets:
+        log.info("All resumable issues blocked by rebase-on-resume; nothing to spawn.")
+        state.save()
+        return
+
     for ident in targets:
         issue = state.issues[ident]
         # If the issue has a recorded session_id and a live worktree, the

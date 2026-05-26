@@ -633,3 +633,95 @@ async def cleanup_worktree(issue: IssueState) -> None:
         log.info("Removed worktree %s", worktree_path)
     else:
         log.warning("Failed to remove worktree %s (may need manual cleanup)", worktree_path)
+
+
+# ABS-160: integration target for rebase-on-resume. The full project
+# integrates new work into `dev` (not `main`); see CLAUDE.md and
+# docs/BRANCHING_STRATEGY.md. Centralised here so test fixtures can
+# patch a single symbol when validating the conflict path.
+REBASE_TARGET_BRANCH = "origin/dev"
+
+
+async def rebase_worktree_onto_dev(
+    issue: IssueState,
+) -> tuple[bool, str]:
+    """Fetch + rebase the issue's worktree onto current `origin/dev`.
+
+    Returns (success, message). Used by the resume path to eliminate
+    the "stale-fork-of-dev makes my e2e fail on a since-fixed test"
+    trigger documented in ABS-160 (nm-20260526-153728). Without this,
+    a worktree forked an hour ago can fail on a since-merged spec fix,
+    the agent "fixes" the spec under its own ticket prefix, and the
+    diff-vs-areas gate has to do all the work alone.
+
+    On conflicts the rebase is aborted and we return (False, msg).
+    The caller is responsible for marking the issue blocked / removing
+    it from the resume target list — surfacing it for manual handling
+    is preferable to silently re-spawning into stale code.
+
+    No-op (returns success) when `issue.worktree` is empty or the
+    directory doesn't exist — the resume path can still hit fresh
+    issues that never got a worktree allocated.
+    """
+    worktree = issue.worktree
+    if not worktree:
+        return True, "No worktree to rebase (issue never started)."
+
+    worktree_path = Path(worktree)
+    if not worktree_path.exists():
+        # The worktree was hand-removed (e.g. by post-merge cleanup)
+        # — nothing to rebase. The downstream spawn will recreate it.
+        return True, f"Worktree {worktree} no longer exists; nothing to rebase."
+
+    # 1. Fetch origin so origin/dev reflects today's tip.
+    fetch_proc = await asyncio.create_subprocess_exec(
+        "git", "-C", worktree, "fetch", "origin",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    fetch_out, fetch_err = await fetch_proc.communicate()
+    if fetch_proc.returncode != 0:
+        err = _combine_streams(fetch_out, fetch_err)
+        log.error(
+            "ERROR: rebase-on-resume fetch failed for %s in %s: %s",
+            issue.identifier, worktree, err,
+        )
+        return False, f"git fetch failed in {worktree}: {err}"
+
+    # 2. Rebase onto current origin/dev.
+    rebase_proc = await asyncio.create_subprocess_exec(
+        "git", "-C", worktree, "rebase", REBASE_TARGET_BRANCH,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    rebase_out, rebase_err = await rebase_proc.communicate()
+    if rebase_proc.returncode == 0:
+        log.info(
+            "Rebased %s worktree (%s) onto %s before re-spawn",
+            issue.identifier, worktree, REBASE_TARGET_BRANCH,
+        )
+        return True, f"Rebased {worktree} onto {REBASE_TARGET_BRANCH}"
+
+    # 3. Conflict path — abort and surface a clear error. Don't leave
+    # the worktree in a half-rebased state; the post-merge cleanup or
+    # a follow-up manual session needs a clean tree to work with.
+    conflict_detail = _combine_streams(rebase_out, rebase_err)
+    abort_proc = await asyncio.create_subprocess_exec(
+        "git", "-C", worktree, "rebase", "--abort",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await abort_proc.communicate()
+
+    log.error(
+        "ERROR: rebase-on-resume for %s failed with conflicts in %s. "
+        "Continuation NOT spawned — issue needs manual attention.\n"
+        "Conflict detail (truncated):\n%s",
+        issue.identifier, worktree, conflict_detail[:1000],
+    )
+    msg = (
+        f"Rebase onto {REBASE_TARGET_BRANCH} conflicted in {worktree}. "
+        f"Aborted to keep the worktree clean. Resolve manually before "
+        f"re-running the night manager. Conflict detail:\n{conflict_detail[:1000]}"
+    )
+    return False, msg
