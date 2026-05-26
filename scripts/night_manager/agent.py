@@ -50,6 +50,62 @@ Follow the SDLC in CLAUDE.md. When complete:
 """
 
 
+CONTINUATION_PROMPT_TEMPLATE = """\
+Continue work on Linear issue {identifier}: {title}
+
+You already did one pass on this issue in this worktree — your prior commits
+are visible via `git log dev..HEAD`. The Night Manager is invoking you again
+because a downstream gate (code review, worktree e2e, or post-merge regression)
+flagged something that needs to be fixed.
+
+Worktree: {worktree_path}
+Branch:   {branch}
+Port configuration: PG_PORT={pg_port} E2E_FASTAPI_PORT={api_port} E2E_WEB_PORT={web_port}
+
+=== Feedback from the failing gate ===
+{feedback}
+=== End of feedback ===
+
+Read your prior commits to understand what you already did, address the
+feedback above, run the relevant tests, and commit. Follow the SDLC in
+CLAUDE.md. Do NOT call any Linear/MCP tools — the Night Manager handles
+all Linear updates.\
+"""
+
+
+def _build_agent_env(issue: IssueState) -> dict[str, str]:
+    """Build the env dict shared by spawn_agent and resume_agent."""
+    import os
+    ports = issue.ports
+    assert ports is not None
+    env_vars = {
+        "PG_PORT": str(ports.pg),
+        "E2E_FASTAPI_PORT": str(ports.api),
+        "E2E_WEB_PORT": str(ports.web),
+        "E2E_API_URL": f"http://127.0.0.1:{ports.api}",
+        "E2E_BASE_URL": f"http://localhost:{ports.web}",
+        "DATABASE_URL": f"postgresql+psycopg://layer1:layer1@localhost:{ports.pg}/layer1_test",
+    }
+    return {**os.environ, **env_vars}
+
+
+def _snapshot_log_offset(log_file: str) -> int:
+    """Capture the log file size BEFORE a new attempt writes anything.
+
+    The error_detail fallback in `_run_agent_lifecycle` reads from this
+    offset to EOF, so historical events from prior attempts in the same
+    append-only log file can no longer false-positive the rate-limit
+    classifier (see ABS-146).
+    """
+    if not log_file:
+        return 0
+    p = Path(log_file)
+    try:
+        return p.stat().st_size if p.exists() else 0
+    except OSError:
+        return 0
+
+
 async def setup_worktree(issue: IssueState, state: NMState) -> Path:
     """Create a git worktree for the issue off dev."""
     worktree_name = f"nm-{issue.identifier.lower()}"
@@ -127,17 +183,7 @@ async def spawn_agent(
         web_port=ports.web,
     )
 
-    env_vars = {
-        "PG_PORT": str(ports.pg),
-        "E2E_FASTAPI_PORT": str(ports.api),
-        "E2E_WEB_PORT": str(ports.web),
-        "E2E_API_URL": f"http://127.0.0.1:{ports.api}",
-        "E2E_BASE_URL": f"http://localhost:{ports.web}",
-        "DATABASE_URL": f"postgresql+psycopg://layer1:layer1@localhost:{ports.pg}/layer1_test",
-    }
-
-    import os
-    env = {**os.environ, **env_vars}
+    env = _build_agent_env(issue)
 
     model = issue.agent_model or config.agent_model
     effort = issue.agent_effort or config.agent_effort
@@ -160,6 +206,7 @@ async def spawn_agent(
 
     log_path = Path(issue.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    issue.attempt_log_offset = _snapshot_log_offset(issue.log_file)
     log_fh = open(log_path, "a")
 
     proc = await asyncio.create_subprocess_exec(
@@ -184,22 +231,28 @@ async def resume_agent(
     config: NMConfig,
     feedback: str,
 ) -> asyncio.subprocess.Process:
-    """Resume an agent session with feedback."""
+    """Send feedback to the agent for an already-spawned issue.
+
+    Two paths:
+
+    * **Prior session was consumed** (`issue.completed_at` is set) —
+      Claude Code v2.x marks sessions consumed once they emit
+      `terminal_reason: completed`. Re-using that session_id via
+      `--resume` is rejected before any API call (see ABS-145).
+      We spawn a fresh session with a new UUID and pass the feedback
+      as the initial prompt; the worktree's git log is the source of
+      truth for prior work the new session needs to read.
+
+    * **Prior session is mid-flight** (e.g., watchdog kill, kernel
+      panic before completed_at was set) — `--resume <id>` still
+      works, so we keep the cheaper cache-reuse path for that case.
+    """
     assert issue.session_id, f"No session_id for {issue.identifier}"
-    ports = issue.ports
-    assert ports is not None
 
-    env_vars = {
-        "PG_PORT": str(ports.pg),
-        "E2E_FASTAPI_PORT": str(ports.api),
-        "E2E_WEB_PORT": str(ports.web),
-        "E2E_API_URL": f"http://127.0.0.1:{ports.api}",
-        "E2E_BASE_URL": f"http://localhost:{ports.web}",
-        "DATABASE_URL": f"postgresql+psycopg://layer1:layer1@localhost:{ports.pg}/layer1_test",
-    }
+    if issue.completed_at is not None:
+        return await _spawn_continuation(issue, config, feedback)
 
-    import os
-    env = {**os.environ, **env_vars}
+    env = _build_agent_env(issue)
 
     model = issue.agent_model or config.agent_model
     effort = issue.agent_effort or config.agent_effort
@@ -220,6 +273,7 @@ async def resume_agent(
     cmd.append(feedback)
 
     log_path = Path(issue.log_file)
+    issue.attempt_log_offset = _snapshot_log_offset(issue.log_file)
     log_fh = open(log_path, "a")
 
     proc = await asyncio.create_subprocess_exec(
@@ -233,8 +287,86 @@ async def resume_agent(
     issue.pid = proc.pid or 0
     issue.attempts += 1
     log.info(
-        "Resumed agent for %s (pid=%d, attempt=%d)",
+        "Resumed agent for %s (pid=%d, attempt=%d, mode=--resume)",
         issue.identifier, issue.pid, issue.attempts,
+    )
+    return proc
+
+
+async def _spawn_continuation(
+    issue: IssueState,
+    config: NMConfig,
+    feedback: str,
+) -> asyncio.subprocess.Process:
+    """Spawn a fresh Claude Code session to handle feedback on a completed issue.
+
+    Used when the prior session was consumed (`terminal_reason: completed`)
+    so `--resume` would be rejected by the CLI. Generates a new session_id,
+    persists it onto the issue, and uses a continuation prompt that points
+    the new agent at the worktree's existing commits.
+    """
+    new_session_id = str(uuid.uuid4())
+    old_session_id = issue.session_id
+    issue.session_id = new_session_id
+
+    ports = issue.ports
+    assert ports is not None
+
+    prompt = CONTINUATION_PROMPT_TEMPLATE.format(
+        identifier=issue.identifier,
+        title=issue.title,
+        worktree_path=issue.worktree,
+        branch=issue.branch,
+        pg_port=ports.pg,
+        api_port=ports.api,
+        web_port=ports.web,
+        feedback=feedback,
+    )
+
+    env = _build_agent_env(issue)
+
+    model = issue.agent_model or config.agent_model
+    effort = issue.agent_effort or config.agent_effort
+
+    cmd = [
+        "claude",
+        "-p",
+        "--verbose",
+        "--output-format", "stream-json",
+        "--permission-mode", "acceptEdits",
+        "--allowedTools", ALLOWED_TOOLS,
+        "--append-system-prompt", DEV_AGENT_SYSTEM_PROMPT,
+        "--session-id", new_session_id,
+        "--model", model,
+        "--max-budget-usd", str(config.agent_token_limit),
+    ]
+    if effort != "high":
+        cmd.extend(["--effort", effort])
+    cmd.append(prompt)
+
+    log_path = Path(issue.log_file)
+    issue.attempt_log_offset = _snapshot_log_offset(issue.log_file)
+    log_fh = open(log_path, "a")
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=issue.worktree,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=log_fh,
+        env=env,
+        limit=10 * 1024 * 1024,
+    )
+    issue.pid = proc.pid or 0
+    issue.attempts += 1
+    # The issue is no longer in a terminal state — it is being worked again.
+    # Clear completed_at so a subsequent resume_agent invocation will see
+    # this as mid-flight rather than another consumed-session case.
+    issue.completed_at = None
+    log.info(
+        "Spawned continuation for %s (pid=%d, attempt=%d, old_session=%s, new_session=%s)",
+        issue.identifier, issue.pid, issue.attempts,
+        old_session_id[:8] if old_session_id else "(none)",
+        new_session_id[:8],
     )
     return proc
 

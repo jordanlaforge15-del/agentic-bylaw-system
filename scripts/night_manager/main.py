@@ -563,16 +563,29 @@ async def _execute(
                 group = state.plan[group_idx]
 
         if rate_limited:
-            log.warning(
-                "Skipping group %d/%d — rate limited in prior group",
-                group_idx + 1, len(state.plan),
-            )
-            for ident in group.parallel:
-                issue = state.issues[ident]
-                issue.mark_failed("Skipped: rate limited in prior group")
-                issue.rate_limited = True
-            state.save()
-            continue
+            # ABS-147: re-probe at each group boundary before skipping. A
+            # five-hour rate-limit window often resets multiple times during
+            # a long NM run, and one bad group should not condemn the rest
+            # of the plan. If the quota is available again, clear the sticky
+            # flag and let the group execute normally.
+            available, probe_msg = await _check_rate_limit()
+            if available:
+                log.info(
+                    "Rate limit cleared at group %d/%d boundary — resuming plan",
+                    group_idx + 1, len(state.plan),
+                )
+                rate_limited = False
+            else:
+                log.warning(
+                    "Skipping group %d/%d — still rate limited: %s",
+                    group_idx + 1, len(state.plan), probe_msg[:120],
+                )
+                for ident in group.parallel:
+                    issue = state.issues[ident]
+                    issue.mark_failed("Skipped: rate limited in prior group")
+                    issue.rate_limited = True
+                state.save()
+                continue
 
         if group.deploy:
             if config.deploy:
@@ -825,9 +838,15 @@ async def _run_agent_lifecycle(
     if exit_code != 0:
         error_detail = final_output
         if not error_detail and issue.log_file:
+            # ABS-146: read only this attempt's slice of the append-only log
+            # file. Reading the whole file picks up historical rate-limit
+            # events from prior attempts and false-positives the classifier.
             try:
-                log_content = Path(issue.log_file).read_text()
-                error_detail = log_content.strip()
+                log_path = Path(issue.log_file)
+                with open(log_path, "rb") as f:
+                    f.seek(issue.attempt_log_offset)
+                    raw = f.read()
+                error_detail = raw.decode("utf-8", errors="replace").strip()
             except OSError:
                 error_detail = "(no log output captured)"
 
