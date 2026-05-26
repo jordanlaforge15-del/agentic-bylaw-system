@@ -47,16 +47,28 @@ test.describe("NM launcher isolation (ABS-152)", () => {
     );
     // The script must declare SESSION_NAME from REPO_ROOT.
     expect(script).toMatch(/SESSION_NAME="nm-.*shasum.*"/);
-    // tmux kill-session and tmux new-session must both target $SESSION_NAME.
-    expect(script).toMatch(/tmux kill-session -t "\$SESSION_NAME"/);
+    // After ABS-154, the script must has-session check and new-session, both
+    // targeting $SESSION_NAME. It must NOT unconditionally kill-session.
+    expect(script).toMatch(/tmux has-session -t "\$SESSION_NAME"/);
     expect(script).toMatch(/tmux new-session -d -s "\$SESSION_NAME"/);
     // The literal global name must NOT appear as a tmux target anywhere.
     const tmuxLines = script
       .split("\n")
-      .filter((l) => l.match(/^\s*tmux\s+(kill|new)-session/));
+      .filter((l) => l.match(/^\s*tmux\s+(has|kill|new)-session/));
     for (const line of tmuxLines) {
       expect(line).not.toMatch(/-t\s+night-manager\b/);
       expect(line).not.toMatch(/-s\s+night-manager\b/);
+    }
+    // An unconditional kill-session must NOT be present (would re-introduce
+    // the self-destruction bug ABS-154 fixed).
+    const killLines = script
+      .split("\n")
+      .filter((l) => /tmux kill-session/.test(l) && !l.trim().startsWith("#"));
+    for (const line of killLines) {
+      // The only kill-session references allowed are in echo statements (help
+      // text telling the user how to stop NM) or comments — not as actual
+      // commands. Filter out echo wrapped lines.
+      expect(line.trim()).toMatch(/^echo\s+|^#/);
     }
   });
 
@@ -74,6 +86,85 @@ test.describe("NM launcher isolation (ABS-152)", () => {
     const a = execSync(`${probePath} ${tmpA}`).toString().trim();
     const b = execSync(`${probePath} ${tmpB}`).toString().trim();
     expect(a).not.toEqual(b);
+  });
+});
+
+test.describe("NM launcher refuses to clobber a live session (ABS-154)", () => {
+  // Use a unique tmux session name per test run so we don't accidentally
+  // touch a real NM session a developer has running locally.
+  const TEST_SESSION = `nm-test-clobber-${process.pid}-${Date.now()}`;
+
+  test.afterEach(() => {
+    // Best-effort cleanup of any session we created.
+    try {
+      execSync(`tmux kill-session -t "${TEST_SESSION}" 2>/dev/null`, {
+        stdio: "ignore",
+      });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("has-session check refuses to clobber and exits non-zero", () => {
+    // Create a sentinel session the launcher would target if it weren't
+    // refusing. A long sleep keeps it alive across the second invocation.
+    execSync(
+      `tmux new-session -d -s "${TEST_SESSION}" 'sleep 60'`,
+    );
+
+    // Inline the launcher's guard logic against a fixed SESSION_NAME — the
+    // real launcher derives SESSION_NAME from REPO_ROOT, which we can't
+    // safely override mid-test without spawning a real NM. The guard block
+    // is what we're proving here.
+    const guard = `
+set -e
+SESSION_NAME="${TEST_SESSION}"
+if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+  echo "ERROR: NM session '$SESSION_NAME' is already running." >&2
+  echo "       Stop it first with:  tmux kill-session -t \${SESSION_NAME}" >&2
+  echo "       (This launcher refuses to clobber a live session — ABS-154.)" >&2
+  exit 2
+fi
+echo "would-have-launched"
+`;
+    let exitCode = 0;
+    let stderr = "";
+    try {
+      execSync(`bash -c '${guard.replace(/'/g, "'\\''")}'`, {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (e) {
+      // execSync throws on non-zero exit.
+      const err = e as { status?: number; stderr?: Buffer };
+      exitCode = err.status ?? -1;
+      stderr = err.stderr?.toString() ?? "";
+    }
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("already running");
+    expect(stderr).toContain("ABS-154");
+
+    // Confirm the original session is still alive.
+    const stillThere = execSync(
+      `tmux has-session -t "${TEST_SESSION}" 2>&1 && echo OK || echo GONE`,
+    )
+      .toString()
+      .trim();
+    expect(stillThere).toBe("OK");
+  });
+
+  test("start-night-manager.sh contains the has-session guard with the right error format", () => {
+    const script = readFileSync(
+      join(process.cwd(), "..", "scripts", "start-night-manager.sh"),
+      "utf-8",
+    );
+    // Guard must call has-session before new-session.
+    expect(script).toMatch(
+      /tmux has-session -t "\$SESSION_NAME"[\s\S]*?tmux new-session -d -s "\$SESSION_NAME"/,
+    );
+    // Guard exits 2 with a clear message.
+    expect(script).toMatch(/exit 2/);
+    expect(script).toMatch(/already running/i);
+    expect(script).toMatch(/ABS-154/);
   });
 });
 
