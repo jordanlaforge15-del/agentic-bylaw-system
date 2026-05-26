@@ -104,6 +104,28 @@ def compute_sli_compliance() -> dict:
     }
 
 
+def mount_metrics_routes(application: "FastAPI") -> None:
+    """Mount ``/metrics`` and ``/v1/slo`` on ``application``."""
+    from prometheus_client import (  # noqa: PLC0415
+        generate_latest,
+        CONTENT_TYPE_LATEST,
+    )
+    from fastapi.responses import Response  # noqa: PLC0415
+
+    APP_INFO.info({"version": "0.1.0", "service": "advisor"})
+
+    @application.get("/metrics", include_in_schema=False)
+    async def metrics():
+        return Response(
+            content=generate_latest(),
+            media_type=CONTENT_TYPE_LATEST,
+        )
+
+    @application.get("/v1/slo")
+    async def slo_status():
+        return compute_sli_compliance()
+
+
 def _estimate_histogram_quantile(
     quantile: float, metric_name: str, endpoint: str
 ) -> float | None:
