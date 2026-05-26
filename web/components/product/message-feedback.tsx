@@ -42,7 +42,7 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
             body: JSON.stringify({
               rating: payload.rating ?? rating,
               flag_reason: payload.flag_reason ?? flagReason,
-              flag_notes: payload.flag_notes ?? flagNotes || null,
+              flag_notes: payload.flag_notes ?? (flagNotes || null),
             }),
           },
         );
