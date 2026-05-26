@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -100,6 +100,27 @@ class AdvisorBillingSettings(BaseSettings):
         default="http://localhost:3000/billing/cancel",
         alias="ADVISOR_BILLING_CANCEL_URL",
     )
+
+    @field_validator(
+        "stripe_api_key",
+        "stripe_webhook_secret",
+        "stripe_price_quick_payg",
+        "stripe_price_quick_starter",
+        "stripe_price_quick_pro",
+        "stripe_price_quick_enterprise",
+        "stripe_price_standard_payg",
+        "stripe_price_standard_starter",
+        "stripe_price_standard_pro",
+        "stripe_price_standard_enterprise",
+        "stripe_price_complex_payg",
+        "stripe_price_complex_starter",
+        "stripe_price_complex_pro",
+        "stripe_price_complex_enterprise",
+        mode="before",
+    )
+    @classmethod
+    def coerce_empty_to_none(cls, v: str | None) -> str | None:
+        return None if v == "" else v
 
     model_config = SettingsConfigDict(
         env_file=".env",
