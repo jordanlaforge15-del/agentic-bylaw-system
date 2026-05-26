@@ -20,6 +20,7 @@ export default function LaunchPage() {
   const [override, setOverride] = useState("");
   const [launching, setLaunching] = useState(false);
   const [lastRun, setLastRun] = useState<RunState | null>(null);
+  const [resumeQueued, setResumeQueued] = useState(false);
 
   const groups = useMemo(() => {
     const count = override ? 1 : 9;
@@ -37,9 +38,17 @@ export default function LaunchPage() {
 
   const resumableIssues = useMemo(() => {
     if (!lastRun) return [];
-    return Object.values(lastRun.issues).filter(
-      (i) => i.status === "failed" || i.status === "blocked",
+    const allowed = resumeQueued
+      ? ["failed", "blocked", "reviewing", "queued"]
+      : ["failed", "blocked", "reviewing"];
+    return Object.values(lastRun.issues).filter((i) =>
+      allowed.includes(i.status),
     );
+  }, [lastRun, resumeQueued]);
+
+  const hasQueued = useMemo(() => {
+    if (!lastRun) return false;
+    return Object.values(lastRun.issues).some((i) => i.status === "queued");
   }, [lastRun]);
 
   async function handleLaunch() {
@@ -85,6 +94,7 @@ export default function LaunchPage() {
           deploy,
           resume: !issueId,
           resumeIssue: issueId,
+          resumeQueued,
         }),
       });
       router.push("/nm");
@@ -367,7 +377,7 @@ export default function LaunchPage() {
           </div>
         </Panel>
 
-        {resumableIssues.length > 0 && lastRun && (
+        {lastRun && (resumableIssues.length > 0 || hasQueued) && (
           <Panel
             id="RSM-03"
             title="RESUME LAST RUN"
@@ -391,6 +401,7 @@ export default function LaunchPage() {
               {resumableIssues.map((iss) => (
                 <div
                   key={iss.identifier}
+                  data-testid={`resume-row-${iss.identifier}`}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -437,16 +448,39 @@ export default function LaunchPage() {
                   </button>
                 </div>
               ))}
+              {hasQueued && (
+                <label
+                  data-testid="resume-queued-toggle"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontSize: 11,
+                    color: "var(--text-dim)",
+                    marginTop: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={resumeQueued}
+                    onChange={(e) => setResumeQueued(e.target.checked)}
+                  />
+                  Include queued (never-started) issues
+                </label>
+              )}
               <div style={{ marginTop: 6 }}>
                 <button
                   className="nm-btn nm-btn--prim"
                   style={{ width: "100%" }}
                   onClick={() => handleResume()}
-                  disabled={launching}
+                  disabled={launching || resumableIssues.length === 0}
                 >
                   {launching
                     ? "RESUMING…"
-                    : `▶ RESUME ALL ${resumableIssues.length} ISSUES`}
+                    : resumableIssues.length === 0
+                      ? "▶ NOTHING TO RESUME"
+                      : `▶ RESUME ALL ${resumableIssues.length} ISSUES`}
                 </button>
               </div>
             </div>
