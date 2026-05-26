@@ -48,6 +48,21 @@ export function useOrchestratorLog() {
   return data ?? [];
 }
 
+// ABS-155: poll the access-log endpoint every 10s for the dashboard
+// panel. The endpoint is admin-gated; for non-admins the response is
+// 401 (no `entries` field), so we hand back an empty array rather
+// than letting the panel surface "undefined". When the panel is
+// invisible to non-admins, leaking the existence of the endpoint via
+// 401 is fine — the dashboard itself is already operator-only.
+export function useAccessLog() {
+  const { data } = useSWR<{ entries: import("./types").AccessLogEntry[] }>(
+    "/api/nm/access-log?limit=10",
+    fetcher,
+    { refreshInterval: 10000 },
+  );
+  return data?.entries ?? [];
+}
+
 export function useLogStream(issueId: string | null) {
   const [events, setEvents] = useState<ParsedLogEvent[]>([]);
   const esRef = useRef<EventSource | null>(null);

@@ -85,3 +85,35 @@ export type ReportSummary = {
 };
 
 export type NmTheme = "apollo" | "vanguard" | "red_october";
+
+// ABS-155: mirror of AccessLogEntry from
+// web/app/api/nm/access-log.ts — UI-side shape for the dashboard
+// panel. Kept in sync by hand; the access-log file is the source of
+// truth. If a new field is added there, mirror it here (or trim it
+// out if the panel doesn't need it).
+export type AccessOutcome =
+  | "ok"
+  | "test_mode"
+  | "rejected"
+  | "refused"
+  | "error";
+
+export type AccessLogEntry = {
+  ts: string;
+  correlationId: string;
+  route: string;
+  method: string;
+  remoteAddr: string | null;
+  userAgent: string | null;
+  referer: string | null;
+  origin: string | null;
+  secFetchSite: string | null;
+  secFetchMode: string | null;
+  secFetchDest: string | null;
+  testMode: boolean;
+  launcherExec: boolean;
+  bodyFingerprint: { agentModel?: string; dryRun?: boolean };
+  status: number;
+  outcome: AccessOutcome;
+  note?: string;
+};
