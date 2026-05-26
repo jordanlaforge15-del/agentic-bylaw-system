@@ -277,6 +277,78 @@ async def code_review(issue: IssueState, config: NMConfig) -> tuple[bool, str]:
     return True, summary
 
 
+def _extract_failing_tests(worktree: str) -> str:
+    """Parse Playwright JSON reporter output and return a formatted list of
+    failing test names with isolation invocations.
+
+    Reads `web/test-results/results.json` from the worktree.  Falls back
+    gracefully (returns empty string) if the file doesn't exist or can't
+    be parsed — caller appends to the existing stdout-tail feedback.
+
+    The Playwright JSON reporter schema (reporter "json") writes:
+      { "suites": [ { "file": str, "suites": [...], "specs": [...] } ] }
+    Each spec has a "title" and "tests" list; each test has "results" with
+    a "status" field.  A test is failing if any result has status "failed"
+    or "timedOut".
+    """
+    results_path = Path(worktree) / "web" / "test-results" / "results.json"
+    try:
+        data = json.loads(results_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.debug("Could not read Playwright results.json from %s: %s", worktree, exc)
+        return ""
+
+    failing: list[str] = []
+
+    def _walk_suites(suites: list, file_path: str, describe_stack: list[str]) -> None:
+        for suite in suites:
+            # Nested describe blocks
+            title = suite.get("title") or ""
+            child_suites = suite.get("suites") or []
+            specs = suite.get("specs") or []
+            new_stack = describe_stack + ([title] if title else [])
+            _walk_suites(child_suites, file_path, new_stack)
+            for spec in specs:
+                spec_title = spec.get("title", "")
+                tests = spec.get("tests") or []
+                is_failing = any(
+                    result.get("status") in ("failed", "timedOut")
+                    for test in tests
+                    for result in (test.get("results") or [])
+                )
+                if is_failing:
+                    parts = new_stack + [spec_title]
+                    full_title = " › ".join(p for p in parts if p)
+                    failing.append(f"  - {file_path} › {full_title}" if file_path else f"  - {full_title}")
+
+    top_suites = data.get("suites") or []
+    for top in top_suites:
+        file_path = top.get("file") or top.get("title") or ""
+        child_suites = top.get("suites") or []
+        specs = top.get("specs") or []
+        _walk_suites(child_suites, file_path, [])
+        for spec in specs:
+            spec_title = spec.get("title", "")
+            tests = spec.get("tests") or []
+            is_failing = any(
+                result.get("status") in ("failed", "timedOut")
+                for test in tests
+                for result in (test.get("results") or [])
+            )
+            if is_failing:
+                failing.append(f"  - {file_path} › {spec_title}" if file_path else f"  - {spec_title}")
+
+    if not failing:
+        return ""
+
+    lines = [
+        "Failing tests (run in isolation with: "
+        "`cd web && npx playwright test <spec> --grep '<test name>'`):",
+    ]
+    lines.extend(failing)
+    return "\n".join(lines)
+
+
 async def run_e2e(issue: IssueState) -> tuple[bool, str]:
     """
     Run make e2e in the issue's worktree with its port triplet.
@@ -322,7 +394,12 @@ async def run_e2e(issue: IssueState) -> tuple[bool, str]:
     else:
         log.info("E2E FAILED for %s (exit=%d)", issue.identifier, proc.returncode or 1)
 
-    return passed, output[-5000:]
+    tail = output[-5000:]
+    if not passed:
+        failing_names = _extract_failing_tests(worktree)
+        if failing_names:
+            tail = failing_names + "\n\n" + tail
+    return passed, tail
 
 
 def _combine_streams(stdout: bytes, stderr: bytes) -> str:
@@ -524,7 +601,12 @@ async def run_dev_e2e(issue: IssueState) -> tuple[bool, str]:
     else:
         log.info("Dev regression e2e FAILED")
 
-    return passed, output[-5000:]
+    tail = output[-5000:]
+    if not passed:
+        failing_names = _extract_failing_tests(worktree)
+        if failing_names:
+            tail = failing_names + "\n\n" + tail
+    return passed, tail
 
 
 async def restore_worktree_branch(issue: IssueState) -> None:

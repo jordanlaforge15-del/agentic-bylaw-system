@@ -46,8 +46,8 @@ export default defineConfig({
   retries: isCI ? 1 : 0,
   workers: isCI ? 2 : 4,
   reporter: isCI
-    ? [["list"], ["html", { open: "never" }]]
-    : [["list"], ["html", { open: "never" }]],
+    ? [["list"], ["html", { open: "never" }], ["json", { outputFile: "test-results/results.json" }]]
+    : [["list"], ["html", { open: "never" }], ["json", { outputFile: "test-results/results.json" }]],
   // Per-test 30s cap is generous for SSE flows (chat turn end-to-end
   // is well under 5s with MockGateway). Bump if a real flow needs it.
   timeout: 30_000,
