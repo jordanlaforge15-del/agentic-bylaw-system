@@ -11,6 +11,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NM_DIR = REPO_ROOT / ".night-manager"
 LOGS_DIR = NM_DIR / "logs"
 STATE_FILE = NM_DIR / "state.json"
+# Sentinel the user can touch to force an in-flight rescan at the next group
+# boundary. The manager already polls Linear at every boundary; this file is
+# an "I added work, please notice" signal that just gets logged and consumed.
+NUDGE_FILE = NM_DIR / "nudge"
 
 DEFAULT_MAX_AGENTS = 2
 DEFAULT_LABEL = "Triaged"
