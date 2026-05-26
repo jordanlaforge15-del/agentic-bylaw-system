@@ -48,6 +48,11 @@ def audit_document_pages(
     selected_pages = page_numbers or select_audit_pages(snapshots, sample_size=sample_size)
     selected_snapshots = [by_page[page] for page in selected_pages if page in by_page]
 
+    # All required data is now in memory as plain Pydantic models. Release
+    # the DB connection before the LLM loop so Postgres idle-in-transaction
+    # timeout cannot kill the session mid-audit (ABS-114).
+    session.commit()
+
     reviewer = ClaudeCodeLayer1Auditor(model=llm_model or get_settings().audit_llm_model) if use_llm else None
     page_results: list[PageAuditResult] = []
     for snapshot in selected_snapshots:
