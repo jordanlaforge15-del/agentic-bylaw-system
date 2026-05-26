@@ -6,7 +6,23 @@ import re
 import httpx
 from tenacity import retry, stop_after_attempt, wait_fixed
 
+from layer1._claude_code_client import ClaudeCodeBackendError, call_claude_p_plain
 from layer2.llm.base import BaseLLMClient
+
+
+class ClaudeCodeLLMClient(BaseLLMClient):
+    """Layer 2 LLM client routed through ``claude -p`` (subscription billing).
+
+    On any subprocess failure raises ``ClaudeCodeBackendError`` — NEVER falls
+    back to OpenAI or any other provider.
+    """
+
+    def __init__(self) -> None:
+        self.model_name = "claude-code"
+
+    def generate(self, *, system_prompt: str, user_prompt: str, temperature: float = 0.0) -> str:
+        prompt = f"{system_prompt}\n\n{user_prompt}"
+        return call_claude_p_plain(prompt)
 
 
 class OpenAICompatibleLLMClient(BaseLLMClient):
