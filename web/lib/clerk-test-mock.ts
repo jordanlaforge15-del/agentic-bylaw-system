@@ -99,3 +99,26 @@ export async function auth(): Promise<StandaloneAuthObject> {
     getToken: async () => jwt,
   };
 }
+
+// ---------- currentUser (for admin-auth.ts) ----------
+
+type MockEmailAddress = { emailAddress: string };
+
+type MockClerkUser = {
+  id: string;
+  primaryEmailAddress: MockEmailAddress | null;
+  emailAddresses: MockEmailAddress[];
+};
+
+export async function currentUser(): Promise<MockClerkUser | null> {
+  const store = await cookies();
+  const userId = store.get("abs_test_sub_user_id")?.value?.trim() || null;
+  if (!userId) return null;
+
+  const email = `${userId}@e2e.test`;
+  return {
+    id: userId,
+    primaryEmailAddress: { emailAddress: email },
+    emailAddresses: [{ emailAddress: email }],
+  };
+}
