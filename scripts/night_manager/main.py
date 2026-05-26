@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import NMConfig, NM_DIR, REPO_ROOT, STUCK_TIMEOUT_MINUTES
+from .config import NMConfig, NM_DIR, REPO_ROOT, STUCK_TIMEOUT_MINUTES, MAX_REGRESSION_FIX_CYCLES
 from .linear_client import LinearClient, LinearIssue
 from .state import NMState
 
@@ -17,6 +17,11 @@ log = logging.getLogger("night_manager")
 
 async def run(config: NMConfig) -> None:
     _setup_logging()
+
+    if config.resume or config.resume_issue:
+        await _run_resume(config)
+        return
+
     log.info("Night Manager starting (dry_run=%s, max_agents=%d)", config.dry_run, config.max_agents)
 
     linear = LinearClient(config.linear_api_key)
@@ -42,6 +47,70 @@ async def run(config: NMConfig) -> None:
         await linear.close()
 
     log.info("Night Manager finished. Run ID: %s", state.run_id)
+
+
+async def _run_resume(config: NMConfig) -> None:
+    """Resume failed/blocked issues from the last run's saved state."""
+    state = NMState.load()
+    if not state.run_id:
+        log.error("No previous run state found. Cannot resume.")
+        return
+
+    log.info("Resuming run %s", state.run_id)
+
+    # Determine which issues to resume
+    if config.resume_issue:
+        targets = [config.resume_issue]
+        if config.resume_issue not in state.issues:
+            log.error("Issue %s not found in last run state", config.resume_issue)
+            return
+        issue = state.issues[config.resume_issue]
+        if not issue.is_resumable:
+            log.error(
+                "Issue %s is not resumable (status=%s). Only failed/blocked issues can be resumed.",
+                config.resume_issue, issue.status,
+            )
+            return
+    else:
+        targets = [
+            ident for ident, iss in state.issues.items() if iss.is_resumable
+        ]
+
+    if not targets:
+        log.info("No resumable issues found. All issues from last run are merged or in progress.")
+        return
+
+    log.info("Resuming %d issues: %s", len(targets), targets)
+
+    for ident in targets:
+        state.issues[ident].reset_for_retry()
+
+    # Rebuild the execution plan keeping only groups that contain resumable issues
+    resumed_plan = []
+    for group in state.plan:
+        if group.deploy:
+            continue
+        active = [i for i in group.parallel if i in targets]
+        if active:
+            from .state import ExecutionGroup
+            resumed_plan.append(ExecutionGroup(parallel=active))
+
+    state.plan = resumed_plan
+    state.save()
+
+    log.info("Resumed execution plan:")
+    for i, group in enumerate(resumed_plan):
+        log.info("  Group %d: %s (parallel)", i + 1, group.parallel)
+
+    linear = LinearClient(config.linear_api_key)
+    try:
+        workflow_states = await linear.get_workflow_states()
+        await _execute(state, config, linear, workflow_states)
+        await _generate_report(state, linear)
+    finally:
+        await linear.close()
+
+    log.info("Resume run finished. Original run ID: %s", state.run_id)
 
 
 async def _fetch_issues(linear: LinearClient, config: NMConfig) -> list[LinearIssue]:
@@ -108,20 +177,84 @@ async def _dry_run_report(state: NMState, linear: LinearClient) -> None:
     print(report)
 
 
+RATE_LIMIT_PROBE_WAIT = 300  # seconds to wait before retrying after rate limit
+RATE_LIMIT_MAX_RETRIES = 6  # ~30 min total wait
+
+
+async def _check_rate_limit() -> tuple[bool, str]:
+    """Run a minimal Claude probe to check if we're rate-limited.
+
+    Returns (available, message). available=True means quota is usable.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "claude", "-p",
+        "--model", "haiku",
+        "--max-budget-usd", "0.05",
+        "respond with only the word OK",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    output = stdout.decode("utf-8", errors="replace").strip()
+    error = stderr.decode("utf-8", errors="replace").strip()
+
+    if proc.returncode == 0:
+        return True, "OK"
+
+    combined = f"{output} {error}"
+    if _is_rate_limited(combined):
+        return False, combined
+    return True, "Probe failed but not rate-limited, proceeding"
+
+
+async def _wait_for_rate_limit(group_idx: int, total_groups: int) -> bool:
+    """Wait for rate limit to clear, polling periodically.
+
+    Returns True if quota became available, False if retries exhausted.
+    """
+    for attempt in range(1, RATE_LIMIT_MAX_RETRIES + 1):
+        log.info(
+            "Rate limited before group %d/%d — waiting %ds (attempt %d/%d)",
+            group_idx + 1, total_groups, RATE_LIMIT_PROBE_WAIT,
+            attempt, RATE_LIMIT_MAX_RETRIES,
+        )
+        await asyncio.sleep(RATE_LIMIT_PROBE_WAIT)
+        available, msg = await _check_rate_limit()
+        if available:
+            log.info("Rate limit cleared, resuming")
+            return True
+        log.info("Still rate limited: %s", msg[:120])
+    return False
+
+
 async def _execute(
     state: NMState,
     config: NMConfig,
     linear: LinearClient,
     workflow_states: dict[str, str],
 ) -> None:
-    from .agent import spawn_agent, monitor_agent, cleanup_worktree, setup_worktree
-    from .reviewer import review_and_gate, merge_to_dev, run_dev_e2e, revert_merge
+    from .agent import spawn_agent, monitor_agent, cleanup_worktree, setup_worktree, resume_agent
+    from .reviewer import review_and_gate, merge_to_dev, run_dev_e2e, run_e2e, revert_merge, restore_worktree_branch
 
     in_progress_id = workflow_states.get("In Progress")
     in_review_id = workflow_states.get("In Review")
     done_id = workflow_states.get("Done")
 
+    rate_limited = False
+
     for group_idx, group in enumerate(state.plan):
+        if rate_limited:
+            log.warning(
+                "Skipping group %d/%d — rate limited in prior group",
+                group_idx + 1, len(state.plan),
+            )
+            for ident in group.parallel:
+                issue = state.issues[ident]
+                issue.mark_failed("Skipped: rate limited in prior group")
+                issue.rate_limited = True
+            state.save()
+            continue
+
         if group.deploy:
             if config.deploy:
                 log.info("Group %d: Deployment phase", group_idx + 1)
@@ -134,6 +267,20 @@ async def _execute(
             "=== Group %d/%d: %s ===",
             group_idx + 1, len(state.plan), group.parallel,
         )
+
+        available, probe_msg = await _check_rate_limit()
+        if not available:
+            log.warning("Rate limit detected before group %d: %s", group_idx + 1, probe_msg[:120])
+            cleared = await _wait_for_rate_limit(group_idx, len(state.plan))
+            if not cleared:
+                log.error("Rate limit did not clear after %d retries, marking remaining groups as rate-limited",
+                          RATE_LIMIT_MAX_RETRIES)
+                rate_limited = True
+                for ident in group.parallel:
+                    state.issues[ident].mark_failed("Rate limited — quota did not clear")
+                    state.issues[ident].rate_limited = True
+                state.save()
+                continue
 
         agent_tasks: dict[str, asyncio.Task] = {}
 
@@ -182,6 +329,9 @@ async def _execute(
                     state.issues[ident].mark_failed(str(result))
                     state.save()
 
+        if any(state.issues[i].rate_limited for i in group.parallel):
+            rate_limited = True
+
         # Sequential merge phase for this group
         for ident in group.parallel:
             issue = state.issues[ident]
@@ -201,25 +351,10 @@ async def _execute(
                 )
                 continue
 
-            success, msg = await merge_to_dev(issue)
-            if not success:
-                issue.mark_failed(msg)
-                state.save()
-                await linear.post_comment(issue.linear_id, f"**Night Manager** — Merge FAILED\n\n{msg}")
-                continue
-
-            log.info("Running regression e2e on dev after merging %s", ident)
-            reg_passed, reg_output = await run_dev_e2e(issue)
-            if not reg_passed:
-                log.warning("Regression detected after merging %s, reverting", ident)
-                rev_ok, rev_msg = await revert_merge(issue)
-                issue.mark_failed(f"Post-merge regression: reverted. {rev_msg}")
-                state.save()
-                await linear.post_comment(
-                    issue.linear_id,
-                    f"**Night Manager** — Post-merge regression detected, merge reverted.\n\n"
-                    f"```\n{reg_output[-2000:]}\n```",
-                )
+            merged = await _merge_and_regression_loop(
+                issue, config, state, linear,
+            )
+            if not merged:
                 continue
 
             issue.mark_merged()
@@ -242,6 +377,120 @@ async def _execute(
     log.info("All groups processed.")
 
 
+RATE_LIMIT_MARKERS = ["session limit", "rate limit", "usage limit"]
+
+
+def _is_rate_limited(error_text: str) -> bool:
+    lower = error_text.lower()
+    return any(m in lower for m in RATE_LIMIT_MARKERS)
+
+
+async def _merge_and_regression_loop(
+    issue,
+    config: NMConfig,
+    state: NMState,
+    linear,
+) -> bool:
+    """Merge the issue into dev and run regression e2e.
+
+    On regression failure, reverts the merge, resumes the agent to fix,
+    and retries up to MAX_REGRESSION_FIX_CYCLES times.
+    Returns True if merged and regression passed.
+    """
+    from .agent import resume_agent, monitor_agent
+    from .reviewer import (
+        merge_to_dev, run_dev_e2e, run_e2e,
+        revert_merge, restore_worktree_branch,
+    )
+
+    success, msg = await merge_to_dev(issue)
+    if not success:
+        issue.mark_failed(msg)
+        state.save()
+        await linear.post_comment(
+            issue.linear_id, f"**Night Manager** — Merge FAILED\n\n{msg}",
+        )
+        return False
+
+    for reg_cycle in range(MAX_REGRESSION_FIX_CYCLES + 1):
+        log.info(
+            "Regression e2e for %s (attempt %d/%d)",
+            issue.identifier, reg_cycle + 1, MAX_REGRESSION_FIX_CYCLES + 1,
+        )
+        reg_passed, reg_output = await run_dev_e2e(issue)
+        if reg_passed:
+            return True
+
+        log.warning(
+            "Regression detected after merging %s (attempt %d/%d), reverting",
+            issue.identifier, reg_cycle + 1, MAX_REGRESSION_FIX_CYCLES + 1,
+        )
+        await revert_merge(issue)
+
+        if reg_cycle >= MAX_REGRESSION_FIX_CYCLES:
+            issue.mark_failed(
+                f"Post-merge regression after {MAX_REGRESSION_FIX_CYCLES + 1} attempts",
+            )
+            state.save()
+            await linear.post_comment(
+                issue.linear_id,
+                f"**Night Manager** — Post-merge regression, exhausted "
+                f"{MAX_REGRESSION_FIX_CYCLES + 1} fix attempts.\n\n"
+                f"```\n{reg_output[-2000:]}\n```",
+            )
+            return False
+
+        await restore_worktree_branch(issue)
+
+        feedback = (
+            f"Post-merge regression detected on dev after merging {issue.identifier}. "
+            f"The merge was reverted. Fix the failing tests and commit.\n\n"
+            f"Regression test output:\n{reg_output[-3000:]}"
+        )
+        log.info(
+            "Sending regression feedback to agent for %s (fix cycle %d/%d)",
+            issue.identifier, reg_cycle + 1, MAX_REGRESSION_FIX_CYCLES,
+        )
+        proc = await resume_agent(issue, config, feedback)
+        exit_code, _ = await monitor_agent(proc, issue, STUCK_TIMEOUT_MINUTES)
+
+        if exit_code != 0:
+            issue.mark_failed(f"Agent failed during regression fix (exit={exit_code})")
+            state.save()
+            await linear.post_comment(
+                issue.linear_id,
+                f"**Night Manager** — Agent failed during regression fix cycle "
+                f"{reg_cycle + 1} (exit={exit_code})",
+            )
+            return False
+
+        wt_passed, wt_output = await run_e2e(issue)
+        if not wt_passed:
+            issue.mark_failed(
+                f"Worktree e2e still failing after regression fix cycle {reg_cycle + 1}",
+            )
+            state.save()
+            await linear.post_comment(
+                issue.linear_id,
+                f"**Night Manager** — Worktree e2e failed after regression fix "
+                f"cycle {reg_cycle + 1}.\n\n```\n{wt_output[-2000:]}\n```",
+            )
+            return False
+
+        success, msg = await merge_to_dev(issue)
+        if not success:
+            issue.mark_failed(msg)
+            state.save()
+            await linear.post_comment(
+                issue.linear_id,
+                f"**Night Manager** — Re-merge FAILED after fix cycle "
+                f"{reg_cycle + 1}\n\n{msg}",
+            )
+            return False
+
+    return False  # unreachable
+
+
 async def _run_agent_lifecycle(
     proc: asyncio.subprocess.Process,
     issue,
@@ -262,7 +511,14 @@ async def _run_agent_lifecycle(
                 error_detail = log_content.strip()
             except OSError:
                 error_detail = "(no log output captured)"
-        issue.mark_failed(f"Agent exited with code {exit_code}: {error_detail[:500]}")
+
+        if _is_rate_limited(error_detail):
+            issue.mark_failed(f"Rate limited: {error_detail[:200]}")
+            issue.rate_limited = True
+            log.warning("Agent %s hit rate limit — remaining group issues will also fail", issue.identifier)
+        else:
+            issue.mark_failed(f"Agent exited with code {exit_code}: {error_detail[:500]}")
+
         state.save()
         await linear.post_comment(
             issue.linear_id,

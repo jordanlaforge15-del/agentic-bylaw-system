@@ -8,7 +8,7 @@ import logging
 import os
 from pathlib import Path
 
-from .config import NMConfig, REPO_ROOT, MAX_REVIEW_CYCLES, MAX_E2E_FIX_CYCLES
+from .config import NMConfig, REPO_ROOT, MAX_REVIEW_CYCLES, MAX_E2E_FIX_CYCLES, MAX_REGRESSION_FIX_CYCLES
 from .state import IssueState
 
 log = logging.getLogger("night_manager.reviewer")
@@ -66,8 +66,8 @@ async def code_review(issue: IssueState, config: NMConfig) -> tuple[bool, str]:
     cmd = [
         "claude", "-p",
         "--output-format", "json",
-        "--model", "sonnet",
-        "--max-budget-usd", "2",
+        "--model", config.reviewer_model,
+        "--max-budget-usd", str(config.reviewer_token_limit),
         review_prompt,
     ]
 
@@ -192,6 +192,15 @@ async def merge_to_dev(issue: IssueState) -> tuple[bool, str]:
                 "Merge step '%s' failed for %s: %s",
                 " ".join(cmd), issue.identifier, error,
             )
+            if "merge" in cmd:
+                abort = await asyncio.create_subprocess_exec(
+                    "git", "merge", "--abort",
+                    cwd=str(REPO_ROOT),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await abort.communicate()
+                log.info("Aborted failed merge to keep dev clean")
             return False, f"Merge failed at '{' '.join(cmd)}': {error}"
 
     log.info("Merged %s into dev", issue.identifier)
@@ -294,6 +303,21 @@ async def run_dev_e2e(issue: IssueState) -> tuple[bool, str]:
         log.info("Dev regression e2e FAILED")
 
     return passed, output[-5000:]
+
+
+async def restore_worktree_branch(issue: IssueState) -> None:
+    """Checkout the issue's feature branch in its worktree.
+
+    After run_dev_e2e the worktree is on dev — this restores it so the
+    agent can resume working on the feature branch.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "git", "checkout", issue.branch,
+        cwd=str(issue.worktree),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await proc.communicate()
 
 
 async def review_and_gate(

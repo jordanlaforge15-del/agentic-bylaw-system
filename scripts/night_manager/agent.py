@@ -122,6 +122,9 @@ async def spawn_agent(
     import os
     env = {**os.environ, **env_vars}
 
+    model = issue.agent_model or config.agent_model
+    effort = issue.agent_effort or config.agent_effort
+
     cmd = [
         "claude",
         "-p",
@@ -131,10 +134,12 @@ async def spawn_agent(
         "--allowedTools", ALLOWED_TOOLS,
         "--append-system-prompt", DEV_AGENT_SYSTEM_PROMPT,
         "--session-id", session_id,
-        "--model", config.model,
-        "--max-budget-usd", "10",
-        prompt,
+        "--model", model,
+        "--max-budget-usd", str(config.agent_token_limit),
     ]
+    if effort != "high":
+        cmd.extend(["--effort", effort])
+    cmd.append(prompt)
 
     log_path = Path(issue.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,8 +156,8 @@ async def spawn_agent(
     issue.pid = proc.pid or 0
     issue.mark_started()
     log.info(
-        "Spawned agent for %s (pid=%d, session=%s)",
-        issue.identifier, issue.pid, session_id,
+        "Spawned agent for %s (pid=%d, session=%s, model=%s, effort=%s)",
+        issue.identifier, issue.pid, session_id, model, effort,
     )
     return proc
 
@@ -179,6 +184,9 @@ async def resume_agent(
     import os
     env = {**os.environ, **env_vars}
 
+    model = issue.agent_model or config.agent_model
+    effort = issue.agent_effort or config.agent_effort
+
     cmd = [
         "claude",
         "-p",
@@ -187,10 +195,12 @@ async def resume_agent(
         "--permission-mode", "acceptEdits",
         "--allowedTools", ALLOWED_TOOLS,
         "--resume", issue.session_id,
-        "--model", config.model,
-        "--max-budget-usd", "10",
-        feedback,
+        "--model", model,
+        "--max-budget-usd", str(config.agent_token_limit),
     ]
+    if effort != "high":
+        cmd.extend(["--effort", effort])
+    cmd.append(feedback)
 
     log_path = Path(issue.log_file)
     log_fh = open(log_path, "a")

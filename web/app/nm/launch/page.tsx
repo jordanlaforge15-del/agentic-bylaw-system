@@ -1,23 +1,46 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Panel } from "../components/panel";
+import type { RunState, Issue } from "../lib/types";
 
 export default function LaunchPage() {
   const router = useRouter();
   const [maxAgents, setMaxAgents] = useState(3);
   const [label, setLabel] = useState("Triaged");
   const [model, setModel] = useState("opus");
+  const [agentModel, setAgentModel] = useState("opus");
+  const [agentEffort, setAgentEffort] = useState("high");
+  const [agentTokenLimit, setAgentTokenLimit] = useState(10);
+  const [reviewerModel, setReviewerModel] = useState("sonnet");
+  const [reviewerTokenLimit, setReviewerTokenLimit] = useState(2);
   const [deploy, setDeploy] = useState(true);
   const [dryRun, setDryRun] = useState(false);
   const [override, setOverride] = useState("");
   const [launching, setLaunching] = useState(false);
+  const [lastRun, setLastRun] = useState<RunState | null>(null);
 
   const groups = useMemo(() => {
     const count = override ? 1 : 9;
     return Math.ceil(count / maxAgents);
   }, [maxAgents, override]);
+
+  useEffect(() => {
+    fetch("/api/nm/state")
+      .then((r) => r.json())
+      .then((data: RunState) => {
+        if (data.run_id) setLastRun(data);
+      })
+      .catch(() => {});
+  }, []);
+
+  const resumableIssues = useMemo(() => {
+    if (!lastRun) return [];
+    return Object.values(lastRun.issues).filter(
+      (i) => i.status === "failed" || i.status === "blocked",
+    );
+  }, [lastRun]);
 
   async function handleLaunch() {
     setLaunching(true);
@@ -29,9 +52,39 @@ export default function LaunchPage() {
           maxAgents,
           label,
           model,
+          agentModel,
+          agentEffort,
+          agentTokenLimit,
+          reviewerModel,
+          reviewerTokenLimit,
           deploy,
           issue: override || undefined,
           dryRun,
+        }),
+      });
+      router.push("/nm");
+    } catch {
+      setLaunching(false);
+    }
+  }
+
+  async function handleResume(issueId?: string) {
+    setLaunching(true);
+    try {
+      await fetch("/api/nm/run/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          maxAgents,
+          model,
+          agentModel,
+          agentEffort,
+          agentTokenLimit,
+          reviewerModel,
+          reviewerTokenLimit,
+          deploy,
+          resume: !issueId,
+          resumeIssue: issueId,
         }),
       });
       router.push("/nm");
@@ -102,20 +155,86 @@ export default function LaunchPage() {
           </FormRow>
 
           <FormRow
-            label="Model"
-            hint="default opus · sonnet for speed, haiku for cheap experiments"
+            label="Agent model"
+            hint="Claude model for dev agents that implement issues"
           >
             <div className="nm-seg">
               {["opus", "sonnet", "haiku"].map((m) => (
                 <button
                   key={m}
-                  className={`nm-seg__opt ${model === m ? "nm-seg__opt--active" : ""}`}
-                  onClick={() => setModel(m)}
+                  className={`nm-seg__opt ${agentModel === m ? "nm-seg__opt--active" : ""}`}
+                  onClick={() => setAgentModel(m)}
                 >
                   {m.toUpperCase()}
                 </button>
               ))}
             </div>
+          </FormRow>
+
+          <FormRow
+            label="Agent effort"
+            hint="low = fast/cheap · medium = balanced · high = thorough"
+          >
+            <div className="nm-seg">
+              {["low", "medium", "high"].map((e) => (
+                <button
+                  key={e}
+                  className={`nm-seg__opt ${agentEffort === e ? "nm-seg__opt--active" : ""}`}
+                  onClick={() => setAgentEffort(e)}
+                >
+                  {e.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </FormRow>
+
+          <FormRow
+            label="Agent token limit"
+            hint="estimated-USD cap per agent — Claude Code --max-budget-usd"
+          >
+            <input
+              className="nm-input"
+              type="number"
+              min={1}
+              max={50}
+              step={1}
+              value={agentTokenLimit}
+              onChange={(e) => setAgentTokenLimit(Math.max(1, +e.target.value || 1))}
+              style={{ width: 80 }}
+            />
+          </FormRow>
+
+          <FormRow
+            label="Reviewer model"
+            hint="Claude model for code review gate"
+          >
+            <div className="nm-seg">
+              {["opus", "sonnet", "haiku"].map((m) => (
+                <button
+                  key={m}
+                  className={`nm-seg__opt ${reviewerModel === m ? "nm-seg__opt--active" : ""}`}
+                  onClick={() => setReviewerModel(m)}
+                >
+                  {m.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </FormRow>
+
+          <FormRow
+            label="Reviewer token limit"
+            hint="estimated-USD cap per review — Claude Code --max-budget-usd"
+          >
+            <input
+              className="nm-input"
+              type="number"
+              min={0.5}
+              max={20}
+              step={0.5}
+              value={reviewerTokenLimit}
+              onChange={(e) => setReviewerTokenLimit(Math.max(0.5, +e.target.value || 0.5))}
+              style={{ width: 80 }}
+            />
           </FormRow>
 
           <FormRow
@@ -175,7 +294,11 @@ export default function LaunchPage() {
             <span className="nm-prim">./scripts/start-night-manager.sh</span>{" "}
             <span>--max-agents {maxAgents}</span>{" "}
             <span>--label &quot;{label}&quot;</span>{" "}
-            <span>--model {model}</span>{" "}
+            <span>--agent-model {agentModel}</span>{" "}
+            <span>--agent-effort {agentEffort}</span>{" "}
+            <span>--agent-token-limit {agentTokenLimit}</span>{" "}
+            <span>--reviewer-model {reviewerModel}</span>{" "}
+            <span>--reviewer-token-limit {reviewerTokenLimit}</span>{" "}
             {deploy && <span>--deploy </span>}
             {override && <span>--issue {override} </span>}
             {dryRun && <span>--dry-run</span>}
@@ -244,6 +367,92 @@ export default function LaunchPage() {
           </div>
         </Panel>
 
+        {resumableIssues.length > 0 && lastRun && (
+          <Panel
+            id="RSM-03"
+            title="RESUME LAST RUN"
+            right={<span>{lastRun.run_id}</span>}
+            flush
+          >
+            <div
+              style={{
+                padding: 12,
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+              }}
+            >
+              <div
+                style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}
+              >
+                {resumableIssues.length} failed/blocked issue
+                {resumableIssues.length !== 1 ? "s" : ""} from last run
+              </div>
+              {resumableIssues.map((iss) => (
+                <div
+                  key={iss.identifier}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "6px 8px",
+                    border: "1px solid var(--line-2)",
+                    background: "var(--bg-2)",
+                  }}
+                >
+                  <span
+                    className="nm-prim"
+                    style={{ fontSize: 12, minWidth: 70 }}
+                  >
+                    {iss.identifier}
+                  </span>
+                  <span
+                    className="nm-mute"
+                    style={{
+                      fontSize: 11,
+                      flex: 1,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {iss.title}
+                  </span>
+                  <span
+                    className="nm-pill"
+                    style={{
+                      fontSize: 10,
+                      color: iss.status === "failed" ? "var(--red)" : "var(--amber)",
+                    }}
+                  >
+                    {iss.status}
+                  </span>
+                  <button
+                    className="nm-btn nm-btn--ghost"
+                    style={{ fontSize: 10, padding: "3px 8px" }}
+                    onClick={() => handleResume(iss.identifier)}
+                    disabled={launching}
+                  >
+                    RESUME
+                  </button>
+                </div>
+              ))}
+              <div style={{ marginTop: 6 }}>
+                <button
+                  className="nm-btn nm-btn--prim"
+                  style={{ width: "100%" }}
+                  onClick={() => handleResume()}
+                  disabled={launching}
+                >
+                  {launching
+                    ? "RESUMING…"
+                    : `▶ RESUME ALL ${resumableIssues.length} ISSUES`}
+                </button>
+              </div>
+            </div>
+          </Panel>
+        )}
+
         <Panel id="LCH-05" title="" flush>
           <div
             style={{
@@ -263,7 +472,7 @@ export default function LaunchPage() {
                   marginTop: 2,
                 }}
               >
-                {groups} groups &middot; {model} &middot;{" "}
+                {groups} groups &middot; {agentModel}/{agentEffort} &middot;{" "}
                 {deploy ? "deploy on" : "no deploy"}
               </div>
             </div>

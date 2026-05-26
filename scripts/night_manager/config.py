@@ -15,9 +15,15 @@ STATE_FILE = NM_DIR / "state.json"
 DEFAULT_MAX_AGENTS = 2
 DEFAULT_LABEL = "Triaged"
 DEFAULT_MODEL = "opus"
+DEFAULT_AGENT_MODEL = "opus"
+DEFAULT_AGENT_EFFORT = "high"
+DEFAULT_AGENT_TOKEN_LIMIT = 10.0  # --max-budget-usd value; token guardrail, not real cost
+DEFAULT_REVIEWER_MODEL = "sonnet"
+DEFAULT_REVIEWER_TOKEN_LIMIT = 2.0
 STUCK_TIMEOUT_MINUTES = 10
 MAX_REVIEW_CYCLES = 3
 MAX_E2E_FIX_CYCLES = 3
+MAX_REGRESSION_FIX_CYCLES = 3
 
 PORT_BASE_PG = 5433
 PORT_BASE_API = 8002
@@ -52,9 +58,16 @@ class NMConfig:
     max_agents: int = DEFAULT_MAX_AGENTS
     label: str = DEFAULT_LABEL
     model: str = DEFAULT_MODEL
+    agent_model: str = DEFAULT_AGENT_MODEL
+    agent_effort: str = DEFAULT_AGENT_EFFORT
+    agent_token_limit: float = DEFAULT_AGENT_TOKEN_LIMIT
+    reviewer_model: str = DEFAULT_REVIEWER_MODEL
+    reviewer_token_limit: float = DEFAULT_REVIEWER_TOKEN_LIMIT
     dry_run: bool = False
     deploy: bool = False
     issue: str | None = None
+    resume: bool = False
+    resume_issue: str | None = None
     repo_root: Path = field(default_factory=lambda: REPO_ROOT)
     linear_api_key: str = field(default_factory=lambda: os.environ.get("LINEAR_API_KEY", ""))
 
@@ -83,19 +96,41 @@ def parse_args(argv: list[str] | None = None) -> NMConfig:
     p.add_argument("--label", default=DEFAULT_LABEL,
                     help=f"Linear label to filter issues (default: {DEFAULT_LABEL})")
     p.add_argument("--model", default=DEFAULT_MODEL,
-                    help=f"Claude model for dev agents (default: {DEFAULT_MODEL})")
+                    help=f"Claude model for planner (default: {DEFAULT_MODEL})")
+    p.add_argument("--agent-model", default=DEFAULT_AGENT_MODEL,
+                    help=f"Claude model for dev agents (default: {DEFAULT_AGENT_MODEL})")
+    p.add_argument("--agent-effort", default=DEFAULT_AGENT_EFFORT,
+                    choices=["low", "medium", "high"],
+                    help=f"Effort level for dev agents (default: {DEFAULT_AGENT_EFFORT})")
+    p.add_argument("--agent-token-limit", type=float, default=DEFAULT_AGENT_TOKEN_LIMIT,
+                    help=f"Estimated-USD cap per agent session — Claude Code's --max-budget-usd (default: {DEFAULT_AGENT_TOKEN_LIMIT})")
+    p.add_argument("--reviewer-model", default=DEFAULT_REVIEWER_MODEL,
+                    help=f"Claude model for code review (default: {DEFAULT_REVIEWER_MODEL})")
+    p.add_argument("--reviewer-token-limit", type=float, default=DEFAULT_REVIEWER_TOKEN_LIMIT,
+                    help=f"Estimated-USD cap per review — Claude Code's --max-budget-usd (default: {DEFAULT_REVIEWER_TOKEN_LIMIT})")
     p.add_argument("--dry-run", action="store_true",
                     help="Plan but don't execute — no agents spawned")
     p.add_argument("--deploy", action="store_true",
                     help="Enable full pipeline: promote dev→main, build, deploy")
     p.add_argument("--issue", type=str, default=None,
                     help="Run a single issue by ID (e.g. ABS-90)")
+    p.add_argument("--resume", action="store_true",
+                    help="Resume the last run — re-execute failed/rate-limited issues")
+    p.add_argument("--resume-issue", type=str, default=None,
+                    help="Resume a single issue from the last run (e.g. ABS-90)")
     args = p.parse_args(argv)
     return NMConfig(
         max_agents=args.max_agents,
         label=args.label,
         model=args.model,
+        agent_model=args.agent_model,
+        agent_effort=args.agent_effort,
+        agent_token_limit=args.agent_token_limit,
+        reviewer_model=args.reviewer_model,
+        reviewer_token_limit=args.reviewer_token_limit,
         dry_run=args.dry_run,
         deploy=args.deploy,
         issue=args.issue,
+        resume=args.resume,
+        resume_issue=args.resume_issue,
     )

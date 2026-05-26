@@ -7,19 +7,33 @@ export async function POST(request: Request) {
     maxAgents = 3,
     label = "Triaged",
     model = "opus",
+    agentModel = "opus",
+    agentEffort = "high",
+    agentTokenLimit = 10,
+    reviewerModel = "sonnet",
+    reviewerTokenLimit = 2,
     deploy = false,
     issue,
     dryRun = false,
+    resume = false,
+    resumeIssue,
   } = body;
 
   const args = [
     `--max-agents ${maxAgents}`,
     `--label "${label}"`,
     `--model ${model}`,
+    `--agent-model ${agentModel}`,
+    `--agent-effort ${agentEffort}`,
+    `--agent-token-limit ${agentTokenLimit}`,
+    `--reviewer-model ${reviewerModel}`,
+    `--reviewer-token-limit ${reviewerTokenLimit}`,
   ];
   if (deploy) args.push("--deploy");
   if (issue) args.push(`--issue ${issue}`);
   if (dryRun) args.push("--dry-run");
+  if (resume) args.push("--resume");
+  if (resumeIssue) args.push(`--resume-issue ${resumeIssue}`);
 
   const cmd = `./scripts/start-night-manager.sh ${args.join(" ")}`;
 

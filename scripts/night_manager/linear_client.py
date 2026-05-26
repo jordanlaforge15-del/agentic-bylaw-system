@@ -59,7 +59,7 @@ class LinearClient:
             filter: {
               team: { key: { eq: $teamKey } }
               labels: { name: { eq: $labelName } }
-              state: { type: { in: ["backlog", "unstarted"] } }
+              state: { type: { in: ["backlog", "unstarted", "started"] } }
             }
             orderBy: updatedAt
           ) {

@@ -40,6 +40,9 @@ class IssueState:
     completed_at: str | None = None
     merged_at: str | None = None
     error: str | None = None
+    rate_limited: bool = False
+    agent_model: str = ""
+    agent_effort: str = ""
     linear_id: str = ""
 
     def mark_started(self) -> None:
@@ -62,6 +65,17 @@ class IssueState:
     def mark_blocked(self, reason: str) -> None:
         self.status = "blocked"
         self.error = reason
+
+    @property
+    def is_resumable(self) -> bool:
+        return self.status in ("failed", "blocked")
+
+    def reset_for_retry(self) -> None:
+        self.status = "queued"
+        self.error = None
+        self.rate_limited = False
+        self.completed_at = None
+        self.merged_at = None
 
 
 @dataclass
