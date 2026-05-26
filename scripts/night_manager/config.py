@@ -68,6 +68,7 @@ class NMConfig:
     issue: str | None = None
     resume: bool = False
     resume_issue: str | None = None
+    resume_queued: bool = False
     repo_root: Path = field(default_factory=lambda: REPO_ROOT)
     linear_api_key: str = field(default_factory=lambda: os.environ.get("LINEAR_API_KEY", ""))
 
@@ -118,6 +119,13 @@ def parse_args(argv: list[str] | None = None) -> NMConfig:
                     help="Resume the last run — re-execute failed/rate-limited issues")
     p.add_argument("--resume-issue", type=str, default=None,
                     help="Resume a single issue from the last run (e.g. ABS-90)")
+    p.add_argument("--resume-queued", action="store_true",
+                    help=(
+                        "Also resume issues that never started (status=queued). "
+                        "Off by default because never-started issues may have "
+                        "been merged out-of-band; the sanity-check pass will "
+                        "reconcile against dev before re-spawning."
+                    ))
     args = p.parse_args(argv)
     return NMConfig(
         max_agents=args.max_agents,
@@ -133,4 +141,5 @@ def parse_args(argv: list[str] | None = None) -> NMConfig:
         issue=args.issue,
         resume=args.resume,
         resume_issue=args.resume_issue,
+        resume_queued=args.resume_queued,
     )

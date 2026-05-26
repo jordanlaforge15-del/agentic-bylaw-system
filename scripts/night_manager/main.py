@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import NMConfig, NM_DIR, REPO_ROOT, STUCK_TIMEOUT_MINUTES, MAX_REGRESSION_FIX_CYCLES
 from .linear_client import LinearClient, LinearIssue
-from .state import NMState
+from .state import IssueState, NMState, _now_iso
 
 log = logging.getLogger("night_manager")
 
@@ -50,7 +50,24 @@ async def run(config: NMConfig) -> None:
 
 
 async def _run_resume(config: NMConfig) -> None:
-    """Resume failed/blocked issues from the last run's saved state."""
+    """Resume failed/blocked/reviewing issues from the last run's saved state.
+
+    Before selecting targets, this performs three reconciliation passes
+    against ground truth — fixing the drift that bit us in run
+    nm-20260526-004610:
+
+    1. **State drift vs git** (Gap 3): if a non-merged issue's branch is
+       already on dev (out-of-band merge) or its tip == merge-base
+       (zombie — merged then reverted), reclassify it. Otherwise the
+       resume would re-do already-merged work.
+    2. **Stale-PID detection** (Gap 2): an `in_progress` or `reviewing`
+       issue whose recorded PID is dead (kernel panic, SIGKILL, etc.)
+       is reclassified to `failed` so the resume loop re-spawns rather
+       than waiting on a corpse.
+    3. **Status-based filtering** (Gap 1): the resumable set is
+       `failed | blocked | reviewing`, plus `queued` only when the
+       operator passes `--resume-queued`.
+    """
     state = NMState.load()
     if not state.run_id:
         log.error("No previous run state found. Cannot resume.")
@@ -58,23 +75,48 @@ async def _run_resume(config: NMConfig) -> None:
 
     log.info("Resuming run %s", state.run_id)
 
-    # Determine which issues to resume
+    # --- Pass 1: reconcile state.json against git reality on dev. -----
+    reconciled = _reconcile_state_with_git(state)
+    if reconciled:
+        log.info("Reconciled %d issues against dev: %s", len(reconciled), reconciled)
+        state.save()
+
+    # --- Pass 2: detect stale PIDs from in_progress / reviewing. -------
+    from .agent import is_pid_alive
+    stale = _detect_stale_pids(state, is_pid_alive)
+    if stale:
+        log.info("Detected %d orphaned issues (dead PID): %s", len(stale), stale)
+        state.save()
+
+    # --- Pass 3: pick targets based on flags. --------------------------
     if config.resume_issue:
-        targets = [config.resume_issue]
         if config.resume_issue not in state.issues:
             log.error("Issue %s not found in last run state", config.resume_issue)
             return
         issue = state.issues[config.resume_issue]
-        if not issue.is_resumable:
+        # --resume-issue is an explicit operator request — accept any
+        # non-merged status, including queued. The sanity-check pass
+        # has already reclassified out-of-band merges.
+        if issue.status == "merged":
             log.error(
-                "Issue %s is not resumable (status=%s). Only failed/blocked issues can be resumed.",
-                config.resume_issue, issue.status,
+                "Issue %s is already merged — nothing to resume.",
+                config.resume_issue,
             )
             return
+        targets = [config.resume_issue]
     else:
         targets = [
             ident for ident, iss in state.issues.items() if iss.is_resumable
         ]
+        if config.resume_queued:
+            queued = [
+                ident for ident, iss in state.issues.items()
+                if iss.status == "queued"
+            ]
+            if queued:
+                log.info("--resume-queued: also picking up %d queued issues: %s",
+                         len(queued), queued)
+                targets.extend(queued)
 
     if not targets:
         log.info("No resumable issues found. All issues from last run are merged or in progress.")
@@ -83,7 +125,15 @@ async def _run_resume(config: NMConfig) -> None:
     log.info("Resuming %d issues: %s", len(targets), targets)
 
     for ident in targets:
-        state.issues[ident].reset_for_retry()
+        issue = state.issues[ident]
+        # If the issue has a recorded session_id and a live worktree, the
+        # resume path will use `claude --resume <session_id>` which is
+        # durable across process restarts. The PID we record is the new
+        # subprocess's, not the dead one. reset_for_retry zeroes the
+        # status; we deliberately keep session_id so resume can re-attach.
+        issue.reset_for_retry()
+        # Clear the stale PID so nothing downstream treats it as alive.
+        issue.pid = 0
 
     # Rebuild the execution plan keeping only groups that contain resumable issues
     resumed_plan = []
@@ -111,6 +161,172 @@ async def _run_resume(config: NMConfig) -> None:
         await linear.close()
 
     log.info("Resume run finished. Original run ID: %s", state.run_id)
+
+
+def _git_oneline(*args: str, cwd: Path | None = None) -> str:
+    """Run a git command synchronously and return stdout (empty on error).
+
+    Resume happens before the event loop is doing anything else, so a
+    synchronous subprocess call here is fine and far simpler than the
+    asyncio variant. Never raises — git failures (missing branch,
+    unknown ref) just yield "".
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd or REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _reconcile_state_with_git(state: NMState) -> list[str]:
+    """Self-heal state.json against the current dev branch.
+
+    For each issue in a non-terminal status, check three things in order:
+
+    1. Branch already merged into dev (the ABS-125 case — merged by hand
+       outside NM): mark as `merged`.
+    2. Commit referencing the issue identifier (e.g. "[ABS-125]" in the
+       subject) is on dev: same — mark as `merged`. This catches squash
+       merges that drop the branch ref.
+    3. Branch tip == merge-base with dev (the ABS-129 / ABS-135 zombie
+       case — merged then reverted): mark as `blocked` with a clear
+       reason. The branch has nothing new to merge.
+
+    Returns the list of identifiers that were reclassified so the caller
+    can log them and persist the state.
+    """
+    reconciled: list[str] = []
+
+    # Branches actually merged into dev (one-shot list — avoids forking
+    # `git branch --merged dev | grep` per issue).
+    merged_raw = _git_oneline("branch", "--merged", "dev")
+    merged_branches = {
+        b.strip().lstrip("* ").strip()
+        for b in merged_raw.splitlines()
+        if b.strip()
+    }
+
+    for ident, issue in state.issues.items():
+        if issue.status not in IssueState.RECONCILABLE_STATUSES:
+            continue
+        if not issue.branch:
+            # Queued issue may not have a branch yet — skip.
+            continue
+
+        tip = _git_oneline("rev-parse", "--verify", "--quiet", issue.branch)
+        base = _git_oneline("merge-base", "dev", issue.branch) if tip else ""
+        merged_into_dev = issue.branch in merged_branches
+
+        # Look for a "Revert ... <identifier> ..." commit on dev. After
+        # `git revert -m 1 <merge-of-ABS-X>` the revert commit's subject
+        # is `Revert "Merge ABS-X: ..."`. Matching on both literal
+        # `Revert` and the identifier scopes this tightly enough.
+        revert_marker = _git_oneline(
+            "log", "dev", "--oneline", "-n", "50",
+            f"--grep=Revert.*{ident}",
+        )
+        is_zombie = (
+            tip and base and tip == base
+            and (bool(revert_marker) or not merged_into_dev)
+        )
+
+        # 1. Zombie detection comes FIRST: branch tip == merge-base AND
+        #    either the merge was reverted on dev (ABS-129 / ABS-135
+        #    case from nm-20260526-004610) OR git doesn't list the
+        #    branch as merged at all (cherry-pick / rebase orphan).
+        #    A clean merged branch ALSO has tip == merge-base when no
+        #    new commits happened after the merge, so the revert marker
+        #    is the distinguishing signal.
+        if is_zombie:
+            log.info(
+                "reconciled %s as zombie branch (tip == merge-base with dev; "
+                "revert_marker=%r)", ident, bool(revert_marker),
+            )
+            issue.mark_blocked(
+                "zombie branch: tip == merge-base; needs re-plan"
+            )
+            reconciled.append(ident)
+            continue
+
+        # 2. Branch merged into dev (no revert in play).
+        if merged_into_dev:
+            log.info(
+                "reconciled %s as already-on-dev (branch %s merged into dev)",
+                ident, issue.branch,
+            )
+            issue.status = "merged"
+            issue.merged_at = _now_iso()
+            issue.error = None
+            reconciled.append(ident)
+            continue
+
+        # 3. Commit subject referencing the issue identifier on dev.
+        # Use --grep with a fixed string and a generous lookback so we
+        # don't miss squash-merged commits whose branch was deleted.
+        subject_match = _git_oneline(
+            "log", "dev", "--oneline", "-n", "50",
+            f"--grep={ident}",
+        )
+        if subject_match:
+            # Only treat as merged if the issue is currently `queued`,
+            # `failed`, or `blocked` — i.e. has no recorded merged_at.
+            # An `in_progress` issue with a commit on dev is more likely
+            # a coincidence (an unrelated commit mentioning the ID), so
+            # be conservative and don't auto-merge it.
+            if issue.status in ("queued", "failed", "blocked"):
+                log.info(
+                    "reconciled %s as already-on-dev "
+                    "(commit on dev mentions %s: %s)",
+                    ident, ident, subject_match.splitlines()[0][:80],
+                )
+                issue.status = "merged"
+                issue.merged_at = _now_iso()
+                issue.error = None
+                reconciled.append(ident)
+                continue
+
+    return reconciled
+
+
+def _detect_stale_pids(
+    state: NMState,
+    is_pid_alive_fn,
+) -> list[str]:
+    """Reclassify `in_progress` / `reviewing` issues with dead PIDs.
+
+    `is_pid_alive_fn` is injected so tests can pass a fake without
+    importing the agent module. Returns the list of identifiers that
+    were reclassified.
+    """
+    stale: list[str] = []
+    for ident, issue in state.issues.items():
+        if issue.status not in ("in_progress", "reviewing"):
+            continue
+        if issue.pid <= 0:
+            # No PID recorded — can't tell if it's stale. Don't touch.
+            continue
+        if is_pid_alive_fn(issue.pid):
+            continue
+        log.info(
+            "orphan: %s has status=%s but pid=%d is dead — reclassifying as failed",
+            ident, issue.status, issue.pid,
+        )
+        issue.mark_failed(
+            f"Orphaned: PID {issue.pid} was dead at resume "
+            f"(prior status={issue.status})"
+        )
+        # Don't zero pid here — _run_resume does it after reset_for_retry.
+        stale.append(ident)
+    return stale
 
 
 async def _fetch_issues(linear: LinearClient, config: NMConfig) -> list[LinearIssue]:

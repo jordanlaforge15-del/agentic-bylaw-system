@@ -316,6 +316,33 @@ async def kill_agent(issue: IssueState) -> None:
         pass
 
 
+def is_pid_alive(pid: int) -> bool:
+    """Return True if `pid` is a live process owned by this user.
+
+    Uses signal 0 (the "null" signal) — sends nothing, but POSIX returns
+    EPERM if the pid exists but is owned by someone else and ESRCH if it
+    doesn't exist at all. We treat both EPERM (process exists, foreign
+    owner — extremely unlikely for NM-spawned agents) and "no error" as
+    alive; ESRCH (ProcessLookupError) is the only "dead" signal.
+
+    After a kernel panic every NM-recorded PID is stale, so this is the
+    fast precondition for the resume path — we mustn't treat a dead PID
+    as a live agent we're "waiting on".
+    """
+    if pid <= 0:
+        return False
+    import os
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # PID exists but is owned by another user — still alive in the
+        # OS sense. Shouldn't happen for NM but be conservative.
+        return True
+    return True
+
+
 async def cleanup_worktree(issue: IssueState) -> None:
     """Remove the git worktree for a completed/failed issue."""
     worktree_path = issue.worktree
