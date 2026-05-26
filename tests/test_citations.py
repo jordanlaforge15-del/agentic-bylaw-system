@@ -62,6 +62,42 @@ def test_address_heading_is_not_parsed_as_numeric_section():
     assert parse_citation_label("5515/17/19 and 5523 Inglis Street") is None
 
 
+def test_compound_label_with_spaced_parenthetical():
+    """ABS-116: PDF text may have whitespace before parenthetical subsection tokens."""
+    match = parse_citation_label("62EE(1) Western Shore requirements")
+    assert match is not None
+    assert match.label == "62EE(1)"
+    assert match.fragment_type == FragmentType.SUBSECTION
+
+    match = parse_citation_label("62EE (1) Western Shore requirements")
+    assert match is not None
+    assert match.label == "62EE(1)"
+    assert match.fragment_type == FragmentType.SUBSECTION
+
+    match = parse_citation_label("34B22(2)(a) Lot area")
+    assert match is not None
+    assert match.label == "34B22(2)(a)"
+    assert match.fragment_type == FragmentType.CLAUSE
+
+    match = parse_citation_label("34B22 (2)(a) Lot area")
+    assert match is not None
+    assert match.label == "34B22(2)(a)"
+    assert match.fragment_type == FragmentType.CLAUSE
+
+    match = parse_citation_label("5(1)(a) Accessory buildings")
+    assert match is not None
+    assert match.label == "5(1)(a)"
+    assert match.fragment_type == FragmentType.CLAUSE
+
+
+def test_compound_label_base_only_still_works():
+    """62EE with no parenthetical should still parse as SECTION."""
+    match = parse_citation_label("62EE Western Shore of the Bedford Basin")
+    assert match is not None
+    assert match.label == "62EE"
+    assert match.fragment_type == FragmentType.SECTION
+
+
 def test_measurement_value_is_not_a_citation_label():
     assert parse_citation_label("16M TEMPORARY CONSTRUCTION USES PERMITTED") is not None
     assert parse_citation_label("40 ANGLE") is not None
