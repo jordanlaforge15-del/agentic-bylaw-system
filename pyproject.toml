@@ -40,7 +40,6 @@ advisor = [
   # endpoint (the submissions upload route — ABS-53). Without it FastAPI
   # raises RuntimeError at request time instead of import time, so the
   # missing dep doesn't show until a real upload is attempted.
-  "prometheus-client>=0.20",
   "python-multipart>=0.0.9",
   # pyproj + ifcopenshell are runtime deps of advisor.api.submissions_router
   # (Phase 2 BIM ingestion in the request path). pyproj is imported at module
