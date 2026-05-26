@@ -8,7 +8,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import NMConfig, NM_DIR, REPO_ROOT, STUCK_TIMEOUT_MINUTES, MAX_REGRESSION_FIX_CYCLES
+from .config import (
+    NMConfig,
+    NM_DIR,
+    NUDGE_FILE,
+    REPO_ROOT,
+    STUCK_TIMEOUT_MINUTES,
+    MAX_REGRESSION_FIX_CYCLES,
+)
 from .linear_client import LinearClient, LinearIssue
 from .state import NMState
 
@@ -39,6 +46,11 @@ async def run(config: NMConfig) -> None:
         if config.dry_run:
             await _dry_run_report(state, linear)
             return
+
+        # Catch issues labeled Triaged during the planning call itself.
+        if not config.issue:
+            await _rescan_and_replan(state, config, linear, source="post-plan")
+            state.save()
 
         await _execute(state, config, linear, workflow_states)
 
@@ -227,6 +239,81 @@ async def _wait_for_rate_limit(group_idx: int, total_groups: int) -> bool:
     return False
 
 
+async def _rescan_and_replan(
+    state: NMState,
+    config: NMConfig,
+    linear: LinearClient,
+    source: str = "boundary",
+) -> list[str]:
+    """Pick up newly-Triaged issues and slot them into the in-flight plan.
+
+    Called at each group boundary in `_execute`, and once immediately after
+    the initial plan. The actual planner call only sees touch profiles for
+    existing issues plus full descriptions for the new ones, keeping the
+    token cost proportional to what was actually added.
+
+    The `NUDGE_FILE` sentinel is consumed (deleted) here if present; it is
+    purely a "I added work, please notice" UX hook — the rescan would have
+    happened at the next boundary regardless.
+    """
+    from .planner import replan_with_new_issues
+
+    nudge_present = False
+    try:
+        if NUDGE_FILE.exists():
+            nudge_present = True
+            NUDGE_FILE.unlink()
+            log.info("Nudge sentinel consumed (%s)", NUDGE_FILE)
+    except OSError as exc:
+        log.warning("Failed to read/delete nudge sentinel: %s", exc)
+
+    try:
+        fresh = await linear.fetch_triaged_issues(config.label)
+    except Exception as exc:
+        log.warning("Rescan (%s) failed to fetch Linear issues: %s", source, exc)
+        return []
+
+    new_issues = [i for i in fresh if i.identifier not in state.issues]
+    if not new_issues:
+        if nudge_present:
+            log.info("Rescan (%s): nudge received but no new Triaged issues found", source)
+        return []
+
+    log.info(
+        "Rescan (%s): %d new Triaged issue(s) — %s",
+        source, len(new_issues), [i.identifier for i in new_issues],
+    )
+
+    try:
+        added = await replan_with_new_issues(state, new_issues, config)
+    except Exception as exc:
+        log.error("Replan (%s) failed: %s", source, exc)
+        return []
+
+    if not added:
+        log.info("Rescan (%s): planner produced no assignments", source)
+        return []
+
+    log.info(
+        "Rescan (%s): added %d issue(s) to plan — %s",
+        source, len(added), added,
+    )
+    for ident in added:
+        issue = state.issues[ident]
+        try:
+            await linear.post_comment(
+                issue.linear_id,
+                f"**Night Manager** — Added to in-flight run `{state.run_id}` "
+                f"via {source} rescan.\n\n"
+                f"- Branch (planned): `{issue.branch}`\n"
+                f"- Ports (planned): PG={issue.ports.pg}, "
+                f"API={issue.ports.api}, WEB={issue.ports.web}",
+            )
+        except Exception as exc:
+            log.warning("Failed to post rescan-add comment for %s: %s", ident, exc)
+    return added
+
+
 async def _execute(
     state: NMState,
     config: NMConfig,
@@ -242,7 +329,23 @@ async def _execute(
 
     rate_limited = False
 
+    # Iterating with enumerate over state.plan is safe even when the plan
+    # grows mid-loop: Python re-indexes the list each step, so groups added
+    # by _rescan_and_replan after the current index get picked up in order.
     for group_idx, group in enumerate(state.plan):
+        # Group-boundary rescan: pick up newly-labeled Triaged issues and
+        # slot them into the remaining plan with minimal token cost.
+        if not rate_limited and not config.issue:
+            added = await _rescan_and_replan(
+                state, config, linear, source=f"group-{group_idx + 1}",
+            )
+            if added:
+                state.save()
+                # The for-enumerate above observes the appended/inserted
+                # groups naturally; refresh the local reference in case
+                # the replan logic mutated this group in place.
+                group = state.plan[group_idx]
+
         if rate_limited:
             log.warning(
                 "Skipping group %d/%d — rate limited in prior group",

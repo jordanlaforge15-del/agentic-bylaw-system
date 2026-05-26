@@ -20,7 +20,14 @@ from scripts.night_manager.state import (
     IssueState,
     NMState,
 )
-from scripts.night_manager.planner import allocate_ports, _slugify
+from scripts.night_manager.planner import (
+    IssueSettings,
+    _apply_replan_assignments,
+    _is_group_pending,
+    _parse_touch_profile,
+    allocate_ports,
+    _slugify,
+)
 from scripts.night_manager.linear_client import LinearIssue
 
 
@@ -180,6 +187,324 @@ class TestPlanner:
 
     def test_slugify_special_chars(self):
         assert _slugify("night_manager (v2)") == "nightmanager-v2"
+
+
+class TestTouchProfileSerialization:
+    def test_touch_profile_roundtrips(self, tmp_path: Path):
+        """touch_profile + added_via_rescan survive save → load."""
+        state = NMState.new_run({})
+        state.issues["ABS-90"] = IssueState(
+            identifier="ABS-90",
+            title="Profile",
+            ports=IssuePorts(pg=5433, api=8002, web=3002),
+            touch_profile={"areas": ["scripts/x"], "kind": "backend", "risk_tags": ["auth"]},
+            added_via_rescan=True,
+        )
+        target = tmp_path / "state.json"
+        state.save(target)
+        recovered = NMState.load(target)
+        issue = recovered.issues["ABS-90"]
+        assert issue.touch_profile == {
+            "areas": ["scripts/x"],
+            "kind": "backend",
+            "risk_tags": ["auth"],
+        }
+        assert issue.added_via_rescan is True
+
+    def test_load_older_state_without_touch_profile(self, tmp_path: Path):
+        """Old state files that predate touch_profile still load."""
+        # An old state.json that lacks both new fields.
+        legacy = {
+            "run_id": "nm-legacy",
+            "started_at": "2024-01-01T00:00:00Z",
+            "config": {},
+            "plan": [{"parallel": ["ABS-1"], "deploy": False}],
+            "issues": {
+                "ABS-1": {
+                    "identifier": "ABS-1",
+                    "title": "Legacy issue",
+                    "status": "queued",
+                    "branch": "agent/ABS-1-legacy",
+                    "worktree": "",
+                    "ports": {"pg": 5433, "api": 8002, "web": 3002},
+                    "session_id": "",
+                    "pid": 0,
+                    "log_file": "",
+                    "attempts": 0,
+                    "review_attempts": 0,
+                    "started_at": None,
+                    "completed_at": None,
+                    "merged_at": None,
+                    "error": None,
+                    "rate_limited": False,
+                    "agent_model": "",
+                    "agent_effort": "",
+                    "linear_id": "",
+                },
+            },
+        }
+        target = tmp_path / "state.json"
+        target.write_text(json.dumps(legacy))
+        state = NMState.load(target)
+        assert state.issues["ABS-1"].touch_profile is None
+        assert state.issues["ABS-1"].added_via_rescan is False
+
+
+class TestParseTouchProfile:
+    def test_well_formed(self):
+        assert _parse_touch_profile(
+            {"areas": ["a/b"], "kind": "backend", "risk_tags": ["auth"]}
+        ) == {"areas": ["a/b"], "kind": "backend", "risk_tags": ["auth"]}
+
+    def test_none_passes_through(self):
+        assert _parse_touch_profile(None) is None
+
+    def test_non_dict_returns_none(self):
+        assert _parse_touch_profile("nope") is None
+        assert _parse_touch_profile(["a/b"]) is None
+
+    def test_missing_keys_get_defaults(self):
+        result = _parse_touch_profile({})
+        assert result == {"areas": [], "kind": "unknown", "risk_tags": []}
+
+    def test_bad_inner_types_coerce(self):
+        result = _parse_touch_profile(
+            {"areas": "string-not-list", "kind": 7, "risk_tags": None}
+        )
+        # Strings/wrong types collapse safely, kind is stringified.
+        assert result["areas"] == []
+        assert result["kind"] == "7"
+        assert result["risk_tags"] == []
+
+    def test_caps_long_lists(self):
+        long = [f"area-{i}" for i in range(20)]
+        result = _parse_touch_profile({"areas": long, "kind": "x", "risk_tags": long})
+        assert len(result["areas"]) == 8
+        assert len(result["risk_tags"]) == 8
+
+
+def _mk_state_with_plan(plan_groups: list[ExecutionGroup], issues_status: dict[str, str]) -> NMState:
+    """Helper to build a state with a pre-existing plan + statuses."""
+    state = NMState.new_run({})
+    state.plan = plan_groups
+    slot_iter = iter(range(100))
+    for group in plan_groups:
+        for ident in group.parallel:
+            state.issues[ident] = IssueState(
+                identifier=ident,
+                title=f"Existing {ident}",
+                status=issues_status.get(ident, "queued"),
+                ports=IssuePorts(pg=5433 + next(slot_iter), api=8002, web=3002),
+                touch_profile={"areas": [f"area/{ident}"], "kind": "backend", "risk_tags": []},
+                linear_id=f"linear-{ident}",
+            )
+    return state
+
+
+def _mk_new_linear_issue(ident: str) -> LinearIssue:
+    return LinearIssue(
+        id=f"linear-{ident}",
+        identifier=ident,
+        title=f"New {ident}",
+        description="desc",
+        priority=2,
+        sort_order=1.0,
+        state_name="Backlog",
+        state_id="state-1",
+        labels=["Triaged"],
+        estimate=None,
+        team_id="team-1",
+    )
+
+
+class TestIsGroupPending:
+    def test_all_queued_is_pending(self):
+        state = _mk_state_with_plan(
+            [ExecutionGroup(parallel=["A", "B"])], {"A": "queued", "B": "queued"}
+        )
+        assert _is_group_pending(state, state.plan[0]) is True
+
+    def test_any_started_is_frozen(self):
+        state = _mk_state_with_plan(
+            [ExecutionGroup(parallel=["A", "B"])], {"A": "queued", "B": "in_progress"}
+        )
+        assert _is_group_pending(state, state.plan[0]) is False
+
+    def test_deploy_group_is_not_pending(self):
+        deploy_group = ExecutionGroup(parallel=[], deploy=True)
+        state = NMState.new_run({})
+        state.plan = [deploy_group]
+        assert _is_group_pending(state, deploy_group) is False
+
+    def test_empty_group_is_not_pending(self):
+        empty = ExecutionGroup(parallel=[])
+        state = NMState.new_run({})
+        state.plan = [empty]
+        assert _is_group_pending(state, empty) is False
+
+
+class TestApplyReplanAssignments:
+    def _config(self, max_agents: int = 2) -> NMConfig:
+        with patch.dict(os.environ, {"LINEAR_API_KEY": "test-key"}):
+            return NMConfig(max_agents=max_agents)
+
+    def _settings_for(self, idents: list[str]) -> dict[str, IssueSettings]:
+        return {
+            ident: IssueSettings(
+                model="sonnet",
+                effort="medium",
+                touch_profile={"areas": [f"area/{ident}"], "kind": "backend", "risk_tags": []},
+            )
+            for ident in idents
+        }
+
+    def test_join_pending_group_when_capacity_allows(self):
+        state = _mk_state_with_plan(
+            [ExecutionGroup(parallel=["A"])], {"A": "queued"}
+        )
+        new = _mk_new_linear_issue("Z")
+        added = _apply_replan_assignments(
+            state,
+            {"Z": new},
+            {"Z": {"join": 1}},  # 1-based
+            self._settings_for(["Z"]),
+            self._config(max_agents=2),
+            pending_indices=[0],
+        )
+        assert added == ["Z"]
+        assert state.plan[0].parallel == ["A", "Z"]
+        assert state.issues["Z"].added_via_rescan is True
+        assert state.issues["Z"].ports is not None
+        assert state.issues["Z"].branch.startswith("agent/Z-")
+
+    def test_join_frozen_group_falls_back_to_new_group(self):
+        state = _mk_state_with_plan(
+            [ExecutionGroup(parallel=["A"])], {"A": "in_progress"}
+        )
+        new = _mk_new_linear_issue("Z")
+        added = _apply_replan_assignments(
+            state,
+            {"Z": new},
+            {"Z": {"join": 1}},  # group 1 is frozen
+            self._settings_for(["Z"]),
+            self._config(max_agents=2),
+            pending_indices=[],  # nothing pending → fallback path
+        )
+        assert added == ["Z"]
+        # The frozen group must be untouched
+        assert state.plan[0].parallel == ["A"]
+        # Z lands in a new appended group
+        assert state.plan[-1].parallel == ["Z"]
+
+    def test_join_target_at_capacity_falls_back(self):
+        state = _mk_state_with_plan(
+            [ExecutionGroup(parallel=["A", "B"])], {"A": "queued", "B": "queued"}
+        )
+        new = _mk_new_linear_issue("Z")
+        added = _apply_replan_assignments(
+            state,
+            {"Z": new},
+            {"Z": {"join": 1, "rationale": "no overlap"}},
+            self._settings_for(["Z"]),
+            self._config(max_agents=2),
+            pending_indices=[0],
+        )
+        assert added == ["Z"]
+        # Group 1 was already full; Z must be in a new appended group
+        assert state.plan[0].parallel == ["A", "B"]
+        assert any(g.parallel == ["Z"] for g in state.plan)
+
+    def test_new_group_clustering_bundles_peers(self):
+        state = _mk_state_with_plan(
+            [ExecutionGroup(parallel=["A"])], {"A": "in_progress"}
+        )
+        new_x = _mk_new_linear_issue("X")
+        new_y = _mk_new_linear_issue("Y")
+        added = _apply_replan_assignments(
+            state,
+            {"X": new_x, "Y": new_y},
+            {
+                "X": {"new_group": "shared"},
+                "Y": {"new_group": "shared"},
+            },
+            self._settings_for(["X", "Y"]),
+            self._config(max_agents=2),
+            pending_indices=[],
+        )
+        assert set(added) == {"X", "Y"}
+        # Both land together in the same new appended group
+        new_group = state.plan[-1]
+        assert sorted(new_group.parallel) == ["X", "Y"]
+
+    def test_new_group_cluster_splits_above_max_agents(self):
+        state = _mk_state_with_plan([], {})
+        idents = ["P", "Q", "R"]
+        new_map = {i: _mk_new_linear_issue(i) for i in idents}
+        added = _apply_replan_assignments(
+            state,
+            new_map,
+            {i: {"new_group": "big"} for i in idents},
+            self._settings_for(idents),
+            self._config(max_agents=2),
+            pending_indices=[],
+        )
+        assert set(added) == {"P", "Q", "R"}
+        # Cluster of 3 with max_agents=2 → splits into two groups
+        non_deploy = [g for g in state.plan if not g.deploy]
+        sizes = sorted(len(g.parallel) for g in non_deploy)
+        assert sizes == [1, 2]
+
+    def test_new_groups_land_before_deploy_group(self):
+        state = _mk_state_with_plan(
+            [
+                ExecutionGroup(parallel=["A"]),
+                ExecutionGroup(parallel=[], deploy=True),
+            ],
+            {"A": "queued"},
+        )
+        new = _mk_new_linear_issue("Z")
+        added = _apply_replan_assignments(
+            state,
+            {"Z": new},
+            {"Z": {"new_group": "g"}},
+            self._settings_for(["Z"]),
+            self._config(max_agents=2),
+            pending_indices=[0],
+        )
+        assert added == ["Z"]
+        # Deploy group still last
+        assert state.plan[-1].deploy is True
+        # Z group sits before it
+        non_deploy_idents = [g.parallel for g in state.plan if not g.deploy]
+        assert ["Z"] in non_deploy_idents
+        z_pos = next(i for i, g in enumerate(state.plan) if g.parallel == ["Z"])
+        deploy_pos = next(i for i, g in enumerate(state.plan) if g.deploy)
+        assert z_pos < deploy_pos
+
+    def test_multiple_joins_reserve_capacity(self):
+        """Two new issues both targeting the same group respect capacity."""
+        state = _mk_state_with_plan(
+            [ExecutionGroup(parallel=["A"])], {"A": "queued"}
+        )
+        new_x = _mk_new_linear_issue("X")
+        new_y = _mk_new_linear_issue("Y")
+        added = _apply_replan_assignments(
+            state,
+            {"X": new_x, "Y": new_y},
+            {
+                "X": {"join": 1},
+                "Y": {"join": 1},
+            },
+            self._settings_for(["X", "Y"]),
+            self._config(max_agents=2),  # group has 1 slot
+            pending_indices=[0],
+        )
+        assert set(added) == {"X", "Y"}
+        # Only one of X/Y can join group 1, the other must land in a new group
+        assert len(state.plan[0].parallel) == 2  # ["A", joined-issue]
+        new_groups = [g.parallel for g in state.plan[1:]]
+        # The other issue is in a new appended group
+        assert any(len(g) == 1 for g in new_groups)
 
 
 class TestLinearIssue:
