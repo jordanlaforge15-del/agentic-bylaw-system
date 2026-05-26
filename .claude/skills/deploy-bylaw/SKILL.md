@@ -70,7 +70,13 @@ ssh bylaw-prod "grep -E 'bylaw-(web|advisor):' /srv/bylaw/docker-compose.yml"
 git describe --tags --exact-match HEAD
 
 # Scope: files changed since the prior tag
-git log $(git describe --tags --abbrev=0 HEAD^)..HEAD --name-only | sort -u | head -60
+# Guard against a repo with only one tag (first deploy or after tag reset)
+PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo '<initial>')
+if [ "$PREV_TAG" = '<initial>' ]; then
+  git log HEAD --name-only | sort -u | head -60
+else
+  git log "$PREV_TAG"..HEAD --name-only | sort -u | head -60
+fi
 ```
 
 Compute `VERSION` from the tag on HEAD. The old version (from the `grep` above) becomes `OLD_VERSION` — needed for rollback.
@@ -87,14 +93,21 @@ Surface to the user:
 Before touching prod, verify the build environment is ready:
 
 ```bash
-# Docker is logged in to GHCR
-docker login ghcr.io -u jordanlaforge15-del 2>&1 | grep -i "login succeeded\|already"
+# Check GHCR credentials without blocking on interactive input
+cat ~/.docker/config.json | python3 -c "
+import json, sys
+auths = json.load(sys.stdin).get('auths', {})
+# Docker credential helpers store a token entry even when the helper manages the secret
+ok = 'ghcr.io' in auths or 'https://ghcr.io' in auths
+print('GHCR: authenticated' if ok else 'GHCR: NOT authenticated')
+sys.exit(0 if ok else 1)
+"
 
 # buildx builder is available
 docker buildx ls
 ```
 
-If Docker is not logged in to GHCR, halt and ask the user to authenticate:
+If the credential check exits non-zero, halt and ask the user to authenticate:
 
 ```bash
 echo <PAT> | docker login ghcr.io -u jordanlaforge15-del --password-stdin
@@ -159,10 +172,16 @@ caffeinate -i -s docker buildx build \
 
 If the promotion touched any file under `advisor/migrations/` (or wherever Alembic revisions live), run the migration **before** the container swap. Old advisor keeps working because every migration must follow the expand/contract rule documented in [docs/DEPLOYMENT.md §Expand/contract discipline](../../../docs/DEPLOYMENT.md).
 
+Migration files are baked into the image, so the *running* (old) advisor container has no knowledge of new revisions. Running `docker compose exec` against the old container would silently report "already at head" and skip the migration entirely. Instead, run a one-shot container from the **new image** so the new migration files are present.
+
 ### Preview first (always)
 
 ```bash
-ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor alembic upgrade head --sql" | less
+ssh bylaw-prod "docker run --rm \
+  --env-file /srv/bylaw/.env \
+  --network bylaw_default \
+  ghcr.io/jordanlaforge15-del/bylaw-advisor:VERSION \
+  alembic upgrade head --sql" | less
 ```
 
 Review the SQL output. If the preview shows any destructive operation (DROP COLUMN, RENAME, DROP TABLE, DROP INDEX on a live column), halt and consult the user — the migration violates the expand/contract rule and is a deployment blocker.
@@ -170,16 +189,26 @@ Review the SQL output. If the preview shows any destructive operation (DROP COLU
 ### Apply
 
 ```bash
-ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor alembic upgrade head"
+ssh bylaw-prod "docker run --rm \
+  --env-file /srv/bylaw/.env \
+  --network bylaw_default \
+  ghcr.io/jordanlaforge15-del/bylaw-advisor:VERSION \
+  alembic upgrade head"
 ```
+
+The `--network bylaw_default` flag puts the one-shot container on the same Docker network as the running `postgres` service, so `DATABASE_URL` resolves correctly. The network name is derived from the compose project name (defaults to `bylaw`) — verify with `ssh bylaw-prod "docker network ls | grep bylaw"` if in doubt.
 
 ### Verify revision
 
 ```bash
-ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor alembic current"
+ssh bylaw-prod "docker run --rm \
+  --env-file /srv/bylaw/.env \
+  --network bylaw_default \
+  ghcr.io/jordanlaforge15-del/bylaw-advisor:VERSION \
+  alembic current"
 ```
 
-Confirm the revision pointer matches what the new code expects. If alembic reports an error, halt — do not proceed with the container swap until the schema is in the expected state. Rollback of a partial migration may require a manual `alembic downgrade -1` over SSH.
+Confirm the revision pointer matches what the new code expects. If alembic reports an error, halt — do not proceed with the container swap until the schema is in the expected state. Rollback of a partial migration may require a manual `alembic downgrade -1` using the same `docker run --rm` pattern but with `OLD_VERSION`.
 
 ---
 
@@ -234,15 +263,12 @@ Run end-to-end checks against the live public endpoints.
 ### Advisor
 
 ```bash
-# Smoke: unauthenticated chat in test mode
-curl -N --max-time 30 -X POST https://api.agenticbylawsystems.com/v1/chat \
-  -H "Content-Type: application/json" \
-  -H "X-Test-User-Id: smoke-test-1" \
-  -d '{"message": "What zone is 6321 Quinpool Road in?"}' \
-  | head -5
+# Healthz: confirms FastAPI is up and accepting requests — no auth required
+curl -sf --max-time 15 https://api.agenticbylawsystems.com/healthz
+# Expect: HTTP 200 with a JSON body like {"status":"ok"}
 ```
 
-Expected: a streaming response starting with zone or district text, no `500`, no connection refused.
+If the healthz endpoint returns a non-200 or times out, the service did not start correctly — jump to [Step 7a — Rollback](#step-7a--rollback). Do not use the `/v1/chat` endpoint as a smoke test in production deploys; that endpoint requires auth and the test-mode bypass header (`X-Test-User-Id`) should not be used outside the local e2e stack.
 
 ### Web
 
