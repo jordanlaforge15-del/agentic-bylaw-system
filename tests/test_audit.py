@@ -192,6 +192,47 @@ def test_abs109_claude_code_auditor_review_returns_valid_review():
     assert "recommended_human_review" in schema["required"]
 
 
+def test_abs114_session_not_in_transaction_during_llm_loop(tmp_path: Path):
+    """DB transaction is committed before the LLM review loop so that Postgres
+    idle-in-transaction timeout cannot kill the connection mid-audit (ABS-114)."""
+    from unittest.mock import patch
+    from layer1.db.init_db import create_all
+    from layer1.db.session import session_scope
+    from layer1.models.schemas import LlmAuditReview
+    from layer1.pipeline.audit import audit_document_pages, ClaudeCodeLayer1Auditor
+    from layer1.pipeline.ingest import ingest_file
+
+    db_url = f"sqlite:///{tmp_path / 'layer1.db'}"
+    create_all(db_url)
+    fixture = Path("tests/fixtures/synthetic_bylaw.txt")
+
+    fake_review = LlmAuditReview(
+        verdict="ok",
+        confidence=0.9,
+        summary="All good",
+        suspected_issues=[],
+        recommended_human_review=False,
+    )
+
+    in_transaction_during_review: list[bool] = []
+
+    with session_scope(db_url) as session:
+        document, _ = ingest_file(session, fixture, municipality="Sampleton", bylaw_name="Synthetic")
+
+        def stub_review(snapshot):
+            in_transaction_during_review.append(session.in_transaction())
+            return fake_review
+
+        with patch.object(ClaudeCodeLayer1Auditor, "review", side_effect=stub_review):
+            audit_document_pages(session, document.id, sample_size=2, use_llm=True)
+
+    assert in_transaction_during_review, "reviewer was never called — sample should select ≥1 page"
+    assert not any(in_transaction_during_review), (
+        "session must not hold an active transaction while the LLM reviewer runs "
+        "(Postgres idle-in-transaction timeout would kill it after ~60 s per page)"
+    )
+
+
 def test_abs109_openai_auditor_name_still_imports_for_back_compat():
     """Any external script that imported OpenAILayer1Auditor should still
     resolve to the renamed Claude Code class — same instance behavior."""
