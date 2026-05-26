@@ -275,19 +275,23 @@ start_web() {
   # with this value to mint the abs_demo cookie before each test.
   # See start_fastapi for why the subshell redirection matters.
   #
-  # Clerk keys are explicitly blanked to keep the test stack on the
-  # legacy /access shared-password gate (what Playwright fixtures
-  # expect). If you want manual local testing with real Clerk sign-in,
-  # use scripts/dev-up.sh against the dev DB instead — do not try to
-  # repurpose this script.
+  # ABS-19: Clerk mock mode. CLERK_SECRET_KEY is set to a test key that
+  # passes isClerkConfigured() so proxy.ts takes the clerkMiddleware
+  # branch. E2E_CLERK_MOCK=1 triggers the Turbopack resolveAlias in
+  # next.config.ts that swaps @clerk/nextjs/server with our mock module
+  # (web/lib/clerk-test-mock.ts). The mock reads test cookies for auth
+  # state and forwards JWTs minted by /v1/_test/mint-jwt to FastAPI.
+  # DEMO_PASSWORD is still set as a fallback for the /api/access endpoint
+  # used by some legacy fixtures.
   # ABS-153: NM_TEST_MODE=1 makes /api/nm/run/start short-circuit before exec()
   # so Playwright specs that POST a valid body never spawn a real NM run.
   ( cd "${REPO_ROOT}/web" && \
     NEXT_DIST_DIR=.next-e2e \
     ADVISOR_API_URL="http://127.0.0.1:${E2E_FASTAPI_PORT}" \
     ADVISOR_DEMO_USER_ID="$E2E_USER_ID" \
-    CLERK_SECRET_KEY="" \
+    CLERK_SECRET_KEY="sk_test_e2e_mock_key_for_testing_only_0000000000" \
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="" \
+    E2E_CLERK_MOCK=1 \
     DEMO_PASSWORD="${E2E_DEMO_PASSWORD:-e2e-demo-pw}" \
     ADMIN_PASSWORD="${E2E_ADMIN_PASSWORD:-e2e-admin-pw}" \
     DATABASE_URL="$DATABASE_URL_E2E_PG" \
