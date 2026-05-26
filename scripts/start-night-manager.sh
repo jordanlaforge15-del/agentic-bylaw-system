@@ -71,9 +71,13 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
     exit 2
 fi
 
-# Launch in tmux with caffeinate to prevent sleep
+# Launch in tmux with caffeinate to prevent sleep.
+# ABS-156: tmux command ends with NM's tee — no trailing `read` hold. When NM
+# exits the window closes and `tmux has-session` flips to false within ~1s, so
+# ABS-154's clobber guard doesn't refuse the next launch hours later. Final
+# output remains durable in $LOG_FILE and the dashboard.
 tmux new-session -d -s "$SESSION_NAME" \
-    "caffeinate -s ${REPO_ROOT}/.venv/bin/python -m scripts.night_manager $* 2>&1 | tee ${LOG_FILE}; echo '--- Night Manager exited. Press any key to close. ---'; read"
+    "caffeinate -s ${REPO_ROOT}/.venv/bin/python -m scripts.night_manager $* 2>&1 | tee ${LOG_FILE}"
 
 echo "Night Manager started in tmux session '${SESSION_NAME}' (repo: ${REPO_ROOT})"
 echo ""

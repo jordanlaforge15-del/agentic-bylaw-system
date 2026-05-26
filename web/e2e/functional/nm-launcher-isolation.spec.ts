@@ -222,3 +222,42 @@ test.describe("NM /api/nm/run/start test-mode bypass (ABS-153)", () => {
     expect(body.argv[idx + 1]).toBe("Backlog");
   });
 });
+
+test.describe("NM launcher auto-closes on NM exit (ABS-156)", () => {
+  // The launcher used to hold the tmux window open after NM exited with
+  // `echo '--- Night Manager exited. …'; read`. That left the session
+  // registered indefinitely, and ABS-154's clobber guard then refused every
+  // subsequent launch until someone pressed a key or killed the session by
+  // hand. ABS-156 drops that hold so the window closes cleanly and a fresh
+  // launch is unblocked seconds later.
+  test("start-night-manager.sh does not hold the tmux window open with `read`", () => {
+    const script = readFileSync(
+      join(process.cwd(), "..", "scripts", "start-night-manager.sh"),
+      "utf-8",
+    );
+    // Find the tmux new-session line(s) — the launcher should have exactly
+    // one. The command argument is the last quoted string on that line.
+    const newSessionLines = script
+      .split("\n")
+      .filter((l) => /tmux\s+new-session\s+-d\s+-s/.test(l));
+    expect(newSessionLines.length).toBeGreaterThan(0);
+
+    // The full new-session statement may span multiple lines via `\` line
+    // continuations. Reassemble the whole statement so we can inspect the
+    // tmux command string regardless of formatting.
+    const newSessionRegion = script.match(
+      /tmux\s+new-session\s+-d\s+-s\s+"\$SESSION_NAME"\s*(?:\\\n\s*)?"[^"]*"/,
+    );
+    expect(newSessionRegion).not.toBeNull();
+    const region = newSessionRegion![0];
+
+    // No trailing `read` or `read -n 1` hold.
+    expect(region).not.toMatch(/;\s*read\b/);
+    // No "Press any key" prompt either — if that string returns, the read
+    // probably came back with it.
+    expect(region).not.toMatch(/Press any key/i);
+    // The command should still tee to the log file (sanity check that the
+    // edit didn't also strip the log capture).
+    expect(region).toMatch(/tee\s+\$\{LOG_FILE\}/);
+  });
+});
