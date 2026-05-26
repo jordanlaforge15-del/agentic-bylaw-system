@@ -234,14 +234,57 @@ If the grep still shows `OLD_VERSION`, the sed pattern did not match — halt. C
 
 ---
 
+## Step 5a — Advisor image preflight smoke (advisor scope only)
+
+**HARD GATE between `docker compose pull` and `docker compose up -d advisor`.**
+
+If `SCOPE` does not include advisor, skip this step.
+
+First pull the new advisor image so it is cached on the server:
+
+```bash
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml pull advisor"
+```
+
+Then run the import smoke under prod-mirroring runtime constraints. This
+catches two classes of bug invisible to local e2e:
+1. **Missing runtime imports** — packages in `[bim]`/`[parsers]` but absent
+   from `[advisor]` extras (the v0.8.3/pyproj incident). `import advisor.api.main`
+   triggers `build_app()`, which wires `db_session_factory` and exercises
+   the lazy imports inside `create_app()` — including `submissions_router`.
+2. **Startup-time filesystem violations** — writes to the read-only filesystem
+   during module import or app construction (the v0.8.4/mkdir incident).
+
+```bash
+ssh bylaw-prod "docker run --rm \
+  --read-only \
+  --tmpfs /tmp:size=64m,mode=1777 \
+  --env-file /srv/bylaw/.env \
+  --network bylaw_default \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  ghcr.io/jordanlaforge15-del/bylaw-advisor:VERSION \
+  python -c 'import advisor.api.main'"
+```
+
+**If this exits non-zero: halt immediately. Do NOT proceed to Step 6.**
+The old container is still running — no rollback is needed. Surface the
+error output to the user and treat it as a deployment blocker.
+
+See `scripts/preflight_advisor_image.sh` in the repo for the canonical
+script form with help text and override env vars.
+
+---
+
 ## Step 6 — Pull new images and restart services
 
 ```bash
-# Pull the new image(s) on the server
-ssh bylaw-prod "cd /srv/bylaw && docker compose pull <web|advisor|both>"
+# Web (if SCOPE includes web)
+ssh bylaw-prod "cd /srv/bylaw && docker compose pull web && docker compose up -d web"
 
-# Recreate just the changed service(s) — leaves caddy and postgres untouched
-ssh bylaw-prod "cd /srv/bylaw && docker compose up -d <web|advisor|both>"
+# Advisor (if SCOPE includes advisor) — image already pulled in Step 5a;
+# skip the explicit pull to avoid re-downloading layers.
+ssh bylaw-prod "cd /srv/bylaw && docker compose up -d advisor"
 ```
 
 Substitute `<web|advisor|both>` with the actual service names from `SCOPE`. Do not restart services that were not rebuilt.
@@ -353,6 +396,7 @@ Surface a deploy summary to the user:
 | Migration SQL preview shows DROP / RENAME on live columns | Halt at Step 4. Expand/contract rule violated — migration is a deployment blocker. |
 | `alembic upgrade head` fails | Halt at Step 4. Do not proceed to container swap. Surface the error and revision state. |
 | `sed -i` did not replace the tag | Halt at Step 5. Do not proceed to `compose up -d` against the wrong tag. |
+| Preflight smoke exits non-zero (advisor) | Halt at Step 5a. Old container still running — no rollback needed. Surface error and treat as deployment blocker. |
 | Container shows `restarting` or `exited` after `up -d` | Trigger Step 7a immediately. |
 | Health check fails (curl timeout, 5xx, wrong response) | Trigger Step 7a immediately. |
 | Rollback `docker compose ps` still shows unhealthy | Halt. Escalate to user — do not loop. Old image may have a startup bug independent of the new code. |
