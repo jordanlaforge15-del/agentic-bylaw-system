@@ -58,8 +58,18 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 LOG_FILE=".night-manager/nm-${TIMESTAMP}.log"
 mkdir -p .night-manager
 
-# Kill any existing NM session FOR THIS WORKTREE (other worktrees use different hashes — see SESSION_NAME).
-tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+# ABS-154: refuse to clobber a live session.
+# ABS-152 scoped SESSION_NAME to this worktree's REPO_ROOT, but two invocations
+# from the SAME REPO_ROOT (e.g. someone POSTs to /api/nm/run/start twice while
+# NM is already running) would still mutually destroy each other if we ran
+# kill-session unconditionally. Refuse instead — the caller gets a non-zero
+# exit + clear error, and the running NM survives.
+if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo "ERROR: NM session '$SESSION_NAME' is already running." >&2
+    echo "       Stop it first with:  tmux kill-session -t ${SESSION_NAME}" >&2
+    echo "       (This launcher refuses to clobber a live session — ABS-154.)" >&2
+    exit 2
+fi
 
 # Launch in tmux with caffeinate to prevent sleep
 tmux new-session -d -s "$SESSION_NAME" \
