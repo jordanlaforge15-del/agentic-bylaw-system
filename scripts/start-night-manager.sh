@@ -12,13 +12,19 @@ set -euo pipefail
 #   - tmux installed
 #   - Python venv at .venv/ with project deps
 #
-# Monitor:
-#   tmux attach -t night-manager
+# Monitor (session name is derived from REPO_ROOT — see SESSION_NAME below):
+#   tmux attach -t <session-name-printed-by-this-script>
 #   tail -f .night-manager/nm-*.log
 #   tail -f .night-manager/logs/ABS-*.jsonl | jq .
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ABS-152: worktree-scoped tmux session name.
+# Hashing REPO_ROOT means each worktree (main checkout, .claude/worktrees/*) gets a
+# unique session, so a worktree's e2e suite that exercises the launcher can never
+# kill an unrelated NM session in another worktree.
+SESSION_NAME="nm-$(printf '%s' "$REPO_ROOT" | shasum -a 1 | cut -c1-8)"
 
 cd "$REPO_ROOT"
 
@@ -52,17 +58,17 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 LOG_FILE=".night-manager/nm-${TIMESTAMP}.log"
 mkdir -p .night-manager
 
-# Kill any existing NM session
-tmux kill-session -t night-manager 2>/dev/null || true
+# Kill any existing NM session FOR THIS WORKTREE (other worktrees use different hashes — see SESSION_NAME).
+tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
 
 # Launch in tmux with caffeinate to prevent sleep
-tmux new-session -d -s night-manager \
+tmux new-session -d -s "$SESSION_NAME" \
     "caffeinate -s ${REPO_ROOT}/.venv/bin/python -m scripts.night_manager $* 2>&1 | tee ${LOG_FILE}; echo '--- Night Manager exited. Press any key to close. ---'; read"
 
-echo "Night Manager started in tmux session 'night-manager'"
+echo "Night Manager started in tmux session '${SESSION_NAME}' (repo: ${REPO_ROOT})"
 echo ""
-echo "  Attach:    tmux attach -t night-manager"
+echo "  Attach:    tmux attach -t ${SESSION_NAME}"
 echo "  Logs:      tail -f ${LOG_FILE}"
 echo "  Agent logs: tail -f .night-manager/logs/ABS-*.jsonl | jq ."
 echo "  State:     cat .night-manager/state.json | jq ."
-echo "  Kill:      tmux kill-session -t night-manager"
+echo "  Kill:      tmux kill-session -t ${SESSION_NAME}"
