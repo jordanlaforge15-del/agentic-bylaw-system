@@ -484,6 +484,14 @@ class TestResumeAgentRouting:
             "_spawn_continuation must reset completed_at so subsequent resumes "
             "see this as mid-flight, not another consumed-session case"
         )
+        # ABS-149: continuation must label the session for the mobile app
+        assert "--remote-control" in cmd, (
+            "_spawn_continuation must enable --remote-control"
+        )
+        rc_idx = cmd.index("--remote-control")
+        assert cmd[rc_idx + 1] == f"nm-{issue.identifier}", (
+            "--remote-control name must be nm-<identifier>"
+        )
 
     @pytest.mark.asyncio
     async def test_midflight_session_uses_resume_flag(
@@ -526,6 +534,59 @@ class TestResumeAgentRouting:
             "Mid-flight resume must pass the original session_id"
         )
         assert issue.session_id == "live-session-uuid"
+        # ABS-149: --remote-control must also be passed on the resume path
+        assert "--remote-control" in cmd, (
+            "Mid-flight resume must enable --remote-control"
+        )
+        rc_idx = cmd.index("--remote-control")
+        assert cmd[rc_idx + 1] == f"nm-{issue.identifier}"
+
+
+# ---------------------------------------------------------------------------
+# ABS-149: spawn_agent enables --remote-control with nm-<identifier> label
+# ---------------------------------------------------------------------------
+
+
+class TestRemoteControlOnInitialSpawn:
+    """Regression for ABS-149: every NM-spawned agent surfaces in the Claude
+    mobile app's session list, labeled by issue."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_agent_enables_remote_control(
+        self, tmp_path, monkeypatch
+    ):
+        from scripts.night_manager import agent as agent_mod
+        from scripts.night_manager.config import NMConfig
+
+        captured: dict = {}
+
+        async def fake_exec(*cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            class FakeProc:
+                pid = 12345
+                returncode = None
+            return FakeProc()
+
+        monkeypatch.setattr(
+            agent_mod.asyncio, "create_subprocess_exec", fake_exec
+        )
+
+        issue = _make_issue(identifier="ABS-123", status="queued")
+        issue.worktree = str(tmp_path)
+        issue.log_file = str(tmp_path / "agent.jsonl")
+
+        config = NMConfig(agent_model="sonnet", agent_effort="high")
+
+        await agent_mod.spawn_agent(issue, config, "desc")
+
+        cmd = captured["cmd"]
+        assert "--remote-control" in cmd, (
+            "spawn_agent must enable --remote-control on initial spawn"
+        )
+        rc_idx = cmd.index("--remote-control")
+        assert cmd[rc_idx + 1] == "nm-ABS-123", (
+            "--remote-control name must be nm-<identifier>"
+        )
 
 
 # ---------------------------------------------------------------------------
