@@ -278,7 +278,7 @@ def dataset_orphans(
 def audit_pages(
     document_id: int,
     sample: int = typer.Option(5, "--sample", min=1, help="Number of high-risk pages to audit"),
-    pages: str | None = typer.Option(None, "--pages", help="Comma-separated explicit pages, e.g. 5,12,26"),
+    pages: str | None = typer.Option(None, "--pages", help="Comma-separated pages and/or inclusive ranges, e.g. 5,12,26 or 10-25,30-35"),
     llm: bool = typer.Option(False, "--llm", help="Run structured LLM review on each selected page"),
     model: str | None = typer.Option(None, "--model", help="LLM model override for --llm mode"),
     out: Path | None = typer.Option(None, "--out", help="Write JSON audit report to a file"),
@@ -349,15 +349,32 @@ def _print_ingest_result(document_id: int, status: str, warnings: list[str], err
 def _parse_pages_option(pages: str | None) -> list[int] | None:
     if not pages:
         return None
-    parsed = []
-    for raw in pages.split(","):
-        raw = raw.strip()
-        if not raw:
+    seen: set[int] = set()
+    parsed: list[int] = []
+    for token in pages.split(","):
+        token = token.strip()
+        if not token:
             continue
-        try:
-            parsed.append(int(raw))
-        except ValueError as exc:
-            raise typer.BadParameter(f"Invalid page number: {raw}") from exc
+        if "-" in token:
+            parts = token.split("-", 1)
+            try:
+                start, end = int(parts[0].strip()), int(parts[1].strip())
+            except ValueError as exc:
+                raise typer.BadParameter(f"Invalid range: {token}") from exc
+            if end < start:
+                raise typer.BadParameter(f"Invalid range {token}: end before start")
+            for page in range(start, end + 1):
+                if page not in seen:
+                    seen.add(page)
+                    parsed.append(page)
+        else:
+            try:
+                page = int(token)
+            except ValueError as exc:
+                raise typer.BadParameter(f"Invalid page number: {token}") from exc
+            if page not in seen:
+                seen.add(page)
+                parsed.append(page)
     return parsed or None
 
 
