@@ -11,7 +11,7 @@ export default function GlobalError({
   unstable_retry: () => void;
 }) {
   useEffect(() => {
-    reportError(error);
+    void reportError(error);
   }, [error]);
 
   return (
