@@ -51,6 +51,12 @@ class IssueState:
     # True once this issue was added to a run after the initial plan via
     # a rescan at a group boundary. Purely informational.
     added_via_rescan: bool = False
+    # Byte offset into log_file captured BEFORE the current attempt wrote
+    # anything. The error_detail fallback in _run_agent_lifecycle reads
+    # from this offset to EOF so historical events from prior attempts
+    # in the same append-only log file can no longer false-positive
+    # _is_rate_limited (see ABS-146).
+    attempt_log_offset: int = 0
 
     def mark_started(self) -> None:
         self.status = "in_progress"
@@ -60,10 +66,17 @@ class IssueState:
     def mark_completed(self) -> None:
         self.status = "reviewing"
         self.completed_at = _now_iso()
+        # A later attempt succeeding scrubs the failure metadata from the
+        # earlier attempt — otherwise state.json reports `failed` reasons
+        # for an issue that actually completed (see ABS-148).
+        self.error = None
+        self.rate_limited = False
 
     def mark_merged(self) -> None:
         self.status = "merged"
         self.merged_at = _now_iso()
+        self.error = None
+        self.rate_limited = False
 
     def mark_failed(self, error: str) -> None:
         self.status = "failed"

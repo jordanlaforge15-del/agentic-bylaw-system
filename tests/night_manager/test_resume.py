@@ -380,3 +380,224 @@ class TestTargetSelection:
         ]
         targets.extend(queued)
         assert set(targets) == {"ABS-2", "ABS-3", "ABS-4", "ABS-5"}
+
+
+# ---------------------------------------------------------------------------
+# ABS-148: mark_completed / mark_merged scrub stale failure metadata
+# ---------------------------------------------------------------------------
+
+
+class TestMarkCompletedScrubsStaleFailureMetadata:
+    """Regression for ABS-148: a later attempt succeeding must clear the
+    `error` and `rate_limited` fields set by an earlier `mark_failed`,
+    otherwise state.json reports a failed reason for an issue that
+    actually completed (e.g., ABS-129 in run nm-20260526-004610)."""
+
+    def test_mark_completed_clears_error_and_rate_limited(self):
+        issue = _make_issue(status="in_progress")
+        issue.mark_failed("Rate limited: <stale event>")
+        issue.rate_limited = True
+        assert issue.error is not None
+        assert issue.rate_limited is True
+
+        issue.mark_completed()
+
+        assert issue.status == "reviewing"
+        assert issue.completed_at is not None
+        assert issue.error is None, (
+            "mark_completed must scrub stale error from an earlier mark_failed"
+        )
+        assert issue.rate_limited is False, (
+            "mark_completed must scrub stale rate_limited flag"
+        )
+
+    def test_mark_merged_clears_error_and_rate_limited(self):
+        """Defense in depth — direct queued→merged transitions (out-of-band
+        merge picked up by the reconciler) also need the fields scrubbed."""
+        issue = _make_issue(status="failed")
+        issue.error = "earlier failure"
+        issue.rate_limited = True
+
+        issue.mark_merged()
+
+        assert issue.status == "merged"
+        assert issue.merged_at is not None
+        assert issue.error is None
+        assert issue.rate_limited is False
+
+
+# ---------------------------------------------------------------------------
+# ABS-145: resume_agent picks the right path based on prior session state
+# ---------------------------------------------------------------------------
+
+
+class TestResumeAgentRouting:
+    """Verifies the branch in `resume_agent` between `--resume <id>` and
+    `_spawn_continuation` based on whether the prior session was consumed
+    (`completed_at` set) — the actual root cause of nm-20260526-071803.log
+    failing every resume with "Session ID already in use"."""
+
+    @pytest.mark.asyncio
+    async def test_consumed_session_routes_to_spawn_continuation(
+        self, tmp_path, monkeypatch
+    ):
+        """When completed_at is set, resume_agent must NOT pass --resume —
+        it must spawn a fresh session with a new UUID."""
+        from scripts.night_manager import agent as agent_mod
+        from scripts.night_manager.config import NMConfig
+
+        captured: dict = {}
+
+        async def fake_exec(*cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["kwargs"] = kwargs
+            class FakeProc:
+                pid = 12345
+                returncode = None
+            return FakeProc()
+
+        monkeypatch.setattr(
+            agent_mod.asyncio, "create_subprocess_exec", fake_exec
+        )
+
+        issue = _make_issue(status="reviewing")
+        issue.worktree = str(tmp_path)
+        issue.log_file = str(tmp_path / "agent.jsonl")
+        issue.session_id = "old-session-uuid"
+        issue.completed_at = "2026-05-26T00:00:00+00:00"
+
+        config = NMConfig(agent_model="sonnet", agent_effort="high")
+
+        await agent_mod.resume_agent(issue, config, "feedback text")
+
+        cmd = captured["cmd"]
+        assert "--resume" not in cmd, (
+            "resume_agent must not pass --resume when prior session is consumed"
+        )
+        assert "--session-id" in cmd, "_spawn_continuation must set a session id"
+        new_session_id = cmd[cmd.index("--session-id") + 1]
+        assert new_session_id != "old-session-uuid", (
+            "_spawn_continuation must allocate a fresh UUID"
+        )
+        assert issue.session_id == new_session_id
+        assert issue.completed_at is None, (
+            "_spawn_continuation must reset completed_at so subsequent resumes "
+            "see this as mid-flight, not another consumed-session case"
+        )
+
+    @pytest.mark.asyncio
+    async def test_midflight_session_uses_resume_flag(
+        self, tmp_path, monkeypatch
+    ):
+        """When completed_at is None (killed mid-stream), resume_agent
+        keeps using --resume <session_id> for cache reuse."""
+        from scripts.night_manager import agent as agent_mod
+        from scripts.night_manager.config import NMConfig
+
+        captured: dict = {}
+
+        async def fake_exec(*cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            class FakeProc:
+                pid = 12345
+                returncode = None
+            return FakeProc()
+
+        monkeypatch.setattr(
+            agent_mod.asyncio, "create_subprocess_exec", fake_exec
+        )
+
+        issue = _make_issue(status="failed")
+        issue.worktree = str(tmp_path)
+        issue.log_file = str(tmp_path / "agent.jsonl")
+        issue.session_id = "live-session-uuid"
+        issue.completed_at = None  # mid-flight
+
+        config = NMConfig(agent_model="sonnet", agent_effort="high")
+
+        await agent_mod.resume_agent(issue, config, "feedback text")
+
+        cmd = captured["cmd"]
+        assert "--resume" in cmd, (
+            "Mid-flight resume must still use --resume for cache reuse"
+        )
+        resume_idx = cmd.index("--resume")
+        assert cmd[resume_idx + 1] == "live-session-uuid", (
+            "Mid-flight resume must pass the original session_id"
+        )
+        assert issue.session_id == "live-session-uuid"
+
+
+# ---------------------------------------------------------------------------
+# ABS-146: error_detail fallback bounded to current attempt only
+# ---------------------------------------------------------------------------
+
+
+class TestAttemptLogOffsetIsolatesAttempts:
+    """Regression for ABS-146: NM's `_is_rate_limited` was matching
+    historical 'session limit' text from prior attempts in the same
+    append-only per-issue log file. The fix snapshots a byte offset
+    BEFORE each spawn/resume; the fallback reads only from that
+    offset to EOF."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_agent_snapshots_offset_before_writing(
+        self, tmp_path, monkeypatch
+    ):
+        from scripts.night_manager import agent as agent_mod
+        from scripts.night_manager.config import NMConfig
+
+        log_path = tmp_path / "agent.jsonl"
+        # Simulate an existing log with yesterday's rate-limit text
+        prior_content = (
+            '{"type":"rate_limit_event",'
+            '"rate_limit_info":{"status":"rejected"}}\n'
+            '{"type":"result","is_error":true,'
+            '"result":"You\'ve hit your session limit · resets 4:10pm"}\n'
+        )
+        log_path.write_text(prior_content)
+        prior_size = log_path.stat().st_size
+        assert prior_size > 0
+
+        async def fake_exec(*cmd, **kwargs):
+            class FakeProc:
+                pid = 12345
+                returncode = None
+            return FakeProc()
+
+        monkeypatch.setattr(
+            agent_mod.asyncio, "create_subprocess_exec", fake_exec
+        )
+
+        issue = _make_issue(status="queued")
+        issue.worktree = str(tmp_path)
+        issue.log_file = str(log_path)
+
+        config = NMConfig(agent_model="sonnet", agent_effort="high")
+
+        await agent_mod.spawn_agent(issue, config, "desc")
+
+        assert issue.attempt_log_offset == prior_size, (
+            "spawn_agent must snapshot the existing log size BEFORE writing "
+            "anything new, so the error_detail fallback reads only this "
+            "attempt's slice."
+        )
+
+    def test_attempt_log_offset_round_trips_through_state_json(self, tmp_path):
+        """The offset is needed across saves because _run_agent_lifecycle
+        runs after monitor_agent; state.save() in between must not
+        clobber the value."""
+        from scripts.night_manager.state import NMState
+
+        state = NMState(
+            run_id="nm-test", started_at="2026-01-01T00:00:00+00:00",
+        )
+        issue = _make_issue(status="in_progress")
+        issue.attempt_log_offset = 12345
+        state.issues["ABS-999"] = issue
+
+        path = tmp_path / "state.json"
+        state.save(path)
+
+        reloaded = NMState.load(path)
+        assert reloaded.issues["ABS-999"].attempt_log_offset == 12345
