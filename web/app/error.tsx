@@ -2,6 +2,8 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
+import { ABSLogo } from "@/components/abs-logo";
+import { Btn } from "@/components/btn";
 import { reportError } from "@/lib/error-reporting";
 
 export default function ErrorPage({
@@ -16,8 +18,12 @@ export default function ErrorPage({
   }, [error]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-surface px-6">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-surface px-6">
       <div className="max-w-md w-full text-center space-y-6">
+        <Link href="/" className="inline-block mb-2" aria-label="ABS home">
+          <ABSLogo size={32} />
+        </Link>
+        <div className="mx-auto w-12 h-[2px] bg-accent" />
         <p className="font-mono text-sm text-text-muted tracking-wider uppercase">
           Something went wrong
         </p>
@@ -34,12 +40,7 @@ export default function ErrorPage({
           </p>
         )}
         <div className="flex items-center justify-center gap-4 pt-2">
-          <button
-            onClick={() => unstable_retry()}
-            className="inline-flex items-center justify-center cursor-pointer font-sans font-semibold border-[1.5px] px-[18px] py-[11px] text-[13.5px] tracking-[-0.01em] bg-text text-surface border-text transition-[transform,opacity] duration-100"
-          >
-            Try again
-          </button>
+          <Btn onClick={() => unstable_retry()}>Try again</Btn>
           <Link
             href="/"
             className="inline-flex items-center justify-center font-sans font-semibold border-[1.5px] px-[18px] py-[11px] text-[13.5px] tracking-[-0.01em] bg-transparent text-text border-text transition-[transform,opacity] duration-100"
