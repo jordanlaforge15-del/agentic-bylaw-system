@@ -51,6 +51,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from advisor.api.app import create_app
+from advisor.logging import CorrelationIdMiddleware, setup_logging
 from advisor.api.auth import resolve_or_create_user
 from advisor.api.sentry import init_sentry
 from advisor.auth.clerk import ClerkVerifier
@@ -153,6 +154,7 @@ def build_app() -> FastAPI:
     :func:`advisor.api.app.create_app` directly with their own
     fixtures rather than going through this builder.
     """
+    setup_logging()
     init_sentry()
     gateway = build_gateway()
     verifier = _build_verifier_or_none()
@@ -178,13 +180,15 @@ def build_app() -> FastAPI:
             ".deleted) will not be synced. Set CLERK_WEBHOOK_SECRET "
             "and configure the endpoint in your Clerk dashboard."
         )
-    return create_app(
+    application = create_app(
         gateway=gateway,
         verifier=verifier,
         db_session_factory=session_scope,
         clerk_webhook_secret=webhook_secret,
         **billing_kwargs,
     )
+    application.add_middleware(CorrelationIdMiddleware)
+    return application
 
 
 app = build_app()
