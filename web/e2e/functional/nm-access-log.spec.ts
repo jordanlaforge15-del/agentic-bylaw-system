@@ -15,7 +15,7 @@
 // set by scripts/e2e-up.sh to "e2e-admin-pw".
 
 import { execSync } from "child_process";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { test, expect } from "../fixtures/test-env";
 
@@ -81,6 +81,17 @@ function readLog(): AccessLogEntry[] {
 }
 
 test.describe("NM /api/nm/access-log instrumentation (ABS-155)", () => {
+  test.beforeAll(() => {
+    // Clear the shared access log before running this suite.
+    // The log file lives in the main repo (not the worktree) to support
+    // the NM dashboard across all worktrees (ABS-102). Without cleanup,
+    // parallel test runs accumulate entries and break log entry count
+    // assertions.
+    if (existsSync(ACCESS_LOG_PATH)) {
+      writeFileSync(ACCESS_LOG_PATH, "");
+    }
+  });
+
   test("POST /api/nm/run/start writes an NDJSON entry with correlation id", async ({
     request,
   }) => {
