@@ -36,7 +36,7 @@ class TestConfig:
         with patch.dict(os.environ, {"LINEAR_API_KEY": "test-key"}):
             cfg = parse_args(["--dry-run"])
         assert cfg.dry_run is True
-        assert cfg.max_agents == 3
+        assert cfg.max_agents == 2
         assert cfg.label == "Triaged"
         assert cfg.model == "opus"
         assert cfg.deploy is False
