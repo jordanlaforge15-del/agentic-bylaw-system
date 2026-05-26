@@ -463,3 +463,237 @@ class TestKillForensics:
         out = _truncate(long, 500)
         assert len(out) == 503  # 500 chars + "..."
         assert out.endswith("...")
+
+
+# ---------------------------------------------------------------------------
+# 4) Post-success idle watchdog (ABS-159) — kill the wrapper when it stays
+#    alive after a `result subtype: success` event.
+# ---------------------------------------------------------------------------
+
+
+def _result_success(text: str = "all good") -> dict:
+    """Build a Claude Code terminal `result` event with success semantics."""
+    return {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": text,
+        "duration_ms": 1234,
+    }
+
+
+def _result_error() -> dict:
+    return {
+        "type": "result",
+        "subtype": "error",
+        "is_error": True,
+        "result": "boom",
+        "duration_ms": 1234,
+    }
+
+
+class TestPostSuccessIdleWatchdog:
+    async def test_wrapper_killed_after_success_result_when_idle(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ):
+        """Reproduces ABS-159: agent wrote a success `result` block to its
+        jsonl 6 minutes ago, but the wrapper is still alive because an
+        orphaned child (e.g. `playwright show-report` on :9323) is holding
+        the stdout pipe open. The watchdog must SIGTERM the wrapper and
+        log the expected warning.
+        """
+        from scripts.night_manager.agent import monitor_agent
+
+        proc = _FakeProcess()
+        issue = _make_issue(tmp_path, identifier="ABS-84")
+        loop = asyncio.get_event_loop()
+        clock = _FakeClock()
+        _patch_loop_clock(loop, clock)
+        real_sleep = asyncio.sleep
+
+        proc.feed(_assistant_text("Done — all 160 tests passed."))
+        proc.feed(_result_success("All work done."))
+        # NOTE: closing stdout here models the wrapper's stdout being
+        # *drained* (no more output) but the wrapper process itself still
+        # alive — the realistic ABS-84 case. The reader loop exits cleanly
+        # while the watchdog still has to decide to SIGTERM via the
+        # post-success idle branch.
+        proc.close_stdout()
+
+        fast_sleep = _make_fast_sleep(
+            real_sleep,
+            on_iter={1: lambda: clock.advance(6 * 60)},  # 6 min > 5 min threshold
+        )
+
+        with caplog.at_level(logging.WARNING, logger="night_manager.agent"):
+            with patch("scripts.night_manager.agent.asyncio.sleep", fast_sleep):
+                exit_code, _ = await monitor_agent(
+                    proc, issue,
+                    timeout_minutes=20,
+                    bash_tool_budget_minutes=30,
+                    post_success_idle_minutes=5,
+                )
+
+        assert signal.SIGTERM in proc.signals, (
+            f"expected SIGTERM after post-success idle; got signals={proc.signals}"
+        )
+        assert exit_code == -signal.SIGTERM
+
+        messages = [r.getMessage() for r in caplog.records]
+        warn_lines = [
+            m for m in messages
+            if "wrapper idle" in m and "after success result" in m
+        ]
+        assert warn_lines, (
+            f"expected 'wrapper idle ... after success result' warning; "
+            f"got messages={messages!r}"
+        )
+        assert "ABS-84" in warn_lines[0]
+        assert "killing wrapper" in warn_lines[0]
+
+    async def test_happy_path_agent_unaffected(self, tmp_path: Path):
+        """Sub-5-min agent that emits a success result and immediately
+        closes stdout (the normal happy path) must NOT be SIGTERMed.
+        """
+        from scripts.night_manager.agent import monitor_agent
+
+        proc = _FakeProcess()
+        issue = _make_issue(tmp_path)
+        loop = asyncio.get_event_loop()
+        clock = _FakeClock()
+        _patch_loop_clock(loop, clock)
+        real_sleep = asyncio.sleep
+
+        proc.feed(_assistant_text("Quick win shipped."))
+        proc.feed(_result_success("done"))
+        proc.close_stdout()
+
+        fast_sleep = _make_fast_sleep(
+            real_sleep,
+            on_iter={
+                # Only 1 min after the success event — well inside the 5-min
+                # grace. Process finishes cleanly before any kill path runs.
+                1: lambda: (clock.advance(60), proc.finish_cleanly(0)),
+            },
+        )
+
+        with patch("scripts.night_manager.agent.asyncio.sleep", fast_sleep):
+            exit_code, _ = await monitor_agent(
+                proc, issue,
+                timeout_minutes=20,
+                bash_tool_budget_minutes=30,
+                post_success_idle_minutes=5,
+            )
+
+        assert proc.signals == [], (
+            f"happy-path wrapper must not be signalled; got {proc.signals}"
+        )
+        assert exit_code == 0
+
+    async def test_error_result_does_not_arm_watchdog(self, tmp_path: Path):
+        """A `result` block with is_error=true is not a success — the
+        post-success watchdog must NOT arm on it. The default stuck-timeout
+        path still applies if the agent then idles, but the kill reason
+        must be the standard 'stuck for N minutes', not 'wrapper idle
+        after success result'.
+        """
+        from scripts.night_manager.agent import monitor_agent
+
+        proc = _FakeProcess()
+        issue = _make_issue(tmp_path, identifier="ABS-ERROR")
+        loop = asyncio.get_event_loop()
+        clock = _FakeClock()
+        _patch_loop_clock(loop, clock)
+        real_sleep = asyncio.sleep
+
+        proc.feed(_assistant_text("Tried, failed."))
+        proc.feed(_result_error())
+        proc.close_stdout()
+
+        fast_sleep = _make_fast_sleep(
+            real_sleep,
+            on_iter={
+                # 6 min — past the 5-min post-success threshold, but well
+                # under the 20-min default. So nothing should happen.
+                1: lambda: (clock.advance(6 * 60), proc.finish_cleanly(1)),
+            },
+        )
+
+        with patch("scripts.night_manager.agent.asyncio.sleep", fast_sleep):
+            exit_code, _ = await monitor_agent(
+                proc, issue,
+                timeout_minutes=20,
+                bash_tool_budget_minutes=30,
+                post_success_idle_minutes=5,
+            )
+
+        assert proc.signals == [], (
+            f"error-result wrapper must not trigger post-success kill; "
+            f"got signals={proc.signals}"
+        )
+        # The fixture closed cleanly with exit code 1.
+        assert exit_code == 1
+
+    async def test_post_success_grace_window_respected(self, tmp_path: Path):
+        """Within the post-success grace window the wrapper must NOT be
+        killed — only after it elapses. Confirms the threshold boundary."""
+        from scripts.night_manager.agent import monitor_agent
+
+        proc = _FakeProcess()
+        issue = _make_issue(tmp_path)
+        loop = asyncio.get_event_loop()
+        clock = _FakeClock()
+        _patch_loop_clock(loop, clock)
+        real_sleep = asyncio.sleep
+
+        proc.feed(_result_success())
+        proc.close_stdout()
+
+        fast_sleep = _make_fast_sleep(
+            real_sleep,
+            on_iter={
+                1: lambda: clock.advance(3 * 60),  # 3 min < 5 min — safe
+                # Now finish cleanly so the test terminates.
+                2: lambda: proc.finish_cleanly(0),
+            },
+        )
+
+        with patch("scripts.night_manager.agent.asyncio.sleep", fast_sleep):
+            exit_code, _ = await monitor_agent(
+                proc, issue,
+                timeout_minutes=20,
+                bash_tool_budget_minutes=30,
+                post_success_idle_minutes=5,
+            )
+
+        assert proc.signals == []
+        assert exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# 5) System-prompt rule (ABS-159) — the constructed prompt must contain a
+#    recognizable substring of the new long-running-server rule.
+# ---------------------------------------------------------------------------
+
+
+class TestSystemPromptLongRunningServerRule:
+    def test_prompt_contains_long_running_server_rule(self):
+        from scripts.night_manager.config import DEV_AGENT_SYSTEM_PROMPT
+
+        # Recognizable fragments from the rule body — assert both the
+        # category guard and a concrete example land in the prompt.
+        assert "long-running server" in DEV_AGENT_SYSTEM_PROMPT
+        assert "playwright show-report" in DEV_AGENT_SYSTEM_PROMPT
+
+    def test_prompt_mentions_safe_alternatives(self):
+        from scripts.night_manager.config import DEV_AGENT_SYSTEM_PROMPT
+
+        # Agent must be told where to read results without serving them.
+        assert "web/test-results/.last-run.json" in DEV_AGENT_SYSTEM_PROMPT
+        assert "do not serve them" in DEV_AGENT_SYSTEM_PROMPT
+
+    def test_prompt_mentions_timeout_workaround(self):
+        from scripts.night_manager.config import DEV_AGENT_SYSTEM_PROMPT
+
+        # The escape hatch: prefix with `timeout 30s` if you really must.
+        assert "timeout 30s" in DEV_AGENT_SYSTEM_PROMPT
