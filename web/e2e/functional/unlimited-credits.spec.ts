@@ -100,8 +100,8 @@ test("normal user with zero credits gets 402", async ({ request }) => {
     },
   });
   expect(res.status()).toBe(402);
-  const body = (await res.json()) as { code: string };
-  expect(body.code).toBe("no_available_credit");
+  const body = (await res.json()) as { detail: { code: string } };
+  expect(body.detail.code).toBe("no_available_credit");
 });
 
 test("unlimited-credits user can chat after opening a case", async ({
