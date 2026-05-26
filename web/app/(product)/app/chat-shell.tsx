@@ -230,11 +230,13 @@ function ProductAppPageInner() {
       }
       const data = (await res.json()) as {
         messages: BackendMessage[];
+        message_db_ids?: number[];
         case_id?: number | null;
         tier?: string | null;
       };
-      setParcel(extractParcelContext(data.messages));
-      setMessages(translateHistory(data.messages));
+      const enriched = attachDbIds(data.messages, data.message_db_ids);
+      setParcel(extractParcelContext(enriched));
+      setMessages(translateHistory(enriched));
       // Keep the case-billing context aligned with the authoritative
       // server state — covers the case where the resume fallback
       // attached a case mid-turn that the SSE stream didn't surface.
@@ -485,20 +487,18 @@ function ProductAppPageInner() {
       }
       const data = (await res.json()) as {
         messages: BackendMessage[];
+        message_db_ids?: number[];
         case_id?: number | null;
         tier?: string | null;
       };
-      setMessages(translateHistory(data.messages));
+      const enriched = attachDbIds(data.messages, data.message_db_ids);
+      setMessages(translateHistory(enriched));
       setSessionId(id);
-      // Rehydrate the case-billing context from the server. The /v1/chat
-      // resume path can fall back to the session's stored case_id, but
-      // the UI also needs it to drive the header strip and (when null
-      // on a session with prior turns) the legacy-session composer gate.
       setCaseIdBoth(
         typeof data.case_id === "number" ? data.case_id : null,
       );
       setCaseTier(typeof data.tier === "string" ? data.tier : null);
-      setParcel(extractParcelContext(data.messages));
+      setParcel(extractParcelContext(enriched));
     } catch (e) {
       setError(`Couldn't load that reading: ${(e as Error).message}`);
     }
@@ -570,6 +570,7 @@ function ProductAppPageInner() {
             thinking={thinking}
             thinkLabel={thinkLabel}
             error={error}
+            sessionId={activeSessionId}
           />
           {(caseTier || caseId !== null) && (
             <CaseHeaderStrip
@@ -723,27 +724,31 @@ function appendAgentDelta(
 // user turns that carry tool_result are dropped, leaving just the
 // human-readable turns. The opening system message is prepended so
 // resumed sessions still show the "connected" banner.
+function attachDbIds(
+  messages: BackendMessage[],
+  dbIds?: number[],
+): BackendMessage[] {
+  if (!dbIds || dbIds.length === 0) return messages;
+  return messages.map((m, i) => ({
+    ...m,
+    db_id: dbIds[i] ?? undefined,
+  }));
+}
+
 function translateHistory(messages: BackendMessage[]): Message[] {
   const out: Message[] = [OPENING];
-  // One agent message per user question. The tool-use loop can emit
-  // many intermediate assistant turns ("Let me check X" → tool →
-  // "Now let me also check Y" → tool → final answer); rendering all
-  // of them inflates the chat and makes the post-stream snap (which
-  // splits a single streamed message into N) jarring. Instead we
-  // accumulate everything between user messages and emit one agent
-  // turn whose body is the *last* text-bearing assistant turn (the
-  // final answer) and whose reasoning is every tool call that
-  // happened along the way.
   let pendingReasoning: AgentReasoningStep[] = [];
   let pendingFinalText = "";
+  let pendingDbId: number | undefined;
 
   const flush = () => {
     if (!pendingFinalText.trim() && pendingReasoning.length === 0) return;
     out.push(
-      buildAgentFromText(pendingFinalText.trim(), pendingReasoning),
+      buildAgentFromText(pendingFinalText.trim(), pendingReasoning, pendingDbId),
     );
     pendingReasoning = [];
     pendingFinalText = "";
+    pendingDbId = undefined;
   };
 
   for (const m of messages) {
@@ -752,13 +757,12 @@ function translateHistory(messages: BackendMessage[]): Message[] {
         flush();
         out.push({ kind: "user", body: m.content });
       }
-      // tool_result intermediate → skip
       continue;
     }
     // assistant
     if (typeof m.content === "string") {
-      // Defensive: future provider might collapse to string.
       pendingFinalText = m.content;
+      pendingDbId = m.db_id;
       continue;
     }
     for (const b of m.content) {
@@ -773,8 +777,8 @@ function translateHistory(messages: BackendMessage[]): Message[] {
       .map((b) => b.text)
       .join("");
     if (text.trim()) {
-      // Overwrite — only the last text turn becomes the rendered body.
       pendingFinalText = text;
+      pendingDbId = m.db_id;
     }
   }
   flush();
@@ -784,6 +788,7 @@ function translateHistory(messages: BackendMessage[]): Message[] {
 function buildAgentFromText(
   text: string,
   reasoning: AgentReasoningStep[] = [],
+  messageDbId?: number,
 ): AgentMessage {
   return {
     kind: "agent",
@@ -792,6 +797,7 @@ function buildAgentFromText(
     reasoning,
     confidence: 0.9,
     sources: [],
+    messageDbId,
   };
 }
 

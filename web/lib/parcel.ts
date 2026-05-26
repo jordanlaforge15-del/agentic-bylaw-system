@@ -61,6 +61,8 @@ export type BackendBlock =
 export type BackendMessage = {
   role: "user" | "assistant";
   content: string | BackendBlock[];
+  /** DB primary key, populated when message_db_ids is present on the session response. */
+  db_id?: number;
 };
 
 type LinkedDataset = {

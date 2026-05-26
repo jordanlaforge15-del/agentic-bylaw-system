@@ -15,6 +15,7 @@ import type {
   SystemMessage,
   UserMessage,
 } from "@/lib/mock";
+import { MessageFeedback } from "@/components/product/message-feedback";
 import { cn } from "@/lib/cn";
 
 type Props = {
@@ -22,6 +23,7 @@ type Props = {
   thinking: boolean;
   thinkLabel: string;
   error?: string | null;
+  sessionId?: string | null;
 };
 
 export function ChatThread({
@@ -29,6 +31,7 @@ export function ChatThread({
   thinking,
   thinkLabel,
   error,
+  sessionId,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const totalBodyLen = messages.reduce(
@@ -48,7 +51,7 @@ export function ChatThread({
       {messages.map((m, i) => {
         if (m.kind === "system") return <SystemMsg key={i} msg={m} />;
         if (m.kind === "user") return <UserMsg key={i} msg={m} />;
-        return <AgentMsg key={i} msg={m} idx={i} />;
+        return <AgentMsg key={i} msg={m} idx={i} sessionId={sessionId} />;
       })}
       {thinking && <ThinkingMsg label={thinkLabel} />}
       {error && <ErrorMsg body={error} />}
@@ -96,7 +99,7 @@ function UserMsg({ msg }: { msg: UserMessage }) {
   );
 }
 
-function AgentMsg({ msg, idx }: { msg: AgentMessage; idx: number }) {
+function AgentMsg({ msg, idx, sessionId }: { msg: AgentMessage; idx: number; sessionId?: string | null }) {
   const [open, setOpen] = useState(idx === 0);
   return (
     <div className="flex flex-col gap-3 mb-1">
@@ -198,6 +201,13 @@ function AgentMsg({ msg, idx }: { msg: AgentMessage; idx: number }) {
               </span>
             ))}
           </div>
+        )}
+
+        {msg.messageDbId != null && sessionId != null && (
+          <MessageFeedback
+            sessionId={sessionId}
+            messageId={msg.messageDbId}
+          />
         )}
       </div>
     </div>

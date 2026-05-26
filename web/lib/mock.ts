@@ -166,6 +166,8 @@ export type AgentMessage = {
   reasoning: AgentReasoningStep[];
   confidence: number;
   sources: AgentSource[];
+  /** DB primary key of the ChatMessage row, if known. Used by feedback UI. */
+  messageDbId?: number;
 };
 
 export type SystemMessage = { kind: "system"; body: string };

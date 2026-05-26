@@ -520,6 +520,54 @@ class ChatMessage(Base):
     )
 
     session: Mapped[ChatSession] = relationship(back_populates="messages")
+    feedback: Mapped[list["ChatMessageFeedback"]] = relationship(
+        back_populates="message", cascade="all, delete-orphan"
+    )
+
+
+class ChatMessageFeedback(Base):
+    """User feedback on a single chat message (thumbs up/down + flag).
+
+    Keyed by ``(message_id, user_id)`` so each user can submit at most
+    one feedback row per message. Re-submitting overwrites the previous
+    rating/flag rather than creating duplicates.
+
+    ``rating`` is ``'up'`` or ``'down'`` (thumbs). ``flag_reason`` is
+    set when the user reports a problem: ``'bad_citation'``,
+    ``'wrong_zone'``, ``'hallucination'``, or ``'other'``.
+    ``flag_notes`` carries free-text detail when ``flag_reason`` is set.
+    """
+
+    __tablename__ = "advisor_chat_message_feedback"
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "user_id",
+            name="uq_advisor_chat_message_feedback_msg_user",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_chat_message.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    rating: Mapped[str | None] = mapped_column(String(8))
+    flag_reason: Mapped[str | None] = mapped_column(String(32))
+    flag_notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    message: Mapped[ChatMessage] = relationship(back_populates="feedback")
 
 
 class UsageEvent(Base):

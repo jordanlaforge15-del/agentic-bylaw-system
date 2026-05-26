@@ -128,6 +128,10 @@ class ChatSessionResponse(BaseModel):
     user_id: str
     model: str
     messages: list[Message]
+    # Parallel to ``messages``: the DB primary key of each ChatMessage
+    # row. Used by the feedback UI to identify which message the user
+    # is rating. Empty when the session store is in-memory (tests).
+    message_db_ids: list[int] = Field(default_factory=list)
     # Case-billing context. ``None`` for legacy sessions that predate
     # the case-credit model — the frontend uses this to gate the
     # composer (a null ``case_id`` means the conversation can't be
@@ -382,6 +386,19 @@ def create_app(
                 user_dependency=require_user,
                 user_resolver=_resolve_user_via_db,
                 evaluator_factory=submissions_evaluator_factory,
+            )
+        )
+
+        # Chat message feedback router (ABS-121) — thumbs + flag.
+        from advisor.api.feedback_router import (  # noqa: PLC0415
+            build_feedback_router,
+        )
+
+        app.include_router(
+            build_feedback_router(
+                db_session_factory=db_session_factory,
+                user_dependency=require_user,
+                user_resolver=_resolve_user_via_db,
             )
         )
 
@@ -817,15 +834,36 @@ def create_app(
         user_id_str = user.clerk_user_id
         session = store.get(session_id)
         if session is None or session.user_id != user_id_str:
-            # 404, not 403, because leaking "this session exists but
-            # isn't yours" would let an attacker enumerate session
-            # ids. Treat unauth and missing as the same response.
             raise HTTPException(status_code=404, detail="Session not found")
+
+        message_db_ids: list[int] = []
+        if db_session_factory is not None:
+            try:
+                db_session_pk = int(session_id)
+            except ValueError:
+                db_session_pk = None
+            if db_session_pk is not None:
+                from advisor.db.models import (  # noqa: PLC0415
+                    ChatMessage as _DbChatMessage,
+                )
+
+                with db_session_factory() as db:
+                    rows = (
+                        db.query(
+                            _DbChatMessage.id, _DbChatMessage.sequence
+                        )
+                        .filter(_DbChatMessage.session_id == db_session_pk)
+                        .order_by(_DbChatMessage.sequence)
+                        .all()
+                    )
+                    message_db_ids = [r.id for r in rows]
+
         return ChatSessionResponse(
             session_id=session.session_id,
             user_id=session.user_id,
             model=session.model,
             messages=session.messages,
+            message_db_ids=message_db_ids,
             case_id=session.case_id,
             tier=session.tier,
         )
