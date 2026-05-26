@@ -35,6 +35,14 @@ STUCK_TIMEOUT_MINUTES = int(os.environ.get("NM_AGENT_STALL_MIN", "20"))
 # `make e2e` on a cold stack with headroom for slow CI machines. Override
 # via NM_BASH_TOOL_BUDGET_MIN.
 BASH_TOOL_BUDGET_MINUTES = int(os.environ.get("NM_BASH_TOOL_BUDGET_MIN", "30"))
+# Post-success idle threshold (see ABS-159). When the most recent stream-json
+# event is a `result` block with `subtype: success` / `is_error: false`, the
+# agent's real work is finished — anything after that is the wrapper draining.
+# If the wrapper is still alive this many minutes later, an orphaned child
+# (e.g. `npx playwright show-report` serving on :9323) is holding it open;
+# SIGTERM the wrapper so NM can enter the merge gate. Override via
+# NM_POST_SUCCESS_IDLE_MIN.
+POST_SUCCESS_IDLE_MINUTES = int(os.environ.get("NM_POST_SUCCESS_IDLE_MIN", "5"))
 MAX_REVIEW_CYCLES = 3
 MAX_E2E_FIX_CYCLES = 3
 MAX_REGRESSION_FIX_CYCLES = 3
@@ -62,6 +70,13 @@ reviewer and will handle the merge after reviewing your work.
 - Commit frequently — small, logical units.
 - If you are stuck for more than 3 attempts on the same error, exit and \
 describe the blocker in your final output.
+- Never run commands that start a long-running server in the foreground \
+(examples: `npx playwright show-report`, `playwright codegen`, \
+`python -m http.server`, `npm run dev`, `vite preview`, `make e2e-up` \
+without `e2e-down`). If you need to inspect Playwright results, read \
+`web/test-results/.last-run.json` or `web/playwright-report/index.html` \
+— do not serve them. If a command must run in the background, prefix it \
+with `timeout 30s` and explain in your output that you did so.
 - When you are done, exit with a summary of what you implemented and \
 your test results. The Night Manager will take it from there.\
 """
