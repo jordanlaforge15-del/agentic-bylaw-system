@@ -230,6 +230,8 @@ start_fastapi() {
     ADVISOR_HOST=127.0.0.1 \
     ADVISOR_PORT="$E2E_FASTAPI_PORT" \
     ADVISOR_E2E_CORS_ORIGINS="http://localhost:${E2E_WEB_PORT}" \
+    ADVISOR_ADMIN_API_ENABLED=true \
+    ADVISOR_ADMIN_CLERK_USER_IDS="${E2E_USER_ID}" \
     nohup "${REPO_ROOT}/.venv/bin/uvicorn" advisor.api.e2e_server:app \
       --host 127.0.0.1 --port "$E2E_FASTAPI_PORT" &
     echo $! >"${PID_DIR}/fastapi.pid"
