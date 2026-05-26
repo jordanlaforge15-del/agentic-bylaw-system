@@ -972,3 +972,143 @@ def test_grant_admin_credits_creates_one_row_per_credit(tmp_path: Path) -> None:
         purchase = s.get(CasePurchase, next(iter(purchase_ids)))
         assert purchase.pack_sku == "admin_grant"
         assert purchase.quantity == 20
+
+
+# ---------- unlimited credits (ABS-12) ------------------------------------
+
+
+def _seed_unlimited_user(db_url: str, *, clerk_user_id: str = "u_test") -> int:
+    with session_scope(db_url) as s:
+        user = User(
+            clerk_user_id=clerk_user_id,
+            email=f"{clerk_user_id}@x.com",
+            unlimited_credits=True,
+        )
+        s.add(user)
+        s.flush()
+        return user.id
+
+
+def test_unlimited_credits_defaults_to_false(tmp_path: Path) -> None:
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        assert user.unlimited_credits is False
+
+
+def test_open_case_auto_mints_credit_for_unlimited_user(tmp_path: Path) -> None:
+    """An unlimited-credits user can open a case without pre-granted credits."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_unlimited_user(db_url)
+    with session_scope(db_url) as s:
+        case, credit = open_case(
+            s,
+            user=s.get(User, user_id),
+            anchor_label="123 Test St",
+            anchor_kind="address",
+            tier="standard",
+        )
+        assert credit.state == "reserved"
+        assert credit.source == "test"
+        assert credit.tier == "standard"
+        assert credit.case_id == case.id
+
+
+def test_unlimited_user_minted_credit_has_test_source(tmp_path: Path) -> None:
+    """Auto-minted credits are tagged with source='test' for analytics filtering."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_unlimited_user(db_url)
+    with session_scope(db_url) as s:
+        open_case(
+            s,
+            user=s.get(User, user_id),
+            anchor_label="456 Test St",
+            anchor_kind="address",
+            tier="quick",
+        )
+
+    with session_scope(db_url) as s:
+        credits = list(
+            s.query(CaseCredit).filter(CaseCredit.user_id == user_id)
+        )
+        assert len(credits) == 1
+        assert credits[0].source == "test"
+        purchase = s.get(CasePurchase, credits[0].purchase_id)
+        assert purchase.pack_sku == "test"
+        assert purchase.amount_paid_cents == 0
+
+
+def test_unlimited_user_can_open_multiple_cases(tmp_path: Path) -> None:
+    """Each case open auto-mints its own test credit."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_unlimited_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        case1, c1 = open_case(
+            s, user=user, anchor_label="A", anchor_kind="address", tier="standard"
+        )
+        case2, c2 = open_case(
+            s, user=user, anchor_label="B", anchor_kind="address", tier="standard"
+        )
+        assert c1.id != c2.id
+        assert c1.source == "test"
+        assert c2.source == "test"
+
+
+def test_unlimited_user_upgrade_auto_mints(tmp_path: Path) -> None:
+    """upgrade_case_credit auto-mints a higher-tier credit for unlimited users."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_unlimited_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        case, credit = open_case(
+            s, user=user, anchor_label="X", anchor_kind="address", tier="quick"
+        )
+        burned, new = upgrade_case_credit(
+            s, case=case, target_tier="standard", trigger="test_upgrade"
+        )
+        assert burned.state == "upgraded_out"
+        assert new.source == "test"
+        assert new.tier == "standard"
+        assert new.case_id == case.id
+
+
+def test_normal_user_still_gets_no_credit_error(tmp_path: Path) -> None:
+    """unlimited_credits=False (default) does not auto-mint."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        with pytest.raises(NoAvailableCreditError):
+            open_case(
+                s,
+                user=s.get(User, user_id),
+                anchor_label="No credits",
+                anchor_kind="address",
+                tier="standard",
+            )
+
+
+def test_unlimited_user_prefers_real_credits_over_minting(tmp_path: Path) -> None:
+    """If an unlimited user has real available credits, those are used first."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_unlimited_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        grant_admin_credits(s, user=user, tier="standard", quantity=1, reason="test")
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        _, credit = open_case(
+            s, user=user, anchor_label="R", anchor_kind="address", tier="standard"
+        )
+        assert credit.source == "admin_grant", (
+            "should use the real credit, not auto-mint"
+        )

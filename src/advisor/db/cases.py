@@ -333,7 +333,9 @@ def open_case(
         )
         return case, existing
 
-    credit = _claim_available_credit(db, user_id=user.id, tier=tier)
+    credit = _claim_available_credit(
+        db, user_id=user.id, tier=tier, unlimited=user.unlimited_credits
+    )
     if credit is None:
         raise NoAvailableCreditError(tier=tier)
 
@@ -527,7 +529,12 @@ def upgrade_case_credit(
             f"target tier {target_tier!r} is not strictly higher than "
             f"current tier {current.tier!r}"
         )
-    new = _claim_available_credit(db, user_id=case.user_id, tier=target_tier)
+    new = _claim_available_credit(
+        db,
+        user_id=case.user_id,
+        tier=target_tier,
+        unlimited=case.user.unlimited_credits,
+    )
     if new is None:
         raise NoAvailableCreditError(tier=target_tier)
 
@@ -904,13 +911,17 @@ def refund_abandoned_credits(db: Session) -> int:
 
 
 def _claim_available_credit(
-    db: Session, *, user_id: int, tier: str
+    db: Session, *, user_id: int, tier: str, unlimited: bool = False
 ) -> CaseCredit | None:
     """FIFO-claim one available credit at ``tier`` for ``user_id``.
 
     Uses ``with_for_update(skip_locked=True)`` so two concurrent
     case-open calls for the same user/tier don't deadlock — the second
     request just grabs the next row in line.
+
+    When ``unlimited`` is True (test/QA accounts with
+    ``User.unlimited_credits``), a fresh credit with ``source='test'``
+    is auto-minted on the fly if no real credit is available.
     """
     stmt = (
         select(CaseCredit)
@@ -923,7 +934,47 @@ def _claim_available_credit(
         .limit(1)
         .with_for_update(skip_locked=True)
     )
-    return db.execute(stmt).scalar_one_or_none()
+    credit = db.execute(stmt).scalar_one_or_none()
+    if credit is not None:
+        return credit
+    if not unlimited:
+        return None
+    return _mint_test_credit(db, user_id=user_id, tier=tier)
+
+
+def _mint_test_credit(
+    db: Session, *, user_id: int, tier: str
+) -> CaseCredit:
+    """Create a synthetic credit for an unlimited-credits test user.
+
+    Writes real rows (``CasePurchase`` + ``CaseCredit``) with
+    ``source='test'`` so the existing lifecycle machinery works
+    unchanged and analytics can filter test traffic.
+    """
+    purchase = CasePurchase(
+        user_id=user_id,
+        pack_sku="test",
+        tier=tier,
+        quantity=1,
+        list_price_cents=0,
+        discount_bps=0,
+        amount_paid_cents=0,
+        currency="CAD",
+        stripe_checkout_session_id=None,
+        stripe_payment_intent_id=None,
+    )
+    db.add(purchase)
+    db.flush()
+    credit = CaseCredit(
+        user_id=user_id,
+        purchase_id=purchase.id,
+        tier=tier,
+        source="test",
+        state="available",
+    )
+    db.add(credit)
+    db.flush()
+    return credit
 
 
 def _existing_active_credit_for_case(
