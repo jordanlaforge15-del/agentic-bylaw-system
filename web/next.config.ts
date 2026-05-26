@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // Next.js's standalone tracer walks static `require`/`import` chains
   // to decide which node_modules to bundle. nodemailer pulls its
   // transports via `require(name)` from a dynamic string, which the

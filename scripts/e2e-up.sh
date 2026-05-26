@@ -88,7 +88,11 @@ ensure_compose_prereqs() {
 }
 
 ensure_postgres() {
-  log "Ensuring Postgres container is up"
+  if docker_compose exec -T postgres pg_isready -U "$PG_USER" -d postgres >/dev/null 2>&1; then
+    log "Postgres already healthy on :${PG_PORT} — reusing"
+    return 0
+  fi
+  log "Starting Postgres container on :${PG_PORT}"
   docker_compose up -d postgres
   local last_err=""
   for _ in $(seq 1 60); do
@@ -251,6 +255,7 @@ start_web() {
   # use scripts/dev-up.sh against the dev DB instead — do not try to
   # repurpose this script.
   ( cd "${REPO_ROOT}/web" && \
+    NEXT_DIST_DIR=.next-e2e \
     ADVISOR_API_URL="http://127.0.0.1:${E2E_FASTAPI_PORT}" \
     ADVISOR_DEMO_USER_ID="$E2E_USER_ID" \
     CLERK_SECRET_KEY="" \
