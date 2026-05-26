@@ -70,6 +70,10 @@ COPY --from=builder --chown=advisor:advisor /opt/venv /opt/venv
 COPY --chown=advisor:advisor alembic.ini ./
 COPY --chown=advisor:advisor alembic ./alembic
 
+# Operational scripts (backfill_parcels.py, etc.) must be present so the
+# operator can invoke `docker compose exec advisor python scripts/<name>.py`.
+COPY --chown=advisor:advisor scripts ./scripts
+
 # Workaround: advisor/chat/persona.py uses Path(__file__).parents[3] to find
 # this file, which only resolves correctly under an editable install. We copy
 # the file to where the resolver looks under a regular install. Tracked as
