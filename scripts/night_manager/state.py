@@ -44,6 +44,13 @@ class IssueState:
     agent_model: str = ""
     agent_effort: str = ""
     linear_id: str = ""
+    # Compact summary of the issue produced by the planner so it can be
+    # reused for in-flight replans without re-sending the full description.
+    # Shape: {"areas": [str], "kind": str, "risk_tags": [str]}
+    touch_profile: dict | None = None
+    # True once this issue was added to a run after the initial plan via
+    # a rescan at a group boundary. Purely informational.
+    added_via_rescan: bool = False
 
     def mark_started(self) -> None:
         self.status = "in_progress"

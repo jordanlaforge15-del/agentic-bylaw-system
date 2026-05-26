@@ -11,6 +11,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NM_DIR = REPO_ROOT / ".night-manager"
 LOGS_DIR = NM_DIR / "logs"
 STATE_FILE = NM_DIR / "state.json"
+# Sentinel the user can touch to force an in-flight rescan at the next group
+# boundary. The manager already polls Linear at every boundary; this file is
+# an "I added work, please notice" signal that just gets logged and consumed.
+NUDGE_FILE = NM_DIR / "nudge"
 
 DEFAULT_MAX_AGENTS = 2
 DEFAULT_LABEL = "Triaged"
@@ -20,7 +24,17 @@ DEFAULT_AGENT_EFFORT = "high"
 DEFAULT_AGENT_TOKEN_LIMIT = 10.0  # --max-budget-usd value; token guardrail, not real cost
 DEFAULT_REVIEWER_MODEL = "sonnet"
 DEFAULT_REVIEWER_TOKEN_LIMIT = 2.0
-STUCK_TIMEOUT_MINUTES = 10
+# Default watchdog stall threshold. `make e2e` is documented at ~9 min on a
+# cold stack and is routinely the last action of a resume cycle (Bash tool
+# blocks stdout for the entire run — see RCA for ABS-121). 10 min was too
+# tight; 20 min sits comfortably above the e2e ceiling without letting truly
+# wedged agents idle forever. Override per-deploy via NM_AGENT_STALL_MIN.
+STUCK_TIMEOUT_MINUTES = int(os.environ.get("NM_AGENT_STALL_MIN", "20"))
+# When the last stream-json event is an unterminated Bash tool_use, the
+# watchdog extends grace to this many minutes for that tool call. Covers
+# `make e2e` on a cold stack with headroom for slow CI machines. Override
+# via NM_BASH_TOOL_BUDGET_MIN.
+BASH_TOOL_BUDGET_MINUTES = int(os.environ.get("NM_BASH_TOOL_BUDGET_MIN", "30"))
 MAX_REVIEW_CYCLES = 3
 MAX_E2E_FIX_CYCLES = 3
 MAX_REGRESSION_FIX_CYCLES = 3
