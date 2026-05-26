@@ -197,6 +197,10 @@ async def spawn_agent(
         "--allowedTools", ALLOWED_TOOLS,
         "--append-system-prompt", DEV_AGENT_SYSTEM_PROMPT,
         "--session-id", session_id,
+        # ABS-149: surface each NM agent in the Claude mobile app's
+        # session list. Name = nm-<issue identifier> so the operator can
+        # tell parallel agents apart on a phone.
+        "--remote-control", f"nm-{issue.identifier}",
         "--model", model,
         "--max-budget-usd", str(config.agent_token_limit),
     ]
@@ -265,6 +269,9 @@ async def resume_agent(
         "--permission-mode", "acceptEdits",
         "--allowedTools", ALLOWED_TOOLS,
         "--resume", issue.session_id,
+        # ABS-149: same nm-<identifier> label as the original spawn so
+        # the mobile app threads this continuation onto the same session.
+        "--remote-control", f"nm-{issue.identifier}",
         "--model", model,
         "--max-budget-usd", str(config.agent_token_limit),
     ]
@@ -337,6 +344,9 @@ async def _spawn_continuation(
         "--allowedTools", ALLOWED_TOOLS,
         "--append-system-prompt", DEV_AGENT_SYSTEM_PROMPT,
         "--session-id", new_session_id,
+        # ABS-149: continuation reuses the same nm-<identifier> label so
+        # the mobile app sees a single thread per issue across spawns.
+        "--remote-control", f"nm-{issue.identifier}",
         "--model", model,
         "--max-budget-usd", str(config.agent_token_limit),
     ]
