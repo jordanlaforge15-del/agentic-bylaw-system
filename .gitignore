@@ -40,3 +40,13 @@ tmp/
 
 # Night Manager runtime state (logs, state, reports)
 .night-manager/
+
+# Typo guard: a stray .claire/ directory appeared in the past (vs .claude/).
+.claire/
+
+# Layer1 audit + pipeline runtime outputs (separate from .night-manager/).
+logs/
+abs-learning/output/
+
+# Per-user submission storage written by the advisor app at runtime.
+data/submissions/
