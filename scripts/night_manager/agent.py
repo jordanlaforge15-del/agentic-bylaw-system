@@ -15,6 +15,7 @@ from .config import (
     BASH_TOOL_BUDGET_MINUTES,
     DEV_AGENT_SYSTEM_PROMPT,
     NMConfig,
+    POST_SUCCESS_IDLE_MINUTES,
     REPO_ROOT,
     STUCK_TIMEOUT_MINUTES,
     WORKTREE_ROOT,
@@ -439,6 +440,7 @@ async def monitor_agent(
     issue: IssueState,
     timeout_minutes: int = STUCK_TIMEOUT_MINUTES,
     bash_tool_budget_minutes: int = BASH_TOOL_BUDGET_MINUTES,
+    post_success_idle_minutes: int = POST_SUCCESS_IDLE_MINUTES,
 ) -> tuple[int, str]:
     """
     Stream agent output, detect stuck state, return (exit_code, final_output).
@@ -449,6 +451,14 @@ async def monitor_agent(
     to `bash_tool_budget_minutes` for that call — a long-running `make e2e`
     legitimately emits no stdout for ~9 min and was misread as "stuck" in
     ABS-121.
+
+    Post-success idle watchdog (ABS-159): if the most recent event is a
+    `result` block with `subtype: "success"` / `is_error: false`, the
+    agent's real work is finished but the wrapper is still running. An
+    orphaned foreground child (e.g. `npx playwright show-report` serving
+    on :9323) can hold the wrapper open indefinitely. After
+    `post_success_idle_minutes` of post-success quiet, SIGTERM the
+    wrapper so NM can enter the merge gate; SIGKILL after a 10s grace.
     """
     final_output = ""
     loop = asyncio.get_event_loop()
@@ -460,12 +470,15 @@ async def monitor_agent(
     # state — so the watchdog's "extended Bash budget" applies only while
     # a Bash call is actually outstanding.
     pending_tool: dict[str, Any] | None = None  # {id, name, input, started_at}
+    # Post-success tracking: timestamp of the most recent `result` event
+    # with subtype=success / is_error=false. None until that event arrives.
+    success_result_at: float | None = None
     log_path = Path(issue.log_file)
 
     assert proc.stdout is not None
 
     async def _read_stream() -> str:
-        nonlocal last_activity, final_output, pending_tool
+        nonlocal last_activity, final_output, pending_tool, success_result_at
         async for raw_line in proc.stdout:
             line = raw_line.decode("utf-8", errors="replace").strip()
             if not line:
@@ -514,6 +527,17 @@ async def monitor_agent(
                         ):
                             pending_tool = None
                             break
+            elif etype == "result":
+                # Claude Code emits a single terminal `result` block when the
+                # agent has finished its turn. is_error=false / subtype=success
+                # means the agent's work succeeded and stdout from here on is
+                # just wrapper drain. If the wrapper doesn't exit promptly,
+                # an orphaned foreground child is holding it open — the
+                # post-success idle watchdog reaps it.
+                is_error = bool(event.get("is_error", False))
+                subtype = event.get("subtype", "")
+                if not is_error or subtype == "success":
+                    success_result_at = now
 
         return final_output
 
@@ -521,10 +545,37 @@ async def monitor_agent(
         nonlocal last_activity
         default_timeout_secs = timeout_minutes * 60
         bash_budget_secs = bash_tool_budget_minutes * 60
+        post_success_idle_secs = post_success_idle_minutes * 60
         while proc.returncode is None:
             await asyncio.sleep(30)
             now = loop.time()
             elapsed = now - last_activity
+
+            # Post-success idle check (ABS-159): if the agent already wrote
+            # a success `result` block but the wrapper is still alive, kill
+            # it. This branch is checked BEFORE the standard / Bash-budget
+            # logic because a hung wrapper after success has no pending
+            # tool_use we care about — the agent thinks it's done.
+            if success_result_at is not None:
+                post_success_elapsed = now - success_result_at
+                if post_success_elapsed > post_success_idle_secs:
+                    log.warning(
+                        "Agent %s wrapper idle for %.1fm after success result "
+                        "— killing wrapper",
+                        issue.identifier, post_success_elapsed / 60.0,
+                    )
+                    try:
+                        proc.send_signal(signal.SIGTERM)
+                        # 10s grace before SIGKILL (per ABS-159 AC).
+                        await asyncio.wait_for(proc.wait(), timeout=10)
+                    except (asyncio.TimeoutError, ProcessLookupError):
+                        proc.kill()
+                    return
+                # Still within the post-success grace window — skip the
+                # other branches; the agent is in the wrapper-drain phase
+                # and shouldn't be penalised by the stdout-silence logic
+                # (last_activity stopped advancing once the result landed).
+                continue
 
             # Bash-aware grace: if an unterminated Bash tool_use is in
             # flight, measure budget against the tool's own start time
