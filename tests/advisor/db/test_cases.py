@@ -834,6 +834,121 @@ def test_refund_orphaned_case_reservations_is_idempotent(
         assert second == 0
 
 
+def test_db_constraint_rejects_second_unsessioned_reservation_on_same_case(
+    tmp_path: Path,
+) -> None:
+    """The partial unique index ``uq_advisor_case_credit_one_unsessioned_reserve``
+    rejects a second ``reserved / session_id IS NULL`` credit on the same case.
+
+    Defence-in-depth for ABS-11: even if the application-level idempotency
+    guard in ``open_case`` were accidentally removed, the DB prevents the
+    double-reservation that leaks a credit.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+
+    # Seed credits and case, then reserve the first credit.
+    with session_scope(db_url) as s:
+        grant_admin_credits(
+            s,
+            user=s.get(User, user_id),
+            tier="standard",
+            quantity=2,
+            reason="t",
+        )
+        case = Case(
+            user_id=user_id,
+            anchor_label="addr",
+            anchor_key="addr",
+            anchor_kind="address",
+            status="open",
+            current_tier="standard",
+            tokens_consumed=0,
+            opened_at=datetime.now(timezone.utc),
+            last_activity_at=datetime.now(timezone.utc),
+        )
+        s.add(case)
+        s.flush()
+        credits = list(
+            s.query(CaseCredit)
+            .filter(CaseCredit.user_id == user_id, CaseCredit.state == "available")
+            .order_by(CaseCredit.id)
+            .all()
+        )
+        credits[0].case_id = case.id
+        credits[0].state = "reserved"
+        credits[0].session_id = None
+        credits[0].reserved_at = datetime.now(timezone.utc)
+        case_id = case.id
+        second_credit_id = credits[1].id
+
+    # Attempt a second unsessioned reservation in a fresh session — must fail.
+    with pytest.raises((IntegrityError, Exception)):
+        with session_scope(db_url) as s:
+            credit2 = s.get(CaseCredit, second_credit_id)
+            credit2.case_id = case_id
+            credit2.state = "reserved"
+            credit2.session_id = None
+            credit2.reserved_at = datetime.now(timezone.utc)
+            s.flush()
+
+
+def test_db_constraint_allows_sessioned_credit_alongside_unsessioned(
+    tmp_path: Path,
+) -> None:
+    """A sessioned credit (from chat start) can coexist with an
+    unsessioned reservation — the constraint only targets the
+    ``session_id IS NULL`` window."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        grant_admin_credits(
+            s,
+            user=s.get(User, user_id),
+            tier="standard",
+            quantity=2,
+            reason="t",
+        )
+        sess_id = _new_session_for(s, user_id=user_id)
+        case = Case(
+            user_id=user_id,
+            anchor_label="addr",
+            anchor_key="addr",
+            anchor_kind="address",
+            status="open",
+            current_tier="standard",
+            tokens_consumed=0,
+            opened_at=datetime.now(timezone.utc),
+            last_activity_at=datetime.now(timezone.utc),
+        )
+        s.add(case)
+        s.flush()
+
+        credits = list(
+            s.query(CaseCredit)
+            .filter(CaseCredit.user_id == user_id, CaseCredit.state == "available")
+            .order_by(CaseCredit.id)
+            .all()
+        )
+        # Credit 1: unsessioned reservation (from open_case).
+        credits[0].case_id = case.id
+        credits[0].state = "reserved"
+        credits[0].session_id = None
+        credits[0].reserved_at = datetime.now(timezone.utc)
+        s.flush()
+
+        # Credit 2: sessioned reservation (from chat start) — must succeed.
+        credits[1].case_id = case.id
+        credits[1].state = "reserved"
+        credits[1].session_id = sess_id
+        credits[1].reserved_at = datetime.now(timezone.utc)
+        s.flush()  # No error expected.
+
+
 def test_grant_admin_credits_creates_one_row_per_credit(tmp_path: Path) -> None:
     db_url = _db_url(tmp_path)
     create_all(db_url)

@@ -275,6 +275,10 @@ class CaseCredit(Base):
     Partial unique index on ``(session_id) WHERE state IN
     ('reserved','consumed')`` enforces "at most one live credit per
     session" at the DB layer — the upgrade transaction relies on this.
+
+    Partial unique index on ``(case_id) WHERE state = 'reserved' AND
+    session_id IS NULL`` enforces "at most one unsessioned reservation
+    per case" — defence-in-depth for the ABS-11 double-reservation fix.
     """
 
     __tablename__ = "advisor_case_credit"
@@ -291,6 +295,17 @@ class CaseCredit(Base):
             unique=True,
             postgresql_where=text("state IN ('reserved', 'consumed')"),
             sqlite_where=text("state IN ('reserved', 'consumed')"),
+        ),
+        Index(
+            "uq_advisor_case_credit_one_unsessioned_reserve",
+            "case_id",
+            unique=True,
+            postgresql_where=text(
+                "state = 'reserved' AND session_id IS NULL"
+            ),
+            sqlite_where=text(
+                "state = 'reserved' AND session_id IS NULL"
+            ),
         ),
     )
 
