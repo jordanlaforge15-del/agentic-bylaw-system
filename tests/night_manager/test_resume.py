@@ -174,9 +174,13 @@ class TestReconcileWithGit:
         monkeypatch.setattr(nm_main, "REPO_ROOT", repo)
         state = self._make_state(**{"ABS-125": {"branch": branch, "status": "queued"}})
 
-        reconciled = nm_main._reconcile_state_with_git(state)
+        reconciled, newly_merged, newly_blocked = nm_main._reconcile_state_with_git(state)
 
         assert "ABS-125" in reconciled
+        # ABS-151: branch-merged-into-dev path must be reported on
+        # newly_merged so the caller can push Done to Linear.
+        assert "ABS-125" in newly_merged
+        assert "ABS-125" not in newly_blocked
         assert state.issues["ABS-125"].status == "merged"
         assert state.issues["ABS-125"].merged_at is not None
         assert state.issues["ABS-125"].error is None
@@ -213,9 +217,13 @@ class TestReconcileWithGit:
         monkeypatch.setattr(nm_main, "REPO_ROOT", repo)
         state = self._make_state(**{"ABS-135": {"branch": branch, "status": "failed"}})
 
-        reconciled = nm_main._reconcile_state_with_git(state)
+        reconciled, newly_merged, newly_blocked = nm_main._reconcile_state_with_git(state)
 
         assert "ABS-135" in reconciled
+        # ABS-151: zombie path must be reported on newly_blocked so the
+        # caller can push Backlog to Linear.
+        assert "ABS-135" in newly_blocked
+        assert "ABS-135" not in newly_merged
         issue = state.issues["ABS-135"]
         assert issue.status == "blocked"
         assert "zombie" in (issue.error or "").lower()
@@ -240,9 +248,11 @@ class TestReconcileWithGit:
             "ABS-200": {"branch": branch, "status": "failed"},
         })
 
-        reconciled = nm_main._reconcile_state_with_git(state)
+        reconciled, newly_merged, newly_blocked = nm_main._reconcile_state_with_git(state)
 
         assert reconciled == []
+        assert newly_merged == []
+        assert newly_blocked == []
         assert state.issues["ABS-200"].status == "failed"
 
     def test_merged_issue_skipped(
@@ -254,8 +264,10 @@ class TestReconcileWithGit:
             "ABS-99": {"branch": "agent/whatever", "status": "merged"},
         })
         # Branch doesn't exist — would normally raise. Just confirm no churn.
-        reconciled = nm_main._reconcile_state_with_git(state)
+        reconciled, newly_merged, newly_blocked = nm_main._reconcile_state_with_git(state)
         assert reconciled == []
+        assert newly_merged == []
+        assert newly_blocked == []
         assert state.issues["ABS-99"].status == "merged"
 
 
@@ -760,3 +772,179 @@ class TestAttemptLogOffsetIsolatesAttempts:
 
         reloaded = NMState.load(path)
         assert reloaded.issues["ABS-999"].attempt_log_offset == 12345
+
+
+# ---------------------------------------------------------------------------
+# ABS-151: reconciler pushes Linear state + crash-recovery backfill
+# ---------------------------------------------------------------------------
+
+
+class TestPushLinearStateForReconciled:
+    """Regression for ABS-151 Gap 1 — the reconciler reclassifies
+    locally but never pushes the resulting state to Linear (since the
+    LinearClient isn't constructed until later in the run lifecycle).
+    The new _push_linear_state_for_reconciled helper closes that gap."""
+
+    @pytest.mark.asyncio
+    async def test_pushes_done_for_newly_merged(self, monkeypatch):
+        calls: list[tuple[str, str]] = []
+
+        class FakeLinear:
+            async def update_issue_state(self, issue_id: str, state_id: str):
+                calls.append((issue_id, state_id))
+
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        state.issues["ABS-1"] = _make_issue("ABS-1", status="merged")
+        state.issues["ABS-1"].linear_id = "linear-1"
+        state.issues["ABS-2"] = _make_issue("ABS-2", status="merged")
+        state.issues["ABS-2"].linear_id = "linear-2"
+
+        workflow_states = {"Done": "done-id", "Backlog": "backlog-id"}
+
+        await nm_main._push_linear_state_for_reconciled(
+            state, FakeLinear(), workflow_states,
+            newly_merged=["ABS-1", "ABS-2"],
+            newly_blocked=[],
+        )
+
+        assert calls == [("linear-1", "done-id"), ("linear-2", "done-id")]
+
+    @pytest.mark.asyncio
+    async def test_pushes_backlog_for_newly_blocked(self):
+        calls: list[tuple[str, str]] = []
+
+        class FakeLinear:
+            async def update_issue_state(self, issue_id: str, state_id: str):
+                calls.append((issue_id, state_id))
+
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        state.issues["ABS-9"] = _make_issue("ABS-9", status="blocked")
+        state.issues["ABS-9"].linear_id = "linear-9"
+
+        workflow_states = {"Done": "done-id", "Backlog": "backlog-id"}
+
+        await nm_main._push_linear_state_for_reconciled(
+            state, FakeLinear(), workflow_states,
+            newly_merged=[],
+            newly_blocked=["ABS-9"],
+        )
+
+        assert calls == [("linear-9", "backlog-id")]
+
+    @pytest.mark.asyncio
+    async def test_skips_issues_with_missing_linear_id(self):
+        calls: list[tuple[str, str]] = []
+
+        class FakeLinear:
+            async def update_issue_state(self, issue_id: str, state_id: str):
+                calls.append((issue_id, state_id))
+
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        state.issues["ABS-1"] = _make_issue("ABS-1", status="merged")
+        state.issues["ABS-1"].linear_id = ""  # no linear binding
+
+        workflow_states = {"Done": "done-id", "Backlog": "backlog-id"}
+
+        await nm_main._push_linear_state_for_reconciled(
+            state, FakeLinear(), workflow_states,
+            newly_merged=["ABS-1"],
+            newly_blocked=[],
+        )
+
+        assert calls == [], "Must not call Linear when linear_id is empty"
+
+    @pytest.mark.asyncio
+    async def test_linear_failure_does_not_raise(self):
+        """Linear API hiccups must not block the resume."""
+        class FlakyLinear:
+            async def update_issue_state(self, issue_id: str, state_id: str):
+                raise RuntimeError("Linear is down")
+
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        state.issues["ABS-1"] = _make_issue("ABS-1", status="merged")
+        state.issues["ABS-1"].linear_id = "linear-1"
+
+        workflow_states = {"Done": "done-id"}
+
+        # Should NOT raise — the helper logs and continues.
+        await nm_main._push_linear_state_for_reconciled(
+            state, FlakyLinear(), workflow_states,
+            newly_merged=["ABS-1"],
+            newly_blocked=[],
+        )
+
+
+class TestBackfillLinearDoneForMerged:
+    """Regression for ABS-151 Gap 2 — if NM crashed between mark_merged
+    and update_issue_state, the issue is stuck at In Review in Linear
+    forever. This backfill sweep runs at every NM startup and re-pushes
+    Done idempotently."""
+
+    @pytest.mark.asyncio
+    async def test_pushes_done_for_every_merged_issue(self):
+        calls: list[tuple[str, str]] = []
+
+        class FakeLinear:
+            async def update_issue_state(self, issue_id: str, state_id: str):
+                calls.append((issue_id, state_id))
+
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        state.issues["ABS-1"] = _make_issue("ABS-1", status="merged")
+        state.issues["ABS-1"].linear_id = "linear-1"
+        state.issues["ABS-2"] = _make_issue("ABS-2", status="failed")  # ignored
+        state.issues["ABS-2"].linear_id = "linear-2"
+        state.issues["ABS-3"] = _make_issue("ABS-3", status="merged")
+        state.issues["ABS-3"].linear_id = "linear-3"
+
+        workflow_states = {"Done": "done-id"}
+
+        updated = await nm_main._backfill_linear_done_for_merged(
+            state, FakeLinear(), workflow_states,
+        )
+
+        assert set(updated) == {"ABS-1", "ABS-3"}
+        assert set(calls) == {("linear-1", "done-id"), ("linear-3", "done-id")}
+
+    @pytest.mark.asyncio
+    async def test_no_done_state_is_noop(self):
+        """If the team's workflow has no 'Done' state, skip silently."""
+        calls = []
+
+        class FakeLinear:
+            async def update_issue_state(self, issue_id: str, state_id: str):
+                calls.append((issue_id, state_id))
+
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        state.issues["ABS-1"] = _make_issue("ABS-1", status="merged")
+        state.issues["ABS-1"].linear_id = "linear-1"
+
+        updated = await nm_main._backfill_linear_done_for_merged(
+            state, FakeLinear(), workflow_states={},
+        )
+        assert updated == []
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_idempotent_across_runs(self):
+        """Two consecutive backfills push Done twice — Linear treats the
+        second call as a no-op transition but the call still happens.
+        Asserts idempotency at the *call* layer; Linear API absorbs the
+        no-op."""
+        calls: list[tuple[str, str]] = []
+
+        class FakeLinear:
+            async def update_issue_state(self, issue_id: str, state_id: str):
+                calls.append((issue_id, state_id))
+
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        state.issues["ABS-1"] = _make_issue("ABS-1", status="merged")
+        state.issues["ABS-1"].linear_id = "linear-1"
+
+        await nm_main._backfill_linear_done_for_merged(
+            state, FakeLinear(), {"Done": "done-id"},
+        )
+        await nm_main._backfill_linear_done_for_merged(
+            state, FakeLinear(), {"Done": "done-id"},
+        )
+        # Two passes → two calls. Linear de-dupes the actual transition.
+        assert len(calls) == 2

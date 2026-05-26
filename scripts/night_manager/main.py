@@ -43,6 +43,11 @@ async def run(config: NMConfig) -> None:
 
         workflow_states = await linear.get_workflow_states()
 
+        # ABS-151: at every fresh-run startup, re-assert Done in Linear
+        # for any prior-run issue whose status=merged but whose Linear
+        # update was lost to a crash. Idempotent; safe to run unconditionally.
+        await _backfill_linear_done_for_merged(state, linear, workflow_states)
+
         if config.dry_run:
             await _dry_run_report(state, linear)
             return
@@ -88,7 +93,10 @@ async def _run_resume(config: NMConfig) -> None:
     log.info("Resuming run %s", state.run_id)
 
     # --- Pass 1: reconcile state.json against git reality on dev. -----
-    reconciled = _reconcile_state_with_git(state)
+    # The reconciler runs before LinearClient is created (git-only,
+    # no network). It returns lists of newly-merged and newly-blocked
+    # idents so we can sync Linear after the client is up (ABS-151).
+    reconciled, newly_merged, newly_blocked = _reconcile_state_with_git(state)
     if reconciled:
         log.info("Reconciled %d issues against dev: %s", len(reconciled), reconciled)
         state.save()
@@ -167,6 +175,13 @@ async def _run_resume(config: NMConfig) -> None:
     linear = LinearClient(config.linear_api_key)
     try:
         workflow_states = await linear.get_workflow_states()
+        # ABS-151: sync Linear with reconciler decisions + backfill any
+        # status=merged issues whose Linear update was lost to a prior
+        # crash (kernel panic between mark_merged and update_issue_state).
+        await _push_linear_state_for_reconciled(
+            state, linear, workflow_states, newly_merged, newly_blocked,
+        )
+        await _backfill_linear_done_for_merged(state, linear, workflow_states)
         await _execute(state, config, linear, workflow_states)
         await _generate_report(state, linear)
     finally:
@@ -199,7 +214,7 @@ def _git_oneline(*args: str, cwd: Path | None = None) -> str:
     return result.stdout.strip()
 
 
-def _reconcile_state_with_git(state: NMState) -> list[str]:
+def _reconcile_state_with_git(state: NMState) -> tuple[list[str], list[str], list[str]]:
     """Self-heal state.json against the current dev branch.
 
     For each issue in a non-terminal status, check three things in order:
@@ -213,10 +228,16 @@ def _reconcile_state_with_git(state: NMState) -> list[str]:
        case — merged then reverted): mark as `blocked` with a clear
        reason. The branch has nothing new to merge.
 
-    Returns the list of identifiers that were reclassified so the caller
-    can log them and persist the state.
+    Returns three lists:
+    - reconciled (all): every identifier this reconcile pass touched
+    - newly_merged: identifiers reclassified to status=merged (caller
+      should push Done to Linear — see ABS-151)
+    - newly_blocked: identifiers reclassified to status=blocked (caller
+      may push Backlog to Linear so the operator sees the zombie state)
     """
     reconciled: list[str] = []
+    newly_merged: list[str] = []
+    newly_blocked: list[str] = []
 
     # Branches actually merged into dev (one-shot list — avoids forking
     # `git branch --merged dev | grep` per issue).
@@ -267,6 +288,7 @@ def _reconcile_state_with_git(state: NMState) -> list[str]:
                 "zombie branch: tip == merge-base; needs re-plan"
             )
             reconciled.append(ident)
+            newly_blocked.append(ident)
             continue
 
         # 2. Branch merged into dev (no revert in play).
@@ -275,19 +297,29 @@ def _reconcile_state_with_git(state: NMState) -> list[str]:
                 "reconciled %s as already-on-dev (branch %s merged into dev)",
                 ident, issue.branch,
             )
-            issue.status = "merged"
-            issue.merged_at = _now_iso()
-            issue.error = None
+            # Use mark_merged so the error/rate_limited scrub from
+            # ABS-148 applies. The reconciler previously set the fields
+            # by hand and missed that scrubbing.
+            issue.mark_merged()
             reconciled.append(ident)
+            newly_merged.append(ident)
             continue
 
         # 3. Commit subject referencing the issue identifier on dev.
-        # Use --grep with a fixed string and a generous lookback so we
-        # don't miss squash-merged commits whose branch was deleted.
-        subject_match = _git_oneline(
-            "log", "dev", "--oneline", "-n", "50",
-            f"--grep={ident}",
+        # Match more strictly than substring — require either an explicit
+        # "Merge <ident>:" subject or a "[<ident>]" tag, so unrelated
+        # commits that happen to mention the identifier (e.g. cleanup
+        # commits referencing past issue IDs) don't false-positive (the
+        # ABS-68 case from nm-20260526-071803.log).
+        merge_subject = _git_oneline(
+            "log", "dev", "--oneline", "-n", "100",
+            f"--grep=Merge {ident}:",
         )
+        tag_subject = _git_oneline(
+            "log", "dev", "--oneline", "-n", "100",
+            f"--grep=\\[{ident}\\]", "--extended-regexp",
+        )
+        subject_match = merge_subject or tag_subject
         if subject_match:
             # Only treat as merged if the issue is currently `queued`,
             # `failed`, or `blocked` — i.e. has no recorded merged_at.
@@ -300,13 +332,103 @@ def _reconcile_state_with_git(state: NMState) -> list[str]:
                     "(commit on dev mentions %s: %s)",
                     ident, ident, subject_match.splitlines()[0][:80],
                 )
-                issue.status = "merged"
-                issue.merged_at = _now_iso()
-                issue.error = None
+                issue.mark_merged()
                 reconciled.append(ident)
+                newly_merged.append(ident)
                 continue
 
-    return reconciled
+    return reconciled, newly_merged, newly_blocked
+
+
+async def _push_linear_state_for_reconciled(
+    state: NMState,
+    linear: LinearClient,
+    workflow_states: dict[str, str],
+    newly_merged: list[str],
+    newly_blocked: list[str],
+) -> None:
+    """Push Linear status transitions for issues the reconciler reclassified.
+
+    The reconciler runs BEFORE the LinearClient is created (it only needs
+    git, no network), so it can't push Linear updates itself. After the
+    client is up we walk the reconciler's output and push:
+
+    * Done for newly_merged (matches state.json status=merged)
+    * Backlog for newly_blocked (zombie branches — operator should re-plan)
+
+    Failures are logged but never raise — Linear API hiccups must not
+    block a resume from running.
+    """
+    done_id = workflow_states.get("Done")
+    backlog_id = workflow_states.get("Backlog")
+
+    for ident in newly_merged:
+        issue = state.issues.get(ident)
+        if not issue or not issue.linear_id or not done_id:
+            continue
+        try:
+            await linear.update_issue_state(issue.linear_id, done_id)
+            log.info("reconciler: pushed Done to Linear for %s", ident)
+        except Exception as exc:
+            log.warning(
+                "reconciler: failed to push Done for %s: %s", ident, exc,
+            )
+
+    for ident in newly_blocked:
+        issue = state.issues.get(ident)
+        if not issue or not issue.linear_id or not backlog_id:
+            continue
+        try:
+            await linear.update_issue_state(issue.linear_id, backlog_id)
+            log.info("reconciler: pushed Backlog to Linear for %s", ident)
+        except Exception as exc:
+            log.warning(
+                "reconciler: failed to push Backlog for %s: %s", ident, exc,
+            )
+
+
+async def _backfill_linear_done_for_merged(
+    state: NMState,
+    linear: LinearClient,
+    workflow_states: dict[str, str],
+) -> list[str]:
+    """Idempotent backfill: push Done to Linear for every status=merged issue.
+
+    Catches the crash-between-mark_merged-and-update_issue_state case
+    (ABS-151 Gap 2). If NM merged an issue but died before the Linear
+    update fired, the issue is stuck at In Review forever — there's no
+    code path that re-tries.
+
+    This sweep runs at every NM startup and re-pushes Done. Idempotent:
+    Linear doesn't fire a transition if the state is already Done, so
+    re-running is safe.
+
+    Returns the list of identifiers that received an update.
+    """
+    done_id = workflow_states.get("Done")
+    if not done_id:
+        return []
+
+    updated: list[str] = []
+    for ident, issue in state.issues.items():
+        if issue.status != "merged":
+            continue
+        if not issue.linear_id:
+            continue
+        try:
+            await linear.update_issue_state(issue.linear_id, done_id)
+            updated.append(ident)
+            log.debug("backfill: re-asserted Done in Linear for %s", ident)
+        except Exception as exc:
+            log.warning(
+                "backfill: failed to push Done for %s: %s", ident, exc,
+            )
+    if updated:
+        log.info(
+            "backfill: re-asserted Done in Linear for %d merged issues",
+            len(updated),
+        )
+    return updated
 
 
 def _detect_stale_pids(
