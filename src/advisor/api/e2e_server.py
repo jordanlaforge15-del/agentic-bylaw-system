@@ -50,6 +50,7 @@ if _ABS_LEARNING_SRC.is_dir():
         sys.path.insert(0, _abs_learning_path)
 
 from advisor.api.app import create_app
+from advisor.api.metrics_middleware import MetricsMiddleware
 from advisor.db.models import InviteRequest, User
 from advisor.llm.mock import MockGateway
 from advisor.logging import CorrelationIdMiddleware, setup_logging
@@ -98,6 +99,11 @@ def build_e2e_app() -> FastAPI:
         submissions_evaluator_factory=_submissions_evaluator_factory,
     )
     app.add_middleware(CorrelationIdMiddleware)
+    app.add_middleware(MetricsMiddleware)
+
+    from advisor.api.metrics import mount_metrics_routes  # noqa: PLC0415
+
+    mount_metrics_routes(app)
 
     origins_env = os.environ.get(
         "ADVISOR_E2E_CORS_ORIGINS", "http://localhost:3001"

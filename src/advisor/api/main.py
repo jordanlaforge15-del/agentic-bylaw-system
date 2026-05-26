@@ -51,6 +51,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from advisor.api.app import create_app
+from advisor.api.metrics_middleware import MetricsMiddleware
 from advisor.logging import CorrelationIdMiddleware, setup_logging
 from advisor.api.auth import resolve_or_create_user
 from advisor.api.sentry import init_sentry
@@ -188,6 +189,11 @@ def build_app() -> FastAPI:
         **billing_kwargs,
     )
     application.add_middleware(CorrelationIdMiddleware)
+    application.add_middleware(MetricsMiddleware)
+
+    from advisor.api.metrics import mount_metrics_routes  # noqa: PLC0415
+
+    mount_metrics_routes(application)
     return application
 
 
