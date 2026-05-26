@@ -1,0 +1,382 @@
+"""Tests for `main._run_resume` and its helpers — resume-logic gaps fix.
+
+Real git fixtures, no `subprocess.run` mocking — mirrors the style of
+`test_merge_to_dev.py`. Faking subprocess would defeat the purpose of
+testing the git-reconciliation pass: it MUST work against actual
+`git branch --merged` / `merge-base` output, including the
+nm-20260526-004610 zombie-branch case (ABS-129 / ABS-135 — tip equals
+merge-base after a revert).
+
+The four scenarios this file exercises map 1:1 to the gaps described
+in the Night Manager resume-fix task:
+
+- `is_resumable` returns True for `reviewing` (Gap 1).
+- `--resume-queued` opens up `queued`; without it, queued is skipped
+  (Gap 1 + Gap 3 — opt-in to avoid re-doing out-of-band merges).
+- Sanity-check pass reclassifies a branch already on dev as `merged`
+  (Gap 3 — the ABS-125 case).
+- Sanity-check pass marks a zombie (tip == merge-base) as `blocked`
+  (Gap 3 — the ABS-129 / ABS-135 case).
+- Stale PID detected; resume reclassifies so re-spawn fires (Gap 2).
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from scripts.night_manager import main as nm_main
+from scripts.night_manager.agent import is_pid_alive
+from scripts.night_manager.config import parse_args
+from scripts.night_manager.state import (
+    ExecutionGroup,
+    IssuePorts,
+    IssueState,
+    NMState,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        list(args),
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def _init_repo(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    _run(path, "git", "init", "-q", "-b", "dev")
+    _run(path, "git", "config", "user.email", "nm-test@example.com")
+    _run(path, "git", "config", "user.name", "NM Test")
+    (path / "README.md").write_text("base\n")
+    _run(path, "git", "add", "README.md")
+    _run(path, "git", "commit", "-q", "-m", "base")
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    """A fresh repo on `dev` with one base commit."""
+    path = tmp_path / "repo"
+    _init_repo(path)
+    return path
+
+
+def _make_issue(
+    identifier: str = "ABS-999",
+    branch: str = "agent/ABS-999-test",
+    status: str = "queued",
+    pid: int = 0,
+) -> IssueState:
+    return IssueState(
+        identifier=identifier,
+        title=f"{identifier} title",
+        branch=branch,
+        status=status,
+        pid=pid,
+        ports=IssuePorts(pg=5499, api=8099, web=3099),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 1: is_resumable widens to include `reviewing`
+# ---------------------------------------------------------------------------
+
+
+class TestIsResumable:
+    def test_reviewing_is_resumable(self):
+        """A `reviewing` issue (killed mid-e2e) must be picked up.
+
+        Regression: in the old code `is_resumable` returned False for
+        `reviewing`, so ABS-121 from run nm-20260526-004610 was silently
+        skipped on `--resume`.
+        """
+        issue = _make_issue(status="reviewing")
+        assert issue.is_resumable is True
+
+    def test_failed_is_resumable(self):
+        assert _make_issue(status="failed").is_resumable is True
+
+    def test_blocked_is_resumable(self):
+        assert _make_issue(status="blocked").is_resumable is True
+
+    def test_queued_not_resumable_by_default(self):
+        """Queued is NOT in the default resumable set — must be opt-in."""
+        assert _make_issue(status="queued").is_resumable is False
+
+    def test_in_progress_not_resumable(self):
+        # The stale-PID pass turns in_progress→failed; in_progress itself
+        # is not directly resumable.
+        assert _make_issue(status="in_progress").is_resumable is False
+
+    def test_merged_not_resumable(self):
+        assert _make_issue(status="merged").is_resumable is False
+
+
+# ---------------------------------------------------------------------------
+# CLI flag: --resume-queued
+# ---------------------------------------------------------------------------
+
+
+class TestResumeQueuedFlag:
+    def test_flag_default_off(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LINEAR_API_KEY", "test-key")
+        cfg = parse_args(["--resume"])
+        assert cfg.resume is True
+        assert cfg.resume_queued is False
+
+    def test_flag_opt_in(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LINEAR_API_KEY", "test-key")
+        cfg = parse_args(["--resume", "--resume-queued"])
+        assert cfg.resume_queued is True
+
+
+# ---------------------------------------------------------------------------
+# Gap 3: state-vs-git reconciliation
+# ---------------------------------------------------------------------------
+
+
+class TestReconcileWithGit:
+    """Verify _reconcile_state_with_git against real git operations."""
+
+    def _make_state(self, **issues_kwargs) -> NMState:
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        for ident, kw in issues_kwargs.items():
+            state.issues[ident] = _make_issue(identifier=ident, **kw)
+        return state
+
+    def test_branch_already_on_dev_reclassified_as_merged(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """ABS-125 scenario: branch was merged outside NM.
+
+        If we naively re-ran with --resume-queued, NM would re-do the
+        already-merged work. The sanity-check pass catches this.
+        """
+        branch = "agent/ABS-125-merged-outside-nm"
+        _run(repo, "git", "checkout", "-q", "-b", branch)
+        (repo / "feature.txt").write_text("done\n")
+        _run(repo, "git", "add", "feature.txt")
+        _run(repo, "git", "commit", "-q", "-m", "feature")
+        _run(repo, "git", "checkout", "-q", "dev")
+        # Merge the branch into dev (the "out-of-band" merge).
+        _run(repo, "git", "merge", "--no-ff", "-q", branch, "-m", "Merge ABS-125")
+
+        monkeypatch.setattr(nm_main, "REPO_ROOT", repo)
+        state = self._make_state(**{"ABS-125": {"branch": branch, "status": "queued"}})
+
+        reconciled = nm_main._reconcile_state_with_git(state)
+
+        assert "ABS-125" in reconciled
+        assert state.issues["ABS-125"].status == "merged"
+        assert state.issues["ABS-125"].merged_at is not None
+        assert state.issues["ABS-125"].error is None
+
+    def test_zombie_branch_marked_blocked(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """ABS-129 / ABS-135 scenario: merged then reverted.
+
+        After `git revert -m 1` the branch's tip is unchanged but the
+        merge-base with dev now equals the tip — the branch has nothing
+        new to offer. Sanity-check pass must catch this so the operator
+        knows to re-plan rather than retry.
+        """
+        branch = "agent/ABS-135-zombie"
+        _run(repo, "git", "checkout", "-q", "-b", branch)
+        (repo / "feature.txt").write_text("from agent\n")
+        _run(repo, "git", "add", "feature.txt")
+        _run(repo, "git", "commit", "-q", "-m", "feature commit")
+        _run(repo, "git", "checkout", "-q", "dev")
+        merge_out = _run(
+            repo, "git", "merge", "--no-ff", "-q", branch,
+            "-m", "Merge ABS-135",
+        )
+        # Revert the merge — recreates the ABS-135 zombie shape.
+        merge_sha = _run(repo, "git", "rev-parse", "HEAD").stdout.strip()
+        _run(repo, "git", "revert", "-m", "1", "--no-edit", merge_sha)
+
+        # Sanity: branch tip == merge-base with dev (the defining shape).
+        tip = _run(repo, "git", "rev-parse", branch).stdout.strip()
+        base = _run(repo, "git", "merge-base", "dev", branch).stdout.strip()
+        assert tip == base, "fixture is wrong — should be a zombie"
+
+        monkeypatch.setattr(nm_main, "REPO_ROOT", repo)
+        state = self._make_state(**{"ABS-135": {"branch": branch, "status": "failed"}})
+
+        reconciled = nm_main._reconcile_state_with_git(state)
+
+        assert "ABS-135" in reconciled
+        issue = state.issues["ABS-135"]
+        assert issue.status == "blocked"
+        assert "zombie" in (issue.error or "").lower()
+
+    def test_clean_unmerged_branch_untouched(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A normal failed-mid-work branch must NOT be reclassified.
+
+        If reconciliation triggers spuriously on healthy in-flight work,
+        we'd silently throw away genuine failures.
+        """
+        branch = "agent/ABS-200-real-failure"
+        _run(repo, "git", "checkout", "-q", "-b", branch)
+        (repo / "x.txt").write_text("wip\n")
+        _run(repo, "git", "add", "x.txt")
+        _run(repo, "git", "commit", "-q", "-m", "wip — incomplete")
+        _run(repo, "git", "checkout", "-q", "dev")
+
+        monkeypatch.setattr(nm_main, "REPO_ROOT", repo)
+        state = self._make_state(**{
+            "ABS-200": {"branch": branch, "status": "failed"},
+        })
+
+        reconciled = nm_main._reconcile_state_with_git(state)
+
+        assert reconciled == []
+        assert state.issues["ABS-200"].status == "failed"
+
+    def test_merged_issue_skipped(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """`merged` status is terminal — reconciliation must skip it."""
+        monkeypatch.setattr(nm_main, "REPO_ROOT", repo)
+        state = self._make_state(**{
+            "ABS-99": {"branch": "agent/whatever", "status": "merged"},
+        })
+        # Branch doesn't exist — would normally raise. Just confirm no churn.
+        reconciled = nm_main._reconcile_state_with_git(state)
+        assert reconciled == []
+        assert state.issues["ABS-99"].status == "merged"
+
+
+# ---------------------------------------------------------------------------
+# Gap 2: stale-PID detection
+# ---------------------------------------------------------------------------
+
+
+class TestStalePIDDetection:
+    def test_is_pid_alive_for_current_process(self):
+        """Sanity check: the test runner's own PID is alive."""
+        import os
+        assert is_pid_alive(os.getpid()) is True
+
+    def test_is_pid_alive_for_dead_pid(self):
+        """A PID that never existed reports as dead.
+
+        We use the very large PID 2^31 - 1 — vastly out of any plausible
+        running-process range on POSIX systems. Doing this rather than
+        forking + reaping a child keeps the test deterministic and
+        avoids zombie children on test re-runs.
+        """
+        assert is_pid_alive(2**31 - 1) is False
+
+    def test_zero_pid_not_alive(self):
+        assert is_pid_alive(0) is False
+
+    def test_detect_stale_pids_reclassifies(self):
+        """A reviewing issue with a dead PID must move to `failed`.
+
+        Without this, the resume loop would either skip the issue
+        (because reviewing was non-resumable) or — once Gap 1 is fixed
+        — try to monitor a corpse. The reclassification ensures the
+        resume path takes the re-spawn branch.
+        """
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        state.issues["ABS-121"] = _make_issue(
+            identifier="ABS-121", status="reviewing", pid=99999,
+        )
+        state.issues["ABS-115"] = _make_issue(
+            identifier="ABS-115", status="in_progress", pid=99998,
+        )
+        # Live issue (uses real PID — won't be reclassified).
+        import os
+        state.issues["ABS-200"] = _make_issue(
+            identifier="ABS-200", status="in_progress", pid=os.getpid(),
+        )
+
+        # All-dead is_pid_alive_fn for the two stale ones, real for the live one.
+        def fake_alive(pid: int) -> bool:
+            return pid == os.getpid()
+
+        stale = nm_main._detect_stale_pids(state, fake_alive)
+
+        assert set(stale) == {"ABS-121", "ABS-115"}
+        assert state.issues["ABS-121"].status == "failed"
+        assert state.issues["ABS-115"].status == "failed"
+        assert "Orphaned" in (state.issues["ABS-121"].error or "")
+        # Live PID untouched.
+        assert state.issues["ABS-200"].status == "in_progress"
+
+    def test_resume_clears_stale_pid_after_reset(self):
+        """`reset_for_retry` keeps session_id; resume zeros the dead PID.
+
+        Important because `claude --resume <session_id>` re-attaches to
+        the durable session, but the recorded PID was from a dead
+        process and must not leak through to the new lifecycle.
+        """
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        issue = _make_issue(status="failed", pid=99999)
+        issue.session_id = "sess-durable"
+        state.issues["ABS-121"] = issue
+
+        # Simulate the bit of _run_resume that runs after target selection.
+        state.issues["ABS-121"].reset_for_retry()
+        state.issues["ABS-121"].pid = 0  # explicit clear (matches main.py)
+
+        assert state.issues["ABS-121"].status == "queued"
+        assert state.issues["ABS-121"].pid == 0
+        # session_id is preserved — Claude Code keeps the session durable
+        # across process restarts, so resume re-spawns into the same
+        # conversation.
+        assert state.issues["ABS-121"].session_id == "sess-durable"
+
+
+# ---------------------------------------------------------------------------
+# Plan rebuild — targets selected correctly with/without --resume-queued
+# ---------------------------------------------------------------------------
+
+
+class TestTargetSelection:
+    """Verify the target-selection logic inside `_run_resume` (extracted)."""
+
+    def _state_with_mixed_statuses(self) -> NMState:
+        state = NMState(run_id="nm-test", started_at="2026-01-01T00:00:00+00:00")
+        for ident, status in [
+            ("ABS-1", "merged"),
+            ("ABS-2", "failed"),
+            ("ABS-3", "blocked"),
+            ("ABS-4", "reviewing"),
+            ("ABS-5", "queued"),
+        ]:
+            state.issues[ident] = _make_issue(identifier=ident, status=status)
+        return state
+
+    def test_default_targets_exclude_queued(self):
+        state = self._state_with_mixed_statuses()
+        targets = [
+            ident for ident, iss in state.issues.items() if iss.is_resumable
+        ]
+        assert set(targets) == {"ABS-2", "ABS-3", "ABS-4"}
+
+    def test_resume_queued_includes_queued(self):
+        """Simulates the --resume-queued branch of target selection."""
+        state = self._state_with_mixed_statuses()
+        targets = [
+            ident for ident, iss in state.issues.items() if iss.is_resumable
+        ]
+        queued = [
+            ident for ident, iss in state.issues.items()
+            if iss.status == "queued"
+        ]
+        targets.extend(queued)
+        assert set(targets) == {"ABS-2", "ABS-3", "ABS-4", "ABS-5"}

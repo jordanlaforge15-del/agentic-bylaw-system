@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from .config import NM_DIR, LOGS_DIR, STATE_FILE
 
@@ -73,9 +73,24 @@ class IssueState:
         self.status = "blocked"
         self.error = reason
 
+    # Statuses that `--resume` always picks up. `reviewing` is included
+    # because a kernel panic / OS kill can leave an issue in `reviewing`
+    # with a dead PID (see ABS-121 from run nm-20260526-004610 — killed
+    # mid-e2e by the stuck-watchdog). `queued` is NOT in this set: a
+    # never-started issue may already have been picked up out-of-band
+    # (hand-merged to dev), so it is opt-in via `--resume-queued`.
+    RESUMABLE_STATUSES: ClassVar[tuple[str, ...]] = ("failed", "blocked", "reviewing")
+    # Statuses that the resume sanity-check pass should reconcile against
+    # git reality. `queued` is included here even though it isn't in
+    # RESUMABLE_STATUSES — out-of-band merges happen for not-yet-started
+    # issues too (see ABS-125 in run nm-20260526-004610).
+    RECONCILABLE_STATUSES: ClassVar[tuple[str, ...]] = (
+        "queued", "in_progress", "reviewing", "failed", "blocked",
+    )
+
     @property
     def is_resumable(self) -> bool:
-        return self.status in ("failed", "blocked")
+        return self.status in self.RESUMABLE_STATUSES
 
     def reset_for_retry(self) -> None:
         self.status = "queued"
