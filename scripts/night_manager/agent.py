@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import signal
 import uuid
 from pathlib import Path
@@ -15,6 +16,9 @@ from .config import (
     BASH_TOOL_BUDGET_MINUTES,
     DEV_AGENT_SYSTEM_PROMPT,
     NMConfig,
+    PORT_BASE_API,
+    PORT_BASE_PG,
+    PORT_BASE_WEB,
     POST_SUCCESS_IDLE_MINUTES,
     REPO_ROOT,
     STUCK_TIMEOUT_MINUTES,
@@ -76,7 +80,6 @@ all Linear updates.\
 
 def _build_agent_env(issue: IssueState) -> dict[str, str]:
     """Build the env dict shared by spawn_agent and resume_agent."""
-    import os
     ports = issue.ports
     assert ports is not None
     env_vars = {
@@ -88,6 +91,54 @@ def _build_agent_env(issue: IssueState) -> dict[str, str]:
         "DATABASE_URL": f"postgresql+psycopg://layer1:layer1@localhost:{ports.pg}/layer1_test",
     }
     return {**os.environ, **env_vars}
+
+
+async def teardown_e2e_stack(issue: IssueState) -> None:
+    """Tear down the e2e stack (FastAPI + Next.js) after an agent exits.
+
+    Runs e2e-down.sh with the issue's port env vars so the lsof-based
+    fallback in that script finds the right listeners even when pidfiles
+    are missing. Idempotent — safe to call when the stack is already down.
+    """
+    ports = issue.ports
+    if not ports:
+        return
+
+    worktree = issue.worktree
+    cwd = worktree if worktree and Path(worktree).exists() else str(REPO_ROOT)
+
+    env = _build_agent_env(issue)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "./scripts/e2e-down.sh",
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=60,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            log.warning("e2e-down timed out for %s — killed", issue.identifier)
+            return
+
+        if proc.returncode == 0:
+            log.info(
+                "Tore down e2e stack for %s (ports PG=%d API=%d WEB=%d)",
+                issue.identifier, ports.pg, ports.api, ports.web,
+            )
+        else:
+            combined = (stdout + stderr).decode("utf-8", errors="replace")
+            log.warning(
+                "e2e-down for %s exited %d: %s",
+                issue.identifier, proc.returncode, combined[:500],
+            )
+    except OSError as exc:
+        log.warning("Failed to run e2e-down for %s: %s", issue.identifier, exc)
 
 
 def _snapshot_log_offset(log_file: str) -> int:
@@ -633,7 +684,6 @@ async def kill_agent(issue: IssueState) -> None:
     """Kill an agent by PID if it's still running."""
     if issue.pid <= 0:
         return
-    import os
     try:
         os.kill(issue.pid, signal.SIGTERM)
         log.info("Sent SIGTERM to agent %s (pid=%d)", issue.identifier, issue.pid)
@@ -656,7 +706,6 @@ def is_pid_alive(pid: int) -> bool:
     """
     if pid <= 0:
         return False
-    import os
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -684,6 +733,95 @@ async def cleanup_worktree(issue: IssueState) -> None:
         log.info("Removed worktree %s", worktree_path)
     else:
         log.warning("Failed to remove worktree %s (may need manual cleanup)", worktree_path)
+
+
+async def _get_ppid(pid: int) -> int | None:
+    """Return the parent PID of *pid*, or None on failure."""
+    proc = await asyncio.create_subprocess_exec(
+        "ps", "-o", "ppid=", "-p", str(pid),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    try:
+        return int(stdout.decode().strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+NM_PORT_RANGES = [
+    (PORT_BASE_PG, PORT_BASE_PG + 50),
+    (PORT_BASE_API, PORT_BASE_API + 50),
+    (PORT_BASE_WEB, PORT_BASE_WEB + 50),
+]
+
+
+def _port_in_nm_range(port: int) -> bool:
+    return any(lo <= port < hi for lo, hi in NM_PORT_RANGES)
+
+
+async def reap_orphan_listeners() -> list[tuple[int, int]]:
+    """Kill orphaned TCP listeners on NM port ranges whose PPID is 1.
+
+    Intended to run at NM startup (fresh run and resume) to clean up
+    stacks left behind by prior NM runs that crashed without going
+    through the agent-exit teardown path. Emits a WARNING per kill.
+
+    Returns a list of (pid, port) tuples that were reaped.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "lsof", "-iTCP", "-sTCP:LISTEN", "-nP",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return []
+
+    candidates: dict[int, int] = {}  # pid -> port
+    for line in stdout.decode("utf-8", errors="replace").splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 9:
+            continue
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            continue
+        name = parts[8]
+        if ":" not in name:
+            continue
+        try:
+            port = int(name.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        if _port_in_nm_range(port):
+            candidates[pid] = port
+
+    if not candidates:
+        return []
+
+    reaped: list[tuple[int, int]] = []
+    for pid, port in candidates.items():
+        ppid = await _get_ppid(pid)
+        if ppid != 1:
+            continue
+        log.warning(
+            "Orphan reaper: killing PID %d listening on port %d (PPID=1)",
+            pid, port,
+        )
+        try:
+            os.kill(pid, signal.SIGTERM)
+            reaped.append((pid, port))
+        except ProcessLookupError:
+            pass
+
+    if reaped:
+        log.warning(
+            "Orphan reaper: reaped %d orphan listener(s): %s",
+            len(reaped),
+            [(pid, port) for pid, port in reaped],
+        )
+    return reaped
 
 
 # ABS-160: integration target for rebase-on-resume. The full project

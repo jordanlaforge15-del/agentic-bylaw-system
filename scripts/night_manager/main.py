@@ -31,6 +31,11 @@ async def run(config: NMConfig) -> None:
 
     log.info("Night Manager starting (dry_run=%s, max_agents=%d)", config.dry_run, config.max_agents)
 
+    # ABS-161: reap orphaned listeners from prior NM runs before allocating
+    # ports. Catches stacks left behind by crashed/killed NM processes.
+    from .agent import reap_orphan_listeners
+    await reap_orphan_listeners()
+
     linear = LinearClient(config.linear_api_key)
     try:
         issues = await _fetch_issues(linear, config)
@@ -85,6 +90,10 @@ async def _run_resume(config: NMConfig) -> None:
        `failed | blocked | reviewing`, plus `queued` only when the
        operator passes `--resume-queued`.
     """
+    # ABS-161: reap orphaned listeners before resuming.
+    from .agent import reap_orphan_listeners
+    await reap_orphan_listeners()
+
     state = NMState.load()
     if not state.run_id:
         log.error("No previous run state found. Cannot resume.")
@@ -889,7 +898,7 @@ async def _merge_and_regression_loop(
     and retries up to MAX_REGRESSION_FIX_CYCLES times.
     Returns True if merged and regression passed.
     """
-    from .agent import resume_agent, monitor_agent
+    from .agent import resume_agent, monitor_agent, teardown_e2e_stack
     from .reviewer import (
         merge_to_dev, run_dev_e2e, run_e2e,
         revert_merge, restore_worktree_branch,
@@ -945,6 +954,7 @@ async def _merge_and_regression_loop(
         )
         proc = await resume_agent(issue, config, feedback)
         exit_code, _ = await monitor_agent(proc, issue, STUCK_TIMEOUT_MINUTES)
+        await teardown_e2e_stack(issue)
 
         if exit_code != 0:
             issue.mark_failed(f"Agent failed during regression fix (exit={exit_code})")
@@ -991,9 +1001,14 @@ async def _run_agent_lifecycle(
     linear: LinearClient,
     workflow_states: dict[str, str],
 ) -> None:
-    from .agent import monitor_agent
+    from .agent import monitor_agent, teardown_e2e_stack
 
     exit_code, final_output = await monitor_agent(proc, issue, STUCK_TIMEOUT_MINUTES)
+
+    # ABS-161: always tear down the e2e stack after the agent exits —
+    # regardless of exit code — so uvicorn / Next.js processes don't
+    # outlive the agent and hold ports indefinitely.
+    await teardown_e2e_stack(issue)
 
     if exit_code != 0:
         error_detail = final_output
