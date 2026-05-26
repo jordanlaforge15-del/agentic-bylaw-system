@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ALLOWED_TOOLS, DEV_AGENT_SYSTEM_PROMPT, NMConfig, REPO_ROOT, WORKTREE_ROOT
+from .reviewer import _combine_streams
 from .state import IssueState, NMState
 
 log = logging.getLogger("night_manager.agent")
@@ -54,7 +55,7 @@ async def setup_worktree(issue: IssueState, state: NMState) -> Path:
     if proc.returncode != 0:
         raise RuntimeError(
             f"Failed to create worktree for {issue.identifier}: "
-            f"{stderr.decode().strip()}"
+            f"{_combine_streams(stdout, stderr)}"
         )
     log.info("Created worktree %s on branch %s", worktree_path, issue.branch)
 
@@ -80,7 +81,7 @@ async def _setup_worktree_deps(worktree_path: Path) -> None:
         if proc.returncode != 0:
             log.warning(
                 "Worktree setup step '%s' failed (rc=%d): %s",
-                label, proc.returncode, stderr.decode()[:500],
+                label, proc.returncode, _combine_streams(stdout, stderr)[:500],
             )
         else:
             log.info("Worktree setup step '%s' completed", label)

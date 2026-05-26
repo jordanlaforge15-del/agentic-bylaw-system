@@ -164,12 +164,73 @@ async def run_e2e(issue: IssueState) -> tuple[bool, str]:
     return passed, output[-5000:]
 
 
+def _combine_streams(stdout: bytes, stderr: bytes) -> str:
+    """Return a non-empty error string drawn from both stdout and stderr.
+
+    Some git subcommands (notably `git merge` on content conflicts) write
+    their failure message to stdout while leaving stderr empty. Reading
+    only stderr in those cases drops the actual error. This helper joins
+    whatever is present so callers always surface something useful.
+    """
+    out = stdout.decode("utf-8", errors="replace").strip()
+    err = stderr.decode("utf-8", errors="replace").strip()
+    if out and err:
+        return f"{err}\n{out}"
+    return err or out
+
+
+async def _assert_clean_worktree(cwd: str) -> tuple[bool, str]:
+    """Return (clean, message). When dirty, message lists the offending paths.
+
+    Uses `git status --porcelain` which lists every staged, unstaged, and
+    untracked path in a stable machine-readable form. Refuses to proceed
+    if the target worktree has any uncommitted state — silent stashing
+    of a sleeping operator's WIP is more dangerous than failing loudly.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "git", "status", "--porcelain",
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        err = _combine_streams(stdout, stderr)
+        return False, f"`git status --porcelain` failed in {cwd}: {err}"
+
+    porcelain = stdout.decode("utf-8", errors="replace").strip()
+    if not porcelain:
+        return True, ""
+
+    dirty_lines = porcelain.splitlines()
+    listing = "\n".join(f"  {line}" for line in dirty_lines)
+    msg = (
+        f"Target worktree {cwd} is not clean — refusing to merge.\n"
+        f"Dirty paths ({len(dirty_lines)} entries):\n{listing}\n"
+        f"Resolve manually before re-running the night manager. To inspect: "
+        f"`git -C {cwd} status`. To discard everything: "
+        f"`git -C {cwd} reset --hard && git -C {cwd} clean -fd` "
+        f"(destructive — only run if you're sure)."
+    )
+    return False, msg
+
+
 async def merge_to_dev(issue: IssueState) -> tuple[bool, str]:
     """
     Merge the issue's branch into dev. Returns (success, message).
 
     Merges are sequential — caller must ensure only one merge at a time.
+
+    Refuses to proceed if the target worktree (REPO_ROOT) has any
+    uncommitted modifications or untracked files. The night manager runs
+    while the operator sleeps; silently stashing their WIP would risk
+    losing work, so we surface the dirty state and let them clean up.
     """
+    clean, dirty_msg = await _assert_clean_worktree(str(REPO_ROOT))
+    if not clean:
+        log.error("Merge precondition failed for %s: %s", issue.identifier, dirty_msg)
+        return False, dirty_msg
+
     cmds = [
         ["git", "checkout", "dev"],
         ["git", "pull", "--ff-only", "origin", "dev"],
@@ -187,11 +248,20 @@ async def merge_to_dev(issue: IssueState) -> tuple[bool, str]:
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            error = stderr.decode("utf-8", errors="replace").strip()
+            error = _combine_streams(stdout, stderr)
             log.error(
                 "Merge step '%s' failed for %s: %s",
                 " ".join(cmd), issue.identifier, error,
             )
+            if cmd[1] == "merge":
+                abort = await asyncio.create_subprocess_exec(
+                    "git", "merge", "--abort",
+                    cwd=str(REPO_ROOT),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await abort.communicate()
+                log.info("Aborted failed merge to keep dev clean")
             return False, f"Merge failed at '{' '.join(cmd)}': {error}"
 
     log.info("Merged %s into dev", issue.identifier)
@@ -208,7 +278,7 @@ async def revert_merge(issue: IssueState) -> tuple[bool, str]:
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
-        error = stderr.decode("utf-8", errors="replace").strip()
+        error = _combine_streams(stdout, stderr)
         log.error("Revert failed for %s: %s", issue.identifier, error)
         return False, f"Revert failed: {error}"
 
