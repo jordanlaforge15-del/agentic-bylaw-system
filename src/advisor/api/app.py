@@ -428,12 +428,20 @@ def create_app(
             "database": db_status,
             "error_tracking": "sentry" if is_sentry_enabled() else "disabled",
         }
+
+        try:
+            from advisor.api.metrics import compute_sli_compliance  # noqa: PLC0415
+
+            sli = compute_sli_compliance()
+        except Exception:  # noqa: BLE001
+            sli = None
+
         if db_status == "unreachable":
             return JSONResponse(
-                content={"status": "degraded", "checks": checks},
+                content={"status": "degraded", "checks": checks, "sli": sli},
                 status_code=503,
             )
-        return JSONResponse(content={"status": "ok", "checks": checks})
+        return JSONResponse(content={"status": "ok", "checks": checks, "sli": sli})
 
     @app.get("/readyz", response_model=None)
     async def readyz():

@@ -50,6 +50,7 @@ if _ABS_LEARNING_SRC.is_dir():
         sys.path.insert(0, _abs_learning_path)
 
 from advisor.api.app import create_app
+from advisor.api.metrics_middleware import MetricsMiddleware
 from advisor.db.models import InviteRequest, User
 from advisor.llm.mock import MockGateway
 from advisor.logging import CorrelationIdMiddleware, setup_logging
@@ -77,6 +78,30 @@ from layer2.compliance.evaluator import (
 logger = logging.getLogger(__name__)
 
 
+def _mount_metrics_endpoint(application: FastAPI) -> None:
+    """Expose ``/metrics`` for Prometheus scraping + ``/v1/slo`` for SLI compliance."""
+    from prometheus_client import (  # noqa: PLC0415
+        generate_latest,
+        CONTENT_TYPE_LATEST,
+    )
+    from fastapi.responses import Response as FastAPIResponse  # noqa: PLC0415
+
+    from advisor.api.metrics import APP_INFO, compute_sli_compliance  # noqa: PLC0415
+
+    APP_INFO.info({"version": "0.1.0", "service": "advisor"})
+
+    @application.get("/metrics", include_in_schema=False)
+    async def metrics():
+        return FastAPIResponse(
+            content=generate_latest(),
+            media_type=CONTENT_TYPE_LATEST,
+        )
+
+    @application.get("/v1/slo")
+    async def slo_status():
+        return compute_sli_compliance()
+
+
 def build_e2e_app() -> FastAPI:
     """Construct the test FastAPI app wired for end-to-end UI tests."""
     setup_logging(json_output=False)
@@ -98,6 +123,8 @@ def build_e2e_app() -> FastAPI:
         submissions_evaluator_factory=_submissions_evaluator_factory,
     )
     app.add_middleware(CorrelationIdMiddleware)
+    app.add_middleware(MetricsMiddleware)
+    _mount_metrics_endpoint(app)
 
     origins_env = os.environ.get(
         "ADVISOR_E2E_CORS_ORIGINS", "http://localhost:3001"
