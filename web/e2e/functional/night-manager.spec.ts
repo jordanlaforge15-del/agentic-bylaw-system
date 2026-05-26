@@ -273,6 +273,85 @@ test.describe("Night Manager — Launch", () => {
   });
 });
 
+test.describe("Night Manager — Resume Last Run", () => {
+  test.beforeEach(async ({ context }) => {
+    await stubNmApis(context);
+  });
+
+  test("panel lists failed + reviewing issues, hides queued by default", async ({
+    page,
+  }) => {
+    await page.goto(`${NM_BASE}/launch`);
+    const panel = page.locator("section").filter({ hasText: "RESUME LAST RUN" });
+    await expect(panel).toBeVisible();
+    // ABS-92 is failed, ABS-94 is reviewing — both must be listed.
+    await expect(panel.getByText("ABS-92", { exact: true })).toBeVisible();
+    await expect(panel.getByText("ABS-94", { exact: true })).toBeVisible();
+    // ABS-97 is queued — must NOT appear without the opt-in toggle.
+    await expect(panel.getByText("ABS-97", { exact: true })).toHaveCount(0);
+  });
+
+  test("include-queued checkbox surfaces queued issues", async ({ page }) => {
+    await page.goto(`${NM_BASE}/launch`);
+    const panel = page.locator("section").filter({ hasText: "RESUME LAST RUN" });
+    const toggle = panel.getByTestId("resume-queued-toggle");
+    await expect(toggle).toBeVisible();
+    await toggle.locator("input[type=checkbox]").check();
+    await expect(panel.getByText("ABS-97", { exact: true })).toBeVisible();
+    // The RESUME ALL button count reflects the new total.
+    await expect(panel.getByRole("button", { name: /RESUME ALL 3 ISSUES/ })).toBeVisible();
+  });
+
+  test("per-issue RESUME button POSTs resumeIssue without resumeQueued", async ({
+    page,
+  }) => {
+    const captured: { value: Record<string, unknown> } = { value: {} };
+    let receivedCount = 0;
+    await page.route("**/api/nm/run/start", async (route) => {
+      captured.value = (await route.request().postDataJSON()) as Record<
+        string,
+        unknown
+      >;
+      receivedCount++;
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) });
+    });
+    await page.goto(`${NM_BASE}/launch`);
+    const panel = page.locator("section").filter({ hasText: "RESUME LAST RUN" });
+    const row = panel.locator("div").filter({
+      has: page.getByText("ABS-94", { exact: true }),
+    }).first();
+    await row.getByRole("button", { name: "RESUME" }).click();
+    await expect.poll(() => receivedCount).toBeGreaterThan(0);
+    expect(captured.value).toMatchObject({ resumeIssue: "ABS-94", resume: false });
+    expect(captured.value.resumeQueued).toBe(false);
+  });
+
+  test("RESUME ALL with checkbox on POSTs resumeQueued: true", async ({
+    page,
+  }) => {
+    const captured: { value: Record<string, unknown> } = { value: {} };
+    let receivedCount = 0;
+    await page.route("**/api/nm/run/start", async (route) => {
+      captured.value = (await route.request().postDataJSON()) as Record<
+        string,
+        unknown
+      >;
+      receivedCount++;
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) });
+    });
+    await page.goto(`${NM_BASE}/launch`);
+    const panel = page.locator("section").filter({ hasText: "RESUME LAST RUN" });
+    await panel
+      .getByTestId("resume-queued-toggle")
+      .locator("input[type=checkbox]")
+      .check();
+    await panel.getByRole("button", { name: /RESUME ALL/ }).click();
+    await expect.poll(() => receivedCount).toBeGreaterThan(0);
+    expect(captured.value).toMatchObject({ resume: true, resumeQueued: true });
+    expect(captured.value.resumeIssue).toBeUndefined();
+  });
+});
+
 test.describe("Night Manager — Reports", () => {
   test.beforeEach(async ({ context }) => {
     await stubNmApis(context);
