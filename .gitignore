@@ -50,3 +50,8 @@ abs-learning/output/
 
 # Per-user submission storage written by the advisor app at runtime.
 data/submissions/
+
+# Regenerated on every e2e run by scripts/seed_e2e_submission_ifc.py;
+# tracking it would dirty the worktree every `make e2e` and trip the
+# Night Manager merge precondition (see ABS-157).
+web/e2e/fixtures/submission-demo.ifc
