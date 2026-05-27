@@ -37,6 +37,9 @@ PG_HOST="${PG_HOST:-localhost}"
 PG_PORT="${PG_PORT:-5432}"
 
 DATABASE_URL_E2E="postgresql+psycopg://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${E2E_TEST_DB}"
+# Export so child processes (Playwright globalSetup, seed scripts) inherit the
+# correct URL without callers having to re-derive it from PG_PORT themselves.
+export DATABASE_URL="$DATABASE_URL_E2E"
 # The node ``pg`` client doesn't grok SQLAlchemy's ``+psycopg`` suffix
 # (it parses the URL with whatwg URL semantics and bails on the
 # unrecognised scheme). Build a separate pg-friendly URL for the
