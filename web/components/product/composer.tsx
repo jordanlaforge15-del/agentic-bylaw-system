@@ -16,14 +16,16 @@
 
 import { useRef, useState } from "react";
 import { Mono } from "@/components/mono";
-import { SUGGESTED_PROMPTS } from "@/lib/mock";
+import type { ParcelContext } from "@/lib/parcel";
+import { getSuggestedPrompts } from "@/lib/suggested-prompts";
 
 type Props = {
   onSend: (text: string) => void;
   disabled?: boolean;
+  parcel?: ParcelContext | null;
 };
 
-export function Composer({ onSend, disabled }: Props) {
+export function Composer({ onSend, disabled, parcel }: Props) {
   const [val, setVal] = useState("");
   const [focused, setFocused] = useState(false);
   // Source-of-truth for the submitted text is the DOM, not React state.
@@ -61,7 +63,7 @@ export function Composer({ onSend, disabled }: Props) {
           [scrollbar-width:none] [&::-webkit-scrollbar]:hidden
         `}
       >
-        {SUGGESTED_PROMPTS.map((s) => (
+        {getSuggestedPrompts(parcel ?? null).map((s) => (
           <button
             key={s}
             type="button"
