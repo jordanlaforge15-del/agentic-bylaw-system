@@ -835,8 +835,12 @@ async def merge_to_dev(issue: IssueState) -> tuple[bool, str]:
     return True, f"Successfully merged {issue.identifier} into dev"
 
 
-async def revert_merge(issue: IssueState) -> tuple[bool, str]:
-    """Revert the last merge on dev (used when post-merge regression detected)."""
+async def revert_merge(issue: IssueState) -> tuple[bool, str, str]:
+    """Revert the last merge on dev (used when post-merge regression detected).
+
+    Returns (success, message, revert_sha). revert_sha is the short SHA of the
+    revert commit on dev, or empty string on failure.
+    """
     proc = await asyncio.create_subprocess_exec(
         "git", "revert", "--no-edit", "-m", "1", "HEAD",
         cwd=str(REPO_ROOT),
@@ -847,7 +851,16 @@ async def revert_merge(issue: IssueState) -> tuple[bool, str]:
     if proc.returncode != 0:
         error = _combine_streams(stdout, stderr)
         log.error("Revert failed for %s: %s", issue.identifier, error)
-        return False, f"Revert failed: {error}"
+        return False, f"Revert failed: {error}", ""
+
+    sha_proc = await asyncio.create_subprocess_exec(
+        "git", "rev-parse", "--short", "HEAD",
+        cwd=str(REPO_ROOT),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    sha_out, _ = await sha_proc.communicate()
+    revert_sha = sha_out.decode("utf-8", errors="replace").strip()
 
     push_proc = await asyncio.create_subprocess_exec(
         "git", "push", "origin", "dev",
@@ -857,8 +870,8 @@ async def revert_merge(issue: IssueState) -> tuple[bool, str]:
     )
     await push_proc.communicate()
 
-    log.info("Reverted merge of %s on dev", issue.identifier)
-    return True, f"Reverted merge of {issue.identifier}"
+    log.info("Reverted merge of %s on dev (sha=%s)", issue.identifier, revert_sha)
+    return True, f"Reverted merge of {issue.identifier}", revert_sha
 
 
 async def _diff_touches(worktree: str, path_prefix: str) -> bool:

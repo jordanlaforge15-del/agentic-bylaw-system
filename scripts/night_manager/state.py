@@ -78,6 +78,14 @@ class IssueState:
         self.error = None
         self.rate_limited = False
 
+    def mark_reverted(self, revert_sha: str = "") -> None:
+        """Mark the issue as reverted — merge landed on dev but was rolled back."""
+        self.status = "reverted"
+        self.merged_at = None
+        sha_note = f" (revert {revert_sha})" if revert_sha else ""
+        self.error = f"Post-merge regression: merge reverted{sha_note}"
+        self.rate_limited = False
+
     def mark_failed(self, error: str) -> None:
         self.status = "failed"
         self.error = error
