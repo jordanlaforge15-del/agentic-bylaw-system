@@ -221,11 +221,46 @@ record_existing_listener() {
 }
 
 wait_for_port() {
+  # Args: port, label, [timeout=30], [pidfile=""]
+  #
+  # ABS-175: detecting "port is bound" is necessary but not sufficient
+  # for "the process we just launched is ready and will stay up." A
+  # `next dev` that's about to crash on a port collision shows up in
+  # LISTEN state for a fraction of a second between bind and exit; the
+  # naive check fired, callers moved on, and the resulting test cascade
+  # looked like a 200-failure flake instead of a startup error.
+  #
+  # After the socket is open we now sleep ${SETTLE_SECS} and re-check
+  # both the port AND (when a pidfile is supplied) that the recorded
+  # process is still alive. If the post-settle check fails we surface
+  # the tail of the matching log file so the operator sees the real
+  # cause without grepping. Callers that don't pass a pidfile fall
+  # back to a port-only re-verification, preserving backward compat.
   local port="$1"
   local label="$2"
   local timeout="${3:-30}"
+  local pidfile="${4:-}"
+  local settle_secs="${WAIT_FOR_PORT_SETTLE_SECS:-2}"
   for _ in $(seq 1 "$timeout"); do
     if is_listening "$port"; then
+      sleep "$settle_secs"
+      if [[ -n "$pidfile" && -f "$pidfile" ]]; then
+        local pid; pid="$(cat "$pidfile" 2>/dev/null || true)"
+        if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+          echo "error: ${label} on :${port} bound briefly then exited (pid ${pid})" >&2
+          local logfile="${LOG_DIR}/$(basename "$pidfile" .pid).log"
+          if [[ -f "$logfile" ]]; then
+            echo "---- last 20 lines of ${logfile} ----" >&2
+            tail -20 "$logfile" >&2 || true
+            echo "---- end ${logfile} ----" >&2
+          fi
+          return 1
+        fi
+      fi
+      if ! is_listening "$port"; then
+        echo "error: ${label} on :${port} became unavailable after startup" >&2
+        return 1
+      fi
       echo "${label} on :${port} is up"
       return 0
     fi
@@ -261,7 +296,7 @@ start_fastapi() {
     echo $! >"${PID_DIR}/fastapi.pid"
     disown
   ) </dev/null >>"${LOG_DIR}/fastapi.log" 2>&1
-  wait_for_port "$E2E_FASTAPI_PORT" "FastAPI"
+  wait_for_port "$E2E_FASTAPI_PORT" "FastAPI" 30 "${PID_DIR}/fastapi.pid"
 }
 
 start_web() {
@@ -302,7 +337,7 @@ start_web() {
     disown
   ) </dev/null >>"${LOG_DIR}/web.log" 2>&1
   # next dev takes longer to compile on first start; allow up to 90s.
-  wait_for_port "$E2E_WEB_PORT" "Next.js" 90
+  wait_for_port "$E2E_WEB_PORT" "Next.js" 90 "${PID_DIR}/web.pid"
 }
 
 main() {
