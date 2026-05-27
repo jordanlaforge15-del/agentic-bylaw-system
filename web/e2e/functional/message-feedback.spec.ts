@@ -308,18 +308,24 @@ test("thumbs-down panel: submitting sends flag data with down rating", async ({
   const feedbackContainer = page.getByTestId("message-feedback").first();
   await expect(feedbackContainer).toBeVisible({ timeout: 10_000 });
 
+  // Drain the initial thumbs-down rating request before setting up the flag interceptor
+  const thumbsPromise = page.waitForResponse(
+    (response) =>
+      response.url().includes("/feedback") && response.status() === 200,
+  );
   await page.getByTestId("feedback-thumbs-down").first().click();
+  await thumbsPromise;
+
   await expect(page.getByTestId("flag-panel")).toBeVisible();
 
   // Select a reason chip
   await page.getByTestId("flag-reason-wrong_zone").click();
 
-  // Intercept the flag submit request
+  // Now intercept the flag submit request (second feedback call)
   const flagPromise = page.waitForResponse(
     (response) =>
       response.url().includes("/feedback") && response.status() === 200,
   );
-
   await page.getByTestId("flag-submit").click();
 
   const flagResponse = await flagPromise;
