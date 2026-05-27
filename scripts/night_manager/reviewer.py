@@ -861,6 +861,18 @@ async def revert_merge(issue: IssueState) -> tuple[bool, str]:
     return True, f"Reverted merge of {issue.identifier}"
 
 
+async def _diff_touches(worktree: str, path_prefix: str) -> bool:
+    """Return True iff the branch diff (`dev...HEAD`) touches any file under `path_prefix`.
+
+    Reuses `_git_changed_files` which already handles git errors gracefully.
+    Must be called while the worktree is still on the feature branch (before
+    `git checkout dev`) so that `dev...HEAD` resolves to the branch's commits.
+    """
+    changed = await _git_changed_files(worktree)
+    norm = path_prefix.rstrip("/") + "/"
+    return any(p.startswith(norm) or p == path_prefix.rstrip("/") for p in changed)
+
+
 async def run_dev_e2e(issue: IssueState) -> tuple[bool, str]:
     """Run post-merge regression e2e from the agent's worktree.
 
@@ -868,10 +880,18 @@ async def run_dev_e2e(issue: IssueState) -> tuple[bool, str]:
     worktree so it has the merged state, then run `make e2e` there.
     This avoids the Next.js 16 same-directory conflict that kills the
     e2e server when a dev server is already running on the main checkout.
+
+    If the merged diff touches any file under `scripts/night_manager/`,
+    also runs `.venv/bin/pytest tests/night_manager/ -x --tb=short`.
+    A pytest failure triggers the same revert path as a failing e2e.
     """
     worktree = issue.worktree
     ports = issue.ports
     assert worktree and ports
+
+    # Capture whether this merge touched NM source BEFORE checking out dev,
+    # because `git diff dev...HEAD` becomes empty once we switch to dev.
+    touched_nm = await _diff_touches(worktree, "scripts/night_manager/")
 
     env = {
         **os.environ,
@@ -940,11 +960,13 @@ async def run_dev_e2e(issue: IssueState) -> tuple[bool, str]:
     else:
         log.info("Dev regression e2e FAILED")
 
-    tail = output[-5000:]
+    flake_msg = ""
     if not passed:
+        tail = output[-5000:]
         failing_names = _extract_failing_tests(worktree)
         if failing_names:
             tail = failing_names + "\n\n" + tail
+        # ABS-164: classify whether this is a flake before escalating.
         is_flake, n_recovered = await _classify_e2e_flake(worktree, issue.identifier, env)
         # Tear down the stack regardless; make e2e left it up on failure.
         _down = await asyncio.create_subprocess_exec(
@@ -955,13 +977,44 @@ async def run_dev_e2e(issue: IssueState) -> tuple[bool, str]:
             env=env,
         )
         await _down.communicate()
-        if is_flake:
-            log.info(
-                "Flake recovered for %s: %d tests passed on solo re-run. flake_recovered=true",
-                issue.identifier, n_recovered,
-            )
-            return True, tail + f"\n\nflake_recovered=true ({n_recovered} test(s) passed on solo re-run)"
-    return passed, tail
+        if not is_flake:
+            return False, tail
+        log.info(
+            "Flake recovered for %s: %d tests passed on solo re-run. flake_recovered=true",
+            issue.identifier, n_recovered,
+        )
+        # Flake recovered counts as passed for the NM-pytest gate that
+        # follows. Carry the flake annotation forward into the final
+        # output so callers can still see what happened.
+        passed = True
+        flake_msg = f"\n\nflake_recovered=true ({n_recovered} test(s) passed on solo re-run)"
+
+    # ABS-169: when the merged diff touched NM source, gate dev on the
+    # NM unit-test suite — `make e2e` exercises the web app, not NM
+    # itself, so a syntactically valid but semantically broken NM
+    # change otherwise lands silently and breaks the next NM launch.
+    if touched_nm:
+        t_pytest = time.monotonic()
+        log.info("NM source touched — running pytest tests/night_manager/ for %s", issue.identifier)
+        pytest_proc = await asyncio.create_subprocess_exec(
+            ".venv/bin/pytest", "tests/night_manager/", "-x", "--tb=short",
+            cwd=str(REPO_ROOT),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        pytest_stdout, _ = await pytest_proc.communicate()
+        pytest_elapsed = time.monotonic() - t_pytest
+        pytest_passed = pytest_proc.returncode == 0
+        pytest_output = pytest_stdout.decode("utf-8", errors="replace")
+        status_word = "PASSED" if pytest_passed else "FAILED"
+        log.info(
+            "NM unit-test regression for %s: %s (%.0fs)",
+            issue.identifier, status_word, pytest_elapsed,
+        )
+        if not pytest_passed:
+            return False, f"NM unit-test regression failed; reverting\n\n{pytest_output[-3000:]}"
+
+    return True, output[-5000:] + flake_msg
 
 
 async def restore_worktree_branch(issue: IssueState) -> None:
