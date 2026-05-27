@@ -42,7 +42,10 @@ def validate_document_objects(
     for fragment in fragments:
         if fragment.parent_fragment_id is None:
             if fragment.fragment_type.value not in VALID_ROOT_TYPES:
-                report.warnings.append(f"Fragment {fragment.id} is an unusual root ({fragment.fragment_type.value})")
+                report.warnings.append(
+                    f"Fragment {fragment.id} is an unusual root ({fragment.fragment_type.value})"
+                    f" — citation_path={fragment.citation_path!r}, page={fragment.page_start}"
+                )
         elif fragment.parent_fragment_id not in fragment_ids:
             report.errors.append(f"Fragment {fragment.id} has missing parent {fragment.parent_fragment_id}")
         if fragment.page_start > fragment.page_end:

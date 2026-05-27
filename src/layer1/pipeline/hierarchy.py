@@ -32,9 +32,29 @@ class HierarchyBlock:
     block: PageBlockData
 
 ROMAN_SUBCLAUSE_TOKEN_RE = re.compile(r"^\((?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\)$", re.IGNORECASE)
+_COMPOUND_BASE_RE = re.compile(r"^(\d+[A-Z]*)\(")
 DEFINITION_HEADING_RE = re.compile(r"^\s*definitions?\b", re.IGNORECASE)
 DEFINITION_INTRO_RE = re.compile(r"^\s*in this by-?law\s*:\s*$", re.IGNORECASE)
 LEADING_QUOTED_SPACE_RE = re.compile(r"^(\s*['\"“])\s+")
+
+def _find_compound_base_parent(fragments: list[FragmentData], label: str) -> int | None:
+    """Search backward through fragments for a section matching the base of a compound label.
+
+    For labels like ``28AO(1)`` the base is ``28AO``; for ``7(3)`` it's ``7``.
+    Returns the fragment index if found, else ``None``.
+    """
+    m = _COMPOUND_BASE_RE.match(label)
+    if not m:
+        return None
+    base_label = m.group(1)
+    for i in range(len(fragments) - 1, -1, -1):
+        if (
+            fragments[i].citation_label == base_label
+            and fragments[i].fragment_type in {FragmentType.SECTION, FragmentType.SUBSECTION}
+        ):
+            return i
+    return None
+
 
 def _nearest_parent(stack: list[StackEntry], level: int) -> StackEntry | None:
     while stack and stack[-1].level >= level:
@@ -231,6 +251,24 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
                 and fragments[last_content_parent].fragment_type == FragmentType.HEADING
             ):
                 contextual_parent_index = last_content_parent
+            if match.fragment_type == FragmentType.SUBSECTION:
+                base_m = _COMPOUND_BASE_RE.match(match.label)
+                if base_m:
+                    base_label = base_m.group(1)
+                    stack_parent_label = (
+                        fragments[contextual_parent_index].citation_label
+                        if contextual_parent_index is not None
+                        else None
+                    )
+                    if stack_parent_label != base_label:
+                        found = _find_compound_base_parent(fragments, match.label)
+                        if found is not None:
+                            contextual_parent_index = found
+                            parent_path = fragments[found].citation_path
+                            path_parent = parent_path
+                            path = citation_path(path_parent, match.label)
+                            status = ParseStatus.PARSED
+                            confidence = match.confidence
             if match.fragment_type in LOW_LEVEL_FRAGMENT_TYPES and contextual_parent_index is None and definition_context_index is not None:
                 contextual_parent_index = definition_context_index
             if match.fragment_type in LOW_LEVEL_FRAGMENT_TYPES and contextual_parent_index is None and definition_container_index is not None:
