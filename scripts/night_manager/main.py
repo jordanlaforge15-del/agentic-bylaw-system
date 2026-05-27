@@ -1050,7 +1050,7 @@ async def _agent_through_review(
     if issue.status != "reviewing":
         return
 
-    log.info("Review + merge gate for %s", ident)
+    log.info("Review + merge gate starting for %s (phase: reviewing)", ident)
     gate_passed = await review_and_gate(issue, config)
     state.save()
 
@@ -1062,6 +1062,7 @@ async def _agent_through_review(
         )
         return
 
+    log.info("%s: review+e2e gate passed — enqueued for serial merge", ident)
     await merge_queue.put(ident)
 
 
@@ -1085,6 +1086,7 @@ async def _drain_merge_queue(
             return
 
         issue = state.issues[ident]
+        log.info("Merge worker: processing %s (phase: merging)", ident)
         merged = await _merge_and_regression_loop(issue, config, state, linear)
         if not merged:
             continue
