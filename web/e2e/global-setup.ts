@@ -49,6 +49,24 @@ export default async function globalSetup() {
     throw err;
   }
 
+  // ABS-57: generate the synthetic PDF fixture the pdf-submission-confirm
+  // spec needs. Only writes the file; DB seeding happens in the spec's
+  // beforeAll via the seed script.
+  const pdfSeed = path.join(repoRoot, "scripts", "seed_e2e_submission_pdf.py");
+  try {
+    execSync(`"${venvPython}" "${pdfSeed}" --skip-db`, {
+      env: {
+        ...process.env,
+        DATABASE_URL: databaseUrl,
+        PYTHONPATH: `${path.join(repoRoot, "src")}:${process.env.PYTHONPATH || ""}`,
+      },
+      stdio: "inherit",
+    });
+  } catch (err) {
+    console.error("globalSetup: seed_e2e_submission_pdf.py failed", err);
+    throw err;
+  }
+
   const apiUrl = process.env.E2E_API_URL || "http://127.0.0.1:8001";
   const res = await fetch(`${apiUrl}/healthz`).catch(() => null);
   if (!res || !res.ok) {
