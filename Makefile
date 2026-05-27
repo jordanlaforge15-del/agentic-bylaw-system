@@ -1,4 +1,4 @@
-.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install
+.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland
 
 DB_URL ?= postgresql+psycopg://layer1:layer1@localhost:5432/layer1
 
@@ -39,6 +39,27 @@ sample-export:
 
 sample-audit:
 	layer1 audit-pages 1 --db-url "$(DB_URL)" --sample 2
+
+# --- Agentic learning pipeline -------------------------------------------
+# Run with: make learn-city-hrm-mainland
+# Or use learn-city-help to see all available flags.
+
+LEARN_CITY_JURISDICTION ?= HRM-MAINLAND
+LEARN_CITY_NAME        ?= Halifax Regional Municipality
+LEARN_CITY_PROVINCE    ?= Nova Scotia
+LEARN_CITY_SEED_URL    ?= https://www.halifax.ca/home-property/planning-development/policies-planning-documents/regional-plan/the-plan-for-each-area-of-hrm/halifax-plan-area
+LEARN_CITY_OUTPUT      ?= abs-learning/output/$(LEARN_CITY_JURISDICTION)/manifest.json
+
+learn-city-help:
+	layer1 learn-city --help
+
+learn-city-hrm-mainland:
+	layer1 learn-city \
+	  --jurisdiction-code "$(LEARN_CITY_JURISDICTION)" \
+	  --name "$(LEARN_CITY_NAME)" \
+	  --province "$(LEARN_CITY_PROVINCE)" \
+	  --seed-url "$(LEARN_CITY_SEED_URL)" \
+	  --output "$(LEARN_CITY_OUTPUT)"
 
 # --- Instrumented UI tests (Playwright) -----------------------------------
 # `make e2e-up` boots the test stack (Postgres test DB + uvicorn:8001 +
