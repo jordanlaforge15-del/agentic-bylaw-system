@@ -30,9 +30,13 @@ from layer1.profiles import (
 )
 from layer1.semantic.enrichment import enrich_document_semantics, validate_document_semantics
 from layer1.validators.structural import validate_document_objects
+from layer1.learn_city_cmd import learn_city_command
 
 app = typer.Typer(help="Layer 1 bylaw source normalization CLI")
 console = Console()
+
+# Register learn-city as a top-level command on the shared app.
+app.command("learn-city")(learn_city_command)
 
 
 @app.callback()
