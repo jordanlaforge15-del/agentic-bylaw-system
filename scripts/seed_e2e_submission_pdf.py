@@ -149,21 +149,6 @@ def seed_pdf_submission(session) -> int:
             f"Parcel {TEST_PID} not found — run seed_e2e_evaluator_bylaws.py first"
         )
 
-    # Clean up any previous PDF submission for this parcel
-    existing = (
-        session.execute(
-            select(Submission).where(
-                Submission.parcel_id == parcel.id,
-                Submission.source_type == SubmissionSourceType.PDF,
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if existing is not None:
-        session.delete(existing)
-        session.flush()
-
     submission = Submission(
         parcel_id=parcel.id,
         submitter_id=1,
