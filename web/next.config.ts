@@ -18,13 +18,6 @@ const nextConfig: NextConfig = {
   // cost for regular users.
   productionBrowserSourceMaps: true,
 
-  // Move Next.js dev toolbar to bottom-right to avoid overlapping the
-  // Clerk UserButton (avatar) in the sidebar's lower-left corner.
-  // This only affects dev mode; production builds don't include the toolbar.
-  devIndicators: {
-    position: "bottom-right",
-  },
-
   // ABS-19: when the e2e Clerk mock is active, swap @clerk/nextjs/server
   // with our lightweight mock that reads test cookies instead of calling
   // Clerk's real backend. This exercises the clerkMiddleware branch in
