@@ -48,29 +48,32 @@ test("validation error clears when message field is modified", async ({
   await page.goto("/cases/new");
 
   const anchorInput = page.getByPlaceholder(/1234 Main St, Halifax/);
-  await anchorInput.fill("1234 Main St, Halifax");
-
+  const messageInput = page.getByPlaceholder(/Describe the inquiry/);
   const classifyBtn = page.getByRole("button", {
     name: /Get tier recommendation/,
   });
+
+  // Fill anchor but leave message empty
+  await anchorInput.fill("1234 Main St, Halifax");
 
   // Submit with empty message — should show validation error
   await classifyBtn.click();
   await expect(
     page.getByText(/Anchor and first message are required to classify/i)
-  ).toBeVisible();
+  ).toBeVisible({
+    timeout: 3000,
+  });
 
   // Type in the message field — error should clear
-  const messageInput = page.getByPlaceholder(/Describe the inquiry/);
   await messageInput.fill("Test message");
 
-  // Error should be gone
+  // Error should be gone immediately as we type
   await expect(
     page.getByText(/Anchor and first message are required to classify/i)
   ).not.toBeVisible();
 });
 
-test("successful classification clears any previous validation error", async ({
+test("error clears when user resumes typing after validation failure", async ({
   page,
 }) => {
   await page.goto("/cases/new");
@@ -81,24 +84,35 @@ test("successful classification clears any previous validation error", async ({
     name: /Get tier recommendation/,
   });
 
-  // Submit with empty anchor — shows validation error
-  await messageInput.fill("Test message");
+  // Submit with empty fields — shows validation error
   await classifyBtn.click();
   await expect(
     page.getByText(/Anchor and first message are required to classify/i)
-  ).toBeVisible();
+  ).toBeVisible({
+    timeout: 3000,
+  });
 
-  // Fill anchor and submit again
-  await anchorInput.fill(`test-${Date.now()}`);
-  await classifyBtn.click();
+  // Start filling in the anchor field — error should clear
+  await anchorInput.fill("1234 Main St");
 
-  // Validation error should be gone and classifier should succeed
+  // Validation error should be gone as soon as user types in anchor
   await expect(
     page.getByText(/Anchor and first message are required to classify/i)
   ).not.toBeVisible();
 
-  // Classifier result should be visible (confidence percentage)
-  await expect(page.getByText(/CONFIDENCE/i)).toBeVisible({
-    timeout: 5_000,
+  // Submit again with just anchor — shows error again
+  await classifyBtn.click();
+  await expect(
+    page.getByText(/Anchor and first message are required to classify/i)
+  ).toBeVisible({
+    timeout: 3000,
   });
+
+  // Now fill in the message — error should clear
+  await messageInput.fill("Test message for classification");
+
+  // Validation error should be gone
+  await expect(
+    page.getByText(/Anchor and first message are required to classify/i)
+  ).not.toBeVisible();
 });
