@@ -88,6 +88,30 @@ ensure_compose_prereqs() {
 }
 
 ensure_postgres() {
+  # ABS-170: Detect a stale container whose published port no longer matches
+  # the requested PG_PORT. `docker compose up -d` is name-keyed: if a container
+  # already exists, it attaches without re-applying the port mapping, so a
+  # worktree previously launched with a different PG_PORT silently keeps the
+  # old port. NM's reviewer then runs e2e against the wrong port and every
+  # cycle fails at startup. Force-recreate when we detect the mismatch (the
+  # named volume survives, so the test DB content is preserved).
+  #
+  # We use `docker inspect .HostConfig.PortBindings` rather than `docker port`
+  # because the latter only reports for *running* containers — and our worst
+  # case is a stale container that's been stopped and restarted with a new
+  # port (it shows up here in `ps -aq` but exposes nothing via `docker port`).
+  local stale_container stale_port
+  stale_container="$(docker_compose ps -aq postgres 2>/dev/null | head -1)"
+  if [[ -n "$stale_container" ]]; then
+    stale_port="$(docker inspect "$stale_container" \
+      --format '{{range $p, $bs := .HostConfig.PortBindings}}{{if eq $p "5432/tcp"}}{{range $bs}}{{.HostPort}}{{end}}{{end}}{{end}}' \
+      2>/dev/null)"
+    if [[ -n "$stale_port" && "$stale_port" != "$PG_PORT" ]]; then
+      log "Removing stale postgres container (port was ${stale_port}, now ${PG_PORT})"
+      docker_compose rm -fs postgres >/dev/null 2>&1 || true
+    fi
+  fi
+
   if docker_compose exec -T postgres pg_isready -U "$PG_USER" -d postgres >/dev/null 2>&1; then
     log "Postgres already healthy on :${PG_PORT} — reusing"
     return 0
