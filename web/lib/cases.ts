@@ -62,6 +62,7 @@ export type PurchaseHistoryResponse = {
 
 export type CaseRow = {
   id: number;
+  user_case_number: number;
   user_id: number;
   anchor_label: string;
   anchor_kind: AnchorKind;

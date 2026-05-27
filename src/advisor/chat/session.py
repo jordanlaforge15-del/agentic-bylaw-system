@@ -125,6 +125,7 @@ class ChatSession:
     # Layer-3 upgrade prompts. ``None`` means this session isn't
     # case-billed (legacy / test path).
     case_id: int | None = field(default=None, compare=False)
+    case_number: int | None = field(default=None, compare=False)
     tier: str | None = field(default=None, compare=False)
     # Active case anchor (the address / project ref / DA the case was
     # opened against). Mirrored onto the in-memory session by the chat

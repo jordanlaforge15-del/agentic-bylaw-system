@@ -137,6 +137,7 @@ class ChatSessionResponse(BaseModel):
     # composer (a null ``case_id`` means the conversation can't be
     # resumed and the user must start a new case).
     case_id: int | None = None
+    case_number: int | None = None
     tier: str | None = None
 
 
@@ -544,6 +545,7 @@ def create_app(
         # path) so existing tests don't need DB fixtures.
         usage_event_id: int | None = None
         case_id_for_session: int | None = None
+        case_number_for_session: int | None = None
         case_tier_for_session: str | None = None
         # Mirrored onto the in-memory ChatSession alongside case_id / tier
         # so the LLM's system prompt picks up the case anchor (see
@@ -662,6 +664,7 @@ def create_app(
                         )
                     db_chat_session.case_id = case_row.id
                     db_chat_session.tier = case_row.current_tier
+                    case_number_for_session = case_row.user_case_number
                     # Initialise the per-case budget remaining from the
                     # tier's full budget minus what the case has burned
                     # in earlier sessions (reopen path).
@@ -682,6 +685,7 @@ def create_app(
                         tier=case_row.current_tier,
                     )
                     case_id_for_session = case_row.id
+                    case_number_for_session = case_row.user_case_number
                     case_tier_for_session = credit.tier
                     case_anchor_label_for_session = case_row.anchor_label
                     case_anchor_kind_for_session = case_row.anchor_kind
@@ -698,6 +702,7 @@ def create_app(
                         else None
                     )
                     if resumed_case is not None:
+                        case_number_for_session = resumed_case.user_case_number
                         case_anchor_label_for_session = resumed_case.anchor_label
                         case_anchor_kind_for_session = resumed_case.anchor_kind
 
@@ -746,6 +751,7 @@ def create_app(
         # and surface the per-turn upgrade-request drain.
         if case_id_for_session is not None:
             session.case_id = case_id_for_session
+            session.case_number = case_number_for_session
             session.tier = case_tier_for_session
             session.case_anchor_label = case_anchor_label_for_session
             session.case_anchor_kind = case_anchor_kind_for_session
@@ -768,6 +774,7 @@ def create_app(
                     {
                         "session_id": session.session_id,
                         "case_id": case_id_for_session,
+                        "case_number": case_number_for_session,
                         "tier": case_tier_for_session,
                     }
                 ),
@@ -899,6 +906,7 @@ def create_app(
             messages=session.messages,
             message_db_ids=message_db_ids,
             case_id=session.case_id,
+            case_number=session.case_number,
             tier=session.tier,
         )
 
