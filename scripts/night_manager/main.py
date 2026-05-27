@@ -705,11 +705,9 @@ async def _execute(
     linear: LinearClient,
     workflow_states: dict[str, str],
 ) -> None:
-    from .agent import spawn_agent, monitor_agent, cleanup_worktree, setup_worktree, resume_agent
-    from .reviewer import review_and_gate, merge_to_dev, run_dev_e2e, run_e2e, revert_merge, restore_worktree_branch
+    from .agent import spawn_agent, setup_worktree
 
     in_progress_id = workflow_states.get("In Progress")
-    in_review_id = workflow_states.get("In Review")
     done_id = workflow_states.get("Done")
 
     rate_limited = False
@@ -783,7 +781,15 @@ async def _execute(
                 state.save()
                 continue
 
-        agent_tasks: dict[str, asyncio.Task] = {}
+        # ABS-168: start merge worker before spawning agents so it is
+        # ready to drain immediately when the first agent finishes review.
+        merge_queue: asyncio.Queue = asyncio.Queue()
+        merge_worker = asyncio.create_task(
+            _drain_merge_queue(merge_queue, state, config, linear, done_id),
+            name=f"merge-worker-group-{group_idx}",
+        )
+
+        review_tasks: dict[str, asyncio.Task] = {}
 
         for ident in group.parallel:
             issue = state.issues[ident]
@@ -817,14 +823,16 @@ async def _execute(
             state.save()
 
             task = asyncio.create_task(
-                _run_agent_lifecycle(proc, issue, config, state, linear, workflow_states),
+                _agent_through_review(
+                    ident, proc, config, state, linear, workflow_states, merge_queue,
+                ),
                 name=f"agent-{ident}",
             )
-            agent_tasks[ident] = task
+            review_tasks[ident] = task
 
-        if agent_tasks:
-            results = await asyncio.gather(*agent_tasks.values(), return_exceptions=True)
-            for ident, result in zip(agent_tasks.keys(), results):
+        if review_tasks:
+            results = await asyncio.gather(*review_tasks.values(), return_exceptions=True)
+            for ident, result in zip(review_tasks.keys(), results):
                 if isinstance(result, Exception):
                     log.error("Agent %s raised exception: %s", ident, result)
                     state.issues[ident].mark_failed(str(result))
@@ -833,47 +841,9 @@ async def _execute(
         if any(state.issues[i].rate_limited for i in group.parallel):
             rate_limited = True
 
-        # Sequential merge phase for this group
-        for ident in group.parallel:
-            issue = state.issues[ident]
-            if issue.status != "reviewing":
-                log.info("Skipping merge for %s (status=%s)", ident, issue.status)
-                continue
-
-            log.info("Review + merge gate for %s", ident)
-            gate_passed = await review_and_gate(issue, config)
-            state.save()
-
-            if not gate_passed:
-                log.warning("Gate failed for %s: %s", ident, issue.error)
-                await linear.post_comment(
-                    issue.linear_id,
-                    f"**Night Manager** — Gate FAILED\n\n{issue.error}",
-                )
-                continue
-
-            merged = await _merge_and_regression_loop(
-                issue, config, state, linear,
-            )
-            if not merged:
-                continue
-
-            issue.mark_merged()
-            state.save()
-
-            if done_id:
-                try:
-                    await linear.update_issue_state(issue.linear_id, done_id)
-                except Exception as e:
-                    log.warning("Failed to update Linear status for %s: %s", ident, e)
-
-            await linear.post_comment(
-                issue.linear_id,
-                f"**Night Manager** — Merged to dev and regression tests passed.",
-            )
-
-            await cleanup_worktree(issue)
-            state.save()
+        # Signal the merge worker that no more items are coming.
+        await merge_queue.put(None)
+        await merge_worker
 
     log.info("All groups processed.")
 
@@ -1055,6 +1025,86 @@ async def _run_agent_lifecycle(
         f"**Night Manager** — Agent completed, entering review.\n\n"
         f"Summary:\n{final_output[-1000:]}",
     )
+
+
+async def _agent_through_review(
+    ident: str,
+    proc: asyncio.subprocess.Process,
+    config: NMConfig,
+    state: NMState,
+    linear: LinearClient,
+    workflow_states: dict[str, str],
+    merge_queue: asyncio.Queue,
+) -> None:
+    """Run one agent to completion, then immediately run review + worktree e2e.
+
+    Executes concurrently with sibling agents in the same group (ABS-168).
+    If review + e2e passes, enqueues the issue identifier for the serial
+    merge worker. The merge step itself remains strictly single-writer.
+    """
+    from .reviewer import review_and_gate
+
+    issue = state.issues[ident]
+    await _run_agent_lifecycle(proc, issue, config, state, linear, workflow_states)
+
+    if issue.status != "reviewing":
+        return
+
+    log.info("Review + merge gate for %s", ident)
+    gate_passed = await review_and_gate(issue, config)
+    state.save()
+
+    if not gate_passed:
+        log.warning("Gate failed for %s: %s", ident, issue.error)
+        await linear.post_comment(
+            issue.linear_id,
+            f"**Night Manager** — Gate FAILED\n\n{issue.error}",
+        )
+        return
+
+    await merge_queue.put(ident)
+
+
+async def _drain_merge_queue(
+    queue: asyncio.Queue,
+    state: NMState,
+    config: NMConfig,
+    linear: LinearClient,
+    done_id: str | None,
+) -> None:
+    """Consume merge-queue entries serially: merge → dev regression → Linear done.
+
+    Drains until it receives the sentinel value ``None``. Each entry is an
+    issue identifier whose review + worktree e2e already passed.
+    """
+    from .agent import cleanup_worktree
+
+    while True:
+        ident = await queue.get()
+        if ident is None:
+            return
+
+        issue = state.issues[ident]
+        merged = await _merge_and_regression_loop(issue, config, state, linear)
+        if not merged:
+            continue
+
+        issue.mark_merged()
+        state.save()
+
+        if done_id:
+            try:
+                await linear.update_issue_state(issue.linear_id, done_id)
+            except Exception as e:
+                log.warning("Failed to update Linear status for %s: %s", ident, e)
+
+        await linear.post_comment(
+            issue.linear_id,
+            "**Night Manager** — Merged to dev and regression tests passed.",
+        )
+
+        await cleanup_worktree(issue)
+        state.save()
 
 
 async def _deploy(state: NMState, config: NMConfig, linear: LinearClient) -> None:
