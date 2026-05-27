@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abs-speckle-automate"
+version = "0.1.0"
+description = "ABS compliance check Speckle Automate function"
+requires-python = ">=3.11"
+dependencies = [
+  # Speckle Automate SDK (includes specklepy)
+  "speckle-automate>=0.4",
+  # HTTP client used by abs_client.py
+  "httpx>=0.27",
+  # IFC authoring for the minimal-IFC fallback path
+  "ifcopenshell>=0.7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-mock>=3.14",
+  "respx>=0.21",         # httpx request mocking
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
