@@ -37,6 +37,13 @@ Scenario keywords in the user message override the default rules:
 * ``"MOCK_EMPTY_TURN"`` — the assistant returns an empty text block
   with no tool_use, exercising the "non-qualifying turn" refund path.
 
+* ``"MOCK_WITH_LOCATION"`` — the ``search_bylaw_evidence`` call
+  includes a ``location`` slot (``civic_number="1234"``,
+  ``street="Elm St"``) so the parcel pane renders with zone data and
+  the "CITED THIS THREAD" panel is populated from the tool result.
+  Use this keyword to test UI that depends on the right-pane being
+  non-empty.
+
 All responses are deterministic, so identical sessions produce
 identical SSE traces — a hard requirement for screenshot-stable UI
 tests.
@@ -96,13 +103,17 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
             preamble="One moment — flagging a tier upgrade.",
         )
 
+    tool_input: dict = {
+        "query": user_text[:120] or "front yard setback",
+        "top_k": 4,
+    }
+    if "MOCK_WITH_LOCATION" in user_text:
+        tool_input["location"] = {"civic_number": "1234", "street": "Elm St"}
+
     return tool_use_response(
         tool_id="t-search-1",
         tool_name="search_bylaw_evidence",
-        tool_input={
-            "query": user_text[:120] or "front yard setback",
-            "top_k": 4,
-        },
+        tool_input=tool_input,
         preamble="Searching the bylaw for relevant passages.",
         usage=TokenUsage(input_tokens=80, output_tokens=24),
     )
