@@ -116,6 +116,9 @@ class User(Base):
     terms_acceptances: Mapped[list["TermsAcceptance"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    api_keys: Mapped[list["AdvisorApiKey"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class Case(Base):
@@ -767,3 +770,42 @@ class TermsAcceptance(Base):
     user_agent: Mapped[str | None] = mapped_column(String(500))
 
     user: Mapped[User] = relationship(back_populates="terms_acceptances")
+
+
+class AdvisorApiKey(Base):
+    """An API key for machine-to-machine access to ABS integration endpoints.
+
+    Secrets are never stored in plaintext — only the SHA-256 hex digest
+    is persisted. The raw key is shown once at creation time and then
+    gone. Authentication checks derive the hash from the incoming
+    ``X-ABS-API-Key`` header and compare against ``key_hash``.
+
+    Each key is scoped to a single ``advisor_user`` so submitted models
+    appear as that user's submissions in the dashboard.  Used today by
+    the Speckle Automate function (ABS-59); the same table supports any
+    future M2M caller (CI scripts, IDP webhooks, etc.).
+    """
+
+    __tablename__ = "advisor_api_key"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    user: Mapped[User] = relationship(back_populates="api_keys")

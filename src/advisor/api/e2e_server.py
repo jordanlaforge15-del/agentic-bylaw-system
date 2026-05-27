@@ -122,6 +122,7 @@ def build_e2e_app() -> FastAPI:
             "Authorization",
             "Last-Event-ID",
             "X-Correlation-ID",
+            "X-ABS-API-Key",
         ],
         expose_headers=["X-Session-Id", "X-Correlation-ID"],
     )
@@ -236,6 +237,11 @@ class _ManifestIngestBody(BaseModel):
     manifest_path: str = Field(min_length=1, max_length=1024)
     bylaw_path: str = Field(min_length=1, max_length=1024)
     bylaw_name: str = Field(min_length=1, max_length=256)
+
+
+class _IssueApiKeyBody(BaseModel):
+    clerk_user_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(default="e2e-test-key", min_length=1, max_length=255)
 
 
 def _mount_test_router(app: FastAPI) -> None:
@@ -477,6 +483,36 @@ def _mount_test_router(app: FastAPI) -> None:
                     else []
                 ),
                 "enrichment": enrich_report.model_dump(),
+            }
+
+    @app.post("/v1/_test/issue-api-key")
+    async def issue_api_key(body: _IssueApiKeyBody) -> dict[str, object]:
+        """Create a fresh API key for the given user (test-only).
+
+        Returns the raw key — the only time it is visible. The spec must
+        capture it immediately. Callers must first create the user via
+        ``/v1/_test/invite-approve`` + a first-login request so the
+        ``advisor_user`` row exists.
+        """
+        from advisor.api.api_key_auth import issue_api_key as _issue  # noqa: PLC0415
+
+        with session_scope() as db:
+            user = (
+                db.query(User)
+                .filter(User.clerk_user_id == body.clerk_user_id)
+                .one_or_none()
+            )
+            if user is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No user with clerk_user_id={body.clerk_user_id!r}.",
+                )
+            row, raw_key = _issue(db, user_id=user.id, name=body.name)
+            db.commit()
+            return {
+                "api_key_id": row.id,
+                "raw_key": raw_key,
+                "name": row.name,
             }
 
     @app.post("/v1/_test/discover")

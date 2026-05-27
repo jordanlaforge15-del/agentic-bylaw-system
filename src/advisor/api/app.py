@@ -389,6 +389,19 @@ def create_app(
             )
         )
 
+        # Integrations router (ABS-59) — API-key-authenticated M2M
+        # submission endpoints for Speckle Automate and similar callers.
+        from advisor.api.integrations_router import (  # noqa: PLC0415
+            build_integrations_router,
+        )
+
+        app.include_router(
+            build_integrations_router(
+                db_session_factory=db_session_factory,
+                evaluator_factory=submissions_evaluator_factory,
+            )
+        )
+
         # Chat message feedback router (ABS-121) — thumbs + flag.
         from advisor.api.feedback_router import (  # noqa: PLC0415
             build_feedback_router,
