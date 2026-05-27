@@ -7,6 +7,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { HighlightWord } from "@/components/highlight-word";
 import { Mono } from "@/components/mono";
 import { Btn } from "@/components/btn";
@@ -25,6 +26,7 @@ type State = "idle" | "thinking" | "done";
 type ResolvedReading = SampleReading & { addr: string };
 
 export function AddressDemo() {
+  const router = useRouter();
   const [val, setVal] = useState("");
   const [state, setState] = useState<State>("idle");
   const [reading, setReading] = useState<ResolvedReading | null>(null);
@@ -179,7 +181,18 @@ export function AddressDemo() {
           </div>
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2.5 sm:gap-2 pt-2 border-t border-hair">
             <Mono muted>SOURCE · HRM LUB {reading.cite}</Mono>
-            <Btn variant="ghost" size="sm" className="self-start sm:self-auto">
+            <Btn
+              variant="ghost"
+              size="sm"
+              className="self-start sm:self-auto"
+              onClick={() => {
+                const params = new URLSearchParams({
+                  anchor_label: reading.addr,
+                  first_message: reading.q,
+                });
+                router.push(`/cases/new?${params.toString()}`);
+              }}
+            >
               Open full reading →
             </Btn>
           </div>

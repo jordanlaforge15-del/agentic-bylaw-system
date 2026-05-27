@@ -8,7 +8,15 @@ import { Mono } from "@/components/mono";
 
 export const dynamic = "force-dynamic";
 
-export default function NewCasePage() {
+export default async function NewCasePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ anchor_label?: string; first_message?: string }>;
+}) {
+  const params = await searchParams;
+  const initialAnchorLabel = params.anchor_label ?? "";
+  const initialMessage = params.first_message ?? "";
+
   return (
     <div
       className="px-5 sm:px-8 py-10 sm:py-12 lg:py-14 mx-auto max-w-[820px]"
@@ -32,7 +40,10 @@ export default function NewCasePage() {
         </p>
       </header>
 
-      <CaseOpenForm />
+      <CaseOpenForm
+        initialAnchorLabel={initialAnchorLabel}
+        initialMessage={initialMessage}
+      />
 
       <div className="mt-8 text-[12.5px] text-text-muted">
         Need credits first?{" "}

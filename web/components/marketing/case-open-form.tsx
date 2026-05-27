@@ -41,11 +41,17 @@ const ANCHOR_KIND_OPTIONS: AnchorKind[] = [
 const TIER_OPTIONS: Tier[] = ["quick", "standard", "complex"];
 
 
-export function CaseOpenForm() {
+export function CaseOpenForm({
+  initialAnchorLabel = "",
+  initialMessage = "",
+}: {
+  initialAnchorLabel?: string;
+  initialMessage?: string;
+}) {
   const router = useRouter();
-  const [anchorLabel, setAnchorLabel] = useState("");
+  const [anchorLabel, setAnchorLabel] = useState(initialAnchorLabel);
   const [anchorKind, setAnchorKind] = useState<AnchorKind>("address");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(initialMessage);
   const [tier, setTier] = useState<Tier>("standard");
   const [match, setMatch] = useState<CaseRow | null | undefined>(undefined);
   const [classification, setClassification] = useState<
