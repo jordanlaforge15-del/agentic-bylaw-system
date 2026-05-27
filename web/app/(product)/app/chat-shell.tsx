@@ -678,7 +678,7 @@ function ProductAppPageInner() {
               )}
             </div>
           ) : (
-            <Composer onSend={send} disabled={thinking} />
+            <Composer onSend={send} disabled={thinking} parcel={parcel} />
           )}
         </main>
 
