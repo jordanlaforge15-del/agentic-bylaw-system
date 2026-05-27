@@ -12,6 +12,29 @@ import { expect, test } from "../fixtures/test-env";
 import { E2E_API_URL } from "../fixtures/test-env";
 
 test.describe("availability monitoring", () => {
+  // On cold stack boot the first probe hasn't run yet, so the endpoint
+  // may return 503 until the initial HTTP check to /healthz completes
+  // (probe timeout up to 10 s) and the cache expires (5 s TTL).  Wait
+  // here so every test in the block sees a warm, healthy probe result.
+  test.beforeAll(async () => {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`${E2E_API_URL}/v1/monitoring/status`);
+        if (res.status === 200) {
+          const body = await res.json();
+          if (body.probe?.status === "healthy") return;
+        }
+      } catch {
+        // stack may still be starting; retry
+      }
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+    throw new Error(
+      "Monitoring probe did not reach healthy status within 30 s — is the e2e stack up?",
+    );
+  });
+
   test("/v1/monitoring/status returns probe result and config", async () => {
     const res = await fetch(`${E2E_API_URL}/v1/monitoring/status`);
 
