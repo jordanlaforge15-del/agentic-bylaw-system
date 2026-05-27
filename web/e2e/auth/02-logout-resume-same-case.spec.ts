@@ -95,27 +95,29 @@ test("logout / login keeps the same case usable for a new turn", async ({
   await signInAs(context, identity);
 
   // Reload /app at the case URL and send a NEW question — this
-  // starts a fresh chat session under the existing case. If a
-  // user_id mismatch sneaks in, the case-credit reservation or
-  // session insert below 401/404s and we never see a streamed
-  // reply.
-  await page.goto(`/app?case_id=${caseId}`);
-  await expect(textarea).toBeVisible({ timeout: 10_000 });
-  await textarea.fill("Follow-up question after logout/login.");
-  await textarea.press("Enter");
+  // starts a fresh chat session under the existing case. Use
+  // ?first_message= so the auto-send path fires instead of the
+  // session-restore path (ABS-195 fix: bare ?case_id= now restores
+  // the most recent session, which would continue the first session
+  // rather than minting a second one). A user_id mismatch sneaking
+  // in would make the case-credit reservation or session insert
+  // 401/404, and we'd never see a streamed reply.
+  const followUp = "Follow-up question after logout/login.";
+  await page.goto(
+    `/app?case_id=${caseId}&first_message=${encodeURIComponent(followUp)}`,
+  );
   await expect(thread).toContainText(/Based on the bylaw evidence/i, {
     timeout: 15_000,
   });
 
   // Direct check: /v1/chat/sessions for this identity should now
   // list both sessions (first turn + post-relogin turn) under the
-  // same user. The summary shape doesn't expose case_id, but the
-  // count alone is enough: every session belongs to this identity
-  // (each spec mints a unique sub-user-id), so two sessions means
-  // both writes attached to the same advisor_user row. A user_id
-  // mismatch would either 4xx the second send (no streamed reply,
-  // already asserted above) or attach the second session to a
-  // phantom row, shrinking this list to one.
+  // same user. Every session belongs to this identity (each spec
+  // mints a unique sub-user-id), so two sessions means both writes
+  // attached to the same advisor_user row. A user_id mismatch would
+  // either 4xx the second send (no streamed reply, already asserted
+  // above) or attach the second session to a phantom row, shrinking
+  // this list to one.
   const res = await context.request.get(`${E2E_API_URL}/v1/chat/sessions`, {
     headers: {
       "X-Test-User-Id": identity.subUserId,
