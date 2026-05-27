@@ -38,7 +38,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from pyproj import Transformer
+try:
+    from pyproj import Transformer
+except ImportError as _pyproj_err:
+    raise ImportError(
+        "pyproj is required by the advisor API (ABS-80). "
+        "Install it via: pip install -e '.[advisor]'"
+    ) from _pyproj_err
 from shapely.geometry import LineString, Polygon
 from shapely.geometry import shape as shapely_shape
 from shapely.ops import transform as shapely_transform
