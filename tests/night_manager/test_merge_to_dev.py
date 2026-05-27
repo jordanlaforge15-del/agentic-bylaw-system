@@ -10,15 +10,17 @@ the streams behave authentically.
 from __future__ import annotations
 
 import asyncio
+import logging
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from scripts.night_manager import reviewer
 from scripts.night_manager.reviewer import (
     _assert_clean_worktree,
+    _clean_agent_leaked_files,
     _combine_streams,
     merge_to_dev,
 )
@@ -140,6 +142,56 @@ class TestAssertCleanWorktree:
 
 
 # ---------------------------------------------------------------------------
+# _clean_agent_leaked_files — idempotent cleanup of agent-polluted checkouts
+# ---------------------------------------------------------------------------
+
+
+class TestCleanAgentLeakedFiles:
+    async def test_noop_on_clean_repo(self, repo: Path):
+        """No files cleaned when the repo is already clean."""
+        cleaned = await _clean_agent_leaked_files(str(repo))
+        assert cleaned == 0
+
+    async def test_cleans_untracked_file(self, repo: Path):
+        (repo / "leaked.md").write_text("agent garbage\n")
+
+        cleaned = await _clean_agent_leaked_files(str(repo))
+        assert cleaned == 1
+        assert not (repo / "leaked.md").exists()
+
+    async def test_cleans_staged_file(self, repo: Path):
+        """Staged-but-uncommitted files (the ABS-171 scenario) are unstaged and removed."""
+        (repo / "docs").mkdir()
+        (repo / "docs" / "decision.md").write_text("agent wrote this\n")
+        _run(repo, "git", "add", "docs/decision.md")
+
+        cleaned = await _clean_agent_leaked_files(str(repo))
+        assert cleaned == 1
+        assert not (repo / "docs" / "decision.md").exists()
+
+        # Index should be clean after cleanup
+        result = _run(repo, "git", "status", "--porcelain")
+        assert result.stdout.strip() == ""
+
+    async def test_cleans_modified_tracked_file(self, repo: Path):
+        """Modified tracked files are restored to HEAD."""
+        (repo / "README.md").write_text("agent overwrote this\n")
+
+        cleaned = await _clean_agent_leaked_files(str(repo))
+        assert cleaned == 1
+        assert (repo / "README.md").read_text() == "base\n"
+
+    async def test_logs_cleaned_files(self, repo: Path, caplog):
+        (repo / "leaked.md").write_text("oops\n")
+
+        with caplog.at_level(logging.INFO):
+            await _clean_agent_leaked_files(str(repo))
+
+        assert any("leaked" in r.getMessage() for r in caplog.records)
+        assert any("cleaned 1 leaked file" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
 # merge_to_dev — end-to-end behaviour against a real repo
 # ---------------------------------------------------------------------------
 
@@ -186,6 +238,9 @@ class TestMergeToDev:
         (docker-compose.production.yml) sits in the target worktree, the
         feature branch would create or overwrite it on merge, and the merge
         must refuse cleanly without ever invoking `git merge`.
+
+        The ABS-171 cleanup step is patched out so this test continues to
+        exercise the precondition check as a standalone safety net.
         """
         repo, branch = repo_with_agent_branch
         # Set up the exact untracked file from the ABS-68 failure.
@@ -194,14 +249,18 @@ class TestMergeToDev:
         _patch_repo_root(monkeypatch, repo)
         issue = _make_issue(branch=branch)
 
+        # Disable ABS-171 cleanup so the precondition check fires.
+        noop_clean = AsyncMock(return_value=0)
+
         # Stub out the network steps so we exercise the precondition only.
         # The precondition fires first; pull/push should never run.
-        with patch.object(
-            asyncio,
-            "create_subprocess_exec",
-            wraps=asyncio.create_subprocess_exec,
-        ) as spy:
-            success, msg = await merge_to_dev(issue)
+        with patch.object(reviewer, "_clean_agent_leaked_files", noop_clean):
+            with patch.object(
+                asyncio,
+                "create_subprocess_exec",
+                wraps=asyncio.create_subprocess_exec,
+            ) as spy:
+                success, msg = await merge_to_dev(issue)
 
         assert success is False
         # Error mentions the untracked file and tells operator how to inspect.
@@ -225,6 +284,9 @@ class TestMergeToDev:
         """Bug 1 regression: modified tracked file also blocks merge.
 
         Replicates the ABS-6 scenario: `web/tsconfig.json` modified in place.
+
+        The ABS-171 cleanup step is patched out so this test continues to
+        exercise the precondition check as a standalone safety net.
         """
         repo, branch = repo_with_agent_branch
         (repo / "README.md").write_text("dirty\n")
@@ -232,7 +294,9 @@ class TestMergeToDev:
         _patch_repo_root(monkeypatch, repo)
         issue = _make_issue(branch=branch)
 
-        success, msg = await merge_to_dev(issue)
+        noop_clean = AsyncMock(return_value=0)
+        with patch.object(reviewer, "_clean_agent_leaked_files", noop_clean):
+            success, msg = await merge_to_dev(issue)
 
         assert success is False
         assert "README.md" in msg
@@ -313,3 +377,68 @@ class TestMergeToDev:
         # Verify the commit landed on dev.
         log_out = _run(repo, "git", "log", "--oneline", "dev")
         assert "Merge ABS-999" in log_out.stdout
+
+    async def test_merge_succeeds_after_cleaning_leaked_staged_file(
+        self,
+        repo_with_agent_branch: tuple[Path, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """ABS-171 regression: a leaked staged file no longer blocks the merge.
+
+        Reproduces the exact scenario: an agent writes a file via absolute
+        path into the main checkout and stages it with ``git add``. Before
+        ABS-171, this caused ``merge_to_dev`` to refuse with
+        "Target worktree … is not clean". Now the cleanup step removes the
+        leaked file and the merge proceeds.
+        """
+        repo, branch = repo_with_agent_branch
+
+        # Bare remote for pull/push.
+        bare = repo.parent / "remote.git"
+        _run(repo, "git", "clone", "--bare", "-q", str(repo), str(bare))
+        _run(repo, "git", "remote", "add", "origin", str(bare))
+        _run(repo, "git", "fetch", "-q", "origin")
+        _run(repo, "git", "branch", "--set-upstream-to=origin/dev", "dev")
+
+        # Simulate an agent that wrote + staged a file in the main checkout.
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "docs" / "2026-05-revit-plugin.md").write_text("leaked\n")
+        _run(repo, "git", "add", "docs/2026-05-revit-plugin.md")
+
+        # Precondition: repo IS dirty before we call merge_to_dev.
+        result = _run(repo, "git", "status", "--porcelain")
+        assert "2026-05-revit-plugin.md" in result.stdout
+
+        _patch_repo_root(monkeypatch, repo)
+        issue = _make_issue(branch=branch)
+
+        success, msg = await merge_to_dev(issue)
+
+        assert success is True, f"merge should succeed after cleanup; got: {msg!r}"
+        assert "ABS-999" in msg
+        # The leaked file must be gone.
+        assert not (repo / "docs" / "2026-05-revit-plugin.md").exists()
+
+    async def test_merge_succeeds_after_cleaning_leaked_untracked_file(
+        self,
+        repo_with_agent_branch: tuple[Path, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Untracked leaked files are also cleaned before merge."""
+        repo, branch = repo_with_agent_branch
+
+        bare = repo.parent / "remote.git"
+        _run(repo, "git", "clone", "--bare", "-q", str(repo), str(bare))
+        _run(repo, "git", "remote", "add", "origin", str(bare))
+        _run(repo, "git", "fetch", "-q", "origin")
+        _run(repo, "git", "branch", "--set-upstream-to=origin/dev", "dev")
+
+        (repo / "agent-garbage.txt").write_text("oops\n")
+
+        _patch_repo_root(monkeypatch, repo)
+        issue = _make_issue(branch=branch)
+
+        success, msg = await merge_to_dev(issue)
+
+        assert success is True, f"merge should succeed after cleanup; got: {msg!r}"
+        assert not (repo / "agent-garbage.txt").exists()
