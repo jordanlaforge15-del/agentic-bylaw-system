@@ -49,8 +49,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-# Side-effect import: registers the IFC extractor with the submission factory.
+# Side-effect imports: register extractors with the submission factory.
 import layer1.parsers.ifc_submission  # noqa: F401
+import layer1.parsers.pdf_submission  # noqa: F401
 
 from advisor.db.models import User
 from layer1.config import get_settings
@@ -69,7 +70,9 @@ from layer2.compliance.db.models import (
     SubmissionSourceType,
     SubmissionStatus,
 )
+from layer1.db.base import SourceFragment
 from layer2.compliance.derived_attributes import compute_derived_attributes
+from layer2.compliance.taxonomy import load_taxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -202,18 +205,19 @@ def build_submissions_router(
                     "message": "Either parcel_id or parcel_address is required.",
                 },
             )
-        if not file.filename or not file.filename.lower().endswith(".ifc"):
-            # .rvt path deferred to a follow-up — APS support lands when
-            # credentials are provisioned. Fail loudly so the UI can
-            # show a clear message.
+        filename_lower = (file.filename or "").lower()
+        if filename_lower.endswith(".ifc"):
+            file_source_type = SubmissionSourceType.IFC
+        elif filename_lower.endswith(".pdf"):
+            file_source_type = SubmissionSourceType.PDF
+        else:
             raise HTTPException(
                 status_code=415,
                 detail={
                     "code": "unsupported_file_type",
                     "message": (
-                        f"Only .ifc files are accepted in this release. "
-                        f"Got: {file.filename!r}. .rvt (Autodesk APS) support "
-                        "is a separate follow-up once APS credentials are wired."
+                        f"Only .ifc and .pdf files are accepted in this release. "
+                        f"Got: {file.filename!r}."
                     ),
                 },
             )
@@ -238,7 +242,7 @@ def build_submissions_router(
                 result: SubmissionIngestResult = ingest_submission(
                     db,
                     target_path,
-                    SubmissionSourceType.IFC,
+                    file_source_type,
                     parcel_id=parcel.id,
                     submitter_id=user.id,
                     config=SubmissionIngestConfig(run_evaluator=False),
@@ -312,6 +316,22 @@ def build_submissions_router(
             user = user_resolver(auth_session, db)
             submission = _load_owned_submission(db, submission_id, user)
 
+            if (
+                submission.source_type == SubmissionSourceType.PDF
+                and not (submission.metadata_json or {}).get("human_confirmed")
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "confirmation_required",
+                        "message": (
+                            "PDF submissions must be human-confirmed before "
+                            "the evaluator can run. Use the confirmation screen "
+                            "to review extracted attributes first."
+                        ),
+                    },
+                )
+
             evaluator = evaluator_factory(db)
             attrs_for_eval = _attributes_for_evaluation(submission)
             request = _build_evaluation_request(submission, attrs_for_eval)
@@ -358,6 +378,34 @@ def build_submissions_router(
                     },
                 )
             return latest
+
+    # ---- POST /v1/submissions/{id}/confirm -----------------------
+
+    @router.post("/{submission_id}/confirm", response_model=_SubmissionOut)
+    def confirm_submission(
+        submission_id: int,
+        auth_session: Any = Depends(user_dependency),
+    ) -> _SubmissionOut:
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            submission = _load_owned_submission(db, submission_id, user)
+            meta = dict(submission.metadata_json or {})
+            meta["human_confirmed"] = True
+            submission.metadata_json = meta
+            db.flush()
+            return _submission_to_out(submission)
+
+    # ---- GET /v1/submissions/{id}/regulated-missing ----------------
+
+    @router.get("/{submission_id}/regulated-missing")
+    def get_regulated_missing(
+        submission_id: int,
+        auth_session: Any = Depends(user_dependency),
+    ) -> list[dict[str, Any]]:
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            submission = _load_owned_submission(db, submission_id, user)
+            return _compute_regulated_missing(db, submission)
 
     return router
 
@@ -556,6 +604,42 @@ def _build_evaluation_request(
         submission_id=submission.id,
         persist_decision=True,
     )
+
+
+def _compute_regulated_missing(
+    db: Session, submission: Submission
+) -> list[dict[str, Any]]:
+    """Return attribute keys regulated by zone bylaws but absent from the submission."""
+    present_keys = {a.attribute_key for a in submission.attributes}
+    parcel = submission.parcel
+    if parcel is None:
+        return []
+
+    fragments = (
+        db.execute(
+            select(SourceFragment.attribute_tags).where(
+                SourceFragment.attribute_tags != [],
+            )
+        )
+        .scalars()
+        .all()
+    )
+    regulated_keys: set[str] = set()
+    for tags in fragments:
+        if isinstance(tags, list):
+            regulated_keys.update(tags)
+
+    taxonomy = load_taxonomy()
+    taxonomy_by_id = {a.id: a for a in taxonomy.attributes}
+    missing: list[dict[str, Any]] = []
+    for key in sorted(regulated_keys - present_keys):
+        entry = taxonomy_by_id.get(key)
+        missing.append({
+            "attribute_key": key,
+            "description": entry.description if entry else key,
+            "unit": entry.unit if entry else None,
+        })
+    return missing
 
 
 __all__ = [

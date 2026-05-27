@@ -23,7 +23,7 @@ export function SubmissionUploadForm() {
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!file) {
-      setError("Pick an .ifc file first.");
+      setError("Pick an .ifc or .pdf file first.");
       return;
     }
     if (!parcelAddress.trim()) {
@@ -51,7 +51,11 @@ export function SubmissionUploadForm() {
         return;
       }
       const body = await res.json();
-      router.push(`/submissions/${body.id}`);
+      if (body.source_type === "pdf") {
+        router.push(`/submissions/${body.id}/confirm`);
+      } else {
+        router.push(`/submissions/${body.id}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed.");
       setSubmitting(false);
@@ -65,18 +69,18 @@ export function SubmissionUploadForm() {
       className="flex flex-col gap-4"
     >
       <label className="flex flex-col gap-1">
-        <span className="text-[13px] font-medium">IFC file</span>
+        <span className="text-[13px] font-medium">Project file</span>
         <input
           data-testid="submission-file-input"
           type="file"
-          accept=".ifc"
+          accept=".ifc,.pdf"
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           className="rounded border border-hair p-2 text-[14px]"
           required
         />
         <span className="text-[12px] text-text-muted">
-          Export from Revit / ArchiCAD / Vectorworks as IFC4. .rvt
-          direct upload is a separate follow-up.
+          IFC4 from Revit / ArchiCAD / Vectorworks, or a PDF drawing
+          set. PDF uploads require human review before evaluation.
         </span>
       </label>
 
@@ -113,7 +117,7 @@ export function SubmissionUploadForm() {
         disabled={submitting}
         className="self-start rounded bg-black px-4 py-2 text-[14px] text-white disabled:opacity-50"
       >
-        {submitting ? "Uploading + extracting…" : "Upload + extract"}
+        {submitting ? "Uploading + extracting..." : "Upload + extract"}
       </button>
     </form>
   );

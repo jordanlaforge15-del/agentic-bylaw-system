@@ -14,6 +14,7 @@
 // latest_decision }`) the single source of truth.
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type AttributeRow = {
   attribute_key: string;
@@ -29,6 +30,7 @@ type SubmissionView = {
   parcel_id: number | null;
   status: string;
   source_type: string;
+  metadata: Record<string, unknown>;
   attributes: AttributeRow[];
   latest_decision: Record<string, unknown> | null;
   warnings: string[];
@@ -64,6 +66,7 @@ export function SubmissionDetailClient({
 }: {
   submissionId: number;
 }) {
+  const router = useRouter();
   const [submission, setSubmission] = useState<SubmissionView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [evaluating, setEvaluating] = useState(false);
@@ -79,11 +82,20 @@ export function SubmissionDetailClient({
         setLoadError(`Failed to load submission (HTTP ${res.status}).`);
         return;
       }
-      setSubmission(await res.json());
+      const data = await res.json();
+      if (
+        data.source_type === "pdf" &&
+        !data.metadata?.human_confirmed &&
+        data.status !== "evaluated"
+      ) {
+        router.replace(`/submissions/${submissionId}/confirm`);
+        return;
+      }
+      setSubmission(data);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Load failed.");
     }
-  }, [submissionId]);
+  }, [submissionId, router]);
 
   useEffect(() => {
     void refresh();
