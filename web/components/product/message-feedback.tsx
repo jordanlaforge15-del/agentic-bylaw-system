@@ -7,9 +7,16 @@ type Rating = "up" | "down" | null;
 type FlagReason = "bad_citation" | "wrong_zone" | "hallucination" | "other" | null;
 type ToastType = "thumbs" | "flag" | null;
 
+export type SavedFeedback = {
+  rating: Rating;
+  flag_reason: FlagReason;
+  flag_notes: string | null;
+};
+
 type Props = {
   sessionId: string;
   messageId: number;
+  savedFeedback?: SavedFeedback | null;
 };
 
 const FLAG_OPTIONS: { value: FlagReason & string; label: string }[] = [
@@ -19,14 +26,14 @@ const FLAG_OPTIONS: { value: FlagReason & string; label: string }[] = [
   { value: "other", label: "Other" },
 ];
 
-export function MessageFeedback({ sessionId, messageId }: Props) {
-  const [rating, setRating] = useState<Rating>(null);
+export function MessageFeedback({ sessionId, messageId, savedFeedback }: Props) {
+  const [rating, setRating] = useState<Rating>(savedFeedback?.rating ?? null);
   const [flagOpen, setFlagOpen] = useState(false);
   const [flagOpenedViaThumbsDown, setFlagOpenedViaThumbsDown] = useState(false);
-  const [flagReason, setFlagReason] = useState<FlagReason>(null);
-  const [flagNotes, setFlagNotes] = useState("");
+  const [flagReason, setFlagReason] = useState<FlagReason>(savedFeedback?.flag_reason ?? null);
+  const [flagNotes, setFlagNotes] = useState(savedFeedback?.flag_notes ?? "");
   const [submitting, setSubmitting] = useState(false);
-  const [flagSubmitted, setFlagSubmitted] = useState(false);
+  const [flagSubmitted, setFlagSubmitted] = useState(savedFeedback?.flag_reason != null);
   const [toastType, setToastType] = useState<ToastType>(null);
 
   useEffect(() => {

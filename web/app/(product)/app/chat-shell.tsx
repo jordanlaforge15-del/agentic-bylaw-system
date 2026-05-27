@@ -20,6 +20,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AppHeader } from "@/components/product/app-header";
 import { Sidebar } from "@/components/product/sidebar";
 import { ChatThread } from "@/components/product/chat-thread";
+import type { SavedFeedback } from "@/components/product/message-feedback";
 import { Composer } from "@/components/product/composer";
 import { CaseHeaderStrip } from "@/components/product/case-header-strip";
 import { CaseUpgradePrompt } from "@/components/product/case-upgrade-prompt";
@@ -97,6 +98,7 @@ function ProductAppPageInner() {
   // session's spatial-join tool results; null when the conversation
   // has no address-bearing question yet.
   const [parcel, setParcel] = useState<ParcelContext | null>(null);
+  const [feedbackMap, setFeedbackMap] = useState<Record<number, SavedFeedback>>({});
   const abortRef = useRef<AbortController | null>(null);
   // Mobile/tablet overlay state. Both default closed; opening one
   // doesn't close the other (parcel sheet on mobile sits above the
@@ -283,10 +285,13 @@ function ProductAppPageInner() {
       return;
     }
     try {
-      const res = await fetch(
-        `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
-        { cache: "no-store" },
-      );
+      const [res, fbMap] = await Promise.all([
+        fetch(
+          `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
+          { cache: "no-store" },
+        ),
+        fetchFeedback(sessionId),
+      ]);
       if (sessionIdRef.current !== sessionId) return; // user moved on
       if (!res.ok) {
         // Surface non-2xx so the parcel pane being stale is *visible*.
@@ -318,6 +323,7 @@ function ProductAppPageInner() {
       const enriched = attachDbIds(data.messages, data.message_db_ids);
       setParcel(extractParcelContext(enriched));
       setMessages(translateHistory(enriched));
+      setFeedbackMap(fbMap);
       // Keep the case-billing context aligned with the authoritative
       // server state — covers the case where the resume fallback
       // attached a case mid-turn that the SSE stream didn't surface.
@@ -565,10 +571,13 @@ function ProductAppPageInner() {
     setError(null);
     setThinking(false);
     try {
-      const res = await fetch(
-        `/api/chat/sessions/${encodeURIComponent(id)}`,
-        { cache: "no-store" },
-      );
+      const [res, fbMap] = await Promise.all([
+        fetch(
+          `/api/chat/sessions/${encodeURIComponent(id)}`,
+          { cache: "no-store" },
+        ),
+        fetchFeedback(id),
+      ]);
       if (!res.ok) {
         setError(`Couldn't load that reading (HTTP ${res.status}).`);
         return;
@@ -582,6 +591,7 @@ function ProductAppPageInner() {
       };
       const enriched = attachDbIds(data.messages, data.message_db_ids);
       setMessages(translateHistory(enriched));
+      setFeedbackMap(fbMap);
       setSessionId(id);
       setCaseIdBoth(
         typeof data.case_id === "number" ? data.case_id : null,
@@ -661,6 +671,7 @@ function ProductAppPageInner() {
             thinkLabel={thinkLabel}
             error={error}
             sessionId={activeSessionId}
+            feedbackMap={feedbackMap}
           />
           {(caseTier || caseId !== null) && (
             <CaseHeaderStrip
@@ -805,6 +816,37 @@ function ProductAppPageInner() {
       )}
     </div>
   );
+}
+
+async function fetchFeedback(
+  sessionId: string,
+): Promise<Record<number, SavedFeedback>> {
+  try {
+    const res = await fetch(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/feedback`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) return {};
+    const data = (await res.json()) as {
+      feedback: Array<{
+        message_id: number;
+        rating: string | null;
+        flag_reason: string | null;
+        flag_notes: string | null;
+      }>;
+    };
+    const map: Record<number, SavedFeedback> = {};
+    for (const item of data.feedback) {
+      map[item.message_id] = {
+        rating: (item.rating as SavedFeedback["rating"]) ?? null,
+        flag_reason: (item.flag_reason as SavedFeedback["flag_reason"]) ?? null,
+        flag_notes: item.flag_notes,
+      };
+    }
+    return map;
+  } catch {
+    return {};
+  }
 }
 
 function appendAgentDelta(

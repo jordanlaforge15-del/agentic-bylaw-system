@@ -15,7 +15,7 @@ import type {
   SystemMessage,
   UserMessage,
 } from "@/lib/mock";
-import { MessageFeedback } from "@/components/product/message-feedback";
+import { MessageFeedback, type SavedFeedback } from "@/components/product/message-feedback";
 import { cn } from "@/lib/cn";
 
 type Props = {
@@ -24,6 +24,7 @@ type Props = {
   thinkLabel: string;
   error?: string | null;
   sessionId?: string | null;
+  feedbackMap?: Record<number, SavedFeedback>;
 };
 
 export function ChatThread({
@@ -32,6 +33,7 @@ export function ChatThread({
   thinkLabel,
   error,
   sessionId,
+  feedbackMap,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const totalBodyLen = messages.reduce(
@@ -51,7 +53,7 @@ export function ChatThread({
       {messages.map((m, i) => {
         if (m.kind === "system") return <SystemMsg key={i} msg={m} />;
         if (m.kind === "user") return <UserMsg key={i} msg={m} />;
-        return <AgentMsg key={i} msg={m} idx={i} sessionId={sessionId} />;
+        return <AgentMsg key={i} msg={m} idx={i} sessionId={sessionId} feedbackMap={feedbackMap} />;
       })}
       {thinking && <ThinkingMsg label={thinkLabel} />}
       {error && <ErrorMsg body={error} />}
@@ -99,7 +101,7 @@ function UserMsg({ msg }: { msg: UserMessage }) {
   );
 }
 
-function AgentMsg({ msg, idx, sessionId }: { msg: AgentMessage; idx: number; sessionId?: string | null }) {
+function AgentMsg({ msg, idx, sessionId, feedbackMap }: { msg: AgentMessage; idx: number; sessionId?: string | null; feedbackMap?: Record<number, SavedFeedback> }) {
   const [open, setOpen] = useState(idx === 0);
   return (
     <div className="flex flex-col gap-3 mb-1">
@@ -207,6 +209,7 @@ function AgentMsg({ msg, idx, sessionId }: { msg: AgentMessage; idx: number; ses
           <MessageFeedback
             sessionId={sessionId}
             messageId={msg.messageDbId}
+            savedFeedback={feedbackMap?.[msg.messageDbId]}
           />
         )}
       </div>
