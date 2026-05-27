@@ -1,0 +1,64 @@
+name: "OpenZoning"
+slug: "openzoning"
+url: "https://openzoning.com"
+category: "adjacent"
+status: "active"
+discovered: "2026-05-27"
+last_analyzed: "2026-05-27"
+
+description: "Open data initiative converting zoning codes into machine-readable formats, providing free zoning data APIs for US jurisdictions."
+
+product:
+  type: "open-source"
+  target_market:
+    - "developers"
+    - "planners"
+    - "municipalities"
+  geography:
+    - "United States"
+  jurisdictions:
+    - "Various US municipalities"
+  pricing_model: "freemium"
+  pricing_range: "Free tier with paid API access"
+  key_features:
+    - "Machine-readable zoning data"
+    - "Open data APIs"
+    - "Standardized zoning schema"
+    - "Community-contributed jurisdiction data"
+
+positioning:
+  tagline: "Open zoning data for everyone"
+  differentiators:
+    - "Open-source and community-driven"
+    - "Standardized data schema across jurisdictions"
+    - "Free access tier"
+    - "Developer-friendly API"
+  weaknesses:
+    - "US-only"
+    - "Data quality varies by community contribution"
+    - "No interpretive layer (raw data, not analysis)"
+    - "No conversational interface"
+    - "Limited to what volunteers have digitized"
+
+funding:
+  stage: "unknown"
+  total_raised: "unknown"
+  last_round_date: null
+  notable_investors: []
+
+signals:
+  - date: "2026-05-27"
+    type: "product-launch"
+    summary: "Initial competitor profile created during ABS competitive monitoring setup"
+    source_url: "https://openzoning.com"
+
+threat_assessment:
+  level: "low"
+  rationale: "Open data approach complements rather than competes with ABS's interpretive layer. Could become a data source for us if they expand to Canadian jurisdictions. Threat is if they add an AI interpretation layer on top."
+  overlap_areas:
+    - "Zoning data digitization"
+    - "Developer tooling"
+  watch_triggers:
+    - "Canadian jurisdiction coverage"
+    - "AI-powered interpretation feature"
+    - "Major institutional backing or funding"

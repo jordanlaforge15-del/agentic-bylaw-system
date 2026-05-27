@@ -1,0 +1,86 @@
+# Competitive Intelligence Configuration
+# =======================================
+# Defines our product positioning and the analysis framework used by
+# the competitive-monitor skill to evaluate competitors.
+
+product:
+  name: "ABS (Agentic Bylaw System)"
+  tagline: "An expert planner, in your workflow."
+  stage: "private-beta"
+  geography: ["Halifax Regional Municipality"]
+  target_expansion: ["Nova Scotia", "Atlantic Canada", "Canada"]
+  target_customers:
+    - "Real estate developers"
+    - "Architects and urban planners"
+    - "Property owners"
+    - "Legal professionals (land use)"
+    - "Municipal planning staff"
+  core_capabilities:
+    - name: "Sourced bylaw interpretation"
+      description: "Every assertion carries a citation to the exact bylaw paragraph"
+    - name: "Parcel-specific analysis"
+      description: "Answers applied to a specific parcel, not generic zone lookups"
+    - name: "Conversational interface"
+      description: "Ask in plain English, get a structured sourced answer"
+    - name: "Automated bylaw ingestion"
+      description: "Multi-layer pipeline: PDF parsing, hierarchy reconstruction, semantic indexing"
+    - name: "Claim verification"
+      description: "Atomic claims with confidence scores and source fragment links"
+  differentiators:
+    - "Deep single-bylaw coverage over broad shallow coverage"
+    - "Citation-backed answers with refuse-before-guess policy"
+    - "Agentic ingestion pipeline that handles consolidated bylaws end-to-end"
+    - "Retrieval-first architecture: claims generated at query time, not pre-extracted"
+  known_gaps:
+    - "Single municipality (HRM) during beta"
+    - "No permit application integration yet"
+    - "No GIS/map visualization layer"
+
+analysis:
+  dimensions:
+    - name: "product_capability"
+      weight: 0.25
+      description: "Depth and accuracy of bylaw/zoning analysis features"
+    - name: "geographic_coverage"
+      weight: 0.20
+      description: "Number and breadth of jurisdictions covered"
+    - name: "technology_moat"
+      weight: 0.20
+      description: "Technical barriers to replication (data pipeline, AI, integrations)"
+    - name: "market_position"
+      weight: 0.15
+      description: "Brand recognition, customer base, partnerships"
+    - name: "business_model"
+      weight: 0.10
+      description: "Revenue model sustainability and scalability"
+    - name: "team_and_funding"
+      weight: 0.10
+      description: "Team strength, funding runway, hiring velocity"
+
+  threat_levels:
+    high: "Direct competitor with overlapping geography or strong expansion trajectory toward our market"
+    medium: "Adjacent product that could pivot into our space, or direct competitor in a non-overlapping geography"
+    low: "Tangentially related product unlikely to compete directly in the near term"
+
+  signal_types:
+    - "product-launch"
+    - "feature-update"
+    - "funding"
+    - "partnership"
+    - "hiring"
+    - "press"
+    - "pricing-change"
+    - "geographic-expansion"
+    - "acquisition"
+    - "regulatory"
+
+report:
+  output_dir: "competitive-intel/reports"
+  format: "markdown"
+  sections:
+    - "executive_summary"
+    - "market_landscape"
+    - "competitor_profiles"
+    - "threat_matrix"
+    - "signal_timeline"
+    - "strategic_recommendations"

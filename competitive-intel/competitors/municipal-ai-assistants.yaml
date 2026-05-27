@@ -1,0 +1,62 @@
+name: "Municipal AI Assistants (Category)"
+slug: "municipal-ai-assistants"
+url: "https://example.com"
+category: "emerging"
+status: "active"
+discovered: "2026-05-27"
+last_analyzed: "2026-05-27"
+
+description: "Emerging category of municipal chatbots and AI assistants deployed by cities to help citizens navigate bylaws and permits. Not a single company but a pattern to monitor."
+
+product:
+  type: "saas"
+  target_market:
+    - "municipalities"
+    - "citizens"
+  geography:
+    - "North America"
+    - "Global"
+  jurisdictions: []
+  pricing_model: "enterprise"
+  pricing_range: "Municipal procurement contracts"
+  key_features:
+    - "General-purpose municipal Q&A chatbots"
+    - "Permit application guidance"
+    - "FAQ and knowledge base search"
+    - "Multi-department coverage (not zoning-specific)"
+
+positioning:
+  tagline: "Various — municipality-branded AI assistants"
+  differentiators:
+    - "Official municipal endorsement and integration"
+    - "Broad scope beyond just zoning"
+    - "Citizen trust through government branding"
+  weaknesses:
+    - "Typically shallow on any single domain"
+    - "No parcel-specific analysis"
+    - "Generic RAG over PDFs without legal structure understanding"
+    - "Slow municipal procurement cycles"
+    - "May not cite specific bylaw sections"
+
+funding:
+  stage: "unknown"
+  total_raised: "unknown"
+  last_round_date: null
+  notable_investors: []
+
+signals:
+  - date: "2026-05-27"
+    type: "product-launch"
+    summary: "Category tracking entry — monitor for specific entrants that offer zoning-depth analysis"
+    source_url: ""
+
+threat_assessment:
+  level: "low"
+  rationale: "Generic municipal chatbots lack the zoning depth and citation rigor that ABS provides. However, if a municipality deploys an official AI tool, it could reduce demand for third-party solutions like ABS. Monitor for any HRM-specific deployment."
+  overlap_areas:
+    - "Bylaw Q&A"
+    - "Citizen-facing municipal information"
+  watch_triggers:
+    - "HRM or Nova Scotia government deploying an official bylaw AI tool"
+    - "A specific vendor gaining traction in Canadian municipal procurement"
+    - "Partnership between a major AI company and Canadian municipalities"
