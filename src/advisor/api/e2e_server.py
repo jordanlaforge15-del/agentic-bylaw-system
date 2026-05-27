@@ -203,6 +203,17 @@ class _EvaluateBylawsBody(BaseModel):
     persist_decision: bool = False
 
 
+# ABS-163: test-only table-search endpoint. Verifies that SourceTable rows
+# with proper captions are found by the retrieval layer's
+# _structured_permission_table_candidates() path. The Playwright spec seeds
+# tables via seed_e2e_permission_tables.py, then hits this endpoint to
+# confirm the query finds them by caption pattern.
+class _SearchTablesBody(BaseModel):
+    bylaw_name: str = Field(min_length=1, max_length=256)
+    use_name: str = Field(min_length=1, max_length=256)
+    zone: str | None = None
+
+
 # ABS-75: test-only Discovery Agent endpoint. Exercises the classifier →
 # parent-resolution → SourceDocument assembly path through the real FastAPI
 # stack. The crawler half (HTTP fetch + link extraction) is unit-tested in
@@ -414,6 +425,53 @@ def _mount_test_router(app: FastAPI) -> None:
             )
             response = evaluator.evaluate(request)
             return response.to_json()
+
+    @app.post("/v1/_test/search-tables")
+    async def search_tables(body: _SearchTablesBody) -> dict[str, object]:
+        """Search for permission-table cells matching a use name.
+
+        Returns the table captions and matching cell texts found by the
+        retrieval layer's ``_structured_permission_table_candidates()``.
+        """
+        from sqlalchemy import select as sa_select
+
+        from layer1.db.base import SourceTable, SourceTableCell
+        from layer2.retrieval.api import _structured_permission_table_candidates
+
+        with session_scope() as db:
+            doc = db.execute(
+                sa_select(Document).where(Document.bylaw_name == body.bylaw_name)
+            ).scalars().first()
+            if doc is None:
+                raise HTTPException(status_code=404, detail=f"No document named '{body.bylaw_name}'")
+
+            candidates = _structured_permission_table_candidates(
+                db,
+                document_id=doc.id,
+                use_name=body.use_name,
+                zone=body.zone,
+            )
+
+            tables = (
+                db.execute(
+                    sa_select(SourceTable)
+                    .where(SourceTable.document_id == doc.id)
+                    .where(SourceTable.caption.ilike("Table 1%Permitted uses by zone%"))
+                )
+                .scalars()
+                .all()
+            )
+
+            return {
+                "document_id": doc.id,
+                "table_count": len(tables),
+                "table_captions": [t.caption for t in tables],
+                "candidate_count": len(candidates),
+                "candidates": [
+                    {"text": c.text, "score": c.base_score, "citation_label": c.citation_label}
+                    for c in candidates
+                ],
+            }
 
     @app.post("/v1/_test/manifest-ingest")
     async def manifest_ingest(body: _ManifestIngestBody) -> dict[str, object]:

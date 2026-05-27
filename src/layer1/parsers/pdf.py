@@ -100,6 +100,7 @@ class DoclingParser(ParserAdapter):
                     pipeline_options=PdfPipelineOptions(
                         do_ocr=ocr,
                         ocr_options=OcrAutoOptions(),
+                        do_table_structure=profile.use_docling_table_structure,
                     )
                 )
             }
@@ -141,6 +142,9 @@ class DoclingParser(ParserAdapter):
             for _, _, _, item, level, bbox, raw_text in sorted(page_candidates, key=lambda entry: (entry[0], entry[1], entry[2])):
                 if isinstance(item, TableItem):
                     table_text = _docling_table_text(item)
+                    caption = _docling_caption_text(item, document)
+                    if not caption and blocks:
+                        caption = _caption_from_preceding_block(blocks[-1])
                     table_block_index = len(blocks)
                     blocks.append(
                         PageBlockData(
@@ -167,6 +171,7 @@ class DoclingParser(ParserAdapter):
                             page_height=page_height,
                             coord_origin_cls=CoordOrigin,
                             source_block_index=table_block_index,
+                            caption=caption,
                         )
                     )
                     continue
@@ -290,6 +295,16 @@ def _extract_docling_tables(path: Path, *, ocr: bool) -> list[TableData]:
                 )
             )
     return tables
+
+
+_TABLE_CAPTION_RE = re.compile(r"^Table\s+\d+[A-Z]?\s*:", re.IGNORECASE)
+
+
+def _caption_from_preceding_block(block: PageBlockData) -> str | None:
+    text = block.normalized_text or block.raw_text
+    if text and _TABLE_CAPTION_RE.match(text):
+        return normalize_text(text)
+    return None
 
 
 def _docling_caption_text(table, document) -> str | None:
@@ -486,7 +501,7 @@ def _docling_table_text(item) -> str:
     return "\n".join(row for row in rendered_rows if row.strip())
 
 
-def _docling_table_data(item, *, page_number: int, page_height: float, coord_origin_cls, source_block_index: int) -> TableData:
+def _docling_table_data(item, *, page_number: int, page_height: float, coord_origin_cls, source_block_index: int, caption: str | None = None) -> TableData:
     cells: list[TableCellData] = []
     for cell in item.data.table_cells:
         bbox = None
@@ -521,6 +536,7 @@ def _docling_table_data(item, *, page_number: int, page_height: float, coord_ori
             )
         )
     return TableData(
+        caption=caption,
         page_start=page_number,
         page_end=page_number,
         parse_status=ParseStatus.PARSED,
