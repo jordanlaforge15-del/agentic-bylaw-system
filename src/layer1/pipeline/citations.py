@@ -11,7 +11,7 @@ PART_RE = re.compile(r"^\s*part\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNOREC
 SCHEDULE_RE = re.compile(r"^\s*schedule\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 APPENDIX_RE = re.compile(r"^\s*appendix\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 COMPOUND_SECTION_RE = re.compile(
-    r"^\s*((?:\d+[A-Z]*)(?:\([0-9A-Za-z]+\))*[A-Z]?)(?=\s|$)\s*(.*)$"
+    r"^\s*((?:\d+[A-Z]*)+(?:\s?\([0-9A-Za-z]+\))*[A-Z]?)(?=\s|$)\s*(.*)$"
 )
 SPLIT_COMPOUND_SECTION_RE = re.compile(r"^\s*(\d+)\s+([A-Z]{1,3})\b\s+(.*)$")
 NUMERIC_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,5})\b(?:[.)])?\s*(.*)$")
@@ -67,7 +67,7 @@ def parse_citation_label(text: str, profile: ParsingProfile | None = None) -> Ci
                     return parsed
         compound = COMPOUND_SECTION_RE.match(stripped)
         if compound:
-            label = compound.group(1)
+            label = re.sub(r"\s+", "", compound.group(1))
             title = compound.group(2).strip()
             parsed = _parse_compound_section_label(label, title)
             if parsed:

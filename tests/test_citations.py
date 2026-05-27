@@ -65,3 +65,37 @@ def test_address_heading_is_not_parsed_as_numeric_section():
 def test_measurement_value_is_not_a_citation_label():
     assert parse_citation_label("16M TEMPORARY CONSTRUCTION USES PERMITTED") is not None
     assert parse_citation_label("40 ANGLE") is not None
+
+
+def test_subsection_label_with_caps_suffix_no_space():
+    # ABS-116: 62EE(1) without space — must produce distinct subsection label
+    match = parse_citation_label("62EE(1) No structures shall be permitted")
+    assert match is not None
+    assert match.label == "62EE(1)"
+    assert match.fragment_type == FragmentType.SUBSECTION
+
+
+def test_subsection_label_with_caps_suffix_spaced():
+    # ABS-116: PDF sometimes emits a space between the base section and the
+    # parenthetical subsection number; the label must still round-trip as 62EE(1).
+    match = parse_citation_label("62EE (1) No structures shall be permitted")
+    assert match is not None
+    assert match.label == "62EE(1)"
+    assert match.fragment_type == FragmentType.SUBSECTION
+
+
+def test_subsection_label_digit_letter_digit_base():
+    # ABS-116: base label with pattern digit+letter+digit (e.g. 34B22) must be
+    # captured as a single token rather than stopping at the first letter run.
+    match = parse_citation_label("34B22(2)(a) Some provision")
+    assert match is not None
+    assert match.label == "34B22(2)(a)"
+    assert match.fragment_type == FragmentType.CLAUSE
+
+
+def test_subsection_label_simple_numeric_paren():
+    # Regression: 5(1)(a) must continue to work correctly.
+    match = parse_citation_label("5(1)(a) Permitted uses")
+    assert match is not None
+    assert match.label == "5(1)(a)"
+    assert match.fragment_type == FragmentType.CLAUSE
