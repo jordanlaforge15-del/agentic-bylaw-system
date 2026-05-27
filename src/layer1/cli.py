@@ -280,7 +280,7 @@ def audit_pages(
     sample: int = typer.Option(5, "--sample", min=1, help="Number of high-risk pages to audit"),
     pages: str | None = typer.Option(None, "--pages", help="Comma-separated pages and/or inclusive ranges, e.g. 5,12,26 or 10-25,30-35"),
     llm: bool = typer.Option(False, "--llm", help="Run structured LLM review on each selected page"),
-    model: str | None = typer.Option(None, "--model", help="LLM model override for --llm mode"),
+    model: str | None = typer.Option(None, "--model", help="(advisory; Claude Code routes the actual model internally)"),
     out: Path | None = typer.Option(None, "--out", help="Write JSON audit report to a file"),
     db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
 ) -> None:
@@ -302,7 +302,7 @@ def audit_page(
     document_id: int,
     page: int = typer.Argument(..., min=1),
     llm: bool = typer.Option(False, "--llm", help="Run structured LLM review for the page"),
-    model: str | None = typer.Option(None, "--model", help="LLM model override for --llm mode"),
+    model: str | None = typer.Option(None, "--model", help="(advisory; Claude Code routes the actual model internally)"),
     out: Path | None = typer.Option(None, "--out", help="Write JSON audit report to a file"),
     db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
 ) -> None:

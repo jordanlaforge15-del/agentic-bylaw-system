@@ -58,7 +58,7 @@ layer1 validate 1
 layer1 show-summary 1
 layer1 export-json 1 --out examples/synthetic_bylaw_export.json
 layer1 audit-pages 1 --sample 5
-layer1 audit-page 1 26 --llm --model gpt-5.4-mini
+layer1 audit-page 1 26 --llm
 ```
 
 Every command accepts `--db-url`. For quick local tests, SQLite also works:
