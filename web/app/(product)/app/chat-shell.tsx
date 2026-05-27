@@ -136,6 +136,10 @@ function ProductAppPageInner() {
   };
   const [caseNumber, setCaseNumber] = useState<number | null>(caseNumberFromUrl);
   const [caseTier, setCaseTier] = useState<string | null>(null);
+  const [caseAnchor, setCaseAnchor] = useState<{
+    kind: string;
+    label: string;
+  } | null>(null);
   const [upgradeOffer, setUpgradeOffer] = useState<{
     case_id: number;
     current_tier: string;
@@ -161,6 +165,37 @@ function ProductAppPageInner() {
       setSessionId(null);
     }
   }, [caseIdFromUrl, caseNumberFromUrl]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch the case anchor (kind + label) whenever caseId changes so
+  // the parcel pane can show the address even before a spatial lookup.
+  useEffect(() => {
+    if (!caseId) {
+      setCaseAnchor(null);
+      return;
+    }
+    void (async () => {
+      try {
+        const res = await fetch("/api/cases", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          cases: Array<{
+            id: number;
+            anchor_kind: string;
+            anchor_label: string;
+          }>;
+        };
+        const matched = data.cases.find((c) => c.id === caseId);
+        if (matched) {
+          setCaseAnchor({
+            kind: matched.anchor_kind,
+            label: matched.anchor_label,
+          });
+        }
+      } catch {
+        // Non-critical — parcel pane falls back to generic empty state.
+      }
+    })();
+  }, [caseId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // On direct URL load (reload, share link, browser back/forward) with
   // a ?case_id=N param but no ?first_message=, restore the most recent
@@ -685,7 +720,13 @@ function ProductAppPageInner() {
         {/* Desktop parcel pane (lg+ only). Below lg the pane shows
          * inside Sheet (mobile) or as a side overlay (tablet). */}
         <div className="hidden lg:contents">
-          <ParcelPane parcel={parcel} sessionId={activeSessionId} caseId={caseId} />
+          <ParcelPane
+            parcel={parcel}
+            sessionId={activeSessionId}
+            caseId={caseId}
+            anchorLabel={caseAnchor?.label}
+            anchorKind={caseAnchor?.kind}
+          />
         </div>
 
         <ParcelFab
@@ -734,7 +775,14 @@ function ProductAppPageInner() {
           maxHeightPct={80}
           ariaLabel="Parcel details"
         >
-          <ParcelPane parcel={parcel} sessionId={activeSessionId} caseId={caseId} inSheet />
+          <ParcelPane
+            parcel={parcel}
+            sessionId={activeSessionId}
+            caseId={caseId}
+            anchorLabel={caseAnchor?.label}
+            anchorKind={caseAnchor?.kind}
+            inSheet
+          />
         </Sheet>
       )}
       {isTablet && (
@@ -745,7 +793,14 @@ function ProductAppPageInner() {
           width={320}
           ariaLabel="Parcel details"
         >
-          <ParcelPane parcel={parcel} sessionId={activeSessionId} caseId={caseId} inSheet />
+          <ParcelPane
+            parcel={parcel}
+            sessionId={activeSessionId}
+            caseId={caseId}
+            anchorLabel={caseAnchor?.label}
+            anchorKind={caseAnchor?.kind}
+            inSheet
+          />
         </Drawer>
       )}
     </div>

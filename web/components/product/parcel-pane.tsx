@@ -23,12 +23,17 @@ type Props = {
   parcel: ParcelContext | null;
   sessionId?: string | null;
   caseId?: number | null;
+  // When the case has an address anchor but no spatial lookup has run
+  // yet, show the anchor address in the empty state instead of the
+  // generic "No parcel yet" copy.
+  anchorLabel?: string | null;
+  anchorKind?: string | null;
   // When `true`, the pane drops its fixed width and left border — the
   // parent (Sheet on mobile, side overlay on tablet) supplies them.
   inSheet?: boolean;
 };
 
-export function ParcelPane({ parcel, sessionId, caseId, inSheet }: Props) {
+export function ParcelPane({ parcel, sessionId, caseId, anchorLabel, anchorKind, inSheet }: Props) {
   const [shareOpen, setShareOpen] = useState(false);
   const [activeCitation, setActiveCitation] = useState<{ citation: string; title: string } | null>(null);
 
@@ -59,7 +64,7 @@ export function ParcelPane({ parcel, sessionId, caseId, inSheet }: Props) {
       {parcel ? (
         <ParcelDetails parcel={parcel} onCitationClick={setActiveCitation} />
       ) : (
-        <EmptyParcel />
+        <EmptyParcel anchorLabel={anchorLabel} anchorKind={anchorKind} />
       )}
 
       <div className="mt-auto border-t border-hair px-5 py-3.5 flex flex-col gap-2">
@@ -232,7 +237,36 @@ function ShareModal({ caseId, onClose }: ShareModalProps) {
 
 // ── Parcel detail ────────────────────────────────────────────────────────────
 
-function EmptyParcel() {
+function EmptyParcel({
+  anchorLabel,
+  anchorKind,
+}: {
+  anchorLabel?: string | null;
+  anchorKind?: string | null;
+}) {
+  const hasAddressAnchor = anchorKind === "address" && anchorLabel;
+
+  if (hasAddressAnchor) {
+    return (
+      <div className="px-5 py-[18px] flex flex-col gap-1.5">
+        <div
+          className="font-sans font-bold leading-[1.15]"
+          style={{ fontSize: 22, letterSpacing: "-0.025em" }}
+          data-testid="parcel-anchor-address"
+        >
+          {anchorLabel}
+        </div>
+        <div className="text-[12.5px] text-text-muted">
+          Halifax Regional Municipality
+        </div>
+        <p className="text-[12.5px] text-text-muted leading-[1.55] m-0 mt-2">
+          Geocoding pending — ask a bylaw question about this address and
+          the spatial-join attributes will appear here.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="px-5 py-7 flex flex-col gap-3">
       <div
