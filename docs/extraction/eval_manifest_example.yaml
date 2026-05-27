@@ -1,0 +1,26 @@
+# Example manifest for pdf_extraction_eval.py (ABS-58).
+#
+# Usage:
+#   python scripts/pdf_extraction_eval.py --manifest docs/extraction/eval_manifest_example.yaml
+#
+# Populate ifc_path and pdf_path with real Phase-2 pilot data paths.
+# Paths are resolved relative to the repository root.
+
+projects:
+  - id: "pilot-project-1"
+    display_name: "Pilot Project 1 — Residential"
+    ifc_path: "data/pilot/project1/model.ifc"
+    pdf_path: "data/pilot/project1/drawings.pdf"
+    complexity: "medium"
+
+  - id: "pilot-project-2"
+    display_name: "Pilot Project 2 — Mixed Use"
+    ifc_path: "data/pilot/project2/model.ifc"
+    pdf_path: "data/pilot/project2/drawings.pdf"
+    complexity: "high"
+
+  - id: "pilot-project-3"
+    display_name: "Pilot Project 3 — Commercial"
+    ifc_path: "data/pilot/project3/model.ifc"
+    pdf_path: "data/pilot/project3/drawings.pdf"
+    complexity: "low"
