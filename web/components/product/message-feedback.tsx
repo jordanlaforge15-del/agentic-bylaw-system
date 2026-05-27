@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 
 type Rating = "up" | "down" | null;
 type FlagReason = "bad_citation" | "wrong_zone" | "hallucination" | "other" | null;
+type ToastType = "thumbs" | "flag" | null;
 
 type Props = {
   sessionId: string;
@@ -25,12 +26,20 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
   const [flagNotes, setFlagNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [flagSubmitted, setFlagSubmitted] = useState(false);
+  const [toastType, setToastType] = useState<ToastType>(null);
+
+  useEffect(() => {
+    if (!toastType) return;
+    const timer = setTimeout(() => setToastType(null), 2500);
+    return () => clearTimeout(timer);
+  }, [toastType]);
 
   const submitFeedback = useCallback(
     async (payload: {
       rating?: Rating;
       flag_reason?: FlagReason;
       flag_notes?: string;
+      toastType?: ToastType;
     }) => {
       setSubmitting(true);
       try {
@@ -46,6 +55,9 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
             }),
           },
         );
+        if (payload.toastType) {
+          setToastType(payload.toastType);
+        }
       } catch {
         // Silently degrade — feedback is non-critical.
       } finally {
@@ -58,7 +70,7 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
   const handleThumb = (value: Rating) => {
     const next = rating === value ? null : value;
     setRating(next);
-    void submitFeedback({ rating: next });
+    void submitFeedback({ rating: next, toastType: "thumbs" });
   };
 
   const handleFlagSubmit = () => {
@@ -68,12 +80,21 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
     void submitFeedback({
       flag_reason: flagReason,
       flag_notes: flagNotes || undefined,
+      toastType: "flag",
     });
   };
 
   return (
     <div className="flex flex-col gap-2" data-testid="message-feedback">
       <div className="flex items-center gap-1.5">
+        {toastType === "thumbs" && (
+          <div
+            data-testid="feedback-toast-thumbs"
+            className="text-[11px] font-mono text-text-muted ml-auto"
+          >
+            Thanks — feedback recorded.
+          </div>
+        )}
         <button
           type="button"
           data-testid="feedback-thumbs-up"
@@ -176,22 +197,32 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
           />
 
           <div className="flex gap-2">
-            <button
-              type="button"
-              data-testid="flag-submit"
-              disabled={!flagReason || submitting}
-              onClick={handleFlagSubmit}
-              className={cn(
-                "font-mono uppercase text-[10.5px] px-3 py-1.5 border cursor-pointer",
-                "transition-colors duration-100",
-                flagReason
-                  ? "border-accent text-accent-ink hover:bg-accent/10"
-                  : "border-hair text-text-muted cursor-not-allowed",
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="flag-submit"
+                disabled={!flagReason || submitting}
+                onClick={handleFlagSubmit}
+                className={cn(
+                  "font-mono uppercase text-[10.5px] px-3 py-1.5 border cursor-pointer",
+                  "transition-colors duration-100",
+                  flagReason
+                    ? "border-accent text-accent-ink hover:bg-accent/10"
+                    : "border-hair text-text-muted cursor-not-allowed",
+                )}
+                style={{ letterSpacing: "0.06em" }}
+              >
+                Submit
+              </button>
+              {flagSubmitted && (
+                <span
+                  data-testid="flag-saved-indicator"
+                  className="text-[10.5px] font-mono text-text-muted"
+                >
+                  Saved.
+                </span>
               )}
-              style={{ letterSpacing: "0.06em" }}
-            >
-              Submit
-            </button>
+            </div>
             <button
               type="button"
               data-testid="flag-cancel"
@@ -202,6 +233,15 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
               Cancel
             </button>
           </div>
+        </div>
+      )}
+
+      {toastType === "flag" && (
+        <div
+          data-testid="feedback-toast-flag"
+          className="text-[11px] font-mono text-text-muted"
+        >
+          Thanks — feedback recorded.
         </div>
       )}
     </div>

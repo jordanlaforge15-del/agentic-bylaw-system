@@ -158,3 +158,85 @@ test("feedback: cancel closes flag panel without submitting", async ({
   await page.getByTestId("flag-cancel").click();
   await expect(page.getByTestId("flag-panel")).not.toBeVisible();
 });
+
+test("feedback: thumbs shows toast and auto-dismisses", async ({ page }) => {
+  const { caseId } = await openCaseViaApi();
+  await page.goto(`/app?case_id=${caseId}`);
+
+  const textarea = page.getByPlaceholder(/Ask about this parcel/);
+  const sendBtn = page.getByRole("button", { name: /^Send/ });
+  const thread = page.getByTestId("chat-thread");
+
+  await textarea.fill("What is the setback distance?");
+  await sendBtn.click();
+  await expect(thread).toContainText(/Based on the bylaw evidence/i, {
+    timeout: 15_000,
+  });
+
+  const feedbackContainer = page.getByTestId("message-feedback").first();
+  await expect(feedbackContainer).toBeVisible({ timeout: 10_000 });
+
+  const thumbsUp = page.getByTestId("feedback-thumbs-up").first();
+  await thumbsUp.click();
+
+  // Toast should appear
+  await expect(page.getByTestId("feedback-toast-thumbs").first()).toBeVisible();
+  await expect(page.getByTestId("feedback-toast-thumbs").first()).toContainText(
+    "Thanks — feedback recorded."
+  );
+
+  // Toast should auto-dismiss after ~2.5s
+  await expect(page.getByTestId("feedback-toast-thumbs").first()).not.toBeVisible({
+    timeout: 3000,
+  });
+});
+
+test("feedback: flag submission shows toast and shows 'Saved.' on reopen", async ({
+  page,
+}) => {
+  const { caseId } = await openCaseViaApi();
+  await page.goto(`/app?case_id=${caseId}`);
+
+  const textarea = page.getByPlaceholder(/Ask about this parcel/);
+  const sendBtn = page.getByRole("button", { name: /^Send/ });
+  const thread = page.getByTestId("chat-thread");
+
+  await textarea.fill("What are the height limits?");
+  await sendBtn.click();
+  await expect(thread).toContainText(/Based on the bylaw evidence/i, {
+    timeout: 15_000,
+  });
+
+  const feedbackContainer = page.getByTestId("message-feedback").first();
+  await expect(feedbackContainer).toBeVisible({ timeout: 10_000 });
+
+  // Open flag panel and submit
+  const flagBtn = page.getByTestId("feedback-flag-btn").first();
+  await flagBtn.click();
+  const flagPanel = page.getByTestId("flag-panel");
+  await expect(flagPanel).toBeVisible();
+
+  await page.getByTestId("flag-reason-hallucination").click();
+  const submitBtn = page.getByTestId("flag-submit");
+  await submitBtn.click();
+
+  // Toast should appear
+  await expect(page.getByTestId("feedback-toast-flag").first()).toBeVisible();
+  await expect(page.getByTestId("feedback-toast-flag").first()).toContainText(
+    "Thanks — feedback recorded."
+  );
+
+  // Toast should auto-dismiss
+  await expect(page.getByTestId("feedback-toast-flag").first()).not.toBeVisible({
+    timeout: 3000,
+  });
+
+  // Flag button should be highlighted (flagSubmitted state)
+  await expect(flagBtn).toHaveAttribute("aria-pressed", "false"); // Still false, but button is highlighted by flagSubmitted state
+
+  // Reopen flag panel and check for "Saved." indicator
+  await flagBtn.click();
+  await expect(page.getByTestId("flag-panel")).toBeVisible();
+  await expect(page.getByTestId("flag-saved-indicator")).toBeVisible();
+  await expect(page.getByTestId("flag-saved-indicator")).toContainText("Saved.");
+});
