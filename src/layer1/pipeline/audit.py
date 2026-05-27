@@ -229,11 +229,15 @@ def score_page_risk(
     if unusual_roots:
         score += len(unusual_roots) * 2
         reasons.append(f"{len(unusual_roots)} unusual root fragments")
+        root_details = "; ".join(
+            f"#{f.id} {f.fragment_type.value} path={f.citation_path!r} p{f.page_start}"
+            for f in unusual_roots
+        )
         checks.append(
             DeterministicPageCheck(
                 name="unusual_root_fragments",
                 severity="warning",
-                detail=f"Page contains {len(unusual_roots)} root fragments with low-level types.",
+                detail=f"Unusual root fragments: {root_details}",
             )
         )
 

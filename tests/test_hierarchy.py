@@ -565,3 +565,67 @@ def test_article_a_after_numeric_section_is_not_joined_into_suffix():
     )
     assert fragments[0].fragment_type == FragmentType.SECTION
     assert fragments[0].citation_label == "41"
+
+
+def test_compound_subsection_finds_parent_when_stack_is_cleared():
+    """When a compound subsection like 28AO(1) appears after its parent section
+    28AO has been popped from the stack (e.g. by a later section), the builder
+    should fall back to scanning existing fragments for the base section."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("28AO Residential Requirements", 0, BlockType.HEADING),
+            block("29 Commercial Requirements", 1, BlockType.HEADING),
+            block("28AO(1) Minimum front setback shall be 6 metres.", 2, BlockType.LIST_ITEM),
+        ]
+    )
+    assert fragments[0].citation_label == "28AO"
+    assert fragments[2].citation_label == "28AO(1)"
+    assert fragments[2].fragment_type == FragmentType.SUBSECTION
+    assert fragments[2].parent_index == 0
+    assert fragments[2].citation_path == "28AO > 28AO(1)"
+    assert fragments[2].parse_status == ParseStatus.PARSED
+
+
+def test_compound_subsection_numeric_base_finds_parent():
+    """Compound labels like 7(3) should find parent section 7 even when
+    another section has replaced it on the stack."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("7 General Requirements", 0, BlockType.HEADING),
+            block("8 Height Requirements", 1, BlockType.HEADING),
+            block("7(3) No building shall exceed the permitted height.", 2, BlockType.LIST_ITEM),
+        ]
+    )
+    assert fragments[0].citation_label == "7"
+    assert fragments[2].citation_label == "7(3)"
+    assert fragments[2].parent_index == 0
+    assert fragments[2].citation_path == "7 > 7(3)"
+
+
+def test_compound_subsection_under_parent_on_stack_still_works():
+    """When the parent IS on the stack, the normal path should work —
+    the fallback should not interfere."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("28AO Residential Requirements", 0, BlockType.HEADING),
+            block("28AO(1) Minimum front setback shall be 6 metres.", 1, BlockType.LIST_ITEM),
+            block("28AO(2) Minimum side setback shall be 3 metres.", 2, BlockType.LIST_ITEM),
+        ]
+    )
+    assert fragments[1].parent_index == 0
+    assert fragments[1].citation_path == "28AO > 28AO(1)"
+    assert fragments[2].parent_index == 0
+    assert fragments[2].citation_path == "28AO > 28AO(2)"
+
+
+def test_orphan_subsection_without_compound_label_stays_orphan():
+    """A parenthesized numeric subsection like (2) without a matching base
+    section in the fragments should remain an orphan — the fallback only
+    applies to compound labels."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("(2) If no setback is specified, the minimum setback is 1.5 metres.", 0, BlockType.LIST_ITEM),
+        ]
+    )
+    assert fragments[0].fragment_type == FragmentType.SUBSECTION
+    assert fragments[0].parent_index is None
