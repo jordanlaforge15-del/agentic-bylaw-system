@@ -32,11 +32,11 @@ const TIER_BUDGETS: Record<Tier, string> = {
   complex: "130k tokens · 35–50 retrieval rounds",
 };
 
-const ANCHOR_KIND_OPTIONS: AnchorKind[] = [
-  "address",
-  "project_ref",
-  "development_application",
-];
+// Only "address" is backed by a live data source in beta.
+// project_ref and development_application have no ingestion pipeline yet —
+// showing them causes users to create cases that immediately ask for an
+// address anyway (ABS-200).
+const ANCHOR_KIND_OPTIONS: AnchorKind[] = ["address"];
 
 const TIER_OPTIONS: Tier[] = ["quick", "standard", "complex"];
 
