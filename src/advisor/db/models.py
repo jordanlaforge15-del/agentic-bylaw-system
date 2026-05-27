@@ -153,6 +153,10 @@ class Case(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Per-user sequential label (1, 2, 3 …). Assigned within the same
+    # transaction as the case row, so it rolls back on failure — the
+    # user always sees contiguous "Case #N" regardless of gaps in ``id``.
+    user_case_number: Mapped[int] = mapped_column(Integer, nullable=False)
     user_id: Mapped[int] = mapped_column(
         ForeignKey("advisor_user.id", ondelete="CASCADE"),
         nullable=False,

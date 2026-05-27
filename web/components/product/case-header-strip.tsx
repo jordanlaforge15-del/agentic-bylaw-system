@@ -9,6 +9,7 @@
 
 type Props = {
   caseId: number | null;
+  caseNumber: number | null;
   tier: string | null;
   budgetWarning: {
     case_id: number;
@@ -25,7 +26,7 @@ const TIER_DISPLAY: Record<string, string> = {
 };
 
 
-export function CaseHeaderStrip({ caseId, tier, budgetWarning }: Props) {
+export function CaseHeaderStrip({ caseId, caseNumber, tier, budgetWarning }: Props) {
   if (caseId === null && !tier) return null;
   const showWarning =
     budgetWarning !== null &&
@@ -47,7 +48,7 @@ export function CaseHeaderStrip({ caseId, tier, budgetWarning }: Props) {
   return (
     <div className="border-t border-hair px-4 py-2 bg-surface-alt flex items-center gap-3 text-[12px]">
       <span className="font-mono uppercase text-text-muted text-[10.5px]">
-        Case #{caseId ?? "—"}
+        Case #{caseNumber ?? caseId ?? "—"}
       </span>
       {tier && (
         <span className="font-semibold capitalize">

@@ -122,12 +122,19 @@ function ProductAppPageInner() {
     const n = Number(raw);
     return Number.isInteger(n) && n > 0 ? n : null;
   }, [searchParams]);
+  const caseNumberFromUrl = useMemo(() => {
+    const raw = searchParams.get("case_number");
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }, [searchParams]);
   const [caseId, setCaseId] = useState<number | null>(caseIdFromUrl);
   const caseIdRef = useRef<number | null>(caseIdFromUrl);
   const setCaseIdBoth = (id: number | null) => {
     caseIdRef.current = id;
     setCaseId(id);
   };
+  const [caseNumber, setCaseNumber] = useState<number | null>(caseNumberFromUrl);
   const [caseTier, setCaseTier] = useState<string | null>(null);
   const [upgradeOffer, setUpgradeOffer] = useState<{
     case_id: number;
@@ -146,11 +153,14 @@ function ProductAppPageInner() {
   useEffect(() => {
     if (caseIdFromUrl !== null && caseIdFromUrl !== caseIdRef.current) {
       setCaseIdBoth(caseIdFromUrl);
+      // Use URL-supplied case_number if present; SSE event will update
+      // it on the first chat turn if not.
+      setCaseNumber(caseNumberFromUrl);
       // New case binding → discard prior session id; the next send()
       // will mint a new session under this case.
       setSessionId(null);
     }
-  }, [caseIdFromUrl]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [caseIdFromUrl, caseNumberFromUrl]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-send the first message that the case-open form passed via
   // ``?first_message=...``. Runs once: a ref guard handles React Strict
@@ -233,6 +243,7 @@ function ProductAppPageInner() {
         messages: BackendMessage[];
         message_db_ids?: number[];
         case_id?: number | null;
+        case_number?: number | null;
         tier?: string | null;
       };
       const enriched = attachDbIds(data.messages, data.message_db_ids);
@@ -243,6 +254,9 @@ function ProductAppPageInner() {
       // attached a case mid-turn that the SSE stream didn't surface.
       if (typeof data.case_id === "number") {
         setCaseIdBoth(data.case_id);
+      }
+      if (typeof data.case_number === "number") {
+        setCaseNumber(data.case_number);
       }
       if (typeof data.tier === "string") {
         setCaseTier(data.tier);
@@ -323,11 +337,15 @@ function ProductAppPageInner() {
               const data = JSON.parse(ev.data) as {
                 session_id?: string;
                 case_id?: number | null;
+                case_number?: number | null;
                 tier?: string | null;
               };
               if (data.session_id) setSessionId(data.session_id);
               if (typeof data.case_id === "number") {
                 setCaseIdBoth(data.case_id);
+              }
+              if (typeof data.case_number === "number") {
+                setCaseNumber(data.case_number);
               }
               if (typeof data.tier === "string") {
                 setCaseTier(data.tier);
@@ -490,6 +508,7 @@ function ProductAppPageInner() {
         messages: BackendMessage[];
         message_db_ids?: number[];
         case_id?: number | null;
+        case_number?: number | null;
         tier?: string | null;
       };
       const enriched = attachDbIds(data.messages, data.message_db_ids);
@@ -498,6 +517,7 @@ function ProductAppPageInner() {
       setCaseIdBoth(
         typeof data.case_id === "number" ? data.case_id : null,
       );
+      setCaseNumber(typeof data.case_number === "number" ? data.case_number : null);
       setCaseTier(typeof data.tier === "string" ? data.tier : null);
       setParcel(extractParcelContext(enriched));
     } catch (e) {
@@ -576,6 +596,7 @@ function ProductAppPageInner() {
           {(caseTier || caseId !== null) && (
             <CaseHeaderStrip
               caseId={caseId}
+              caseNumber={caseNumber}
               tier={caseTier}
               budgetWarning={budgetWarning}
             />

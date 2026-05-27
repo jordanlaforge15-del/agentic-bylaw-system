@@ -268,8 +268,19 @@ def open_case(
     case = match.case
     now = _utcnow()
     if case is None:
+        # Compute the next user-scoped sequential number inside this
+        # transaction. Unlike a Postgres sequence, this value rolls
+        # back if the surrounding transaction aborts — so the user
+        # always sees contiguous "Case #1, #2, #3" labels.
+        next_num = (
+            db.execute(
+                select(func.coalesce(func.max(Case.user_case_number), 0) + 1)
+                .where(Case.user_id == user.id)
+            ).scalar()
+        ) or 1
         case = Case(
             user_id=user.id,
+            user_case_number=next_num,
             anchor_label=anchor_label,
             anchor_key=normalise_anchor(anchor_label, anchor_kind),
             anchor_kind=anchor_kind,

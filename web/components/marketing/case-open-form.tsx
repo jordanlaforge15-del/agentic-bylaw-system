@@ -166,6 +166,7 @@ export function CaseOpenForm() {
       // the chat API call must happen client-side anyway.
       const params = new URLSearchParams({
         case_id: String(data.case.id),
+        case_number: String(data.case.user_case_number),
       });
       if (message.trim()) {
         params.set("first_message", message.trim());
