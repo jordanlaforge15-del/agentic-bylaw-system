@@ -166,6 +166,52 @@ class LinearClient:
         await self._query(mutation, {"issueId": issue_id, "body": body})
         log.info("Posted comment on %s", issue_id)
 
+    async def get_team_id(self, team_key: str) -> str:
+        query = """
+        query GetTeam($key: String!) {
+          teams(filter: { key: { eq: $key } }) {
+            nodes { id }
+          }
+        }
+        """
+        data = await self._query(query, {"key": team_key})
+        nodes = data["teams"]["nodes"]
+        if not nodes:
+            raise RuntimeError(f"Linear team {team_key!r} not found")
+        return nodes[0]["id"]
+
+    async def create_issue(
+        self,
+        *,
+        team_id: str,
+        title: str,
+        description: str,
+        priority: int | None = None,
+    ) -> dict[str, str]:
+        """Create a new Linear issue and return {id, identifier, url}."""
+        mutation = """
+        mutation CreateIssue($input: IssueCreateInput!) {
+          issueCreate(input: $input) {
+            success
+            issue { id identifier url }
+          }
+        }
+        """
+        input_payload: dict[str, Any] = {
+            "teamId": team_id,
+            "title": title,
+            "description": description,
+        }
+        if priority is not None:
+            input_payload["priority"] = priority
+        data = await self._query(mutation, {"input": input_payload})
+        result = data["issueCreate"]
+        if not result.get("success"):
+            raise RuntimeError(f"issueCreate returned success=false: {result}")
+        issue = result["issue"]
+        log.info("Created issue %s", issue["identifier"])
+        return {"id": issue["id"], "identifier": issue["identifier"], "url": issue["url"]}
+
     async def search_issue_by_identifier(self, identifier: str) -> LinearIssue | None:
         """Search for an issue by its human-readable identifier (e.g. ABS-88)."""
         query = """
