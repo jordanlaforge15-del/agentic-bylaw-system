@@ -94,14 +94,50 @@ export const E2E_DEMO_PASSWORD =
  * so the Clerk middleware branch in proxy.ts and the JWT verification
  * path in FastAPI are exercised on every test.
  */
+async function postWithRetry(
+  context: any,
+  url: string,
+  data: any,
+  maxAttempts: number = 3,
+): Promise<any> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await context.request.post(url, { data });
+      if (res.ok()) {
+        return res;
+      }
+      const text = await res.text();
+      lastError = new Error(
+        `HTTP ${res.status()} ${text}`,
+      );
+      // Only retry on 5xx or transient errors; don't retry 4xx
+      if (res.status() < 500) {
+        throw lastError;
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxAttempts - 1) {
+        // Wait before retrying: 100ms * (attempt + 1)
+        await new Promise((resolve) =>
+          setTimeout(resolve, 100 * (attempt + 1)),
+        );
+      }
+    }
+  }
+  throw lastError || new Error("POST request failed");
+}
+
 export const test = base.extend<{ authedContext: void }>({
   authedContext: [
     async ({ context, baseURL }, use) => {
       const target = baseURL ?? E2E_BASE_URL;
       // Mint the legacy password-gate cookie.
-      const res = await context.request.post(`${target}/api/access`, {
-        data: { gate: "demo", password: E2E_DEMO_PASSWORD },
-      });
+      const res = await postWithRetry(
+        context,
+        `${target}/api/access`,
+        { gate: "demo", password: E2E_DEMO_PASSWORD },
+      );
       if (!res.ok()) {
         throw new Error(
           `failed to mint abs_demo cookie: HTTP ${res.status()} ${await res.text()}`,
@@ -109,13 +145,12 @@ export const test = base.extend<{ authedContext: void }>({
       }
       // Mint a test JWT for the demo user so requests through the
       // Next.js proxy exercise the Clerk JWT auth path end-to-end.
-      const jwtRes = await context.request.post(
+      const jwtRes = await postWithRetry(
+        context,
         `${E2E_API_URL}/v1/_test/mint-jwt`,
         {
-          data: {
-            sub: DEMO_USER_ID,
-            email: `${DEMO_USER_ID}@e2e.test`,
-          },
+          sub: DEMO_USER_ID,
+          email: `${DEMO_USER_ID}@e2e.test`,
         },
       );
       if (jwtRes.ok()) {
