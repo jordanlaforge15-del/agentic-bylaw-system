@@ -683,18 +683,82 @@ async def _assert_clean_worktree(cwd: str) -> tuple[bool, str]:
     return False, msg
 
 
+async def _clean_agent_leaked_files(cwd: str) -> int:
+    """Reset staged entries and remove untracked files leaked by agents.
+
+    NM agents run in worktrees, but a misbehaving agent can write files via
+    absolute paths into the main checkout (REPO_ROOT) and even ``git add``
+    them there.  This poisons the index and causes every subsequent
+    ``merge_to_dev`` to fail the clean-worktree precondition.
+
+    This function runs ``git reset HEAD -- .`` (unstage everything) and
+    ``git checkout -- .`` (discard working-tree modifications to tracked
+    files), then ``git clean -fd`` (remove untracked files/dirs).  The
+    combination is idempotent and safe when the operator has no legitimate
+    WIP in the main checkout — which is always true during an NM run.
+
+    Returns the number of dirty paths that were cleaned.
+    """
+    # Snapshot dirty paths *before* cleaning so we can log them.
+    proc = await asyncio.create_subprocess_exec(
+        "git", "status", "--porcelain",
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    porcelain = stdout.decode("utf-8", errors="replace").strip()
+    if not porcelain:
+        return 0
+
+    dirty_lines = porcelain.splitlines()
+    listing = "\n".join(f"  {line}" for line in dirty_lines)
+    log.warning(
+        "merge_to_dev: cleaning %d leaked file(s) from main checkout "
+        "before merge:\n%s",
+        len(dirty_lines),
+        listing,
+    )
+
+    for cmd in (
+        ["git", "reset", "HEAD", "--", "."],
+        ["git", "checkout", "--", "."],
+        ["git", "clean", "-fd"],
+    ):
+        p = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await p.communicate()
+
+    log.info(
+        "merge_to_dev: cleaned %d leaked files from main checkout before merge",
+        len(dirty_lines),
+    )
+    return len(dirty_lines)
+
+
 async def merge_to_dev(issue: IssueState) -> tuple[bool, str]:
     """
     Merge the issue's branch into dev. Returns (success, message).
 
     Merges are sequential — caller must ensure only one merge at a time.
 
-    Refuses to proceed if the target worktree (REPO_ROOT) has any
-    uncommitted modifications or untracked files. The night manager runs
-    while the operator sleeps; silently stashing their WIP would risk
-    losing work, so we surface the dirty state and let them clean up.
+    Before checking the clean-worktree precondition, runs an idempotent
+    cleanup pass to remove any files leaked into the main checkout by
+    misbehaving agents (see ABS-171).  If cleaning is needed, it is
+    logged so the operator has visibility.
+
+    After cleanup, the clean-worktree assertion still runs: if the
+    checkout is *still* dirty (e.g. submodule state, lock files), the
+    merge is refused with a clear error — same as before.
     """
-    clean, dirty_msg = await _assert_clean_worktree(str(REPO_ROOT))
+    target = str(REPO_ROOT)
+    await _clean_agent_leaked_files(target)
+
+    clean, dirty_msg = await _assert_clean_worktree(target)
     if not clean:
         log.error("Merge precondition failed for %s: %s", issue.identifier, dirty_msg)
         return False, dirty_msg
