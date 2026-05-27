@@ -757,7 +757,160 @@ def _mount_test_router(app: FastAPI) -> None:
             return report.model_dump(mode="json")
 
 
+class _SeedSessionBody(BaseModel):
+    """Body for ``POST /v1/_test/seed-session``.
+
+    Inserts a ChatSession with synthetic tool_use + tool_result messages
+    that include ``linked_datasets`` and ``citation_path`` values. The
+    session simulates a completed search_bylaw_evidence round so the
+    right-pane ``extractParcelContext`` can reconstruct parcel + citation
+    data without requiring real bylaw content in the test DB.
+    """
+
+    case_id: int
+    user_id: str = "demo-user-1"
+    civic_number: str = "1234"
+    street: str = "Elm St"
+    citation_path: str = "4.2.1"
+    citation_label: str = "(1)"
+    bylaw_name: str = "Regional Centre Land Use By-Law"
+    clause_text: str = (
+        "The minimum front yard setback shall be 3.0 metres from the property line."
+    )
+
+
+def _mount_seed_session_endpoint(app: FastAPI) -> None:
+    @app.post("/v1/_test/seed-session")
+    async def seed_session(body: _SeedSessionBody) -> dict[str, object]:
+        """Seed a ChatSession with citation-bearing tool results.
+
+        Creates a DB-backed session for the given case so ``GET
+        /v1/chat/sessions/{id}`` returns messages that cause
+        ``extractParcelContext`` to populate the parcel pane with
+        ``cited`` entries — without requiring real bylaw text in the DB.
+        """
+        import json as _json
+
+        from advisor.db.models import (  # noqa: PLC0415
+            ChatMessage as _DbChatMessage,
+            ChatSession as _DbChatSession,
+            User as _User,
+        )
+
+        tool_result_payload = _json.dumps({
+            "matches": [
+                {
+                    "citation_path": body.citation_path,
+                    "citation_label": body.citation_label,
+                    "bylaw_name": body.bylaw_name,
+                    "fragment_type": "clause",
+                    "linked_datasets": [
+                        {
+                            "name": "halifax_zoning_boundaries",
+                            "location_resolver": "civic_number",
+                            "location_confidence": 0.92,
+                            "feature_matches": [
+                                {
+                                    "canonical_attributes": {
+                                        "zone_code": "C-2",
+                                        "zone_description": "General Commercial",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        })
+
+        with session_scope() as db:
+            user_row = (
+                db.query(_User)
+                .filter(_User.clerk_user_id == body.user_id)
+                .first()
+            )
+            if user_row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"User '{body.user_id}' not found",
+                )
+
+            session_row = _DbChatSession(
+                user_id=user_row.id,
+                case_id=body.case_id,
+                tier="standard",
+                updated_at=utcnow(),
+            )
+            db.add(session_row)
+            db.flush()
+
+            tool_use_id = f"t-seed-{session_row.id}"
+            messages = [
+                {
+                    "sequence": 0,
+                    "role": "user",
+                    "content_json": (
+                        f"What is the front yard setback for "
+                        f"{body.civic_number} {body.street}?"
+                    ),
+                },
+                {
+                    "sequence": 1,
+                    "role": "assistant",
+                    "content_json": [
+                        {"type": "text", "text": "Searching the bylaw…", "cache": False},
+                        {
+                            "type": "tool_use",
+                            "id": tool_use_id,
+                            "name": "search_bylaw_evidence",
+                            "input": {
+                                "query": "front yard setback",
+                                "top_k": 4,
+                                "location": {
+                                    "civic_number": body.civic_number,
+                                    "street": body.street,
+                                },
+                            },
+                            "cache": False,
+                        },
+                    ],
+                },
+                {
+                    "sequence": 2,
+                    "role": "user",
+                    "content_json": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": tool_result_payload,
+                            "is_error": False,
+                            "cache": False,
+                        }
+                    ],
+                },
+                {
+                    "sequence": 3,
+                    "role": "assistant",
+                    "content_json": (
+                        "Based on the bylaw evidence, the front yard setback is 3 m."
+                    ),
+                },
+            ]
+            for m in messages:
+                db.add(
+                    _DbChatMessage(
+                        session_id=session_row.id,
+                        sequence=m["sequence"],
+                        role=m["role"],
+                        content_json=m["content_json"],
+                    )
+                )
+            db.flush()
+            return {"session_id": str(session_row.id)}
+
+
 app = build_e2e_app()
+_mount_seed_session_endpoint(app)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -939,6 +939,38 @@ def create_app(
             tier=session.tier,
         )
 
+    @app.get("/v1/citation")
+    async def get_citation(
+        citation_path: str,
+        document_id: int | None = None,
+        user: User = Depends(require_user),
+    ) -> dict:
+        from advisor.chat.compact import compact_match  # noqa: PLC0415
+        from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+            CitationLookupRequest,
+        )
+
+        request = CitationLookupRequest(
+            citation_path=citation_path,
+            document_id=document_id,
+            include_context=True,
+            include_cross_references=False,
+            include_tables=False,
+        )
+        try:
+            if callable(factory):
+                result = factory()
+                if hasattr(result, "__enter__"):
+                    with result as service:
+                        match = service.lookup_citation(request)
+                else:
+                    match = result.lookup_citation(request)
+            else:
+                match = factory.lookup_citation(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return compact_match(match)
+
     return app
 
 
