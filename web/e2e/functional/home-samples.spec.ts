@@ -24,12 +24,15 @@ test.describe("home page — pre-recorded samples", () => {
     await page.getByRole("button", { name: "5184 Morris St" }).click();
     // Wait for the thinking sequence to finish and the verdict to appear.
     await expect(page.getByText(/35%/)).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/§ 7/)).toBeVisible();
+    // § 7 appears in both the verdict card and the ProofGrid; just assert at least one is visible.
+    await expect(page.getByText(/§ 7/).first()).toBeVisible();
   });
 
   test("ProofGrid shows verified answers for all six samples", async ({
     page,
   }) => {
+    // Scope to the ProofGrid section to avoid conflicts with other page regions.
+    const grid = page.locator("text=REAL READINGS").locator("..").locator("..");
     // Lot coverage — ER-1
     await expect(page.getByText("35%.")).toBeVisible();
     // Height — HR-1
@@ -40,8 +43,8 @@ test.describe("home page — pre-recorded samples", () => {
     await expect(page.getByText("Both permitted concurrently.")).toBeVisible();
     // Single-unit — ER-1
     await expect(page.getByText("Permitted as-of-right.")).toBeVisible();
-    // Multi-unit — CEN-1
-    await expect(page.getByText("Permitted.")).toBeVisible();
+    // Multi-unit — CEN-1 (exact match scoped to the grid card)
+    await expect(grid.getByText("Permitted.", { exact: true })).toBeVisible();
   });
 
   test("ProofGrid shows verified citation references", async ({ page }) => {
