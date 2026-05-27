@@ -15,8 +15,8 @@ import { SAMPLE_READINGS, type SampleReading } from "@/lib/mock";
 const STEPS = [
   "Geocoding parcel…",
   "Fetching HRM Land Use By-law…",
-  "Reading § 9 — Established Residential…",
-  "Cross-checking § 4.3 frontage minimums…",
+  "Identifying applicable zone standards…",
+  "Cross-checking dimensional requirements…",
   "Compiling answer…",
 ];
 
@@ -91,7 +91,7 @@ export function AddressDemo() {
             <input
               value={val}
               onChange={(e) => setVal(e.target.value)}
-              placeholder="e.g. 5184 Morris St, Halifax"
+              placeholder="e.g. 5184 Morris St, Halifax, NS"
               className="flex-1 min-w-0 bg-surface text-text font-sans text-[14px] sm:text-[15px] outline-none px-3 sm:px-4 py-3 sm:py-3.5 tracking-[-0.005em]"
             />
             <button
