@@ -266,14 +266,37 @@ def create_app(
     app.state.retrieval_factory = factory
     app.state.db_session_factory = db_session_factory
 
+    # Build the user-dependency callable here — before the billing router
+    # so the dormant flavour can share it for ``GET /me``. Also used by
+    # the cases / admin / terms / submissions routers mounted below.
+    require_user = _build_user_dependency(
+        verifier, db_session_factory, test_header_fallback=test_header_fallback
+    )
+
+    # Pre-build the user resolver if we have a DB factory. Shared by
+    # the dormant billing ``GET /me`` and all DB-backed routers below.
+    _resolve_user_via_db: Any = None
+    if db_session_factory is not None:
+        from advisor.api.db_session_store import (  # noqa: PLC0415
+            default_resolve_user,
+        )
+
+        def _resolve_user_via_db(  # type: ignore[misc]
+            auth_session: Any, db: Session
+        ) -> User:
+            if isinstance(auth_session, User):
+                return auth_session
+            return default_resolve_user(db, auth_session.clerk_user_id)
+
     # Billing router. Mounted in two flavours:
     # * If ``billing_settings`` is provided AND ``enabled=True`` AND
     #   the wiring kwargs are present, the live router is mounted.
-    # * Otherwise, a dormant stub router that 503s every endpoint —
-    #   so the frontend can probe ``/v1/billing/me`` regardless and
-    #   the operator can flip the flag without redeploying. This
-    #   block is the ONLY billing-related edit to this file; all
-    #   other billing logic lives in ``advisor.billing``.
+    # * Otherwise, a dormant stub router that 503s purchase endpoints
+    #   but serves real credit balances on ``GET /me`` so the billing
+    #   page accurately reflects admin-granted credits even before
+    #   Stripe is configured. This block is the ONLY billing-related
+    #   edit to this file; all other billing logic lives in
+    #   ``advisor.billing``.
     from advisor.billing.router import (  # noqa: PLC0415 — lazy import
         build_billing_router,
         build_dormant_billing_router,
@@ -297,14 +320,23 @@ def create_app(
             )
         )
     else:
-        app.include_router(build_dormant_billing_router())
-
-    # Build the user-dependency callable here so the cases / admin
-    # routers (mounted next) can share it. The same callable is
-    # consumed by ``POST /v1/chat`` further down.
-    require_user = _build_user_dependency(
-        verifier, db_session_factory, test_header_fallback=test_header_fallback
-    )
+        # Pass the main DB + user deps as a fallback so ``GET /me``
+        # can return real credit balances even when Stripe isn't
+        # configured. Prefer the billing-specific deps when they are
+        # set (they will be present if billing_settings exists but
+        # enabled=False, e.g. during a feature-flag roll-out).
+        _dormant_db = billing_db_session_factory or db_session_factory
+        _dormant_user_dep = billing_user_dependency or (
+            require_user if db_session_factory is not None else None
+        )
+        _dormant_resolver = billing_user_resolver or _resolve_user_via_db
+        app.include_router(
+            build_dormant_billing_router(
+                db_session_factory=_dormant_db,
+                user_dependency=_dormant_user_dep,
+                user_resolver=_dormant_resolver,
+            )
+        )
 
     # Cases router — case-credit lifecycle (open / match / classify /
     # upgrade / close). Mounted whenever a DB factory is wired; the
@@ -315,9 +347,6 @@ def create_app(
     # synthetic-_TestUser (test header) shapes.
     if db_session_factory is not None:
         from advisor.api.cases_router import build_cases_router  # noqa: PLC0415
-        from advisor.api.db_session_store import (  # noqa: PLC0415
-            default_resolve_user,
-        )
 
         # Default classifier gateway = same Anthropic gateway as chat,
         # since the gateway is model-agnostic and selects per-call.
@@ -329,11 +358,6 @@ def create_app(
 
         def _classifier_gateway_factory() -> LLMGateway:
             return gateway
-
-        def _resolve_user_via_db(auth_session: Any, db: Session) -> User:
-            if isinstance(auth_session, User):
-                return auth_session
-            return default_resolve_user(db, auth_session.clerk_user_id)
 
         app.include_router(
             build_cases_router(
