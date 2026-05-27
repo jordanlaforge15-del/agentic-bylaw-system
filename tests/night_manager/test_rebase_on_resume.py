@@ -320,7 +320,88 @@ class TestRebaseNoopBranches:
 
 
 # ---------------------------------------------------------------------------
-# 5. Integration: _run_resume marks rebase-conflicting issues as blocked
+# 5. ABS-201: pre-rebase clean removes untracked runtime artifacts
+# ---------------------------------------------------------------------------
+
+
+class TestPreRebaseClean:
+    """Regression for ABS-201: an untracked file committed on origin/dev by
+    a sibling agent (e.g. submission-demo.pdf) must not block this worktree's
+    rebase with 'untracked working tree files would be overwritten'.
+
+    The pre-rebase `git clean -fdx` step removes it so the rebase proceeds.
+    """
+
+    @pytest.mark.asyncio
+    async def test_untracked_artifact_does_not_block_rebase(self, tmp_path: Path):
+        """Real-git: worktree has an untracked e2e artifact (artifact.pdf)
+        that a sibling committed to origin/dev. Rebase must succeed after
+        the clean step removes the untracked copy."""
+        origin, worktree = _init_origin_and_worktree(tmp_path)
+
+        # Feature commit on the agent's branch (no overlap with the artifact)
+        (worktree / "feature.txt").write_text("agent work\n")
+        _run(worktree, "git", "add", "feature.txt")
+        _run(worktree, "git", "commit", "-q", "-m", "[ABS-201] feature commit")
+
+        # Sibling agent commits the same-named file on dev (simulates ABS-189
+        # landing first and committing submission-demo.pdf as a fixture).
+        pusher = tmp_path / "pusher"
+        _run(tmp_path, "git", "clone", "-q", str(origin), str(pusher))
+        _run(pusher, "git", "config", "user.email", "dev@example.com")
+        _run(pusher, "git", "config", "user.name", "Dev")
+        _run(pusher, "git", "checkout", "-q", "dev")
+        (pusher / "artifact.pdf").write_text("pdf-bytes\n")
+        _run(pusher, "git", "add", "artifact.pdf")
+        _run(pusher, "git", "commit", "-q", "-m", "sibling commits artifact.pdf on dev")
+        _run(pusher, "git", "push", "-q", "origin", "dev")
+
+        # E2e run leaves an untracked copy of the same file in this worktree
+        (worktree / "artifact.pdf").write_text("pdf-bytes\n")
+        status = _run(worktree, "git", "status", "--porcelain").stdout
+        assert "artifact.pdf" in status, "artifact.pdf must be untracked before rebase"
+
+        issue = _make_issue(worktree=str(worktree))
+        ok, msg = await rebase_worktree_onto_dev(issue)
+
+        assert ok is True, (
+            f"rebase must succeed when pre-rebase clean removes the untracked "
+            f"artifact; got msg: {msg}"
+        )
+        # Feature commit replayed successfully
+        assert (worktree / "feature.txt").exists()
+        # Sibling's committed artifact is now visible (landed from dev)
+        assert (worktree / "artifact.pdf").exists()
+
+    @pytest.mark.asyncio
+    async def test_clean_does_not_remove_staged_changes(self, tmp_path: Path):
+        """The pre-rebase clean must NOT discard staged (index) changes — only
+        untracked and ignored files are removed."""
+        origin, worktree = _init_origin_and_worktree(tmp_path)
+
+        # Stage a change without committing it
+        (worktree / "staged.txt").write_text("staged content\n")
+        _run(worktree, "git", "add", "staged.txt")
+
+        # Dev moves on with a non-conflicting file
+        _push_new_dev_commit(origin, tmp_path, "newfile.txt", "from dev\n")
+
+        issue = _make_issue(worktree=str(worktree))
+        # Rebase will fail because staged-but-uncommitted changes block rebase.
+        # The important thing: the staged file itself must NOT have been deleted
+        # by the clean step (git clean -fdx only removes untracked files;
+        # staged files are tracked and are therefore preserved).
+        ok, msg = await rebase_worktree_onto_dev(issue)
+
+        # Rebase itself fails or aborts due to dirty index — that's fine,
+        # the staged file not being deleted is what we're asserting here.
+        assert (worktree / "staged.txt").exists(), (
+            "pre-rebase clean must not delete staged (index-tracked) files"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 6. Integration: _run_resume marks rebase-conflicting issues as blocked
 # ---------------------------------------------------------------------------
 
 
