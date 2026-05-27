@@ -191,6 +191,151 @@ test("feedback: thumbs shows toast and auto-dismisses", async ({ page }) => {
   });
 });
 
+test("thumbs-down: auto-opens flag panel with 'What went wrong?' header", async ({
+  page,
+}) => {
+  const { caseId } = await openCaseViaApi();
+  await page.goto(`/app?case_id=${caseId}`);
+
+  const textarea = page.getByPlaceholder(/Ask about this parcel/);
+  const sendBtn = page.getByRole("button", { name: /^Send/ });
+  const thread = page.getByTestId("chat-thread");
+
+  await textarea.fill("What zone is this property in?");
+  await sendBtn.click();
+  await expect(thread).toContainText(/Based on the bylaw evidence/i, {
+    timeout: 15_000,
+  });
+
+  const feedbackContainer = page.getByTestId("message-feedback").first();
+  await expect(feedbackContainer).toBeVisible({ timeout: 10_000 });
+
+  // Clicking thumbs-down should auto-open the flag panel
+  const thumbsDown = page.getByTestId("feedback-thumbs-down").first();
+  await thumbsDown.click();
+  await expect(thumbsDown).toHaveAttribute("aria-pressed", "true");
+
+  const flagPanel = page.getByTestId("flag-panel");
+  await expect(flagPanel).toBeVisible();
+
+  // Panel should show "What went wrong?" header, not "Report an issue"
+  await expect(flagPanel).toContainText("What went wrong?");
+  await expect(flagPanel).not.toContainText("Report an issue");
+});
+
+test("thumbs-down panel: skip closes panel and rating stays down", async ({
+  page,
+}) => {
+  const { caseId } = await openCaseViaApi();
+  await page.goto(`/app?case_id=${caseId}`);
+
+  const textarea = page.getByPlaceholder(/Ask about this parcel/);
+  const sendBtn = page.getByRole("button", { name: /^Send/ });
+  const thread = page.getByTestId("chat-thread");
+
+  await textarea.fill("What are the setback requirements?");
+  await sendBtn.click();
+  await expect(thread).toContainText(/Based on the bylaw evidence/i, {
+    timeout: 15_000,
+  });
+
+  const feedbackContainer = page.getByTestId("message-feedback").first();
+  await expect(feedbackContainer).toBeVisible({ timeout: 10_000 });
+
+  const thumbsDown = page.getByTestId("feedback-thumbs-down").first();
+  await thumbsDown.click();
+  await expect(page.getByTestId("flag-panel")).toBeVisible();
+
+  // Skip button should be present (not "Cancel")
+  const skipBtn = page.getByTestId("flag-cancel").first();
+  await expect(skipBtn).toContainText("Skip");
+
+  await skipBtn.click();
+
+  // Panel closes, rating stays "down"
+  await expect(page.getByTestId("flag-panel")).not.toBeVisible();
+  await expect(thumbsDown).toHaveAttribute("aria-pressed", "true");
+});
+
+test("thumbs-down panel: submit is enabled without selecting a reason", async ({
+  page,
+}) => {
+  const { caseId } = await openCaseViaApi();
+  await page.goto(`/app?case_id=${caseId}`);
+
+  const textarea = page.getByPlaceholder(/Ask about this parcel/);
+  const sendBtn = page.getByRole("button", { name: /^Send/ });
+  const thread = page.getByTestId("chat-thread");
+
+  await textarea.fill("Can I build a deck here?");
+  await sendBtn.click();
+  await expect(thread).toContainText(/Based on the bylaw evidence/i, {
+    timeout: 15_000,
+  });
+
+  const feedbackContainer = page.getByTestId("message-feedback").first();
+  await expect(feedbackContainer).toBeVisible({ timeout: 10_000 });
+
+  await page.getByTestId("feedback-thumbs-down").first().click();
+  await expect(page.getByTestId("flag-panel")).toBeVisible();
+
+  // Submit should be enabled even without selecting a reason chip
+  const submitBtn = page.getByTestId("flag-submit");
+  await expect(submitBtn).toBeEnabled();
+
+  // Add notes and submit — panel should close
+  await page.getByTestId("flag-notes").fill("The answer seemed incorrect.");
+  await submitBtn.click();
+  await expect(page.getByTestId("flag-panel")).not.toBeVisible();
+});
+
+test("thumbs-down panel: submitting sends flag data with down rating", async ({
+  page,
+}) => {
+  const { caseId } = await openCaseViaApi();
+  await page.goto(`/app?case_id=${caseId}`);
+
+  const textarea = page.getByPlaceholder(/Ask about this parcel/);
+  const sendBtn = page.getByRole("button", { name: /^Send/ });
+  const thread = page.getByTestId("chat-thread");
+
+  await textarea.fill("What is the floor space ratio?");
+  await sendBtn.click();
+  await expect(thread).toContainText(/Based on the bylaw evidence/i, {
+    timeout: 15_000,
+  });
+
+  const feedbackContainer = page.getByTestId("message-feedback").first();
+  await expect(feedbackContainer).toBeVisible({ timeout: 10_000 });
+
+  // Drain the initial thumbs-down rating request before setting up the flag interceptor
+  const thumbsPromise = page.waitForResponse(
+    (response) =>
+      response.url().includes("/feedback") && response.status() === 200,
+  );
+  await page.getByTestId("feedback-thumbs-down").first().click();
+  await thumbsPromise;
+
+  await expect(page.getByTestId("flag-panel")).toBeVisible();
+
+  // Select a reason chip
+  await page.getByTestId("flag-reason-wrong_zone").click();
+
+  // Now intercept the flag submit request (second feedback call)
+  const flagPromise = page.waitForResponse(
+    (response) =>
+      response.url().includes("/feedback") && response.status() === 200,
+  );
+  await page.getByTestId("flag-submit").click();
+
+  const flagResponse = await flagPromise;
+  const body = JSON.parse(
+    flagResponse.request().postDataBuffer()?.toString() || "{}",
+  );
+  expect(body.rating).toBe("down");
+  expect(body.flag_reason).toBe("wrong_zone");
+});
+
 test("feedback: flag submission shows toast and shows 'Saved.' on reopen", async ({
   page,
 }) => {
