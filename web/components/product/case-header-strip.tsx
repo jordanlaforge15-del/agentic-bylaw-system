@@ -46,7 +46,7 @@ export function CaseHeaderStrip({ caseId, caseNumber, tier, budgetWarning }: Pro
   const tone = fraction < 0.1 ? "bg-red-600" : fraction < 0.25 ? "bg-amber-500" : "bg-text";
 
   return (
-    <div className="border-t border-hair px-4 py-2 bg-surface-alt flex items-center gap-3 text-[12px]">
+    <div data-testid="case-header-strip" className="border-t border-hair px-4 py-2 bg-surface-alt flex items-center gap-3 text-[12px]">
       <span className="font-mono uppercase text-text-muted text-[10.5px]">
         Case #{caseNumber ?? caseId ?? "—"}
       </span>

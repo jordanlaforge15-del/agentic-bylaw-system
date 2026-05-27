@@ -150,6 +150,9 @@ class ChatSessionSummary(BaseModel):
     ``message_count`` counts only user-facing turns (user input or
     assistant text reply), not the intermediate tool_use / tool_result
     rounds — that's what a sidebar wants to display.
+    ``case_id`` lets the frontend restore transcript state on direct URL
+    load (``/app?case_id=N``) by locating the matching session without
+    a separate round-trip.
     """
 
     session_id: str
@@ -160,6 +163,8 @@ class ChatSessionSummary(BaseModel):
     # that exist but have never been written to. The frontend renders
     # this as a relative label ("2m ago"); the backend stays neutral.
     updated_at: str | None = None
+    # Numeric case FK. None for legacy / un-cased sessions.
+    case_id: int | None = None
 
 
 class ChatSessionList(BaseModel):
@@ -963,6 +968,7 @@ def _summary_from_entry(entry: SessionListEntry) -> ChatSessionSummary:
             if entry.updated_at is not None
             else None
         ),
+        case_id=entry.case_id,
     )
 
 

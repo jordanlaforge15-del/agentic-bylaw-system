@@ -32,6 +32,7 @@ type SessionSummary = {
   title: string;
   message_count: number;
   updated_at: string | null;
+  case_id?: number | null;
 };
 
 // Render a backend ISO timestamp as a sidebar-friendly relative label.

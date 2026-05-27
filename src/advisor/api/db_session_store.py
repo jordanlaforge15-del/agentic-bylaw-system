@@ -327,6 +327,7 @@ class DbSessionStore:
                         model=ChatSession.__dataclass_fields__["model"].default,
                         first_user_message=first_user,
                         anchor_label=anchor_label,
+                        case_id=r.case_id,
                         user_message_count=user_count,
                         assistant_text_count=assistant_text_count,
                         updated_at=r.updated_at,
