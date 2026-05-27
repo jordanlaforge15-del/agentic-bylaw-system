@@ -202,6 +202,7 @@ export function CaseOpenForm() {
             onChange={(e) => {
               setAnchorLabel(e.target.value);
               setMatch(undefined);
+              setError(null);
             }}
             onBlur={lookupMatch}
             placeholder={
@@ -249,7 +250,10 @@ export function CaseOpenForm() {
       <Field label="First message">
         <textarea
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => {
+            setMessage(e.target.value);
+            setError(null);
+          }}
           rows={5}
           placeholder="Describe the inquiry. The classifier reads this to recommend a tier."
           className="bg-surface border border-hair px-3 py-2 text-[13.5px] font-sans resize-y w-full"
