@@ -88,7 +88,7 @@ class EmailAlerter:
             f"Check https://api.agenticbylawsystems.com/healthz for current status."
         )
         try:
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=30) as server:
                 server.starttls()
                 server.login(self.username, self.password)
                 server.send_message(msg)

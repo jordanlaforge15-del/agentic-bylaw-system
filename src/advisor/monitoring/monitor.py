@@ -77,7 +77,9 @@ class MonitorService:
             },
         )
         while True:
-            self.run_once()
+            # run_once() calls probe.check() (blocking urllib I/O) — offload to
+            # thread pool so any future async co-tasks are not serialised behind it.
+            await asyncio.to_thread(self.run_once)
             await asyncio.sleep(self.interval_seconds)
 
     @property

@@ -80,7 +80,7 @@ class TestSlackAlerter:
         alerter.send(_result(), consecutive_failures=2)  # should not raise
 
 
-class TestBuildAlsertersFromEnv:
+class TestBuildAlertersFromEnv:
     def test_no_env_returns_empty(self, monkeypatch):
         monkeypatch.delenv("MONITOR_SLACK_WEBHOOK_URL", raising=False)
         monkeypatch.delenv("MONITOR_SMTP_HOST", raising=False)

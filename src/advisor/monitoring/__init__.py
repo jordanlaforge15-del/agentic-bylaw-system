@@ -16,7 +16,7 @@ from advisor.monitoring.probe import HealthProbe, ProbeResult
 from advisor.monitoring.alerting import SlackAlerter
 from advisor.monitoring.state import FailureTracker
 from advisor.monitoring.monitor import MonitorService
-from advisor.monitoring import router as monitoring_router
+from advisor.monitoring.router import router as monitoring_router
 
 __all__ = [
     "HealthProbe",
