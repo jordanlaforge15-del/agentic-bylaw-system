@@ -651,7 +651,7 @@ function ProductAppPageInner() {
         {/* Desktop parcel pane (lg+ only). Below lg the pane shows
          * inside Sheet (mobile) or as a side overlay (tablet). */}
         <div className="hidden lg:contents">
-          <ParcelPane parcel={parcel} />
+          <ParcelPane parcel={parcel} sessionId={activeSessionId} caseId={caseId} />
         </div>
 
         <ParcelFab
@@ -700,7 +700,7 @@ function ProductAppPageInner() {
           maxHeightPct={80}
           ariaLabel="Parcel details"
         >
-          <ParcelPane parcel={parcel} inSheet />
+          <ParcelPane parcel={parcel} sessionId={activeSessionId} caseId={caseId} inSheet />
         </Sheet>
       )}
       {isTablet && (
@@ -711,7 +711,7 @@ function ProductAppPageInner() {
           width={320}
           ariaLabel="Parcel details"
         >
-          <ParcelPane parcel={parcel} inSheet />
+          <ParcelPane parcel={parcel} sessionId={activeSessionId} caseId={caseId} inSheet />
         </Drawer>
       )}
     </div>
