@@ -375,15 +375,27 @@ def build_billing_router(
     return router
 
 
-def build_dormant_billing_router() -> APIRouter:
-    """Mount a stub router that returns 503 on every billing path
-    except ``GET /catalog``, which still serves the price list so the
-    pricing page renders during the pre-Stripe phase (with
-    ``enabled=False`` so the frontend hides "Buy" buttons)."""
+def build_dormant_billing_router(
+    *,
+    db_session_factory: Callable[[], Any] | None = None,
+    user_dependency: Callable[..., Any] | None = None,
+    user_resolver: Callable[[Any, Any], Any] | None = None,
+) -> APIRouter:
+    """Mount a stub router that 503s purchase endpoints but serves real
+    credit balances on ``GET /me`` so the billing page accurately
+    reflects admin-granted credits even before Stripe is configured.
+
+    ``GET /catalog`` always works (price list for the pricing page).
+    ``GET /me`` returns real per-tier credit counts when ``db_session_factory``,
+    ``user_dependency``, and ``user_resolver`` are all provided; otherwise
+    it returns an empty-balance response so the page still renders without
+    crashing. Checkout / webhook endpoints always 503 when billing is
+    dormant — users cannot purchase credits until Stripe is wired up.
+    """
     router = APIRouter(prefix="/v1/billing", tags=["billing"])
     pricing = get_pricing_settings()
 
-    detail = {
+    checkout_detail = {
         "code": "billing_disabled",
         "message": (
             "Billing is not enabled on this deployment. Set "
@@ -422,25 +434,83 @@ def build_dormant_billing_router() -> APIRouter:
     @router.post("/checkout/pack")
     def post_checkout_disabled() -> Any:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=checkout_detail,
         )
 
     @router.post("/webhook")
     def post_webhook_disabled() -> Any:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=checkout_detail,
         )
 
-    @router.get("/me")
-    def get_me_disabled() -> Any:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
-        )
+    # ``GET /me`` — return real credit balances even when billing is
+    # dormant so the billing page shows the accurate tier breakdown for
+    # admin-granted credits. Two flavours depending on whether DB deps
+    # are wired: with deps we read from Postgres; without deps we return
+    # an empty response that the frontend renders as all-zero balances.
+    if (
+        db_session_factory is not None
+        and user_dependency is not None
+        and user_resolver is not None
+    ):
+        @contextmanager
+        def _open_db_dormant() -> Any:
+            result = db_session_factory()
+            if hasattr(result, "__enter__"):
+                with result as session:
+                    yield session
+            else:
+                try:
+                    yield result
+                finally:
+                    close = getattr(result, "close", None)
+                    if callable(close):
+                        close()
+
+        @router.get("/me", response_model=BillingMeResponse)
+        def get_me_dormant(
+            auth_session: Any = Depends(user_dependency),
+        ) -> BillingMeResponse:
+            with _open_db_dormant() as db:
+                user = user_resolver(auth_session, db)
+                balances = credit_balance_for(db, user_id=user.id)
+                tier_balances = [
+                    TierBalance(
+                        tier=b.tier,
+                        available=b.available,
+                        reserved=b.reserved,
+                        consumed=b.consumed,
+                    )
+                    for b in balances
+                ]
+                return BillingMeResponse(
+                    enabled=False,
+                    stripe_customer_id=None,
+                    tier_balances=tier_balances,
+                    total_available_credits=sum(
+                        b.available for b in tier_balances
+                    ),
+                )
+
+    else:
+        @router.get("/me", response_model=BillingMeResponse)
+        def get_me_dormant_no_db() -> BillingMeResponse:
+            # No DB wired (minimal test setups). Return empty balances
+            # rather than 503 so the frontend still renders gracefully.
+            return BillingMeResponse(
+                enabled=False,
+                stripe_customer_id=None,
+                tier_balances=[],
+                total_available_credits=0,
+            )
 
     @router.get("/purchases")
     def get_purchases_disabled() -> Any:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=checkout_detail,
         )
 
     return router
