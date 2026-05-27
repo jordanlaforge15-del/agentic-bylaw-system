@@ -44,6 +44,8 @@ The FastAPI test server runs with no Clerk verifier, so its routes accept an `X-
 
 ```bash
 # 1. Python venv (only if not already done)
+#    dev-setup.sh installs [dev,advisor] extras by default, so uvicorn/fastapi
+#    are available for make e2e without any extra pip install step.
 ./scripts/dev-setup.sh
 
 # 2. JS deps + Playwright browsers
@@ -253,7 +255,7 @@ E2E_BASE_URL=http://localhost:3002 \
   make e2e
 ```
 
-`scripts/e2e-up.sh` derives `POSTGRES_HOST_PORT` from `PG_PORT` and exports it so `docker-compose.yml`'s `"${POSTGRES_HOST_PORT:-5432}:5432"` interpolation picks it up. `playwright.config.ts` already reads `E2E_BASE_URL` for `baseURL`, and `global-setup.ts` / `fixtures/test-env.ts` read `E2E_API_URL` for upstream calls.
+`scripts/e2e-up.sh` derives and exports `POSTGRES_HOST_PORT` from `PG_PORT` (for docker-compose), and also exports `DATABASE_URL` built from `PG_PORT` so Playwright's `global-setup.ts` and seed scripts inherit the correct URL automatically — no extra `DATABASE_URL` export needed. `playwright.config.ts` already reads `E2E_BASE_URL` for `baseURL`, and `global-setup.ts` / `fixtures/test-env.ts` read `E2E_API_URL` for upstream calls.
 
 The first worktree (using all defaults) and the second (using the overrides above) can each run the full suite end-to-end without seeing each other.
 
