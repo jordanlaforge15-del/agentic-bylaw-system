@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/cn";
 
 type Category = "ux_issue" | "feature_request" | "general_satisfaction" | "other";
@@ -18,6 +18,15 @@ export function GeneralFeedbackButton() {
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    if (submitted) {
+      const timeoutId = setTimeout(() => {
+        setSubmitted(false);
+      }, 4000);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [submitted]);
 
   const handleOpen = () => {
     setOpen(true);
