@@ -44,6 +44,11 @@ class SessionListEntry:
     # attached to. ``None`` for legacy / un-cased sessions and for any
     # session store that doesn't track cases (the in-memory store).
     anchor_label: str | None
+    # Numeric FK to ``advisor_case``. Surfaced in the sessions-list
+    # response so the frontend can restore a session by ``?case_id=N``
+    # without an extra round-trip. ``None`` for legacy / un-cased
+    # sessions and for the in-memory store.
+    case_id: int | None
     # Count of plain-string user turns — same definition the sidebar
     # used to compute from in-memory ChatSession.messages.
     user_message_count: int
@@ -201,6 +206,7 @@ class InMemorySessionStore:
                     model=s.model,
                     first_user_message=first_user,
                     anchor_label=s.case_anchor_label,
+                    case_id=s.case_id,
                     user_message_count=user_count,
                     assistant_text_count=assistant_text_count,
                     updated_at=s.updated_at,

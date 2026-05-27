@@ -162,6 +162,40 @@ function ProductAppPageInner() {
     }
   }, [caseIdFromUrl, caseNumberFromUrl]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // On direct URL load (reload, share link, browser back/forward) with
+  // a ?case_id=N param but no ?first_message=, restore the most recent
+  // session for that case so the transcript and parcel pane aren't
+  // empty. Skipped when first_message is present — that flow mints a
+  // new session via send() and handles its own state hydration.
+  const restoredCaseIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (caseIdFromUrl === null) return;
+    if (searchParams.get("first_message")) return;
+    // Guard against running twice for the same case (React Strict Mode
+    // double-invoke, or a re-render triggered by state settling).
+    if (restoredCaseIdRef.current === caseIdFromUrl) return;
+    restoredCaseIdRef.current = caseIdFromUrl;
+
+    void (async () => {
+      try {
+        const res = await fetch("/api/chat/sessions", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          sessions: Array<{ session_id: string; case_id?: number | null }>;
+        };
+        // Sessions are already newest-first from the backend; pick the
+        // first one whose case_id matches the URL param.
+        const match = data.sessions.find((s) => s.case_id === caseIdFromUrl);
+        if (match) {
+          await selectSession(match.session_id);
+        }
+      } catch {
+        // Non-critical: the page still renders; the user can click the
+        // sidebar to manually restore the session.
+      }
+    })();
+  }, [caseIdFromUrl, searchParams]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-send the first message that the case-open form passed via
   // ``?first_message=...``. Runs once: a ref guard handles React Strict
   // Mode's double-mount, and we strip the param via ``router.replace``
