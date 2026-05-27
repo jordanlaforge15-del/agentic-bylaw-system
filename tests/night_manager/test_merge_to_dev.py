@@ -442,3 +442,183 @@ class TestMergeToDev:
 
         assert success is True, f"merge should succeed after cleanup; got: {msg!r}"
         assert not (repo / "agent-garbage.txt").exists()
+
+
+# ---------------------------------------------------------------------------
+# ABS-172: rebase onto dev tip before merge (sibling-merge absorption)
+# ---------------------------------------------------------------------------
+
+
+def _init_origin_with_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    """Build a bare origin + main checkout clone with ``dev``.
+
+    Returns (origin_bare, main_checkout).
+    """
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _run(seed, "git", "init", "-q", "-b", "dev")
+    _run(seed, "git", "config", "user.email", "nm@test.com")
+    _run(seed, "git", "config", "user.name", "NM")
+    (seed / "shared.py").write_text("line1\nline2\nline3\n")
+    _run(seed, "git", "add", "shared.py")
+    _run(seed, "git", "commit", "-q", "-m", "base")
+
+    bare = tmp_path / "origin.git"
+    _run(seed, "git", "clone", "--bare", str(seed), str(bare))
+
+    checkout = tmp_path / "main"
+    _run(tmp_path, "git", "clone", "-q", str(bare), str(checkout))
+    _run(checkout, "git", "config", "user.email", "nm@test.com")
+    _run(checkout, "git", "config", "user.name", "NM")
+    return bare, checkout
+
+
+class TestRebaseBeforeMerge:
+    """ABS-172: ``merge_to_dev`` rebases the agent branch onto dev tip
+    before the merge, absorbing sibling merges within the same group."""
+
+    async def test_sibling_merge_absorbed_by_rebase(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Two agents touch the same file with non-conflicting edits.
+        First merges into dev; second's ``merge_to_dev`` rebases onto
+        the updated dev and merges cleanly."""
+        bare, checkout = _init_origin_with_checkout(tmp_path)
+
+        # Agent A: branch off dev, edit line 1
+        _run(checkout, "git", "checkout", "-q", "-b", "agent/ABS-A")
+        (checkout / "shared.py").write_text("AGENT-A\nline2\nline3\n")
+        _run(checkout, "git", "commit", "-aq", "-m", "agent A edit")
+
+        # Agent B: branch off dev (before A merges), edit line 3
+        _run(checkout, "git", "checkout", "-q", "dev")
+        _run(checkout, "git", "checkout", "-q", "-b", "agent/ABS-B")
+        (checkout / "shared.py").write_text("line1\nline2\nAGENT-B\n")
+        _run(checkout, "git", "commit", "-aq", "-m", "agent B edit")
+
+        # Create a real git worktree for agent B
+        _run(checkout, "git", "checkout", "-q", "dev")
+        wt_b = tmp_path / "wt-b"
+        _run(checkout, "git", "worktree", "add", str(wt_b), "agent/ABS-B")
+
+        # Simulate: Agent A merges into dev first
+        _run(checkout, "git", "merge", "--no-ff", "agent/ABS-A", "-m", "Merge ABS-A")
+        _run(checkout, "git", "push", "-q", "origin", "dev")
+
+        _patch_repo_root(monkeypatch, checkout)
+        issue_b = IssueState(
+            identifier="ABS-B",
+            title="Agent B",
+            branch="agent/ABS-B",
+            worktree=str(wt_b),
+            ports=IssuePorts(pg=5499, api=8099, web=3099),
+        )
+
+        success, msg = await merge_to_dev(issue_b)
+
+        assert success is True, f"merge should succeed after rebase; got: {msg!r}"
+        assert "ABS-B" in msg
+
+        # Both agents' changes are present in the merged file.
+        content = (checkout / "shared.py").read_text()
+        assert "AGENT-A" in content, "first agent's edit must survive"
+        assert "AGENT-B" in content, "second agent's edit must survive"
+
+        # Merge commit is on dev.
+        log_out = _run(checkout, "git", "log", "--oneline", "dev")
+        assert "Merge ABS-B" in log_out.stdout
+
+    async def test_sibling_conflict_returns_rebase_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Two agents edit the same line — rebase conflicts and
+        ``merge_to_dev`` returns ``(False, ...)`` with the conflicted
+        path in the error string."""
+        bare, checkout = _init_origin_with_checkout(tmp_path)
+
+        # Agent A edits line 2
+        _run(checkout, "git", "checkout", "-q", "-b", "agent/ABS-A")
+        (checkout / "shared.py").write_text("line1\nAGENT-A\nline3\n")
+        _run(checkout, "git", "commit", "-aq", "-m", "agent A edit line2")
+
+        # Agent B also edits line 2 — will conflict with A
+        _run(checkout, "git", "checkout", "-q", "dev")
+        _run(checkout, "git", "checkout", "-q", "-b", "agent/ABS-B")
+        (checkout / "shared.py").write_text("line1\nAGENT-B\nline3\n")
+        _run(checkout, "git", "commit", "-aq", "-m", "agent B edit line2")
+
+        _run(checkout, "git", "checkout", "-q", "dev")
+        wt_b = tmp_path / "wt-b"
+        _run(checkout, "git", "worktree", "add", str(wt_b), "agent/ABS-B")
+
+        # Agent A merges first
+        _run(checkout, "git", "merge", "--no-ff", "agent/ABS-A", "-m", "Merge ABS-A")
+        _run(checkout, "git", "push", "-q", "origin", "dev")
+
+        _patch_repo_root(monkeypatch, checkout)
+        issue_b = IssueState(
+            identifier="ABS-B",
+            title="Agent B",
+            branch="agent/ABS-B",
+            worktree=str(wt_b),
+            ports=IssuePorts(pg=5499, api=8099, web=3099),
+        )
+
+        success, msg = await merge_to_dev(issue_b)
+
+        assert success is False, "merge must fail when rebase conflicts"
+        assert "rebase-pre-merge failed" in msg
+        assert "shared.py" in msg or "conflict" in msg.lower()
+
+        # Worktree must be left clean (rebase aborted).
+        status = _run(wt_b, "git", "status", "--porcelain").stdout
+        assert status.strip() == "", "rebase --abort must leave worktree clean"
+
+        # Main checkout (dev) must also be clean — no merge was attempted.
+        main_status = _run(checkout, "git", "status", "--porcelain").stdout
+        assert main_status.strip() == "", "main checkout must stay clean"
+
+    async def test_rebase_log_line_emitted(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog,
+    ):
+        """The operator log contains the ``merge_to_dev: rebased ABS-XX
+        onto dev tip (Ns)`` line required by the acceptance criteria."""
+        bare, checkout = _init_origin_with_checkout(tmp_path)
+
+        _run(checkout, "git", "checkout", "-q", "-b", "agent/ABS-999-test")
+        (checkout / "feature.txt").write_text("work\n")
+        _run(checkout, "git", "add", "feature.txt")
+        _run(checkout, "git", "commit", "-q", "-m", "feature commit")
+
+        _run(checkout, "git", "checkout", "-q", "dev")
+        wt = tmp_path / "wt"
+        _run(checkout, "git", "worktree", "add", str(wt), "agent/ABS-999-test")
+
+        _patch_repo_root(monkeypatch, checkout)
+        issue = IssueState(
+            identifier="ABS-999",
+            title="Test merge",
+            branch="agent/ABS-999-test",
+            worktree=str(wt),
+            ports=IssuePorts(pg=5499, api=8099, web=3099),
+        )
+
+        with caplog.at_level(logging.INFO):
+            success, msg = await merge_to_dev(issue)
+
+        assert success is True, f"clean merge should succeed; got: {msg!r}"
+        rebase_logs = [
+            r.getMessage()
+            for r in caplog.records
+            if "rebased" in r.getMessage() and "dev tip" in r.getMessage()
+        ]
+        assert len(rebase_logs) == 1, f"expected exactly one rebase log line; got: {rebase_logs}"
+        assert "ABS-999" in rebase_logs[0]
+        assert "s)" in rebase_logs[0]  # timing: "(N.Ns)"

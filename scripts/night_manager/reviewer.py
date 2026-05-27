@@ -740,21 +740,55 @@ async def _clean_agent_leaked_files(cwd: str) -> int:
     return len(dirty_lines)
 
 
+async def _rebase_branch_onto_dev(issue: IssueState) -> tuple[bool, str]:
+    """Rebase the agent branch onto current dev tip before merge.
+
+    Delegates to ``agent.rebase_worktree_onto_dev`` (ABS-160) via a
+    lazy import to avoid a circular dependency (agent → reviewer for
+    ``_combine_streams``).  Adds merge-context timing to the log line.
+    """
+    from .agent import rebase_worktree_onto_dev
+
+    t0 = time.monotonic()
+    ok, msg = await rebase_worktree_onto_dev(issue)
+    elapsed = time.monotonic() - t0
+
+    if ok:
+        log.info(
+            "merge_to_dev: rebased %s onto dev tip (%.1fs)",
+            issue.identifier, elapsed,
+        )
+    return ok, msg
+
+
 async def merge_to_dev(issue: IssueState) -> tuple[bool, str]:
     """
     Merge the issue's branch into dev. Returns (success, message).
 
     Merges are sequential — caller must ensure only one merge at a time.
 
-    Before checking the clean-worktree precondition, runs an idempotent
-    cleanup pass to remove any files leaked into the main checkout by
-    misbehaving agents (see ABS-171).  If cleaning is needed, it is
-    logged so the operator has visibility.
+    Before checking the clean-worktree precondition, rebases the agent
+    branch onto the current dev tip (ABS-172). This absorbs sibling
+    merges that landed on dev earlier in the same execution group.
+    Without this, agents that touch files modified by an earlier sibling
+    merge will hit a content conflict at the ``git merge`` step even
+    though their worktree e2e passed.
+
+    Then runs an idempotent cleanup pass to remove any files leaked
+    into the main checkout by misbehaving agents (see ABS-171).
 
     After cleanup, the clean-worktree assertion still runs: if the
     checkout is *still* dirty (e.g. submodule state, lock files), the
     merge is refused with a clear error — same as before.
     """
+    # ABS-172: rebase agent branch onto dev tip to absorb sibling merges.
+    rebase_ok, rebase_err = await _rebase_branch_onto_dev(issue)
+    if not rebase_ok:
+        log.warning(
+            "Rebase onto dev failed for %s: %s", issue.identifier, rebase_err,
+        )
+        return False, f"rebase-pre-merge failed: {rebase_err}"
+
     target = str(REPO_ROOT)
     await _clean_agent_leaked_files(target)
 
