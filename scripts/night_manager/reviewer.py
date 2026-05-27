@@ -7,7 +7,10 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from .config import NMConfig, REPO_ROOT, LOGS_DIR, MAX_REVIEW_CYCLES, MAX_E2E_FIX_CYCLES, MAX_REGRESSION_FIX_CYCLES
@@ -16,6 +19,22 @@ from .state import IssueState
 log = logging.getLogger("night_manager.reviewer")
 
 HEARTBEAT_INTERVAL = 60  # seconds between "still alive" log lines
+_FLAKE_CANDIDATE_THRESHOLD = 3  # flakes needed before surfacing flake_candidate=true
+
+# Maps test key → list of booleans (True = test recovered on that solo re-run).
+# In-memory only; resets on NM restart, which is fine for the rolling-window intent.
+_flake_history: dict[str, list[bool]] = defaultdict(list)
+
+
+@dataclass
+class _FailingTest:
+    """Structured representation of a single failing Playwright test."""
+    spec_file: str   # relative path under web/ (e.g. e2e/functional/foo.spec.ts)
+    test_title: str  # full title including describe stack (e.g. "Suite › test name")
+
+    @property
+    def key(self) -> str:
+        return f"{self.spec_file}::{self.test_title}"
 
 
 async def _periodic_heartbeat(label: str, interval: int = HEARTBEAT_INTERVAL) -> None:
@@ -340,6 +359,128 @@ async def code_review(issue: IssueState, config: NMConfig) -> tuple[bool, str]:
     return True, summary
 
 
+def _extract_failing_tests_structured(worktree: str) -> list[_FailingTest]:
+    """Parse Playwright results.json and return structured failing test data.
+
+    Mirrors the logic in `_extract_failing_tests` but returns typed objects
+    suitable for driving the solo re-run in `_classify_e2e_flake`.
+    """
+    results_path = Path(worktree) / "web" / "test-results" / "results.json"
+    try:
+        data = json.loads(results_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.debug("Could not read Playwright results.json from %s: %s", worktree, exc)
+        return []
+
+    failing: list[_FailingTest] = []
+
+    def _walk_suites(suites: list, file_path: str, describe_stack: list[str]) -> None:
+        for suite in suites:
+            title = suite.get("title") or ""
+            child_suites = suite.get("suites") or []
+            specs = suite.get("specs") or []
+            new_stack = describe_stack + ([title] if title else [])
+            _walk_suites(child_suites, file_path, new_stack)
+            for spec in specs:
+                spec_title = spec.get("title", "")
+                tests = spec.get("tests") or []
+                is_failing = any(
+                    result.get("status") in ("failed", "timedOut")
+                    for test in tests
+                    for result in (test.get("results") or [])
+                )
+                if is_failing:
+                    parts = new_stack + [spec_title]
+                    full_title = " › ".join(p for p in parts if p)
+                    failing.append(_FailingTest(spec_file=file_path, test_title=full_title))
+
+    top_suites = data.get("suites") or []
+    for top in top_suites:
+        file_path = top.get("file") or top.get("title") or ""
+        child_suites = top.get("suites") or []
+        specs = top.get("specs") or []
+        _walk_suites(child_suites, file_path, [])
+        for spec in specs:
+            spec_title = spec.get("title", "")
+            tests = spec.get("tests") or []
+            is_failing = any(
+                result.get("status") in ("failed", "timedOut")
+                for test in tests
+                for result in (test.get("results") or [])
+            )
+            if is_failing:
+                failing.append(_FailingTest(spec_file=file_path, test_title=spec_title))
+
+    return failing
+
+
+async def _classify_e2e_flake(
+    worktree: str,
+    issue_identifier: str,
+    env: dict,
+) -> tuple[bool, int]:
+    """Classify whether failing e2e tests are flakes via solo re-run.
+
+    Reads results.json from the *already-running* e2e stack (make e2e leaves
+    it up when Playwright exits non-zero) and re-runs each failing test in
+    isolation with `npx playwright test <spec> --grep <title>`.
+
+    Returns (is_flake, n_recovered):
+      is_flake=True  → all failures passed on solo re-run; treat as flake.
+      n_recovered    → count of tests that recovered.
+
+    Updates the in-memory _flake_history and logs flake_candidate=true for
+    any test that has recovered ≥ _FLAKE_CANDIDATE_THRESHOLD times.
+    """
+    failing_tests = _extract_failing_tests_structured(worktree)
+    if not failing_tests:
+        log.debug(
+            "classify_flake for %s: no structured failing tests found in results.json, "
+            "treating as real failure",
+            issue_identifier,
+        )
+        return False, 0
+
+    log.info(
+        "classify_flake for %s: %d failing test(s) found, attempting solo re-run",
+        issue_identifier, len(failing_tests),
+    )
+
+    recovered = 0
+    for test in failing_tests:
+        grep_pattern = re.escape(test.test_title)
+        cmd = [
+            "npx", "playwright", "test",
+            test.spec_file,
+            "--grep", grep_pattern,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(Path(worktree) / "web"),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+        stdout, _ = await proc.communicate()
+        passed = proc.returncode == 0
+        log.debug(
+            "classify_flake solo re-run [%s > %s]: %s",
+            test.spec_file, test.test_title, "PASS" if passed else "FAIL",
+        )
+        _flake_history[test.key].append(passed)
+        if passed:
+            recovered += 1
+            flake_count = sum(1 for v in _flake_history[test.key] if v)
+            if flake_count >= _FLAKE_CANDIDATE_THRESHOLD:
+                log.warning(
+                    "flake_candidate=true test='%s > %s' (recovered %d times across runs)",
+                    test.spec_file, test.test_title, flake_count,
+                )
+
+    is_flake = recovered == len(failing_tests)
+    return is_flake, recovered
+
+
 def _extract_failing_tests(worktree: str) -> str:
     """Parse Playwright JSON reporter output and return a formatted list of
     failing test names with isolation invocations.
@@ -472,6 +613,22 @@ async def run_e2e(issue: IssueState) -> tuple[bool, str]:
         failing_names = _extract_failing_tests(worktree)
         if failing_names:
             tail = failing_names + "\n\n" + tail
+        is_flake, n_recovered = await _classify_e2e_flake(worktree, issue.identifier, env)
+        # Tear down the stack regardless; make e2e left it up on failure.
+        _down = await asyncio.create_subprocess_exec(
+            "./scripts/e2e-down.sh",
+            cwd=worktree,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        await _down.communicate()
+        if is_flake:
+            log.info(
+                "Flake recovered for %s: %d tests passed on solo re-run. flake_recovered=true",
+                issue.identifier, n_recovered,
+            )
+            return True, tail + f"\n\nflake_recovered=true ({n_recovered} test(s) passed on solo re-run)"
     return passed, tail
 
 
@@ -690,6 +847,22 @@ async def run_dev_e2e(issue: IssueState) -> tuple[bool, str]:
         failing_names = _extract_failing_tests(worktree)
         if failing_names:
             tail = failing_names + "\n\n" + tail
+        is_flake, n_recovered = await _classify_e2e_flake(worktree, issue.identifier, env)
+        # Tear down the stack regardless; make e2e left it up on failure.
+        _down = await asyncio.create_subprocess_exec(
+            "./scripts/e2e-down.sh",
+            cwd=worktree,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        await _down.communicate()
+        if is_flake:
+            log.info(
+                "Flake recovered for %s: %d tests passed on solo re-run. flake_recovered=true",
+                issue.identifier, n_recovered,
+            )
+            return True, tail + f"\n\nflake_recovered=true ({n_recovered} test(s) passed on solo re-run)"
     return passed, tail
 
 
