@@ -48,6 +48,12 @@ async def run(config: NMConfig) -> None:
 
         workflow_states = await linear.get_workflow_states()
 
+        # ABS-166: flip any status=merged issue whose merge was later reverted
+        # on dev back to reverted + Backlog in Linear. Must run before
+        # _backfill_linear_done_for_merged so those issues are no longer
+        # "merged" when the Done backfill runs.
+        await _backfill_reverted_for_stale_merges(state, linear, workflow_states)
+
         # ABS-151: at every fresh-run startup, re-assert Done in Linear
         # for any prior-run issue whose status=merged but whose Linear
         # update was lost to a crash. Idempotent; safe to run unconditionally.
@@ -228,6 +234,8 @@ async def _run_resume(config: NMConfig) -> None:
         await _push_linear_state_for_reconciled(
             state, linear, workflow_states, newly_merged, newly_blocked,
         )
+        # ABS-166: flip any status=merged issue whose merge was later reverted.
+        await _backfill_reverted_for_stale_merges(state, linear, workflow_states)
         await _backfill_linear_done_for_merged(state, linear, workflow_states)
         await _execute(state, config, linear, workflow_states)
         await _generate_report(state, linear)
@@ -432,6 +440,80 @@ async def _push_linear_state_for_reconciled(
             log.warning(
                 "reconciler: failed to push Backlog for %s: %s", ident, exc,
             )
+
+
+async def _backfill_reverted_for_stale_merges(
+    state: NMState,
+    linear: LinearClient,
+    workflow_states: dict[str, str],
+) -> list[str]:
+    """Detect status=merged issues whose merge was later reverted on dev.
+
+    Scans state.json for status=merged entries. For each, checks whether a
+    ``Revert "Merge ABS-XXX..."`` commit exists on dev. When found, flips
+    the local state to ``reverted`` and reopens the Linear ticket to Backlog
+    with an explanatory comment.
+
+    This is the startup-time backfill that cleans up the historical mess from
+    runs that pre-date ABS-166 (four tickets were left at Done after their
+    merges were silently reverted). It is idempotent: issues already marked
+    ``reverted`` are skipped, and Linear only transitions if the current
+    state differs.
+
+    Must run BEFORE ``_backfill_linear_done_for_merged`` so that issues
+    detected here are no longer ``merged`` and won't be re-pushed to Done.
+    """
+    backlog_id = workflow_states.get("Backlog")
+    if not backlog_id:
+        return []
+
+    updated: list[str] = []
+    for ident, issue in state.issues.items():
+        if issue.status != "merged":
+            continue
+        if not issue.linear_id:
+            continue
+
+        revert_marker = _git_oneline(
+            "log", "dev", "--oneline", "-n", "50",
+            f"--grep=Revert.*{ident}",
+        )
+        if not revert_marker:
+            continue
+
+        revert_sha = revert_marker.split()[0] if revert_marker else ""
+        log.info(
+            "backfill-revert: %s was merged but later reverted (%s) — "
+            "flipping to reverted + reopening Linear",
+            ident, revert_sha,
+        )
+        issue.mark_reverted(revert_sha)
+
+        try:
+            await linear.update_issue_state(issue.linear_id, backlog_id)
+            log.info("backfill-revert: pushed Backlog to Linear for %s", ident)
+        except Exception as exc:
+            log.warning("backfill-revert: failed to push Backlog for %s: %s", ident, exc)
+
+        try:
+            await linear.post_comment(
+                issue.linear_id,
+                f"**Night Manager** — Merge reverted (`{revert_sha}`).\n"
+                f"Reason: post-merge regression e2e detected failures. "
+                f"Re-flipped to Backlog for re-pickup. See revert commit for diff.",
+            )
+        except Exception as exc:
+            log.warning("backfill-revert: failed to post comment for %s: %s", ident, exc)
+
+        updated.append(ident)
+
+    if updated:
+        state.save()
+        log.info(
+            "backfill-revert: processed %d reverted merge(s): %s",
+            len(updated), updated,
+        )
+    return updated
 
 
 async def _backfill_linear_done_for_merged(
@@ -861,11 +943,13 @@ async def _merge_and_regression_loop(
     config: NMConfig,
     state: NMState,
     linear,
+    workflow_states: dict[str, str] | None = None,
 ) -> bool:
     """Merge the issue into dev and run regression e2e.
 
-    On regression failure, reverts the merge, resumes the agent to fix,
-    and retries up to MAX_REGRESSION_FIX_CYCLES times.
+    On regression failure, reverts the merge, flips the Linear ticket back to
+    Backlog (ABS-166), resumes the agent to fix, and retries up to
+    MAX_REGRESSION_FIX_CYCLES times.
     Returns True if merged and regression passed.
     """
     from .agent import resume_agent, monitor_agent, teardown_e2e_stack
@@ -883,6 +967,8 @@ async def _merge_and_regression_loop(
         )
         return False
 
+    backlog_id = (workflow_states or {}).get("Backlog")
+
     for reg_cycle in range(MAX_REGRESSION_FIX_CYCLES + 1):
         log.info(
             "Regression e2e for %s (attempt %d/%d)",
@@ -896,9 +982,35 @@ async def _merge_and_regression_loop(
             "Regression detected after merging %s (attempt %d/%d), reverting",
             issue.identifier, reg_cycle + 1, MAX_REGRESSION_FIX_CYCLES + 1,
         )
-        await revert_merge(issue)
+        reverted, revert_msg, revert_sha = await revert_merge(issue)
+
+        # ABS-166: always flip Linear back to Backlog on revert and post a comment.
+        if reverted:
+            issue.mark_reverted(revert_sha)
+            state.save()
+            if backlog_id:
+                try:
+                    await linear.update_issue_state(issue.linear_id, backlog_id)
+                except Exception as exc:
+                    log.warning(
+                        "Failed to push Backlog for %s after revert: %s",
+                        issue.identifier, exc,
+                    )
+            try:
+                await linear.post_comment(
+                    issue.linear_id,
+                    f"**Night Manager** — Merge reverted (`{revert_sha}`).\n"
+                    f"Reason: post-merge regression e2e detected failures. "
+                    f"Re-flipped to Backlog for re-pickup. See revert commit for diff.",
+                )
+            except Exception as exc:
+                log.warning(
+                    "Failed to post revert comment for %s: %s",
+                    issue.identifier, exc,
+                )
 
         if reg_cycle >= MAX_REGRESSION_FIX_CYCLES:
+            # Already marked reverted above; overwrite error with cycle count.
             issue.mark_failed(
                 f"Post-merge regression after {MAX_REGRESSION_FIX_CYCLES + 1} attempts",
             )
