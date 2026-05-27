@@ -123,11 +123,11 @@ export function GeneralFeedbackButton() {
               disabled={!category || !message.trim() || submitting}
               onClick={handleSubmit}
               className={cn(
-                "font-mono uppercase text-[10.5px] px-3 py-1.5 border cursor-pointer",
+                "font-mono uppercase text-[10.5px] px-3 py-1.5 border",
                 "transition-colors duration-100",
                 category && message.trim()
-                  ? "border-accent text-accent-ink hover:bg-accent/10"
-                  : "border-hair text-text-muted cursor-not-allowed",
+                  ? "border-accent text-accent-ink hover:bg-accent/10 cursor-pointer"
+                  : "border-hair text-text-muted cursor-not-allowed opacity-50",
               )}
               style={{ letterSpacing: "0.06em" }}
             >
