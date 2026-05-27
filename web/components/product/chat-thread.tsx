@@ -214,7 +214,18 @@ function AgentMsg({ msg, idx, sessionId }: { msg: AgentMessage; idx: number; ses
   );
 }
 
+function AnimatedEllipsis() {
+  return (
+    <span aria-hidden="true">
+      <span className="abs-ellipsis-dot">.</span>
+      <span className="abs-ellipsis-dot">.</span>
+      <span className="abs-ellipsis-dot">.</span>
+    </span>
+  );
+}
+
 function ThinkingMsg({ label }: { label: string }) {
+  const labelText = label.replace(/[.…]+$/, "");
   return (
     <div className="flex flex-col gap-2.5 sm:gap-3 mb-1">
       <div className="flex items-center gap-2">
@@ -241,7 +252,10 @@ function ThinkingMsg({ label }: { label: string }) {
           style={{ letterSpacing: "0.02em" }}
         >
           <span className="text-accent-ink">→</span>
-          <span>{label}</span>
+          <span>
+            {labelText}
+            <AnimatedEllipsis />
+          </span>
         </div>
       </div>
     </div>
