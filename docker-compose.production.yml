@@ -128,6 +128,45 @@ services:
       timeout: 5s
       retries: 5
 
+  monitor:
+    image: ghcr.io/jordanlaforge15-del/bylaw-advisor:${ADVISOR_VERSION}
+    container_name: bylaw-monitor
+    restart: unless-stopped
+    command: ["python", "-m", "advisor.monitoring.main"]
+    environment:
+      MONITOR_TARGET_URL: http://advisor:8000/healthz
+      MONITOR_PROBE_INTERVAL_SECONDS: "60"
+      MONITOR_FAILURE_THRESHOLD: "2"
+      MONITOR_SLACK_WEBHOOK_URL: ${MONITOR_SLACK_WEBHOOK_URL:-}
+      MONITOR_ALERT_EMAIL_TO: ${MONITOR_ALERT_EMAIL_TO:-}
+      MONITOR_SMTP_HOST: ${MONITOR_SMTP_HOST:-}
+      MONITOR_SMTP_PORT: ${MONITOR_SMTP_PORT:-587}
+      MONITOR_SMTP_USER: ${MONITOR_SMTP_USER:-}
+      MONITOR_SMTP_PASSWORD: ${MONITOR_SMTP_PASSWORD:-}
+      MONITOR_SMTP_FROM: ${MONITOR_SMTP_FROM:-monitor@agenticbylawsystems.com}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    depends_on:
+      advisor:
+        condition: service_healthy
+    networks:
+      - default
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 128m
+    pids_limit: 50
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   default:
     name: bylaw-network

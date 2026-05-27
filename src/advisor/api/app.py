@@ -446,6 +446,11 @@ def create_app(
             )
         )
 
+    # Monitoring status router (ABS-122) — unauthenticated, always mounted.
+    from advisor.monitoring.router import router as monitoring_router  # noqa: PLC0415
+
+    app.include_router(monitoring_router)
+
     def _check_db() -> str:
         """Return ``"ok"`` if the database answers a ``SELECT 1``, else ``"unreachable"``."""
         if db_session_factory is None:
