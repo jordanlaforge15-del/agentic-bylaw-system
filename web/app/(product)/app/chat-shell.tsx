@@ -26,6 +26,7 @@ import { CaseUpgradePrompt } from "@/components/product/case-upgrade-prompt";
 import { ParcelPane } from "@/components/product/parcel-pane";
 import { AddressPill } from "@/components/product/address-pill";
 import { ParcelFab } from "@/components/product/parcel-fab";
+import { ChatDisclaimerBar } from "@/components/product/chat-disclaimer-bar";
 import { Drawer } from "@/components/drawer";
 import { Sheet } from "@/components/sheet";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
@@ -590,6 +591,7 @@ function ProductAppPageInner() {
               }}
             />
           )}
+          <ChatDisclaimerBar />
           {caseId === null ? (
             // No active case → /v1/chat would 400 case_id_required.
             // Two sub-states share this gate:
