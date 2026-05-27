@@ -126,7 +126,7 @@ function BalanceCard({ me }: { me: BillingMeResponse | null }) {
   if (!me) {
     return (
       <div className="bg-surface-alt border border-hair p-8">
-        <div className="font-semibold mb-2">Couldn't load balance</div>
+        <div className="font-semibold mb-2">Couldn&apos;t load balance</div>
         <div className="text-text-muted text-[13.5px]">
           Please try refreshing the page.
         </div>
@@ -134,8 +134,17 @@ function BalanceCard({ me }: { me: BillingMeResponse | null }) {
     );
   }
 
+  const balances = new Map(me.tier_balances.map((b) => [b.tier, b]));
+
   return (
     <div className="bg-surface-alt border border-hair p-8 rounded">
+      {!me.enabled && (
+        <div className="bg-surface border border-hair p-4 mb-6 text-[13px] text-text-muted">
+          Billing is dormant on this deployment. Purchases are not yet
+          available; admin can grant credits manually for beta access.
+        </div>
+      )}
+
       <div className="mb-6">
         <Mono muted size={10} className="mb-2">
           AVAILABLE CREDITS
@@ -145,40 +154,32 @@ function BalanceCard({ me }: { me: BillingMeResponse | null }) {
             className="font-semibold text-[48px] leading-[1]"
             style={{ fontVariantNumeric: "tabular-nums" }}
           >
-            {formatCurrency(me.credits_available)}
+            {me.total_available_credits}
           </span>
+          <span className="text-text-muted text-[14px]">credits</span>
         </div>
         <div className="text-text-muted text-[13.5px] mt-2">
-          Spend on any tier of case research
+          Available across all tiers
         </div>
       </div>
 
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-3 my-6">
         {TIER_ORDER.map((tier) => {
-          const display = TIER_DISPLAY[tier];
-          const used =
-            me.tier_usage?.find((t) => t.tier === tier)?.tokens_used ?? 0;
-          const budget =
-            me.tier_budgets?.find((t) => t.tier === tier)?.budget ?? 0;
+          const b = balances.get(tier);
           return (
             <div key={tier} className="bg-surface border border-hair p-4 rounded">
               <Mono muted size={9} className="mb-2 block">
-                {display.label.toUpperCase()}
+                {TIER_DISPLAY[tier].toUpperCase()}
               </Mono>
               <div className="text-[28px] font-semibold leading-[1] mb-1">
-                {budget > 0 ? `${used} / ${budget}` : "—"}
+                {b?.available ?? 0}
               </div>
-              <div className="text-[11.5px] text-text-muted">tokens used</div>
+              <div className="text-[11.5px] text-text-muted">
+                available · {b?.reserved ?? 0} in flight · {b?.consumed ?? 0} consumed
+              </div>
             </div>
           );
         })}
-      </div>
-
-      <div className="text-[13.5px] text-text-muted leading-[1.6]">
-        <p>
-          Your credits reset with each calendar month. Case-level usage is
-          tracked by tier, so you know exactly what you're spending and where.
-        </p>
       </div>
     </div>
   );
@@ -206,9 +207,11 @@ function PurchasesCard({
           {purchases.map((p) => (
             <div key={p.id} className="p-6 flex justify-between items-start">
               <div>
-                <div className="font-semibold mb-1">{p.description}</div>
+                <div className="font-semibold mb-1 capitalize">
+                  {TIER_DISPLAY[p.tier]} · {p.pack_sku} ({p.quantity}×)
+                </div>
                 <div className="text-[12.5px] text-text-muted">
-                  {new Date(p.created_at).toLocaleDateString("en-US", {
+                  {new Date(p.created_at).toLocaleDateString("en-CA", {
                     year: "numeric",
                     month: "long",
                     day: "numeric",
@@ -216,8 +219,9 @@ function PurchasesCard({
                 </div>
               </div>
               <div className="text-right">
-                <div className="font-semibold">{formatCurrency(p.amount)}</div>
-                <div className="text-[12.5px] text-text-muted">{p.status}</div>
+                <div className="font-semibold">
+                  {formatCurrency(p.amount_paid_cents, p.currency)}
+                </div>
               </div>
             </div>
           ))}
@@ -232,6 +236,7 @@ function CasesCard({
 }: {
   cases: CaseListResponse["cases"];
 }) {
+  const recent = cases.slice(0, 8);
   return (
     <div className="bg-surface-alt border border-hair rounded overflow-hidden">
       <div className="p-6 border-b border-hair">
@@ -240,7 +245,7 @@ function CasesCard({
         </Mono>
         <h2 className="text-[20px] font-semibold m-0">Recent research</h2>
       </div>
-      {cases.length === 0 ? (
+      {recent.length === 0 ? (
         <div className="p-6 text-text-muted text-[13.5px]">
           No cases yet.{" "}
           <Link href="/cases/new" className="underline text-text">
@@ -250,18 +255,18 @@ function CasesCard({
         </div>
       ) : (
         <div className="divide-y divide-hair">
-          {cases.map((c) => (
+          {recent.map((c) => (
             <Link
               key={c.id}
               href={`/app?case_id=${c.id}`}
               className="p-6 flex justify-between items-start hover:bg-surface transition-colors cursor-pointer"
             >
               <div className="flex-1">
-                <div className="font-semibold mb-1">
-                  {c.name || `Case #${c.id}`}
+                <div className="font-semibold mb-1 truncate max-w-[320px]">
+                  {c.anchor_label || `Case #${c.user_case_number}`}
                 </div>
                 <div className="text-[12.5px] text-text-muted">
-                  {new Date(c.created_at).toLocaleDateString("en-US", {
+                  {new Date(c.last_activity_at).toLocaleDateString("en-CA", {
                     year: "numeric",
                     month: "long",
                     day: "numeric",
@@ -269,9 +274,10 @@ function CasesCard({
                 </div>
               </div>
               <div className="text-right text-text-muted">
-                <div className="text-[12.5px] font-mono">
-                  {c.tier ? TIER_DISPLAY[c.tier]?.label : "—"}
+                <div className="text-[12.5px] font-mono capitalize">
+                  {c.current_tier ? TIER_DISPLAY[c.current_tier] : "—"}
                 </div>
+                <div className="text-[11px] capitalize">{c.status}</div>
               </div>
             </Link>
           ))}
