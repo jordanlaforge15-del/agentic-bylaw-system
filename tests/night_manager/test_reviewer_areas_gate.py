@@ -287,19 +287,38 @@ class TestCodeReviewWiresAreasGate:
         _run(repo, "git", "add", "Dockerfile.advisor")
         _run(repo, "git", "commit", "-q", "-m", "[ABS-84] add scripts copy")
 
+        import json as _json
+
         real_exec = rev_mod.asyncio.create_subprocess_exec
 
         async def faking_exec(*cmd, **kwargs):
             # Let git calls pass through; intercept the LLM call.
             if cmd and cmd[0] == "claude":
+                # Emulate stream-json output: one JSONL line with type=result.
+                result_line = _json.dumps({
+                    "type": "result",
+                    "subtype": "success",
+                    "result": '{"passed": true, "findings": [], "summary": "Looks good"}',
+                    "is_error": False,
+                }).encode() + b"\n"
+
+                class _AsyncLines:
+                    def __init__(self, lines):
+                        self._it = iter(lines)
+                    def __aiter__(self):
+                        return self
+                    async def __anext__(self):
+                        try:
+                            return next(self._it)
+                        except StopIteration:
+                            raise StopAsyncIteration
+
                 class FakeProc:
                     returncode = 0
-                    async def communicate(self):
-                        body = (
-                            '{"passed": true, "findings": [], '
-                            '"summary": "Looks good"}'
-                        )
-                        return body.encode(), b""
+                    stdout = _AsyncLines([result_line])
+                    async def wait(self):
+                        return 0
+
                 return FakeProc()
             return await real_exec(*cmd, **kwargs)
 

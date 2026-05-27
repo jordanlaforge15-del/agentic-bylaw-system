@@ -3,15 +3,34 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
-from .config import NMConfig, REPO_ROOT, MAX_REVIEW_CYCLES, MAX_E2E_FIX_CYCLES, MAX_REGRESSION_FIX_CYCLES
+from .config import NMConfig, REPO_ROOT, LOGS_DIR, MAX_REVIEW_CYCLES, MAX_E2E_FIX_CYCLES, MAX_REGRESSION_FIX_CYCLES
 from .state import IssueState
 
 log = logging.getLogger("night_manager.reviewer")
+
+HEARTBEAT_INTERVAL = 60  # seconds between "still alive" log lines
+
+
+async def _periodic_heartbeat(label: str, interval: int = HEARTBEAT_INTERVAL) -> None:
+    """Emit a 'still alive' log line every `interval` seconds until cancelled.
+
+    Call asyncio.create_task(_periodic_heartbeat(...)) and cancel the task
+    when the awaited operation completes.  The interval is intentionally
+    shorter than the 90-second silence threshold from ABS-167 so at least
+    one heartbeat fires before an operator would suspect a hang.
+    """
+    start = time.monotonic()
+    while True:
+        await asyncio.sleep(interval)
+        elapsed = int(time.monotonic() - start)
+        log.info("still alive — %s (running %ds)", label, elapsed)
 
 
 # Path prefixes that mark a touched file as "test-only" for the
@@ -184,6 +203,11 @@ async def code_review(issue: IssueState, config: NMConfig) -> tuple[bool, str]:
         )
         return False, areas_msg
 
+    log.info(
+        "reviewer: diff-vs-areas check (pass) → LLM review starting for %s (model=%s)",
+        issue.identifier, config.reviewer_model,
+    )
+
     diff_proc = await asyncio.create_subprocess_exec(
         "git", "diff", "dev...HEAD",
         cwd=worktree,
@@ -226,11 +250,20 @@ async def code_review(issue: IssueState, config: NMConfig) -> tuple[bool, str]:
 
     cmd = [
         "claude", "-p",
-        "--output-format", "json",
+        "--output-format", "stream-json",
         "--model", config.reviewer_model,
         "--max-budget-usd", str(config.reviewer_token_limit),
         review_prompt,
     ]
+
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    jsonl_path = LOGS_DIR / f"{issue.identifier}-review.jsonl"
+
+    t_start = time.monotonic()
+    log.info(
+        "Reviewer LLM started for %s (model=%s) — streaming to %s",
+        issue.identifier, config.reviewer_model, jsonl_path,
+    )
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -238,12 +271,42 @@ async def code_review(issue: IssueState, config: NMConfig) -> tuple[bool, str]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
-    raw = stdout.decode("utf-8", errors="replace").strip()
+
+    result_text = ""
+    hb = asyncio.create_task(
+        _periodic_heartbeat(f"LLM review for {issue.identifier} (model={config.reviewer_model})")
+    )
+    try:
+        with jsonl_path.open("w", encoding="utf-8") as fh:
+            assert proc.stdout is not None
+            async for line_bytes in proc.stdout:
+                decoded = line_bytes.decode("utf-8", errors="replace")
+                fh.write(decoded)
+                fh.flush()
+                try:
+                    event = json.loads(decoded)
+                    if event.get("type") == "result":
+                        result_text = event.get("result", "")
+                except json.JSONDecodeError:
+                    pass
+        await proc.wait()
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
+
+    elapsed = time.monotonic() - t_start
+    raw = result_text.strip()
+    log.info(
+        "Reviewer LLM returned for %s (elapsed=%.0fs, bytes=%d)",
+        issue.identifier, elapsed, len(raw),
+    )
 
     try:
         result = json.loads(raw)
-        if isinstance(result, dict) and "result" in result:
+        # Defensive unwrap: if the text was double-encoded (legacy json format),
+        # peel the outer envelope. stream-json delivers the text directly.
+        if isinstance(result, dict) and "result" in result and set(result.keys()) <= {"result", "session_id", "type", "subtype", "cost_usd", "usage", "is_error"}:
             inner = result["result"]
             if isinstance(inner, str):
                 inner = json.loads(inner)
@@ -378,6 +441,10 @@ async def run_e2e(issue: IssueState) -> tuple[bool, str]:
     )
     await down_proc.communicate()
 
+    log.info(
+        "E2E starting for %s (PG=%d API=%d WEB=%d)",
+        issue.identifier, ports.pg, ports.api, ports.web,
+    )
     proc = await asyncio.create_subprocess_exec(
         "make", "e2e",
         cwd=worktree,
@@ -385,7 +452,13 @@ async def run_e2e(issue: IssueState) -> tuple[bool, str]:
         stderr=asyncio.subprocess.STDOUT,
         env=env,
     )
-    stdout, _ = await proc.communicate()
+    hb = asyncio.create_task(_periodic_heartbeat(f"e2e run for {issue.identifier}"))
+    try:
+        stdout, _ = await proc.communicate()
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
     output = stdout.decode("utf-8", errors="replace")
     passed = proc.returncode == 0
 
@@ -469,6 +542,7 @@ async def merge_to_dev(issue: IssueState) -> tuple[bool, str]:
         log.error("Merge precondition failed for %s: %s", issue.identifier, dirty_msg)
         return False, dirty_msg
 
+    log.info("Merge starting for %s: %s", issue.identifier, issue.title)
     cmds = [
         ["git", "checkout", "dev"],
         ["git", "pull", "--ff-only", "origin", "dev"],
@@ -585,6 +659,10 @@ async def run_dev_e2e(issue: IssueState) -> tuple[bool, str]:
     )
     await down_proc.communicate()
 
+    log.info(
+        "Dev regression e2e starting for %s (PG=%d API=%d WEB=%d)",
+        issue.identifier, ports.pg, ports.api, ports.web,
+    )
     proc = await asyncio.create_subprocess_exec(
         "make", "e2e",
         cwd=worktree,
@@ -592,7 +670,13 @@ async def run_dev_e2e(issue: IssueState) -> tuple[bool, str]:
         stderr=asyncio.subprocess.STDOUT,
         env=env,
     )
-    stdout, _ = await proc.communicate()
+    hb = asyncio.create_task(_periodic_heartbeat(f"dev regression e2e for {issue.identifier}"))
+    try:
+        stdout, _ = await proc.communicate()
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
     output = stdout.decode("utf-8", errors="replace")
     passed = proc.returncode == 0
 
