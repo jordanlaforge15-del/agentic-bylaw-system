@@ -42,6 +42,54 @@ test("feedback: thumbs up/down buttons appear and toggle on agent messages", asy
   await expect(thumbsDown).toHaveAttribute("aria-pressed", "true");
 });
 
+test("feedback: re-clicking selected thumbs button clears rating on server", async ({
+  page,
+}) => {
+  const { caseId } = await openCaseViaApi();
+  await page.goto(`/app?case_id=${caseId}`);
+
+  const textarea = page.getByPlaceholder(/Ask about this parcel/);
+  const sendBtn = page.getByRole("button", { name: /^Send/ });
+  const thread = page.getByTestId("chat-thread");
+
+  await textarea.fill("What are the setback requirements?");
+  await sendBtn.click();
+  await expect(thread).toContainText(/Based on the bylaw evidence/i, {
+    timeout: 15_000,
+  });
+
+  const feedbackContainer = page.getByTestId("message-feedback").first();
+  await expect(feedbackContainer).toBeVisible({ timeout: 10_000 });
+
+  const thumbsUp = page.getByTestId("feedback-thumbs-up").first();
+
+  // Intercept first click to verify rating: "up"
+  const promise1 = page.waitForResponse(
+    (response) =>
+      response.url().includes("/feedback") && response.status() === 200,
+  );
+  await thumbsUp.click();
+  const response1 = await promise1;
+  const body1 = JSON.parse(
+    response1.request().postDataBuffer()?.toString() || "{}",
+  );
+  expect(body1.rating).toBe("up");
+  await expect(thumbsUp).toHaveAttribute("aria-pressed", "true");
+
+  // Intercept second click to verify rating: null
+  const promise2 = page.waitForResponse(
+    (response) =>
+      response.url().includes("/feedback") && response.status() === 200,
+  );
+  await thumbsUp.click();
+  const response2 = await promise2;
+  const body2 = JSON.parse(
+    response2.request().postDataBuffer()?.toString() || "{}",
+  );
+  expect(body2.rating).toBe(null);
+  await expect(thumbsUp).toHaveAttribute("aria-pressed", "false");
+});
+
 test("feedback: flag panel opens, requires reason, and submits", async ({
   page,
 }) => {

@@ -40,7 +40,7 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              rating: payload.rating ?? rating,
+              rating: payload.rating !== undefined ? payload.rating : rating,
               flag_reason: payload.flag_reason ?? flagReason,
               flag_notes: payload.flag_notes ?? (flagNotes || null),
             }),
