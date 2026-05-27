@@ -218,33 +218,34 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
             maxLength={2000}
           />
 
-          <div className="flex gap-2">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                data-testid="flag-submit"
-                disabled={(flagOpenedViaThumbsDown ? false : !flagReason) || submitting}
-                onClick={handleFlagSubmit}
-                className={cn(
-                  "font-mono uppercase text-[10.5px] px-3 py-1.5 border cursor-pointer",
-                  "transition-colors duration-100",
-                  flagOpenedViaThumbsDown || flagReason
-                    ? "border-accent text-accent-ink hover:bg-accent/10"
-                    : "border-hair text-text-muted cursor-not-allowed",
-                )}
-                style={{ letterSpacing: "0.06em" }}
-              >
-                Submit
-              </button>
-              {flagSubmitted && (
-                <span
-                  data-testid="flag-saved-indicator"
-                  className="text-[10.5px] font-mono text-text-muted"
+          <div className="flex flex-col gap-1.5">
+            <div className="flex gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="flag-submit"
+                  disabled={(flagOpenedViaThumbsDown ? false : !flagReason) || submitting}
+                  onClick={handleFlagSubmit}
+                  className={cn(
+                    "font-mono uppercase text-[10.5px] px-3 py-1.5 border",
+                    "transition-colors duration-100",
+                    flagOpenedViaThumbsDown || flagReason
+                      ? "border-accent text-accent-ink hover:bg-accent/10 cursor-pointer"
+                      : "border-hair text-text-muted cursor-not-allowed opacity-50",
+                  )}
+                  style={{ letterSpacing: "0.06em" }}
                 >
-                  Saved.
-                </span>
-              )}
-            </div>
+                  Submit
+                </button>
+                {flagSubmitted && (
+                  <span
+                    data-testid="flag-saved-indicator"
+                    className="text-[10.5px] font-mono text-text-muted"
+                  >
+                    Saved.
+                  </span>
+                )}
+              </div>
             <button
               type="button"
               data-testid="flag-cancel"
@@ -256,6 +257,7 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
             </button>
           </div>
         </div>
+      </div>
       )}
 
       {toastType === "flag" && (
