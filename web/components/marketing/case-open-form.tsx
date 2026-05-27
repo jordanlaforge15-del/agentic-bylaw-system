@@ -27,9 +27,9 @@ import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 
 const TIER_BUDGETS: Record<Tier, string> = {
-  quick: "12k tokens · 4–6 retrieval rounds",
-  standard: "45k tokens · 12–18 retrieval rounds",
-  complex: "130k tokens · 35–50 retrieval rounds",
+  quick: "12k tokens · 4–6 reasoning steps",
+  standard: "45k tokens · 12–18 reasoning steps",
+  complex: "130k tokens · 35–50 reasoning steps",
 };
 
 // Only "address" is backed by a live data source in beta.

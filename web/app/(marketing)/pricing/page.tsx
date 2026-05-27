@@ -26,11 +26,11 @@ export const dynamic = "force-dynamic";
 
 const TIER_BLURBS: Record<Tier, string> = {
   quick:
-    "Single-property zoning lookups, permitted-use checks. ~4–6 retrieval rounds.",
+    "Single-property zoning lookups, permitted-use checks. ~4–6 reasoning steps.",
   standard:
-    "Variance research, multi-section cross-references, development standards. ~12–18 retrieval rounds.",
+    "Variance research, multi-section cross-references, development standards. ~12–18 reasoning steps.",
   complex:
-    "Rezoning, multi-overlay analysis, deep development-application files. ~35–50 retrieval rounds.",
+    "Rezoning, multi-overlay analysis, deep development-application files. ~35–50 reasoning steps.",
 };
 
 const TIER_ORDER: Tier[] = ["quick", "standard", "complex"];
