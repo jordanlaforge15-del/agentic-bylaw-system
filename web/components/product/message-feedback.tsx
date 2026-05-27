@@ -22,6 +22,7 @@ const FLAG_OPTIONS: { value: FlagReason & string; label: string }[] = [
 export function MessageFeedback({ sessionId, messageId }: Props) {
   const [rating, setRating] = useState<Rating>(null);
   const [flagOpen, setFlagOpen] = useState(false);
+  const [flagOpenedViaThumbsDown, setFlagOpenedViaThumbsDown] = useState(false);
   const [flagReason, setFlagReason] = useState<FlagReason>(null);
   const [flagNotes, setFlagNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -70,18 +71,36 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
   const handleThumb = (value: Rating) => {
     const next = rating === value ? null : value;
     setRating(next);
-    void submitFeedback({ rating: next, toastType: "thumbs" });
+    if (next === "down") {
+      // Auto-open the flag panel so user can explain why
+      setFlagOpen(true);
+      setFlagOpenedViaThumbsDown(true);
+      void submitFeedback({ rating: next }); // toast deferred until panel submit/skip
+    } else {
+      if (value === "down") {
+        // Un-toggling thumbs-down — close the auto-opened panel
+        setFlagOpen(false);
+        setFlagOpenedViaThumbsDown(false);
+      }
+      void submitFeedback({ rating: next, toastType: "thumbs" });
+    }
   };
 
   const handleFlagSubmit = () => {
-    if (!flagReason) return;
+    if (!flagOpenedViaThumbsDown && !flagReason) return;
     setFlagSubmitted(true);
     setFlagOpen(false);
+    setFlagOpenedViaThumbsDown(false);
     void submitFeedback({
-      flag_reason: flagReason,
+      flag_reason: flagReason ?? undefined,
       flag_notes: flagNotes || undefined,
       toastType: "flag",
     });
+  };
+
+  const handleFlagCancel = () => {
+    setFlagOpen(false);
+    setFlagOpenedViaThumbsDown(false);
   };
 
   return (
@@ -137,7 +156,10 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
           type="button"
           data-testid="feedback-flag-btn"
           disabled={submitting}
-          onClick={() => setFlagOpen((o) => !o)}
+          onClick={() => {
+            setFlagOpen((o) => !o);
+            setFlagOpenedViaThumbsDown(false);
+          }}
           className={cn(
             "inline-flex items-center justify-center border cursor-pointer",
             "transition-colors duration-100",
@@ -162,7 +184,7 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
             className="font-mono uppercase text-text-muted"
             style={{ fontSize: 10, letterSpacing: "0.08em" }}
           >
-            Report an issue
+            {flagOpenedViaThumbsDown ? "What went wrong?" : "Report an issue"}
           </span>
 
           <div className="flex flex-wrap gap-1.5">
@@ -188,7 +210,7 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
 
           <textarea
             data-testid="flag-notes"
-            placeholder="Optional detail..."
+            placeholder={flagOpenedViaThumbsDown ? "What went wrong?" : "Optional detail..."}
             value={flagNotes}
             onChange={(e) => setFlagNotes(e.target.value)}
             className="w-full border border-hair bg-surface text-text text-[12.5px] p-2 resize-none"
@@ -201,12 +223,12 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
               <button
                 type="button"
                 data-testid="flag-submit"
-                disabled={!flagReason || submitting}
+                disabled={(flagOpenedViaThumbsDown ? false : !flagReason) || submitting}
                 onClick={handleFlagSubmit}
                 className={cn(
                   "font-mono uppercase text-[10.5px] px-3 py-1.5 border cursor-pointer",
                   "transition-colors duration-100",
-                  flagReason
+                  flagOpenedViaThumbsDown || flagReason
                     ? "border-accent text-accent-ink hover:bg-accent/10"
                     : "border-hair text-text-muted cursor-not-allowed",
                 )}
@@ -226,11 +248,11 @@ export function MessageFeedback({ sessionId, messageId }: Props) {
             <button
               type="button"
               data-testid="flag-cancel"
-              onClick={() => setFlagOpen(false)}
+              onClick={handleFlagCancel}
               className="font-mono uppercase text-[10.5px] px-3 py-1.5 border border-hair text-text-muted hover:text-text cursor-pointer"
               style={{ letterSpacing: "0.06em" }}
             >
-              Cancel
+              {flagOpenedViaThumbsDown ? "Skip" : "Cancel"}
             </button>
           </div>
         </div>
