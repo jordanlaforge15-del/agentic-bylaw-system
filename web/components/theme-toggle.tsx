@@ -1,7 +1,5 @@
-// Two-cell pill toggle that reads "04 / 03" — design-time labels intended
-// to evoke film stock or revision marks rather than sun/moon glyphs. The
-// active cell inverts (text fill, surface text); the inactive cell sits
-// transparent with muted text.
+// Two-cell pill toggle for light/dark mode. The active cell inverts (text
+// fill, surface text); the inactive cell sits transparent with muted text.
 
 "use client";
 
@@ -22,6 +20,7 @@ export function ThemeToggle({ size = "md" }: Props) {
       type="button"
       onClick={toggle}
       title="Toggle light / dark"
+      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
       className="inline-flex items-center bg-surface-alt border border-hair p-[2px] cursor-pointer font-mono uppercase"
       style={{ fontSize, letterSpacing: "0.12em" }}
     >
@@ -33,8 +32,9 @@ export function ThemeToggle({ size = "md" }: Props) {
             ? "bg-transparent text-text-muted"
             : "bg-text text-surface",
         )}
+        aria-hidden={isDark}
       >
-        04
+        Light
       </span>
       <span
         className={cn(
@@ -44,8 +44,9 @@ export function ThemeToggle({ size = "md" }: Props) {
             ? "bg-text text-surface"
             : "bg-transparent text-text-muted",
         )}
+        aria-hidden={!isDark}
       >
-        03
+        Dark
       </span>
     </button>
   );
