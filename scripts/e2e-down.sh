@@ -39,8 +39,13 @@ stop_pid() {
   # (or external processes squatting on the port) won't have one — the
   # lsof lookup ensures teardown still finds and kills the holder.
   if { [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; } && [[ -n "$fallback_port" ]]; then
-    local lsof_pid
-    lsof_pid="$(lsof -iTCP:"$fallback_port" -sTCP:LISTEN -tnP 2>/dev/null | head -1)"
+    # ABS-170: trailing `|| true` keeps the substitution rc=0 when lsof
+    # finds no listener on the port. Without it, `set -euo pipefail`
+    # treats the failed pipeline as a script-level error and e2e-down
+    # exits silently after "Stopping Next.js" — leaving the postgres
+    # container alive and reproducing the symptom we set out to fix.
+    local lsof_pid=""
+    lsof_pid="$(lsof -iTCP:"$fallback_port" -sTCP:LISTEN -tnP 2>/dev/null | head -1 || true)"
     if [[ -n "$lsof_pid" ]]; then
       echo "${label}: pidfile missing/stale — using :${fallback_port} holder PID ${lsof_pid}"
       pid="$lsof_pid"
@@ -78,17 +83,26 @@ stop_pid "${PID_DIR}/web.pid" "web" "$E2E_WEB_PORT"
 log "Stopping FastAPI"
 stop_pid "${PID_DIR}/fastapi.pid" "fastapi" "$E2E_FASTAPI_PORT"
 
+docker_compose_cmd() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  else
+    docker-compose "$@"
+  fi
+}
+
 if [[ "$DROP_DB" -eq 1 ]]; then
   log "Dropping test database ${E2E_TEST_DB}"
-  docker_compose_cmd() {
-    if docker compose version >/dev/null 2>&1; then
-      docker compose "$@"
-    else
-      docker-compose "$@"
-    fi
-  }
   docker_compose_cmd exec -T postgres psql -U "$PG_USER" -d postgres -c \
     "DROP DATABASE IF EXISTS \"${E2E_TEST_DB}\""
 fi
+
+# ABS-170: Remove the postgres container so the next `e2e-up` cannot attach
+# to it with a stale port mapping. The compose project's named volume is
+# preserved (no -v), so DB content survives container recreation. Without
+# this, a worktree relaunched with a different PG_PORT silently keeps the
+# old port and NM's reviewer e2e fails at startup with no useful signal.
+log "Removing Postgres container (volume preserved)"
+docker_compose_cmd rm -fs postgres >/dev/null 2>&1 || true
 
 log "E2E stack is down"
