@@ -11,18 +11,31 @@
 // polygon, but that needs the geocoder to surface the parcel
 // geometry first.
 
+"use client";
+
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 import type { ParcelContext } from "@/lib/parcel";
 
 type Props = {
   parcel: ParcelContext | null;
+  sessionId?: string | null;
+  caseId?: number | null;
   // When `true`, the pane drops its fixed width and left border — the
   // parent (Sheet on mobile, side overlay on tablet) supplies them.
   inSheet?: boolean;
 };
 
-export function ParcelPane({ parcel, inSheet }: Props) {
+export function ParcelPane({ parcel, sessionId, caseId, inSheet }: Props) {
+  const [shareOpen, setShareOpen] = useState(false);
+
+  const handleExport = () => {
+    if (!sessionId) return;
+    window.open(`/app/print?session_id=${encodeURIComponent(sessionId)}`, "_blank");
+  };
+
   return (
     <aside
       className={
@@ -49,8 +62,9 @@ export function ParcelPane({ parcel, inSheet }: Props) {
           variant="primary"
           size="sm"
           className="w-full"
-          disabled={!parcel}
-          style={{ opacity: parcel ? 1 : 0.5 }}
+          disabled={!sessionId}
+          style={{ opacity: sessionId ? 1 : 0.5 }}
+          onClick={handleExport}
         >
           Export reading (PDF)
         </Btn>
@@ -58,15 +72,152 @@ export function ParcelPane({ parcel, inSheet }: Props) {
           variant="ghost"
           size="sm"
           className="w-full"
-          disabled={!parcel}
-          style={{ opacity: parcel ? 1 : 0.5 }}
+          disabled={!caseId}
+          style={{ opacity: caseId ? 1 : 0.5 }}
+          onClick={() => caseId && setShareOpen(true)}
         >
           Share with team
         </Btn>
       </div>
+
+      {shareOpen && caseId && (
+        <ShareModal
+          caseId={caseId}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
     </aside>
   );
 }
+
+// ── Share modal ─────────────────────────────────────────────────────────────
+
+type ShareModalProps = {
+  caseId: number;
+  onClose: () => void;
+};
+
+function ShareModal({ caseId, onClose }: ShareModalProps) {
+  const [copied, setCopied] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const shareUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/app?case_id=${caseId}`
+      : "";
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+    } catch {
+      // Fallback for non-HTTPS or restricted contexts
+      const el = document.createElement("textarea");
+      el.value = shareUrl;
+      el.style.position = "fixed";
+      el.style.opacity = "0";
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      aria-modal="true"
+      role="dialog"
+      aria-label="Share this reading"
+    >
+      {/* Scrim */}
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="absolute inset-0 bg-overlay cursor-default"
+      />
+
+      {/* Panel */}
+      <div
+        className="relative bg-surface border border-hair shadow-lg w-full mx-4"
+        style={{ maxWidth: 400 }}
+      >
+        {/* Header */}
+        <div className="border-b border-hair px-5 py-4 flex justify-between items-center">
+          <Mono>SHARE READING</Mono>
+          <button
+            type="button"
+            aria-label="Close share modal"
+            onClick={onClose}
+            className="text-text-muted hover:text-text transition-colors text-[18px] leading-none"
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-5 py-5 flex flex-col gap-4">
+          {/* Link copy */}
+          <div className="flex flex-col gap-2">
+            <label className="text-[11px] font-mono text-text-muted tracking-[0.05em] uppercase">
+              Link
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                readOnly
+                value={shareUrl}
+                className="flex-1 bg-surface-alt border border-hair px-3 py-2 text-[12.5px] font-mono text-text-muted min-w-0"
+                onFocus={(e) => e.currentTarget.select()}
+              />
+              <Btn
+                variant="primary"
+                size="sm"
+                onClick={handleCopy}
+                style={{ whiteSpace: "nowrap" }}
+              >
+                {copied ? "Copied!" : "Copy link"}
+              </Btn>
+            </div>
+            <p className="text-[11.5px] text-text-muted leading-[1.5] m-0">
+              Anyone with access to this account can open this case from the link.
+            </p>
+          </div>
+
+          {/* Email invite — coming soon */}
+          <div
+            className="border border-hair px-4 py-3 flex flex-col gap-1"
+            style={{ opacity: 0.6 }}
+          >
+            <span className="text-[11px] font-mono tracking-[0.05em] uppercase text-text-muted">
+              Invite by email
+            </span>
+            <span className="text-[12.5px] text-text-muted">
+              Coming in beta — team email invites and shared workspaces are on the roadmap.
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ── Parcel detail ────────────────────────────────────────────────────────────
 
 function EmptyParcel() {
   return (
