@@ -70,6 +70,42 @@ def _make_issue(tmp_path: Path, identifier: str = "ABS-999") -> Any:
 
 
 # ---------------------------------------------------------------------------
+# ABS-171 — DEV_AGENT_SYSTEM_PROMPT: worktree isolation rule
+# ---------------------------------------------------------------------------
+
+
+class TestSystemPromptWorktreeIsolation:
+    """The agent prompt must include an explicit rule forbidding writes to the
+    main checkout.  Without this, agents can drift to absolute paths under the
+    project root, poisoning the index and blocking all subsequent merges.
+    """
+
+    def test_prompt_contains_worktree_isolation_rule(self):
+        from scripts.night_manager.config import DEV_AGENT_SYSTEM_PROMPT
+        prompt_lower = DEV_AGENT_SYSTEM_PROMPT.lower()
+        assert "worktree isolation" in prompt_lower or "worktree" in prompt_lower
+
+    def test_prompt_forbids_main_checkout_writes(self):
+        from scripts.night_manager.config import DEV_AGENT_SYSTEM_PROMPT
+        assert "never write to" in DEV_AGENT_SYSTEM_PROMPT.lower() or \
+               "must stay within" in DEV_AGENT_SYSTEM_PROMPT.lower()
+
+    def test_prompt_warns_about_index_corruption(self):
+        from scripts.night_manager.config import DEV_AGENT_SYSTEM_PROMPT
+        assert "corrupt" in DEV_AGENT_SYSTEM_PROMPT.lower() or \
+               "blocks" in DEV_AGENT_SYSTEM_PROMPT.lower()
+
+    def test_prompt_includes_wrong_right_examples(self):
+        from scripts.night_manager.config import DEV_AGENT_SYSTEM_PROMPT
+        assert "WRONG" in DEV_AGENT_SYSTEM_PROMPT
+        assert "RIGHT" in DEV_AGENT_SYSTEM_PROMPT
+
+    def test_prompt_mentions_worktree_path_pattern(self):
+        from scripts.night_manager.config import DEV_AGENT_SYSTEM_PROMPT
+        assert ".claude/worktrees/" in DEV_AGENT_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
 # A.1 — ALLOWED_TOOLS includes Linear MCP read tools, not write tools
 # ---------------------------------------------------------------------------
 
