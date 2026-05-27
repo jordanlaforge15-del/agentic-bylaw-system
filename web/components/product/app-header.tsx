@@ -1,7 +1,7 @@
 // Top bar inside /app. Replaces the marketing TopNav. Carries the
 // hamburger trigger (mobile/tablet), the logo, the current reading's
 // address/zone, the "verified" timestamp, the theme toggle, and an
-// Account button that links back to /billing.
+// Account button that links to /app/billing.
 //
 // Responsive contract:
 //   - base (< 640): minimal — hamburger + logo + zone code + accent
@@ -67,7 +67,7 @@ export function AppHeader({ reading, onMenuClick }: Props) {
           VERIFIED 2026·05·06
         </Mono>
         <ThemeToggle size="sm" />
-        <Link href="/billing" className="hidden sm:contents">
+        <Link href="/app/billing" className="hidden sm:contents">
           <Btn variant="quiet" size="sm">
             Account
           </Btn>
