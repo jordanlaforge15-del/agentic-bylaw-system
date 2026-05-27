@@ -291,6 +291,7 @@ start_web() {
     ADVISOR_DEMO_USER_ID="$E2E_USER_ID" \
     CLERK_SECRET_KEY="sk_test_e2e_mock_key_for_testing_only_0000000000" \
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="" \
+    ADVISOR_ADMIN_CLERK_USER_IDS="${E2E_USER_ID}" \
     E2E_CLERK_MOCK=1 \
     DEMO_PASSWORD="${E2E_DEMO_PASSWORD:-e2e-demo-pw}" \
     ADMIN_PASSWORD="${E2E_ADMIN_PASSWORD:-e2e-admin-pw}" \

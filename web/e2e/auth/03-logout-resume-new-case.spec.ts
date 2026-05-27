@@ -50,7 +50,7 @@ test("logout / login + open a second case shows both on /cases", async ({
   // Sign out — clears all auth cookies.
   await signOut(context);
   await page.goto("/app");
-  await page.waitForURL(/\/access(\?|$)/);
+  await page.waitForURL(/\/sign-in/);
 
   // Sign in again as the same identity; advisor_user row reuse is
   // what makes the second case attach correctly.
