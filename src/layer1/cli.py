@@ -20,6 +20,7 @@ from layer1.models.enums import IngestionStatus
 from layer1.pipeline.audit import audit_document_pages
 from layer1.pipeline.export import export_document_json
 from layer1.pipeline.ingest import ingest_file
+from layer1.pipeline.verify_coverage import verify_document_coverage
 from layer1.datasets.linker import find_orphan_datasets, relink_orphan_datasets
 from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 from layer1.profiles import (
@@ -320,6 +321,38 @@ def audit_page(
             llm_model=model,
         )
     _emit_json_report(report.model_dump(mode="json"), out)
+
+
+@app.command("verify-coverage")
+def verify_coverage(
+    document_id: int,
+    out: Path | None = typer.Option(None, "--out", "-o", help="Write JSON coverage report to a file"),
+    low_coverage_threshold: float = typer.Option(0.3, "--threshold", help="Page overlap ratio below which a page is flagged as low-coverage"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    """Verify that a bylaw document was fully ingested into the database.
+
+    Compares source PDF text page-by-page against persisted fragments,
+    tables, and cross-references. Outputs a structured coverage report
+    with per-page overlap ratios, gap classifications, and a letter grade.
+    """
+    with session_scope(db_url) as session:
+        report = verify_document_coverage(
+            session,
+            document_id,
+            low_coverage_threshold=low_coverage_threshold,
+        )
+    payload = report.model_dump(mode="json")
+    _emit_json_report(payload, out)
+    grade = report.summary.grade
+    gap_count = len(report.gaps)
+    if grade in ("D", "F"):
+        console.print(f"[red]Grade {grade} — {gap_count} gap(s) found.[/red]")
+        raise typer.Exit(code=1)
+    elif gap_count > 0:
+        console.print(f"[yellow]Grade {grade} — {gap_count} gap(s) found.[/yellow]")
+    else:
+        console.print(f"[green]Grade {grade} — no gaps found.[/green]")
 
 
 def _validate_from_db(session: Session, document_id: int):
