@@ -1,6 +1,6 @@
-// Verifies that the home page "See what's permitted" demo section and the
-// ProofGrid display the verified pre-recorded sample data, not placeholder
-// or fabricated values. ABS-83.
+// Verifies that the home page "Try It" demo section and the ProofGrid display
+// the verified pre-recorded sample data, not placeholder or fabricated values.
+// ABS-83, ABS-179.
 
 import { expect, test } from "../fixtures/test-env";
 
@@ -9,10 +9,11 @@ test.describe("home page — pre-recorded samples", () => {
     await page.goto("/");
   });
 
-  test("TryDemo preset chips show the three verified sample addresses", async ({
+  test("TryDemo shows only the three preset sample address buttons (no free-text input)", async ({
     page,
   }) => {
-    // The address demo renders three preset chips from SAMPLE_READINGS.
+    // Widget must not have a free-text input — only the three preset buttons.
+    await expect(page.locator('input[placeholder*="Morris"]')).not.toBeVisible();
     await expect(page.getByRole("button", { name: "5184 Morris St" })).toBeVisible();
     await expect(
       page.getByRole("button", { name: "2310 Gottingen St" }),
@@ -20,10 +21,15 @@ test.describe("home page — pre-recorded samples", () => {
     await expect(page.getByRole("button", { name: "1208 Robie St" })).toBeVisible();
   });
 
-  test("clicking a preset chip shows the verified verdict", async ({ page }) => {
+  test("clicking a preset chip shows SAMPLE READING badge (not VERIFIED · 0.93 CONF)", async ({
+    page,
+  }) => {
     await page.getByRole("button", { name: "5184 Morris St" }).click();
     // Wait for the thinking sequence to finish and the verdict to appear.
     await expect(page.getByText(/35%/)).toBeVisible({ timeout: 10_000 });
+    // Must show "SAMPLE READING", not the misleading "VERIFIED · 0.93 CONF".
+    await expect(page.getByText("SAMPLE READING")).toBeVisible();
+    await expect(page.getByText(/VERIFIED.*CONF/)).not.toBeVisible();
     // § 7 appears in both the verdict card and the ProofGrid; just assert at least one is visible.
     await expect(page.getByText(/§ 7/).first()).toBeVisible();
   });
