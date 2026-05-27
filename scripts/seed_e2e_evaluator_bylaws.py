@@ -266,6 +266,11 @@ def _get_or_create_dataset(session) -> ExternalDataset:
         .first()
     )
     if dataset is not None:
+        # Repair stale rows seeded before ABS-77: the evaluator fixture must
+        # not shadow the lot-facts dataset (both used "property_parcels").
+        if (dataset.metadata_json or {}).get("role") == "property_parcels":
+            dataset.metadata_json = {**dataset.metadata_json, "role": "evaluator_parcels"}
+            session.flush()
         return dataset
     dataset = ExternalDataset(
         name=PARCELS_DATASET_NAME,
@@ -276,7 +281,7 @@ def _get_or_create_dataset(session) -> ExternalDataset:
         feature_count=1,
         schema_mapping_json={},
         parse_status=ParseStatus.PARSED,
-        metadata_json={"role": "property_parcels"},
+        metadata_json={"role": "evaluator_parcels"},
     )
     session.add(dataset)
     session.flush()
