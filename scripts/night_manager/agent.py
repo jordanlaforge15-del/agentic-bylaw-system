@@ -980,6 +980,36 @@ async def rebase_worktree_onto_dev(
         )
         return False, f"git fetch failed in {worktree}: {err}"
 
+    # 1.5. Remove untracked runtime artifacts before rebase (ABS-201).
+    # E2e runs write files (e.g. submission-demo.pdf) that are never committed
+    # by this agent but may be committed on origin/dev by a sibling that merged
+    # first. If left untracked, git rebase refuses:
+    #   "untracked working tree files would be overwritten by checkout"
+    # -fdx cleans untracked + ignored files; -e guards skip the heavyweight
+    # install dirs. Staged changes and committed content are never touched.
+    clean_proc = await asyncio.create_subprocess_exec(
+        "git", "-C", worktree, "clean", "-fdx",
+        "-e", ".venv",
+        "-e", "node_modules",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    clean_out, clean_err = await clean_proc.communicate()
+    if clean_proc.returncode != 0:
+        log.warning(
+            "pre-rebase clean in %s exited %d (non-fatal): %s",
+            worktree,
+            clean_proc.returncode,
+            _combine_streams(clean_out, clean_err),
+        )
+    else:
+        cleaned = clean_out.decode("utf-8", errors="replace").strip()
+        if cleaned:
+            log.info(
+                "pre-rebase clean removed runtime artifacts from %s:\n%s",
+                worktree, cleaned,
+            )
+
     # 2. Rebase onto current origin/dev.
     rebase_proc = await asyncio.create_subprocess_exec(
         "git", "-C", worktree, "rebase", REBASE_TARGET_BRANCH,
