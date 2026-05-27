@@ -49,6 +49,7 @@ const COOKIE_NAMES = [
   "abs_test_sub_user_id",
   "abs_test_sub_email",
   "abs_test_sub_full_name",
+  "abs_test_clerk_jwt",
 ] as const;
 
 export type TestIdentity = {
@@ -97,12 +98,40 @@ async function mintAbsDemoCookie(context: BrowserContext): Promise<void> {
   }
 }
 
+/** Mint a test JWT for the given identity via the FastAPI test server.
+ * The JWT is signed by the mock RSA key and accepted by the
+ * ClerkVerifier wired into the e2e server. */
+async function mintTestJwt(
+  context: BrowserContext,
+  identity: TestIdentity,
+): Promise<string> {
+  const res = await context.request.post(
+    `${E2E_API_URL}/v1/_test/mint-jwt`,
+    {
+      data: {
+        sub: identity.subUserId,
+        email: identity.email,
+        full_name: identity.fullName,
+      },
+    },
+  );
+  if (!res.ok()) {
+    throw new Error(
+      `mintTestJwt failed: HTTP ${res.status()} ${await res.text()}`,
+    );
+  }
+  const data = (await res.json()) as { token: string };
+  return data.token;
+}
+
 /** Set the per-test identity cookies. Each cookie is scoped to the
  * dev server's host so it survives navigation between /app, /cases,
- * /signup. */
+ * /signup. Includes the JWT cookie so the Next.js Clerk mock can
+ * forward it as Authorization: Bearer to FastAPI. */
 async function setIdentityCookies(
   context: BrowserContext,
   identity: TestIdentity,
+  jwt: string,
 ): Promise<void> {
   const url = new URL(E2E_BASE_URL);
   await context.addCookies([
@@ -133,22 +162,31 @@ async function setIdentityCookies(
       secure: false,
       sameSite: "Lax",
     },
+    {
+      name: "abs_test_clerk_jwt",
+      value: jwt,
+      domain: url.hostname,
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
   ]);
 }
 
 /** "Sign in" the supplied identity into the current browser context.
- * Mints the password gate cookie and the three identity cookies, so
- * the next request from this context reaches the backend with
- * ``X-Test-User-Id: <identity.subUserId>`` and a matching
- * ``X-Test-User-Email``. The backend's user-dependency JIT-creates the
- * advisor_user row + redeems any approved InviteRequest by email on
- * first sight (see ``_resolve_or_create_test_user``). */
+ * Mints a test JWT (for the Clerk mock auth path), the password gate
+ * cookie (fallback for /api/access), and the identity cookies. The
+ * next request from this context reaches the backend with either
+ * ``Authorization: Bearer <jwt>`` (via the Next.js proxy Clerk mock)
+ * or ``X-Test-User-Id`` (direct FastAPI calls). */
 export async function signInAs(
   context: BrowserContext,
   identity: TestIdentity,
 ): Promise<void> {
+  const jwt = await mintTestJwt(context, identity);
   await mintAbsDemoCookie(context);
-  await setIdentityCookies(context, identity);
+  await setIdentityCookies(context, identity, jwt);
 }
 
 /** "Sign out" the current browser context. Clears the password-gate

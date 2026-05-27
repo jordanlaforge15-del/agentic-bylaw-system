@@ -88,16 +88,17 @@ export const E2E_DEMO_PASSWORD =
   process.env.E2E_DEMO_PASSWORD || "e2e-demo-pw";
 
 /**
- * Test fixture that auto-mints an `abs_demo` cookie on every browser
- * context before the first navigation. The legacy shared-password
- * gate in `web/proxy.ts` redirects /app and /admin to /access without
- * this cookie; the e2e suite sets `DEMO_PASSWORD` on the dev server
- * so the gate has a known value to authenticate against.
+ * Test fixture that auto-mints auth cookies on every browser context
+ * before the first navigation. Sets both the legacy abs_demo cookie
+ * (fallback for /api/access) AND a Clerk mock JWT for the demo user
+ * so the Clerk middleware branch in proxy.ts and the JWT verification
+ * path in FastAPI are exercised on every test.
  */
 export const test = base.extend<{ authedContext: void }>({
   authedContext: [
     async ({ context, baseURL }, use) => {
       const target = baseURL ?? E2E_BASE_URL;
+      // Mint the legacy password-gate cookie.
       const res = await context.request.post(`${target}/api/access`, {
         data: { gate: "demo", password: E2E_DEMO_PASSWORD },
       });
@@ -105,6 +106,41 @@ export const test = base.extend<{ authedContext: void }>({
         throw new Error(
           `failed to mint abs_demo cookie: HTTP ${res.status()} ${await res.text()}`,
         );
+      }
+      // Mint a test JWT for the demo user so requests through the
+      // Next.js proxy exercise the Clerk JWT auth path end-to-end.
+      const jwtRes = await context.request.post(
+        `${E2E_API_URL}/v1/_test/mint-jwt`,
+        {
+          data: {
+            sub: DEMO_USER_ID,
+            email: `${DEMO_USER_ID}@e2e.test`,
+          },
+        },
+      );
+      if (jwtRes.ok()) {
+        const { token } = (await jwtRes.json()) as { token: string };
+        const url = new URL(target);
+        await context.addCookies([
+          {
+            name: "abs_test_sub_user_id",
+            value: DEMO_USER_ID,
+            domain: url.hostname,
+            path: "/",
+            httpOnly: false,
+            secure: false,
+            sameSite: "Lax",
+          },
+          {
+            name: "abs_test_clerk_jwt",
+            value: token,
+            domain: url.hostname,
+            path: "/",
+            httpOnly: false,
+            secure: false,
+            sameSite: "Lax",
+          },
+        ]);
       }
       await use();
     },

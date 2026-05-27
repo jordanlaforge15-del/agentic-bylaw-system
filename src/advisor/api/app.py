@@ -180,6 +180,7 @@ def create_app(
     billing_user_dependency: Callable[..., Any] | None = None,
     billing_user_resolver: Callable[[Any, Any], Any] | None = None,
     submissions_evaluator_factory: Callable[[Any], Any] | None = None,
+    test_header_fallback: bool = False,
 ) -> FastAPI:
     """Build the FastAPI app with explicit, injectable dependencies.
 
@@ -300,7 +301,9 @@ def create_app(
     # Build the user-dependency callable here so the cases / admin
     # routers (mounted next) can share it. The same callable is
     # consumed by ``POST /v1/chat`` further down.
-    require_user = _build_user_dependency(verifier, db_session_factory)
+    require_user = _build_user_dependency(
+        verifier, db_session_factory, test_header_fallback=test_header_fallback
+    )
 
     # Cases router — case-credit lifecycle (open / match / classify /
     # upgrade / close). Mounted whenever a DB factory is wired; the
@@ -1173,26 +1176,31 @@ def _patch_usage_event_tokens(
 def _build_user_dependency(
     verifier: ClerkVerifier | None,
     db_session_factory: Callable[[], AbstractContextManager[Session]] | None,
+    *,
+    test_header_fallback: bool = False,
 ) -> Callable[..., User]:
     """Return a Depends-compatible callable that yields a ``User``.
 
-    Three modes:
+    Four modes:
 
     * **Production** (``verifier`` + ``db_session_factory``): real Clerk
       JWT verification and DB-backed user resolution via
       ``current_user_dependency``.
-    * **E2E** (``verifier=None`` + ``db_session_factory``): header-based
-      auth (``X-Test-User-Id``, optional ``X-Test-User-Email`` /
-      ``X-Test-User-Full-Name``) that JIT-creates a real
-      ``advisor_user`` row on first sight and redeems any matching
-      approved ``InviteRequest``. Mirrors ``resolve_or_create_user``'s
-      shape so the Playwright suite exercises the full sign-up →
-      approval → first-login redemption path without Clerk.
+    * **E2E hybrid** (``verifier`` + ``db_session_factory`` +
+      ``test_header_fallback=True``): tries JWT verification first; if
+      no ``Authorization`` header is present, falls back to the
+      ``X-Test-User-Id`` header path. This lets the e2e suite exercise
+      the real Clerk JWT pipeline for requests routed through the
+      Next.js proxy while keeping direct FastAPI calls (from Playwright
+      fixtures) working via test headers.
+    * **E2E header-only** (``verifier=None`` + ``db_session_factory``):
+      header-based auth that JIT-creates a real ``advisor_user`` row.
     * **Unit-test** (``verifier=None`` + no ``db_session_factory``):
-      transient synthetic ``_TestUser`` for in-memory chat-behaviour
-      tests that never touch the DB.
+      transient synthetic ``_TestUser`` for in-memory tests.
     """
     if verifier is not None and db_session_factory is not None:
+        if test_header_fallback:
+            return _build_hybrid_user_dependency(verifier, db_session_factory)
         return current_user_dependency(verifier, db_session_factory)
 
     if db_session_factory is not None:
@@ -1250,6 +1258,64 @@ def _build_user_dependency(
         return _TestUser(id=cleaned)
 
     return _require_test_user_id
+
+
+def _build_hybrid_user_dependency(
+    verifier: ClerkVerifier,
+    db_session_factory: Callable[[], AbstractContextManager[Session]],
+) -> Callable[..., User]:
+    """User dependency that tries JWT first, falls back to test headers.
+
+    Used by the e2e server so requests through the Next.js proxy (which
+    sends ``Authorization: Bearer <jwt>``) exercise the real Clerk
+    verification pipeline, while direct FastAPI calls from Playwright
+    fixtures (which send ``X-Test-User-Id``) keep working.
+    """
+    from advisor.api.auth import resolve_or_create_user  # noqa: PLC0415
+    from advisor.auth.errors import AuthError  # noqa: PLC0415
+    from advisor.auth.fastapi import _strip_bearer  # noqa: PLC0415
+
+    def dependency(
+        authorization: str | None = Header(default=None),
+        x_test_user_id: str | None = Header(default=None),
+        x_test_user_email: str | None = Header(default=None),
+        x_test_user_full_name: str | None = Header(default=None),
+    ) -> User:
+        if authorization and authorization.strip():
+            try:
+                token = _strip_bearer(authorization)
+                clerk_session = verifier.verify(token)
+            except AuthError as exc:
+                raise HTTPException(
+                    status_code=401,
+                    detail={"code": exc.code, "message": str(exc)},
+                ) from exc
+            with db_session_factory() as db:
+                user = resolve_or_create_user(db, clerk_session)
+                db.commit()
+                db.refresh(user)
+                return user
+
+        if not x_test_user_id or not x_test_user_id.strip():
+            raise HTTPException(
+                status_code=401,
+                detail="Missing Authorization header or X-Test-User-Id header.",
+            )
+        cleaned = x_test_user_id.strip()
+        cleaned_email = (x_test_user_email or "").strip()
+        cleaned_name = (x_test_user_full_name or "").strip() or None
+        with db_session_factory() as db:
+            user = _resolve_or_create_test_user(
+                db,
+                clerk_user_id=cleaned,
+                email=cleaned_email,
+                full_name=cleaned_name,
+            )
+            db.commit()
+            db.refresh(user)
+            return user
+
+    return dependency
 
 
 def _resolve_or_create_test_user(

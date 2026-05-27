@@ -83,6 +83,15 @@ def build_e2e_app() -> FastAPI:
     setup_logging(json_output=False)
     gateway = MockGateway(callable_=build_dispatcher())
 
+    # ABS-19: wire a real ClerkVerifier backed by an in-memory test RSA
+    # key so the e2e suite exercises the full JWT verification pipeline
+    # (ClerkVerifier → clerk_session_dependency → resolve_or_create_user).
+    # test_header_fallback=True keeps the X-Test-User-Id header path
+    # working for direct FastAPI calls from Playwright fixtures.
+    from advisor.auth.mock_clerk import build_mock_verifier  # noqa: PLC0415
+
+    mock_verifier = build_mock_verifier()
+
     # ABS-53: wire a real EvaluatorService into the submissions router
     # so the /submissions/{id}/evaluate endpoint actually evaluates. The
     # factory is called per-request with the active DB session so each
@@ -94,9 +103,10 @@ def build_e2e_app() -> FastAPI:
 
     app = create_app(
         gateway=gateway,
-        verifier=None,
+        verifier=mock_verifier,
         db_session_factory=session_scope,
         submissions_evaluator_factory=_submissions_evaluator_factory,
+        test_header_fallback=True,
     )
     app.add_middleware(CorrelationIdMiddleware)
     app.add_middleware(MetricsMiddleware)
@@ -244,8 +254,34 @@ class _IssueApiKeyBody(BaseModel):
     name: str = Field(default="e2e-test-key", min_length=1, max_length=255)
 
 
+class _MintJwtBody(BaseModel):
+    sub: str = Field(min_length=1, max_length=255)
+    email: str | None = None
+    full_name: str | None = None
+    lifetime_s: int = Field(default=3600, ge=60, le=86400)
+
+
 def _mount_test_router(app: FastAPI) -> None:
     """Wire the ``/v1/_test/...`` lifecycle endpoints onto ``app``."""
+
+    @app.post("/v1/_test/mint-jwt")
+    async def mint_jwt(body: _MintJwtBody) -> dict[str, str]:
+        """Mint a test JWT signed by the e2e mock RSA key.
+
+        The returned token is accepted by the ``ClerkVerifier`` wired
+        into this e2e server. Playwright specs use this to get a JWT
+        they can set as a cookie, which the Next.js Clerk mock reads
+        and forwards as ``Authorization: Bearer <jwt>`` to FastAPI.
+        """
+        from advisor.auth.mock_clerk import mint_test_jwt  # noqa: PLC0415
+
+        token = mint_test_jwt(
+            sub=body.sub,
+            email=body.email,
+            full_name=body.full_name,
+            lifetime_s=body.lifetime_s,
+        )
+        return {"token": token}
 
     @app.post("/v1/_test/invite-approve")
     async def invite_approve(body: _ApproveInviteBody) -> dict[str, object]:

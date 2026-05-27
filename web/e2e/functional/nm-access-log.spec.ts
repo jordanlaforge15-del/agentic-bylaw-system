@@ -9,10 +9,13 @@
 //   3. The /nm dashboard's "API access — last 10" panel renders entries
 //      color-coded by outcome.
 //
-// Auth: the e2e Next.js dev server runs with Clerk keys blanked, so the
-// admin gate falls through to the abs_admin cookie. The cookie is minted
-// by POSTing the e2e ADMIN_PASSWORD to /api/access. ADMIN_PASSWORD is
-// set by scripts/e2e-up.sh to "e2e-admin-pw".
+// Auth: the e2e Next.js dev server runs with CLERK_SECRET_KEY set to a
+// test key and E2E_CLERK_MOCK=1, so admin routes use the Clerk mock's
+// auth() + requireAdmin(). The authedContext fixture sets the
+// abs_test_sub_user_id cookie to the demo user ID (which is on the
+// ADVISOR_ADMIN_CLERK_USER_IDS allowlist), satisfying the admin gate.
+// Tests that need admin access use context.request (which shares the
+// browser context's cookies) rather than the standalone request fixture.
 
 import { execSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
@@ -43,9 +46,6 @@ const GIT_COMMON_DIR = execSync("git rev-parse --git-common-dir", {
   encoding: "utf-8",
 }).trim();
 const ACCESS_LOG_PATH = join(GIT_COMMON_DIR, "..", ".night-manager", "api-access.log");
-
-const ADMIN_PASSWORD =
-  process.env.E2E_ADMIN_PASSWORD || "e2e-admin-pw";
 
 type AccessLogEntry = {
   ts: string;
@@ -181,25 +181,20 @@ test.describe("NM /api/nm/access-log instrumentation (ABS-155)", () => {
     expect(res.status()).toBe(401);
   });
 
-  test("GET /api/nm/access-log with admin cookie returns recent entries", async ({
-    request,
+  test("GET /api/nm/access-log with admin auth returns recent entries", async ({
+    context,
   }) => {
     // Fire a POST first so we have a known correlation id to look for.
-    const postRes = await request.post("/api/nm/run/start", {
+    const postRes = await context.request.post("/api/nm/run/start", {
       data: VALID_BODY,
     });
     const postBody = await postRes.json();
     const correlationId = postBody.correlationId as string;
 
-    // Mint the abs_admin cookie. The Playwright request context is
-    // independent of the page context, so we mint inside the same
-    // request fixture.
-    const mint = await request.post("/api/access", {
-      data: { gate: "admin", password: ADMIN_PASSWORD },
-    });
-    expect(mint.status()).toBe(200);
-
-    const res = await request.get("/api/nm/access-log?limit=50");
+    // The authedContext fixture already set abs_test_sub_user_id on
+    // the browser context, and ADVISOR_ADMIN_CLERK_USER_IDS includes
+    // the demo user — so context.request carries the admin identity.
+    const res = await context.request.get("/api/nm/access-log?limit=50");
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body.entries)).toBe(true);
@@ -209,11 +204,8 @@ test.describe("NM /api/nm/access-log instrumentation (ABS-155)", () => {
     expect(ids).toContain(correlationId);
   });
 
-  test("GET /api/nm/access-log rejects invalid limit", async ({ request }) => {
-    await request.post("/api/access", {
-      data: { gate: "admin", password: ADMIN_PASSWORD },
-    });
-    const res = await request.get("/api/nm/access-log?limit=not-a-number");
+  test("GET /api/nm/access-log rejects invalid limit", async ({ context }) => {
+    const res = await context.request.get("/api/nm/access-log?limit=not-a-number");
     expect(res.status()).toBe(400);
   });
 
@@ -230,11 +222,9 @@ test.describe("NM /api/nm/access-log instrumentation (ABS-155)", () => {
     });
     expect(post.status()).toBe(200);
 
-    // Mint admin cookie so the GET endpoint returns entries instead of
-    // 401. The page context shares cookies via the browser context.
-    await context.request.post("/api/access", {
-      data: { gate: "admin", password: ADMIN_PASSWORD },
-    });
+    // The authedContext fixture set abs_test_sub_user_id on the browser
+    // context (demo-user-1 is on the admin allowlist), so the SWR fetch
+    // to /api/nm/access-log carries the admin identity automatically.
 
     await page.goto("/nm");
     // The page renders a "no active run" empty state when there's no

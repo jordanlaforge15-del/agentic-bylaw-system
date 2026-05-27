@@ -87,7 +87,7 @@ test("logout / login keeps the same case usable for a new turn", async ({
   // matching Clerk's sign-out under the password-gate fallback.
   await signOut(context);
   await page.goto("/app");
-  await page.waitForURL(/\/access(\?|$)/);
+  await page.waitForURL(/\/sign-in/);
 
   // Sign back in as the SAME identity. The e2e backend resolves to
   // the existing advisor_user row (no second insert), so the case
