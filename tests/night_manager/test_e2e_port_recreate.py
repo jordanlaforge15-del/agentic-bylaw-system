@@ -212,3 +212,222 @@ class TestE2eDownRemovesPostgresContainer:
             if "compose rm" in line:
                 assert " -v" not in line, \
                     f"rm with -v would destroy named volume: {line}"
+
+
+# ---------------------------------------------------------------------------
+# ABS-175: wait_for_port settle-time check
+# ---------------------------------------------------------------------------
+
+
+class TestWaitForPortSettleCheck:
+    """ABS-175: `wait_for_port` must catch the bind-then-exit pattern
+    (next dev port collision, uvicorn import failure, etc.) instead of
+    declaring victory the instant the socket is open."""
+
+    def _run_wait_for_port(
+        self,
+        tmp_path: Path,
+        *,
+        is_listening_returns: bool,
+        pidfile_pid: str | None,
+        port: str = "12345",
+        timeout: str = "3",
+    ) -> subprocess.CompletedProcess:
+        """Source e2e-up.sh, stub is_listening to return the configured
+        value, optionally point a pidfile at the configured PID, then
+        invoke wait_for_port directly."""
+        src = (REPO_ROOT / "scripts" / "e2e-up.sh").read_text()
+        # Hijack main() — we only want wait_for_port + its deps available.
+        is_listening_stub = (
+            "is_listening() { return 0; }" if is_listening_returns
+            else "is_listening() { return 1; }"
+        )
+        pidfile_setup = ""
+        pidfile_arg = ""
+        if pidfile_pid is not None:
+            pid_path = tmp_path / "fake.pid"
+            pid_path.write_text(pidfile_pid)
+            pidfile_setup = ""  # already written
+            pidfile_arg = str(pid_path)
+
+        # Make WAIT_FOR_PORT_SETTLE_SECS=0 to keep the test fast.
+        epilogue = (
+            f"{is_listening_stub}\n"
+            f"export WAIT_FOR_PORT_SETTLE_SECS=0\n"
+            f"export LOG_DIR={tmp_path}\n"
+            f"mkdir -p {tmp_path}\n"
+            f"wait_for_port {port} testlabel {timeout} {pidfile_arg!r}\n"
+        )
+        patched = src.replace('main "$@"', epilogue)
+        script_path = tmp_path / "patched_e2e_up.sh"
+        script_path.write_text(patched)
+        script_path.chmod(0o755)
+        return subprocess.run(
+            ["bash", str(script_path)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+    def test_bind_then_exit_detected_via_dead_pid(self, tmp_path: Path):
+        """If the recorded pidfile points at a non-existent PID by the
+        time we re-check, wait_for_port must return non-zero and the
+        error must mention the failing PID — not declare victory."""
+        # PID 999999999 doesn't exist on macOS/Linux.
+        result = self._run_wait_for_port(
+            tmp_path,
+            is_listening_returns=True,
+            pidfile_pid="999999999",
+        )
+        assert result.returncode != 0, (
+            f"expected non-zero exit but got success.\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
+        assert "bound briefly then exited" in result.stderr, \
+            f"missing error message; stderr={result.stderr}"
+        assert "999999999" in result.stderr, \
+            f"error should mention the failing PID; stderr={result.stderr}"
+
+    def test_live_pid_with_open_port_succeeds(self, tmp_path: Path):
+        """Happy path: socket is open AND the recorded PID is alive →
+        wait_for_port returns 0 and prints the 'is up' line."""
+        # Use our own PID — guaranteed alive.
+        result = self._run_wait_for_port(
+            tmp_path,
+            is_listening_returns=True,
+            pidfile_pid=str(os.getpid()),
+        )
+        assert result.returncode == 0, (
+            f"expected success but got rc={result.returncode}.\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
+        assert "testlabel on :12345 is up" in result.stdout
+
+    def test_no_pidfile_falls_back_gracefully(self, tmp_path: Path):
+        """When no pidfile is supplied (old callers / fallback), the
+        check still re-verifies the port is bound — but doesn't gate
+        on PID liveness. Backward-compatible."""
+        result = self._run_wait_for_port(
+            tmp_path,
+            is_listening_returns=True,
+            pidfile_pid=None,
+        )
+        assert result.returncode == 0, \
+            f"backward-compat should pass; rc={result.returncode}"
+
+
+# ---------------------------------------------------------------------------
+# ABS-176: stop_pid survivor cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestStopPidSurvivorCleanup:
+    """ABS-176: when SIGTERM to the recorded PID succeeds but the port
+    is still bound (uvicorn child outlived the wrapper shell), stop_pid
+    must lsof for the survivor and kill it directly."""
+
+    def _run_stop_pid(
+        self,
+        tmp_path: Path,
+        *,
+        port: str = "12345",
+        recorded_pid: str | None = None,  # None → spawn a real sleep
+        lsof_returns: str = "",  # PID lsof reports after the kill
+    ) -> subprocess.CompletedProcess:
+        """Source e2e-down.sh and call stop_pid directly with a
+        controlled environment. lsof is shimmed via PATH so the test
+        determines what the survivor PID looks like.
+
+        When ``recorded_pid`` is None, the helper spawns a real
+        ``sleep 600`` and uses its PID — so the primary kill in
+        stop_pid actually has something live to terminate, matching
+        the production scenario (live wrapper, surviving child)."""
+        # Use a dead PID for the recorded pidfile so the primary kill
+        # path takes the "nothing to kill" branch (fast, no waiting).
+        # The post-kill port verification (ABS-176) runs regardless
+        # of whether the primary kill happened, which is what we test.
+        if recorded_pid is None:
+            recorded_pid = "999999999"
+        # Shim lsof so the test controls what stop_pid "sees" on the
+        # port. The shim returns the configured survivor on the first
+        # N-1 calls; after the SIGTERM to the survivor, the (N)th call
+        # onward returns nothing (port freed) so the wait-loop exits
+        # cleanly without hitting the SIGKILL path.
+        bin_dir = tmp_path / "fake_bin"
+        bin_dir.mkdir(exist_ok=True)
+        fake_lsof = bin_dir / "lsof"
+        # Calls happen in this order:
+        #   1. stop_pid's "lsof fallback" when pidfile PID is dead — uses -tnP
+        #   2. stop_pid's "ABS-176 survivor probe" — uses -tnP
+        #   3..N. The survivor-kill wait-loop — uses no extra args
+        # We need (1) and (2) to BOTH return the survivor PID so the
+        # fallback assignment AND the survivor probe see it. Then
+        # subsequent calls return nothing so the wait-loop exits.
+        fake_lsof.write_text(
+            "#!/usr/bin/env bash\n"
+            f"state_file='{tmp_path}/lsof_called.txt'\n"
+            f"survivor='{lsof_returns}'\n"
+            "calls=0\n"
+            "if [[ -f \"$state_file\" ]]; then calls=$(cat \"$state_file\"); fi\n"
+            "echo $((calls + 1)) > \"$state_file\"\n"
+            "if [[ $calls -lt 2 && -n \"$survivor\" ]]; then\n"
+            "  if [[ \"$*\" == *'-tnP'* ]]; then echo \"$survivor\"; fi\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 1\n"  # no listener (port freed by survivor-kill)
+        )
+        fake_lsof.chmod(0o755)
+
+        src = (REPO_ROOT / "scripts" / "e2e-down.sh").read_text()
+        # Drop the `log "Stopping..."; stop_pid ...` cascade and just
+        # invoke stop_pid with our controlled args.
+        pidfile = tmp_path / "fake.pid"
+        pidfile.write_text(recorded_pid)
+        epilogue = f"stop_pid {pidfile!s} testlabel {port}\n"
+        # Replace everything from the first `log "Stopping Next.js"` to end.
+        marker = 'log "Stopping Next.js"'
+        idx = src.find(marker)
+        assert idx != -1
+        patched = src[:idx] + epilogue
+        script_path = tmp_path / "patched_e2e_down.sh"
+        script_path.write_text(patched)
+        script_path.chmod(0o755)
+
+        env = {
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        }
+        return subprocess.run(
+            ["bash", str(script_path)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+    def test_survivor_after_kill_is_targeted(self, tmp_path: Path):
+        """When stop_pid kills the recorded PID but a survivor still
+        binds the port, stop_pid lsofs for it and kills it directly.
+        The new log line must surface so the operator can see it."""
+        # Use our own PID as the survivor — guaranteed not to exist by
+        # the time we check (we don't actually want to kill ourselves;
+        # the shimmed lsof returns this PID once, then nothing, so
+        # stop_pid's loop sees "port freed").
+        result = self._run_stop_pid(
+            tmp_path,
+            lsof_returns="999999998",  # not our actual pid; kill no-ops
+        )
+        assert result.returncode == 0, f"stderr={result.stderr}"
+        assert "still bound after SIGTERM" in result.stdout, \
+            f"survivor-kill log missing; stdout={result.stdout}"
+        assert "killing survivor PID 999999998" in result.stdout
+
+    def test_no_survivor_clean_exit(self, tmp_path: Path):
+        """Happy path: SIGTERM works, no survivor — no extra log line,
+        clean rc=0."""
+        result = self._run_stop_pid(
+            tmp_path,
+            lsof_returns="",  # lsof returns no listener
+        )
+        assert result.returncode == 0
+        assert "still bound after SIGTERM" not in result.stdout

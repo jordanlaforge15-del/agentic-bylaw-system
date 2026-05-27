@@ -51,30 +51,59 @@ stop_pid() {
       pid="$lsof_pid"
     fi
   fi
-  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    # Send the kill to the whole process group so npx-spawned children
+    # also exit (next dev is a tree, not a single process).
+    if kill -- "-$pid" 2>/dev/null; then
+      echo "${label}: sent SIGTERM to process group -${pid}"
+    else
+      kill "$pid" 2>/dev/null || true
+      echo "${label}: sent SIGTERM to PID ${pid}"
+    fi
+    for _ in $(seq 1 15); do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+      echo "${label}: SIGKILLed PID ${pid}"
+    fi
+  else
     echo "${label}: nothing to kill (pidfile=${pidfile}${fallback_port:+, port=${fallback_port}})"
-    rm -f "$pidfile"
+  fi
+  rm -f "$pidfile"
+
+  # ABS-176: post-kill verification by port. Killing the recorded PID
+  # is not enough when the parent was a wrapper shell (nohup + disown
+  # + subshell wrapping make macOS process-group semantics flaky); the
+  # actual server child gets reparented to init and survives. Next
+  # e2e-up then prints REUSING-EXISTING-LISTENER and silently adopts
+  # the stale process — the failure mode this script is supposed to
+  # prevent. Always verify the port is free at the end of stop_pid;
+  # this also catches the "nothing to kill via pidfile but port is
+  # still bound from a sibling process" case.
+  if [[ -z "$fallback_port" ]]; then
     return 0
   fi
-  # Send the kill to the whole process group so npx-spawned children
-  # also exit (next dev is a tree, not a single process).
-  if kill -- "-$pid" 2>/dev/null; then
-    echo "${label}: sent SIGTERM to process group -${pid}"
-  else
-    kill "$pid" 2>/dev/null || true
-    echo "${label}: sent SIGTERM to PID ${pid}"
+  local survivor=""
+  survivor="$(lsof -iTCP:"$fallback_port" -sTCP:LISTEN -tnP 2>/dev/null | head -1 || true)"
+  if [[ -z "$survivor" ]]; then
+    return 0
   fi
-  for _ in $(seq 1 15); do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      break
+  echo "${label}: :${fallback_port} still bound after SIGTERM — killing survivor PID ${survivor}"
+  kill "$survivor" 2>/dev/null || true
+  for _ in $(seq 1 5); do
+    if ! lsof -iTCP:"$fallback_port" -sTCP:LISTEN >/dev/null 2>&1; then
+      return 0
     fi
     sleep 1
   done
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -9 "$pid" 2>/dev/null || true
-    echo "${label}: SIGKILLed PID ${pid}"
+  if lsof -iTCP:"$fallback_port" -sTCP:LISTEN >/dev/null 2>&1; then
+    kill -9 "$survivor" 2>/dev/null || true
+    echo "${label}: SIGKILLed survivor PID ${survivor}"
   fi
-  rm -f "$pidfile"
 }
 
 log "Stopping Next.js"
