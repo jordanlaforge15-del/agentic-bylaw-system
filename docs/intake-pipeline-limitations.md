@@ -59,7 +59,6 @@ This doc covers the full path a new municipality's bylaw travels from a URL to q
 - **Audit is read-only.** Produces a JSON report; nothing in the system can act on its findings. They become Linear tickets, not data updates (see feedback loop gap below).
 - **DB session held idle across LLM calls.** `audit_document_pages` loads all snapshots upfront then keeps the SQLAlchemy session open during the LLM loop. With the default `idle_in_transaction_session_timeout=60 000 ms` from `docker-compose.yml`, any sample beyond ~1 LLM page crashes the run with `psycopg.errors.IdleInTransactionSessionTimeout`. Filed as [[ABS-114]]. Workaround: `PG_IDLE_IN_TXN_TIMEOUT=1800000 docker compose up -d postgres` before the run.
 - **`--pages` accepts only single integers, not ranges.** Filed as [[ABS-117]].
-- **`llm_model` field in report shows env var, not actual model used.** Post-[[ABS-109]] the actual model is whatever `claude -p` chooses; the report still echoes `AUDIT_LLM_MODEL` from the env. Cosmetic but misleading; will fold into [[ABS-115]] or a small standalone fix.
 - **Default `--sample 5` is low** for a 222-page bylaw, but bigger samples burn subscription quota and (per [[ABS-115]]) don't necessarily audit substantive content. The real fix is the scorer, not the default.
 
 ### Feedback loop (absent)
