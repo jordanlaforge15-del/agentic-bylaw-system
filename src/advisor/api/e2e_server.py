@@ -64,6 +64,7 @@ from layer1.manifest_adapter import (
     profile_from_manifest,
 )
 from layer1.models.enums import IngestionStatus, ParseStatus
+from layer1.pipeline.verify_coverage import verify_document_coverage
 from layer1.pipeline.ingest import ingest_file
 from layer1.profiles import HALIFAX_PROFILE
 from layer1.semantic.enrichment import enrich_document_semantics
@@ -270,6 +271,11 @@ class _MintJwtBody(BaseModel):
     email: str | None = None
     full_name: str | None = None
     lifetime_s: int = Field(default=3600, ge=60, le=86400)
+
+
+class _VerifyCoverageBody(BaseModel):
+    document_id: int
+    low_coverage_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
 
 
 def _mount_test_router(app: FastAPI) -> None:
@@ -728,6 +734,27 @@ def _mount_test_router(app: FastAPI) -> None:
             "companions": companions_from_sources(sources),
             "llm_call_count": fake_llm.messages.create.call_count,
         }
+
+    @app.post("/v1/_test/verify-coverage")
+    async def verify_coverage(body: _VerifyCoverageBody) -> dict[str, object]:
+        """Run ingest coverage verification for a document.
+
+        Returns the structured DocumentCoverageReport with per-page
+        overlap ratios, gap classifications, and a letter grade.
+        """
+        with session_scope() as db:
+            doc = db.get(Document, body.document_id)
+            if doc is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Document {body.document_id} not found",
+                )
+            report = verify_document_coverage(
+                db,
+                body.document_id,
+                low_coverage_threshold=body.low_coverage_threshold,
+            )
+            return report.model_dump(mode="json")
 
 
 app = build_e2e_app()
