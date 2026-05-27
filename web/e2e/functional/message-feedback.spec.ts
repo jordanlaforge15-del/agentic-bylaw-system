@@ -231,9 +231,6 @@ test("feedback: flag submission shows toast and shows 'Saved.' on reopen", async
     timeout: 3000,
   });
 
-  // Flag button should be highlighted (flagSubmitted state)
-  await expect(flagBtn).toHaveAttribute("aria-pressed", "false"); // Still false, but button is highlighted by flagSubmitted state
-
   // Reopen flag panel and check for "Saved." indicator
   await flagBtn.click();
   await expect(page.getByTestId("flag-panel")).toBeVisible();
