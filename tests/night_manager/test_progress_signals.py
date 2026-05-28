@@ -118,7 +118,10 @@ class TestCodeReviewJSONLArtifact:
         _init_repo(repo)
         _run(repo, "git", "checkout", "-q", "-b", "agent/abs-167-test")
         (repo / "main.py").write_text("x = 1\n")
-        _run(repo, "git", "add", "main.py")
+        e2e_dir = repo / "web" / "e2e" / "functional"
+        e2e_dir.mkdir(parents=True, exist_ok=True)
+        (e2e_dir / "abs167.spec.ts").write_text("test('placeholder', () => {});\n")
+        _run(repo, "git", "add", "main.py", "web/e2e/functional/abs167.spec.ts")
         _run(repo, "git", "commit", "-q", "-m", "[ABS-167] add main.py")
 
         real_exec = rev_mod.asyncio.create_subprocess_exec
@@ -186,7 +189,10 @@ class TestCodeReviewLogLines:
         _init_repo(repo)
         _run(repo, "git", "checkout", "-q", "-b", "agent/abs-167-log-test")
         (repo / "app.py").write_text("print('hello')\n")
-        _run(repo, "git", "add", "app.py")
+        e2e_dir = repo / "web" / "e2e" / "functional"
+        e2e_dir.mkdir(parents=True, exist_ok=True)
+        (e2e_dir / "abs167.spec.ts").write_text("test('placeholder', () => {});\n")
+        _run(repo, "git", "add", "app.py", "web/e2e/functional/abs167.spec.ts")
         _run(repo, "git", "commit", "-q", "-m", "[ABS-167] add app.py")
 
         real_exec = rev_mod.asyncio.create_subprocess_exec
