@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from advisor.db.cases import grant_admin_credits
 from advisor.db.models import CaseCredit, TermsAcceptance, User
@@ -52,6 +52,14 @@ def main() -> int:
     args = parser.parse_args()
 
     with session_scope() as db:
+        # ABS-207: serialise against concurrent Playwright workers.
+        # globalSetup runs this once, but abs9-credit-adoption.spec.ts,
+        # credit-gating-consistency.spec.ts, and unlimited-credits.spec.ts
+        # also call it from their per-worker beforeAll hooks where two
+        # workers can race the User INSERT and the per-tier credit grants.
+        if db.bind.dialect.name == "postgresql":
+            db.execute(text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601203))
+
         user = (
             db.query(User)
             .filter(User.clerk_user_id == args.user_id)

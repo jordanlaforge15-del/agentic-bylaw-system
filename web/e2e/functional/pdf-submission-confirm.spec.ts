@@ -15,9 +15,11 @@ import { expect, test } from "../fixtures/test-env";
 function seedPdfSubmission(): number {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
+  // ABS-207: honor PG_PORT for the parallel-worktree case.
+  const pgPort = process.env.PG_PORT || "5432";
   const databaseUrl =
     process.env.DATABASE_URL ||
-    "postgresql+psycopg://layer1:layer1@localhost:5432/layer1_test";
+    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
 
   const bylawSeed = path.join(
     repoRoot,
