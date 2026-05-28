@@ -167,7 +167,7 @@ def test_t7c_pattern_coverage_detects_broken_patterns(monkeypatch, tmp_path):
     [
         (0.82, 0.90, 0.10, [], "PASS", "approve"),
         (0.70, 0.75, 0.10, [{"severity": "warn"}], "PASS_WITH_FLAGS", "approve_with_review"),
-        (0.60, 0.90, 0.10, [], "FAIL", "reject_and_retry"),
+        (0.60, 0.90, 0.10, [], "FAIL_WITH_RETRIEVAL_GAP", "investigate_retrieval"),
     ],
 )
 def test_t7d_status_thresholds(cite, zone, cov, flags, expected_status, expected_action):
