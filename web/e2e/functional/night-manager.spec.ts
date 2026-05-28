@@ -150,7 +150,9 @@ test.describe("Night Manager — Dashboard", () => {
       page.locator(".nm-topbar__stat").filter({ hasText: "SYSTEM" }),
     ).toBeVisible();
     await expect(page.getByText("NOMINAL")).toBeVisible();
-    await expect(page.getByText(/nm-\d{8}-\d{4}/)).toBeVisible();
+    await expect(
+      page.getByTestId("nm-topbar-run-id").getByText(/nm-\d{8}-\d{4}/),
+    ).toBeVisible();
   });
 
   test("nav bar shows all four tabs", async ({ page }) => {
