@@ -124,10 +124,18 @@ def _print_manifest_summary(manifest, output: Path, stub_retrieval: bool) -> Non
     console.print(f"  pipeline_ready : {manifest.pipeline_ready}")
     if manifest.qa_report:
         r = manifest.qa_report
-        console.print(f"  qa.status      : {r.status}")
-        if stub_retrieval:
+        status_style = {
+            "PASS": "[green]PASS[/green]",
+            "PASS_PENDING_INGEST": "[cyan]PASS_PENDING_INGEST[/cyan]",
+            "PASS_WITH_FLAGS": "[yellow]PASS_WITH_FLAGS[/yellow]",
+            "FAIL": "[red]FAIL[/red]",
+            "FAIL_WITH_RETRIEVAL_GAP": "[red]FAIL_WITH_RETRIEVAL_GAP[/red]",
+        }
+        console.print(f"  qa.status      : {status_style.get(r.status, r.status)}")
+        if stub_retrieval or r.status == "PASS_PENDING_INGEST":
             console.print(
-                "  qa.citation_resolution_rate : [yellow]0.0 (stub client — meaningless)[/yellow]"
+                "  qa.citation_resolution_rate : "
+                "[yellow]0.0 (pending ingest — will be validated post-ingest)[/yellow]"
             )
         else:
             console.print(
@@ -326,4 +334,142 @@ def learn_city_command(
             "\n[yellow]pipeline_ready=False[/yellow] — review the flags above "
             "before ingesting with [bold]layer1 ingest --manifest[/bold]."
         )
+        raise typer.Exit(code=1)
+
+    if manifest.qa_report and manifest.qa_report.status == "PASS_PENDING_INGEST":
+        console.print(
+            "\n[cyan]pipeline_ready=True (pending ingest)[/cyan] — citation "
+            "validation deferred until retrieval data exists. After ingesting, "
+            "run [bold]layer1 validate-manifest[/bold] to confirm citation "
+            "resolution."
+        )
+
+
+# --------------------------------------------------------------------------- #
+# validate-manifest command                                                     #
+# --------------------------------------------------------------------------- #
+def validate_manifest_command(
+    manifest_path: Path = typer.Argument(
+        ..., exists=True, readable=True, help="Path to the CityIntakeManifest JSON"
+    ),
+    retrieval: str = typer.Option(
+        ...,
+        "--retrieval",
+        help="Retrieval client in form 'document-id=<N>'",
+    ),
+    citation_samples_file: Optional[Path] = typer.Option(
+        None,
+        "--citation-samples",
+        help="Path to a JSON array of citation path strings for validation",
+    ),
+    db_url: Optional[str] = typer.Option(
+        None, "--db-url", help="Database URL override"
+    ),
+) -> None:
+    """Re-run validation against a populated retrieval service (post-ingest).
+
+    Reads the manifest, runs the ValidationAgent with a real retrieval client,
+    and updates the manifest's qa_report + pipeline_ready in place.
+
+    \b
+    Example:
+      layer1 validate-manifest abs-learning/output/HRM-MAINLAND/manifest.json \\
+          --retrieval document-id=4
+    """
+    # ── Parse retrieval client ────────────────────────────────────────────
+    parts = retrieval.split("=", 1)
+    if len(parts) != 2 or parts[0].strip() != "document-id":
+        raise typer.BadParameter(
+            "--retrieval must be in the form 'document-id=<N>' (e.g. document-id=4)"
+        )
+    try:
+        document_id = int(parts[1].strip())
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"Invalid document ID in --retrieval: {parts[1]!r}"
+        ) from exc
+
+    retrieval_client = _DbRetrievalClient(document_id, db_url)
+
+    # ── Load citation samples ─────────────────────────────────────────────
+    citation_samples: List[str] = []
+    if citation_samples_file is not None:
+        try:
+            citation_samples = json.loads(
+                citation_samples_file.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise typer.BadParameter(
+                f"Could not load citation samples from {citation_samples_file}: {exc}"
+            ) from exc
+
+    # ── Ensure abs-learning is on sys.path ────────────────────────────────
+    _setup_abs_learning_syspath()
+
+    try:
+        from manifest.models import CityIntakeManifest
+        from agents.validation import ValidationAgent
+    except ImportError as exc:
+        console.print(
+            f"[red]Error:[/red] abs-learning modules are not available: {exc}"
+        )
+        raise typer.Exit(code=1)
+
+    # ── Load and validate the manifest ────────────────────────────────────
+    try:
+        raw = manifest_path.read_text(encoding="utf-8")
+        manifest = CityIntakeManifest.model_validate_json(raw)
+    except Exception as exc:
+        raise typer.BadParameter(f"Could not load manifest: {exc}") from exc
+
+    if manifest.parser_config is None or manifest.taxonomy is None:
+        console.print(
+            "[red]Error:[/red] manifest has no parser_config or taxonomy — "
+            "cannot run validation."
+        )
+        raise typer.Exit(code=1)
+
+    primary = next(
+        (
+            s
+            for s in manifest.sources
+            if s.document_type == "bylaw"
+            and s.parent_document is None
+            and s.in_scope
+        ),
+        None,
+    )
+    if primary is None:
+        console.print("[red]Error:[/red] no primary in-scope bylaw source in manifest.")
+        raise typer.Exit(code=1)
+
+    # ── Run validation ────────────────────────────────────────────────────
+    console.print(f"[bold]Validating manifest:[/bold] {manifest_path}")
+    console.print(f"  retrieval: document-id={document_id}")
+    console.print(f"  citation samples: {len(citation_samples)}")
+
+    validator = ValidationAgent(retrieval_client)
+    qa_report = validator.validate(
+        primary, manifest.parser_config, manifest.taxonomy, citation_samples
+    )
+
+    old_status = manifest.qa_report.status if manifest.qa_report else "None"
+    manifest.qa_report = qa_report
+    manifest.pipeline_ready = qa_report.status in ("PASS", "PASS_PENDING_INGEST")
+
+    # ── Write updated manifest ────────────────────────────────────────────
+    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+
+    # ── Print result ──────────────────────────────────────────────────────
+    console.print(f"\n[bold]Validation result:[/bold]")
+    console.print(f"  status     : {old_status} → {qa_report.status}")
+    console.print(
+        f"  citation_resolution_rate : {qa_report.citation_resolution_rate:.0%}"
+    )
+    console.print(f"  zone_completeness        : {qa_report.zone_completeness:.0%}")
+    console.print(f"  pattern_coverage         : {qa_report.pattern_coverage:.0%}")
+    console.print(f"  pipeline_ready           : {manifest.pipeline_ready}")
+    console.print(f"\n[green]Manifest updated:[/green] {manifest_path}")
+
+    if qa_report.status not in ("PASS", "PASS_WITH_FLAGS"):
         raise typer.Exit(code=1)
