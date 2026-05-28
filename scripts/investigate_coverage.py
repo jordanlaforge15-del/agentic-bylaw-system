@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Investigate coverage gaps in an ingested bylaw document.
 
 Pipeline (cheap-tool-first triage, not auto-fix):
