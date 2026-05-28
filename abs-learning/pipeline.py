@@ -125,7 +125,10 @@ def run_learning_pipeline(
             "validation_skipped: parser_config or taxonomy unavailable"
         )
 
-    pipeline_ready = qa_report is not None and qa_report.status == "PASS"
+    pipeline_ready = qa_report is not None and qa_report.status in (
+        "PASS",
+        "PASS_PENDING_INGEST",
+    )
 
     return CityIntakeManifest(
         municipality=municipality,

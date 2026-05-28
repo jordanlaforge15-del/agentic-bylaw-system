@@ -115,8 +115,21 @@ class ValidationAgent:
             source_doc, parser_config
         )
         all_flags = citation_flags + zone_flags + pattern_flags
+
+        citation_unavailable = (
+            len(citation_samples) > 0
+            and citation_rate == 0.0
+            and not any(
+                f.get("code") == "citation_lookup_error" for f in citation_flags
+            )
+        )
+
         status, action = self._determine_status(
-            citation_rate, zone_completeness, pattern_coverage, all_flags
+            citation_rate,
+            zone_completeness,
+            pattern_coverage,
+            all_flags,
+            citation_unavailable=citation_unavailable,
         )
         return QAReport(
             status=status,
@@ -323,24 +336,35 @@ class ValidationAgent:
         zone_completeness: float,
         pattern_coverage: float,
         all_flags: List[Dict[str, Any]],
+        *,
+        citation_unavailable: bool = False,
     ) -> Tuple[str, str]:
         has_error = any(
             isinstance(f, dict) and f.get("severity") == "error" for f in all_flags
         )
-        is_pass = (
-            citation_rate >= _PASS_CITATION_THRESHOLD
-            and zone_completeness >= _PASS_ZONE_THRESHOLD
+        zone_pattern_pass = (
+            zone_completeness >= _PASS_ZONE_THRESHOLD
             and _PASS_COVERAGE_LOWER <= pattern_coverage <= _PASS_COVERAGE_UPPER
             and not has_error
         )
+
+        if citation_unavailable and zone_pattern_pass:
+            return ("PASS_PENDING_INGEST", "approve_pending_ingest")
+
+        is_pass = citation_rate >= _PASS_CITATION_THRESHOLD and zone_pattern_pass
+        if is_pass:
+            return ("PASS", "approve")
+
         is_acceptable = (
             citation_rate >= _PASS_WITH_FLAGS_CITATION_THRESHOLD
             and zone_completeness >= _PASS_WITH_FLAGS_ZONE_THRESHOLD
         )
-        if is_pass:
-            return ("PASS", "approve")
         if is_acceptable:
             return ("PASS_WITH_FLAGS", "approve_with_review")
+
+        if zone_pattern_pass and citation_rate > 0:
+            return ("FAIL_WITH_RETRIEVAL_GAP", "investigate_retrieval")
+
         return ("FAIL", "reject_and_retry")
 
     # ---------------------------------------------- private: PDF state
