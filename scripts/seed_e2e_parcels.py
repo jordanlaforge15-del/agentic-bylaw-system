@@ -333,6 +333,13 @@ def _ensure_geocode_cache(
 
 def main() -> int:
     with session_scope() as db:
+        # ABS-207: serialise concurrent beforeAll invocations so two
+        # Playwright workers don't race the unique-key inserts below
+        # (dataset name + feature_key + geocode_cache.normalized_text).
+        # Same shape as seed_e2e_evaluator_bylaws.py's advisory lock.
+        if db.bind.dialect.name == "postgresql":
+            db.execute(text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601200))
+
         # 2 parcels (mid-block + corner), 3 centerlines (1 mid-block + 2 corner).
         parcels = _ensure_dataset(
             db, name=PARCELS_DATASET_NAME, role="property_parcels", feature_count=2

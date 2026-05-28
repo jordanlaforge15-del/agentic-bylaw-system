@@ -74,9 +74,12 @@ function runSeed(): void {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const seed = path.join(repoRoot, "scripts", "seed_e2e_evaluator_bylaws.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
+  // ABS-207: honor PG_PORT so this seed lands in the right Postgres
+  // when a worktree overrides ports for parallel `make e2e`.
+  const pgPort = process.env.PG_PORT || "5432";
   const databaseUrl =
     process.env.DATABASE_URL ||
-    "postgresql+psycopg://layer1:layer1@localhost:5432/layer1_test";
+    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
 
   execSync(`"${venvPython}" "${seed}"`, {
     env: {

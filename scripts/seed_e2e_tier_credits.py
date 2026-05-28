@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from advisor.db.cases import grant_admin_credits
 from advisor.db.models import CaseCredit, User
@@ -34,6 +34,12 @@ def main() -> int:
     args = parser.parse_args()
 
     with session_scope() as db:
+        # ABS-207: serialise against concurrent Playwright workers
+        # so two seed runs don't race the per-tier grant_admin_credits
+        # update + CaseCredit insert paths below.
+        if db.bind.dialect.name == "postgresql":
+            db.execute(text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601202))
+
         user = (
             db.query(User)
             .filter(User.clerk_user_id == args.user_id)
