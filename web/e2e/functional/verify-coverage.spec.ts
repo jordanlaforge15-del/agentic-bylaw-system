@@ -133,6 +133,24 @@ test("verify-coverage returns per-page details", async ({ request }) => {
 });
 
 
+test("verify-coverage does not flag structural fragments as missing_citation_path", async ({ request }) => {
+  // ABS-205: HEADING/PROSE/LIST_ITEM/FOOTNOTE fragments with citation_path=None
+  // are structural by design and must NOT produce a missing_citation_path gap.
+  const response = await request.post(`${E2E_API_URL}/v1/_test/verify-coverage`, {
+    headers: { "Content-Type": "application/json" },
+    data: { document_id: seededDocumentId },
+  });
+  expect(response.status()).toBe(200);
+
+  const body = await response.json();
+  const citationGaps = body.gaps.filter(
+    (g: { gap_type: string }) => g.gap_type === "missing_citation_path",
+  );
+  expect(citationGaps).toHaveLength(0);
+  expect(body.summary.fragments_without_citation).toBe(0);
+});
+
+
 test("verify-coverage 404s for nonexistent document", async ({ request }) => {
   const response = await request.post(`${E2E_API_URL}/v1/_test/verify-coverage`, {
     headers: { "Content-Type": "application/json" },
