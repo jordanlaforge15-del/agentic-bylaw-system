@@ -1,7 +1,7 @@
 # Terms and Conditions
 
-**Effective date:** [Insert effective date]
-**Last updated:** [Insert last-updated date]
+**Effective date:** 2026-05-28
+**Last updated:** 2026-05-28
 
 > **Pre-counsel review draft.** This document has not been reviewed by a
 > Nova Scotia lawyer. It is the live document the application serves to
@@ -321,7 +321,7 @@ Terms.
 ## 13. Privacy
 
 Your use of the Service is also governed by the Provider's privacy
-policy, available at [Insert privacy-policy URL]. To the extent of any
+policy, available at https://agenticbylawsystems.com/privacy. To the extent of any
 conflict between these Terms and the privacy policy on a matter of
 personal-information handling, the privacy policy controls. Acceptance
 of these Terms includes acceptance of the privacy policy as it stands
@@ -407,9 +407,8 @@ period under the Nova Scotia *Limitation of Actions Act*.
 5. **Force majeure.** The Provider is not liable for any failure or
    delay in performance caused by events beyond its reasonable control.
 6. **Notices.** Notices to the Provider must be sent to
-   **info@agenticbylawsystems.com** with a copy by post to
-   [Insert mailing address]. Notices to you may be sent to the email
-   address on your account or posted in the Service.
+   **info@agenticbylawsystems.com**. Notices to you may be sent to the
+   email address on your account or posted in the Service.
 7. **Language.** The parties have requested that these Terms be drawn
    up in English. Les parties ont demandé que ces conditions soient
    rédigées en anglais.
