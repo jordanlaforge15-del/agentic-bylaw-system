@@ -593,12 +593,18 @@ function ProductAppPageInner() {
       setMessages(translateHistory(enriched));
       setFeedbackMap(fbMap);
       setSessionId(id);
-      setCaseIdBoth(
-        typeof data.case_id === "number" ? data.case_id : null,
-      );
+      const newCaseId = typeof data.case_id === "number" ? data.case_id : null;
+      setCaseIdBoth(newCaseId);
       setCaseNumber(typeof data.case_number === "number" ? data.case_number : null);
       setCaseTier(typeof data.tier === "string" ? data.tier : null);
       setParcel(extractParcelContext(enriched));
+      // Keep URL in sync so reloads and shared links land on the right case.
+      if (newCaseId !== null) {
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("case_id", String(newCaseId));
+        params.delete("case_number");
+        router.replace(`${pathname}?${params.toString()}`);
+      }
     } catch (e) {
       setError(`Couldn't load that reading: ${(e as Error).message}`);
     }
