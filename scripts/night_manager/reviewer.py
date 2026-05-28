@@ -21,6 +21,17 @@ log = logging.getLogger("night_manager.reviewer")
 HEARTBEAT_INTERVAL = 60  # seconds between "still alive" log lines
 _FLAKE_CANDIDATE_THRESHOLD = 3  # flakes needed before surfacing flake_candidate=true
 
+# ABS-206: keywords that indicate the agent crashed on an authentication
+# failure before producing any commits. Scanned by the empty-diff guard in
+# `review_and_gate` so an empty branch is reported with the actual root
+# cause ("401 Invalid authentication credentials" etc.) rather than a
+# generic "agent produced no commits" line.
+AUTH_ERROR_MARKERS: tuple[str, ...] = (
+    "401",
+    "invalid authentication credentials",
+    "authentication failed",
+)
+
 # Maps test key → list of booleans (True = test recovered on that solo re-run).
 # In-memory only; resets on NM restart, which is fine for the rolling-window intent.
 _flake_history: dict[str, list[bool]] = defaultdict(list)
@@ -211,6 +222,41 @@ def check_e2e_coverage(changed_files: list[str]) -> tuple[bool, str]:
     return False, msg
 
 
+def _scan_log_for_auth_error(log_file: str, start_offset: int) -> str | None:
+    """Return a short excerpt around the first auth-marker hit in the log
+    slice [`start_offset`:EOF], or None when no marker is present.
+
+    The offset is captured by `IssueState.attempt_log_offset` before the
+    current attempt starts to write to its append-only log file (see
+    `_snapshot_log_offset` in agent.py). Scanning from that offset avoids
+    false positives on auth strings left behind by an earlier attempt
+    that shares the same log path. Mirrors the ABS-146 fix for
+    `_is_rate_limited`.
+    """
+    if not log_file:
+        return None
+    try:
+        with open(log_file, "rb") as fh:
+            fh.seek(start_offset)
+            raw = fh.read()
+    except OSError:
+        return None
+    text = raw.decode("utf-8", errors="replace")
+    lower = text.lower()
+    for marker in AUTH_ERROR_MARKERS:
+        idx = lower.find(marker)
+        if idx == -1:
+            continue
+        # Small window around the hit so the operator sees the HTTP body /
+        # status line that surrounded the marker, not just the marker
+        # itself. Bounds are intentionally tight to keep Linear comments
+        # readable.
+        start = max(0, idx - 80)
+        end = min(len(text), idx + len(marker) + 240)
+        return text[start:end].strip()
+    return None
+
+
 async def _git_changed_files(worktree: str) -> list[str]:
     """Return `git diff --name-only dev...HEAD` as a list of paths.
 
@@ -292,7 +338,15 @@ async def code_review(issue: IssueState, config: NMConfig) -> tuple[bool, str]:
     diff_text = diff_out.decode("utf-8", errors="replace")
 
     if not diff_text.strip():
-        return True, "No changes to review."
+        # ABS-206: `review_and_gate`'s empty-diff guard should already
+        # have blocked this issue before us. If a direct caller of
+        # code_review reaches this branch, fail closed — auto-passing
+        # an empty diff is what let ABS-203 land as Done after the
+        # agent died on a 401.
+        return False, (
+            "Agent produced no commits — empty diff against dev. "
+            "Re-run required."
+        )
 
     log_proc = await asyncio.create_subprocess_exec(
         "git", "log", "dev...HEAD", "--oneline",
@@ -1110,6 +1164,36 @@ async def review_and_gate(
     Returns True if the issue passed all gates and is ready to merge.
     """
     from .agent import resume_agent, monitor_agent
+
+    # ABS-206: empty-diff guard. An agent that exits 0 without committing
+    # anything (auth failure, sandbox crash, OOM) leaves the worktree on
+    # dev tip. Code review then auto-passes the empty diff, e2e runs
+    # against unmodified dev (green by definition), and `merge_to_dev`
+    # merges nothing — silently flipping the ticket to Done. Catch the
+    # non-delivery here, before any LLM call or e2e run, and surface the
+    # auth root cause to the operator when the agent log shows one.
+    changed_files = await _git_changed_files(issue.worktree)
+    if not changed_files:
+        auth_excerpt = _scan_log_for_auth_error(
+            issue.log_file, issue.attempt_log_offset,
+        )
+        if auth_excerpt:
+            reason = (
+                "Agent produced no commits — authentication error detected "
+                "in agent log. Re-run required after credentials are "
+                f"refreshed.\n\nLog excerpt:\n{auth_excerpt}"
+            )
+        else:
+            reason = (
+                "Agent produced no commits — possible crash or auth failure. "
+                "Re-run required."
+            )
+        log.warning(
+            "Empty-diff guard fired for %s: %s",
+            issue.identifier, reason.splitlines()[0],
+        )
+        issue.mark_blocked(reason)
+        return False
 
     for cycle in range(MAX_REVIEW_CYCLES):
         passed, feedback = await code_review(issue, config)
