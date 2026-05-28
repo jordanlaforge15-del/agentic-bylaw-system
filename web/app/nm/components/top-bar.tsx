@@ -45,7 +45,7 @@ export function TopBar({
               <span>SYSTEM</span>
               <b style={{ color: "var(--ok)" }}>NOMINAL</b>
             </div>
-            <div className="nm-topbar__stat">
+            <div className="nm-topbar__stat" data-testid="nm-topbar-run-id">
               <span>RUN</span>
               <b className="nm-prim">{state.run_id}</b>
             </div>
