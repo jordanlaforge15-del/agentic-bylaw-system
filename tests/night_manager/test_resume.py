@@ -255,6 +255,43 @@ class TestReconcileWithGit:
         assert newly_blocked == []
         assert state.issues["ABS-200"].status == "failed"
 
+    def test_empty_branch_not_classified_as_zombie(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """ABS-210 false positive: an agent created a branch off dev and
+        exited without committing (e.g. it asked for operator input and
+        ended the turn). The branch has `tip == merge-base` — the same
+        shape as a real zombie — but no `Revert ABS-X` commit ever
+        landed on dev. The previous `or not merged_into_dev` clause
+        misclassified the empty branch as a zombie and pushed Linear to
+        Backlog mid-resume. The reconciler must now leave empty branches
+        alone; `_detect_stale_pids` + the resume loop handle the re-spawn.
+        """
+        branch = "agent/ABS-210-empty-no-commits"
+        _run(repo, "git", "checkout", "-q", "-b", branch)
+        # Branch created off dev, NO commits added — tip == dev tip ==
+        # merge-base. No revert on dev because there was no merge.
+        _run(repo, "git", "checkout", "-q", "dev")
+
+        # Sanity: branch tip == merge-base with dev (the zombie SHAPE).
+        tip = _run(repo, "git", "rev-parse", branch).stdout.strip()
+        base = _run(repo, "git", "merge-base", "dev", branch).stdout.strip()
+        assert tip == base, "fixture wrong — should look like a zombie"
+
+        monkeypatch.setattr(nm_main, "REPO_ROOT", repo)
+        state = self._make_state(**{
+            "ABS-210": {"branch": branch, "status": "reviewing"},
+        })
+
+        reconciled, newly_merged, newly_blocked = nm_main._reconcile_state_with_git(state)
+
+        assert "ABS-210" not in reconciled
+        assert "ABS-210" not in newly_blocked
+        assert "ABS-210" not in newly_merged
+        # Status stays as recorded — stale-PID detector handles it next.
+        assert state.issues["ABS-210"].status == "reviewing"
+        assert state.issues["ABS-210"].error is None
+
     def test_merged_issue_skipped(
         self, repo: Path, monkeypatch: pytest.MonkeyPatch,
     ):

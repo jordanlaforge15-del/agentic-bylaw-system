@@ -156,6 +156,57 @@ class TestScanLogForAuthError:
         assert _scan_log_for_auth_error("", 0) is None
         assert _scan_log_for_auth_error("/no/such/path.log", 0) is None
 
+    def test_line_number_401_in_read_tool_output_does_not_match(self, tmp_path: Path):
+        """ABS-210 false positive: docs/TERMS_AND_CONDITIONS.md is >400 lines,
+        so a `Read` tool result includes a line-numbered prefix
+        `401\\t<content>`. The previous substring-match marker treated that
+        as an HTTP 401 and reported a bogus auth failure. The tightened
+        patterns require an HTTP / status / "Unauthorized" / "invalid"
+        context — bare `401` alone must NOT match.
+        """
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            '{"type":"user","message":{"content":[{"type":"tool_result",'
+            '"content":"399\\tprovision is...\\n400\\t3. **No waiver.**...\\n'
+            '401\\t   right under these Terms operates as a waiver of that right.\\n'
+            '402\\t4. **Assignment.**...\\n"}]}}\n',
+        )
+        assert _scan_log_for_auth_error(str(log_file), 0) is None
+
+    def test_bare_401_in_other_contexts_does_not_match(self, tmp_path: Path):
+        """Page numbers, counts, dates — anything containing the digits 401
+        without an HTTP / status / Unauthorized / invalid neighbour must
+        not trip the auth guard.
+        """
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            "processed 401 rows\n"
+            "error code 4015 thrown\n"
+            "version 1401.2 of foo released in 2401\n",
+        )
+        assert _scan_log_for_auth_error(str(log_file), 0) is None
+
+    def test_json_status_401_matches(self, tmp_path: Path):
+        """The Anthropic SDK surfaces auth failures as JSON with
+        `"status": 401` — keep that path matching after the tightening."""
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            'API error: {"type":"error","status":401,'
+            '"message":"invalid x-api-key"}\n',
+        )
+        excerpt = _scan_log_for_auth_error(str(log_file), 0)
+        assert excerpt is not None
+        assert "401" in excerpt
+
+    def test_401_unauthorized_matches(self, tmp_path: Path):
+        """`401 Unauthorized` (no `HTTP/` prefix — e.g. a raw error line)
+        is the canonical auth-failure phrase. Keep it matching."""
+        log_file = tmp_path / "agent.log"
+        log_file.write_text("response: 401 Unauthorized\n")
+        excerpt = _scan_log_for_auth_error(str(log_file), 0)
+        assert excerpt is not None
+        assert "401" in excerpt
+
 
 # ---------------------------------------------------------------------------
 # code_review: defensive fail-closed on empty diff
