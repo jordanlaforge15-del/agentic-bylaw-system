@@ -15,11 +15,11 @@ Tiers
 Three case tiers, ordered by token budget and price:
 
 * ``quick`` — 12k token budget, $12.50 CAD. Single-property zoning
-  lookups, permitted-use checks. ~4-6 retrieval rounds.
+  lookups, permitted-use checks. ~4-6 reasoning steps.
 * ``standard`` — 45k token budget, $32.50 CAD. Variance research, multi-
-  bylaw cross-references, development-standards lookups. ~12-18 rounds.
+  bylaw cross-references, development-standards lookups. ~12-18 reasoning steps.
 * ``complex`` — 130k token budget, $75 CAD. Multi-property files,
-  rezoning, deep overlay-zone analysis. ~35-50 rounds.
+  rezoning, deep overlay-zone analysis. ~35-50 reasoning steps.
 
 Token budgets are CUMULATIVE (input + output) across all sessions in
 the case within the 30-day window. Margin against API cost is 98%+ at
@@ -113,8 +113,8 @@ TIER_QUICK_DEF = Tier(
     token_budget=12_000,
     unit_price_cents=1250,  # $12.50 CAD
     description=(
-        "A single-property zoning or permitted-use lookup. ~4-6 retrieval "
-        "rounds. Best for fast yes/no answers on a known address."
+        "A single-property zoning or permitted-use lookup. ~4-6 reasoning "
+        "steps. Best for fast yes/no answers on a known address."
     ),
 )
 TIER_STANDARD_DEF = Tier(
@@ -125,7 +125,7 @@ TIER_STANDARD_DEF = Tier(
     description=(
         "Variance research, multi-bylaw cross-references, and "
         "development-standards lookups for a single property. ~12-18 "
-        "retrieval rounds."
+        "reasoning steps."
     ),
 )
 TIER_COMPLEX_DEF = Tier(
@@ -135,7 +135,7 @@ TIER_COMPLEX_DEF = Tier(
     unit_price_cents=7500,  # $75 CAD
     description=(
         "Rezoning, multi-overlay analysis, deep development-application "
-        "files. ~35-50 retrieval rounds. Use when you need a thorough "
+        "files. ~35-50 reasoning steps. Use when you need a thorough "
         "research file rather than a quick answer."
     ),
 )
