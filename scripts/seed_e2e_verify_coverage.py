@@ -205,6 +205,19 @@ def _ensure_fragments(session, document_id: int) -> None:
             confidence=0.4,
             source_block_ids=block_ids_by_page.get(2, [])[2:3],
         ),
+        # PARSED structural fragment with no citation_path — intentional by design.
+        # Must NOT trigger a missing_citation_path gap (ABS-205).
+        dict(
+            fragment_type=FragmentType.HEADING,
+            citation_label=None,
+            citation_path=None,
+            page_start=1, page_end=1,
+            reading_order_start=0,
+            text="Part 1 General Provisions",
+            parse_status=ParseStatus.PARSED,
+            confidence=0.85,
+            source_block_ids=block_ids_by_page.get(1, [])[:1],
+        ),
         dict(
             fragment_type=FragmentType.SECTION,
             citation_label="8.1",
