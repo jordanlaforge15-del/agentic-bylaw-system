@@ -42,11 +42,15 @@ for _path in (
 def api_call_budget():
     """Shared counter + ceiling for the integration session.
 
-    Phase 1's three control tests use ~5 calls; the Phase 2 control tests
-    share a single full-pipeline run via ``halifax_full_run`` for ~20 calls.
-    The limit of 30 leaves headroom for retries on transient errors.
+    Phase 1 integration tests use ~5 calls; the Phase 2 control tests share a
+    single full-pipeline run via ``halifax_full_run`` for ~20 calls; the live
+    municipal-site tests (``test_discovery_live.py``) cap at 15 calls per site
+    × 2 sites = up to 30 calls.  The limit of 60 covers the combined worst case
+    with headroom for transient retries.  When running ``test_discovery_live.py``
+    in isolation the same limit applies — individual tests assert their own
+    per-site ceiling of 15 calls.
     """
-    return {"count": 0, "limit": 30}
+    return {"count": 0, "limit": 60}
 
 
 @pytest.fixture(scope="session")
