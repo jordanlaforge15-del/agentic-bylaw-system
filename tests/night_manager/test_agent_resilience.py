@@ -635,3 +635,121 @@ class TestExtractPriorReasoning:
         prompt = captured_prompt[0]
         assert "The fix requires editing pyproject.toml." in prompt
         assert "Prior agent reasoning" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Stale-branch recovery: setup_worktree must purge a leftover agent/* branch
+# from a prior crashed NM run instead of crashing the whole orchestrator.
+# ---------------------------------------------------------------------------
+
+class TestSetupWorktreeStaleBranchRecovery:
+    """A prior NM crash can leave `agent/ABS-XXX-*` on a stale dev SHA with no
+    worktree pointing at it. The next run must purge that orphan and create
+    a fresh worktree off current dev — otherwise the second `git worktree add
+    -b <branch> dev` fails with "branch already exists" and tears down NM.
+    """
+
+    @pytest.mark.asyncio
+    async def test_purges_stale_branch_then_creates_worktree(self, tmp_path: Path):
+        from scripts.night_manager import agent as agent_mod
+
+        calls: list[list[str]] = []
+        # Simulated git state: branch exists; worktree path does not.
+        state = {"branch_exists": True, "wt_created": False}
+
+        async def fake_git(*args: str) -> tuple[int, bytes, bytes]:
+            calls.append(list(args))
+            if args[:3] == ("rev-parse", "--verify", "--quiet"):
+                return (0, b"", b"") if state["branch_exists"] else (1, b"", b"")
+            if args[:2] == ("rev-parse", "--short"):
+                return (0, b"deadbee\n", b"")
+            if args[:2] == ("branch", "-D"):
+                state["branch_exists"] = False
+                return (0, b"Deleted branch.\n", b"")
+            if args[0] == "worktree" and args[1] == "add":
+                if state["branch_exists"]:
+                    return (
+                        128, b"",
+                        b"fatal: a branch named '...' already exists\n",
+                    )
+                state["wt_created"] = True
+                return (0, b"Preparing worktree\n", b"")
+            return (0, b"", b"")
+
+        # Worktree dir must NOT pre-exist or setup_worktree short-circuits.
+        worktree_root = tmp_path / "worktrees"
+        worktree_root.mkdir()
+
+        with patch.object(agent_mod, "_git", fake_git), \
+             patch.object(agent_mod, "WORKTREE_ROOT", worktree_root), \
+             patch.object(agent_mod, "_setup_worktree_deps", AsyncMock()):
+            issue = _make_issue(tmp_path, identifier="ABS-203")
+            issue.worktree = ""  # force the "not yet created" path
+            wt = await agent_mod.setup_worktree(issue, MagicMock())
+
+        # Branch was purged before worktree add ran.
+        cmd_names = [tuple(c[:2]) for c in calls]
+        assert ("branch", "-D") in cmd_names, calls
+        assert ("worktree", "add") in cmd_names, calls
+        branch_d_idx = cmd_names.index(("branch", "-D"))
+        wt_add_idx = cmd_names.index(("worktree", "add"))
+        assert branch_d_idx < wt_add_idx, "branch -D must precede worktree add"
+        assert state["wt_created"] is True
+        assert wt == worktree_root / "nm-abs-203"
+
+    @pytest.mark.asyncio
+    async def test_no_purge_when_branch_absent(self, tmp_path: Path):
+        from scripts.night_manager import agent as agent_mod
+
+        calls: list[list[str]] = []
+
+        async def fake_git(*args: str) -> tuple[int, bytes, bytes]:
+            calls.append(list(args))
+            if args[:3] == ("rev-parse", "--verify", "--quiet"):
+                return (1, b"", b"")  # branch absent
+            if args[0] == "worktree" and args[1] == "add":
+                return (0, b"Preparing worktree\n", b"")
+            return (0, b"", b"")
+
+        worktree_root = tmp_path / "worktrees"
+        worktree_root.mkdir()
+
+        with patch.object(agent_mod, "_git", fake_git), \
+             patch.object(agent_mod, "WORKTREE_ROOT", worktree_root), \
+             patch.object(agent_mod, "_setup_worktree_deps", AsyncMock()):
+            issue = _make_issue(tmp_path, identifier="ABS-555")
+            issue.worktree = ""
+            await agent_mod.setup_worktree(issue, MagicMock())
+
+        cmd_names = [tuple(c[:2]) for c in calls]
+        assert ("branch", "-D") not in cmd_names, "must not delete a branch that isn't there"
+
+    @pytest.mark.asyncio
+    async def test_raises_when_branch_checked_out_elsewhere(self, tmp_path: Path):
+        """If `git branch -D` fails (branch is checked out in another worktree
+        — e.g. a parallel NM run), surface the error rather than silently
+        racing for the same branch."""
+        from scripts.night_manager import agent as agent_mod
+
+        async def fake_git(*args: str) -> tuple[int, bytes, bytes]:
+            if args[:3] == ("rev-parse", "--verify", "--quiet"):
+                return (0, b"", b"")
+            if args[:2] == ("rev-parse", "--short"):
+                return (0, b"cafef00\n", b"")
+            if args[:2] == ("branch", "-D"):
+                return (
+                    1, b"",
+                    b"error: Cannot delete branch 'agent/ABS-9' checked out at '/path'\n",
+                )
+            return (0, b"", b"")
+
+        worktree_root = tmp_path / "worktrees"
+        worktree_root.mkdir()
+
+        with patch.object(agent_mod, "_git", fake_git), \
+             patch.object(agent_mod, "WORKTREE_ROOT", worktree_root), \
+             patch.object(agent_mod, "_setup_worktree_deps", AsyncMock()):
+            issue = _make_issue(tmp_path, identifier="ABS-9")
+            issue.worktree = ""
+            with pytest.raises(RuntimeError, match="Cannot reclaim branch"):
+                await agent_mod.setup_worktree(issue, MagicMock())

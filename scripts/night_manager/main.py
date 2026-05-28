@@ -875,34 +875,45 @@ async def _execute(
 
         for ident in group.parallel:
             issue = state.issues[ident]
-            issue_data = None
             try:
-                li = await linear.search_issue_by_identifier(ident)
-                if li:
-                    issue_data = li.description
-            except Exception:
-                pass
-
-            worktree_path = await setup_worktree(issue, state)
-            state.save()
-
-            if in_progress_id:
+                issue_data = None
                 try:
-                    await linear.update_issue_state(issue.linear_id, in_progress_id)
-                except Exception as e:
-                    log.warning("Failed to update Linear status for %s: %s", ident, e)
+                    li = await linear.search_issue_by_identifier(ident)
+                    if li:
+                        issue_data = li.description
+                except Exception:
+                    pass
 
-            await linear.post_comment(
-                issue.linear_id,
-                f"**Night Manager** — Agent started\n\n"
-                f"- Branch: `{issue.branch}`\n"
-                f"- Worktree: `{issue.worktree}`\n"
-                f"- Ports: PG={issue.ports.pg}, API={issue.ports.api}, WEB={issue.ports.web}\n"
-                f"- Run: `{state.run_id}`",
-            )
+                worktree_path = await setup_worktree(issue, state)
+                state.save()
 
-            proc = await spawn_agent(issue, config, issue_data)
-            state.save()
+                if in_progress_id:
+                    try:
+                        await linear.update_issue_state(issue.linear_id, in_progress_id)
+                    except Exception as e:
+                        log.warning("Failed to update Linear status for %s: %s", ident, e)
+
+                await linear.post_comment(
+                    issue.linear_id,
+                    f"**Night Manager** — Agent started\n\n"
+                    f"- Branch: `{issue.branch}`\n"
+                    f"- Worktree: `{issue.worktree}`\n"
+                    f"- Ports: PG={issue.ports.pg}, API={issue.ports.api}, WEB={issue.ports.web}\n"
+                    f"- Run: `{state.run_id}`",
+                )
+
+                proc = await spawn_agent(issue, config, issue_data)
+                state.save()
+            except Exception as exc:
+                # A spawn-time failure (stale branch, dep install crash, Linear
+                # outage) for one issue must not tear down the orchestrator —
+                # mark this issue failed and continue with the rest of the
+                # group. The post-group asyncio.gather only catches exceptions
+                # raised inside the review tasks, not spawn-side ones.
+                log.error("Failed to spawn agent for %s: %s", ident, exc)
+                issue.mark_failed(f"Spawn failed: {exc}")
+                state.save()
+                continue
 
             task = asyncio.create_task(
                 _agent_through_review(
