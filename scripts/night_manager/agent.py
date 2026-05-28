@@ -166,8 +166,58 @@ def _snapshot_log_offset(log_file: str) -> int:
         return 0
 
 
+async def _git(*args: str) -> tuple[int, bytes, bytes]:
+    """Run a git command at REPO_ROOT and return (rc, stdout, stderr)."""
+    proc = await asyncio.create_subprocess_exec(
+        "git", *args,
+        cwd=str(REPO_ROOT),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return proc.returncode or 0, stdout, stderr
+
+
+async def _purge_stale_branch(branch: str) -> None:
+    """If `branch` exists with no worktree pointing at it, force-delete it.
+
+    A prior NM run can crash after `git worktree add -b <branch> dev` reserves
+    the branch but before the worktree is materialised (or the worktree is
+    later removed manually). On the next run, `git worktree add -b <branch>
+    dev` then fails with "branch already exists" and used to crash the entire
+    orchestrator. We recover by purging the orphan branch so the create can
+    proceed off current dev. The branch's pre-purge tip SHA is logged so an
+    operator can salvage from the reflog if it carried unmerged commits.
+
+    If the branch is checked out in some worktree (parallel NM run, manual
+    worktree), `git branch -D` fails and we surface that — never delete a
+    branch another process is actively using.
+    """
+    rc, _, _ = await _git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+    if rc != 0:
+        return  # branch doesn't exist; nothing to do
+
+    rc, sha_out, _ = await _git("rev-parse", "--short", branch)
+    head_sha = sha_out.decode().strip() if rc == 0 else "<unknown>"
+
+    rc, stdout, stderr = await _git("branch", "-D", branch)
+    if rc != 0:
+        raise RuntimeError(
+            f"Cannot reclaim branch {branch} (head={head_sha}): "
+            f"{_combine_streams(stdout, stderr)}"
+        )
+    log.warning(
+        "Purged stale branch %s (was at %s) — recoverable via `git reflog`",
+        branch, head_sha,
+    )
+
+
 async def setup_worktree(issue: IssueState, state: NMState) -> Path:
-    """Create a git worktree for the issue off dev."""
+    """Create a git worktree for the issue off dev.
+
+    Recovers from a stale `agent/<identifier>-*` branch left behind by a prior
+    crashed NM run by purging the orphan branch before creating fresh off dev.
+    """
     worktree_name = f"nm-{issue.identifier.lower()}"
     worktree_path = WORKTREE_ROOT / worktree_name
     issue.worktree = str(worktree_path)
@@ -176,15 +226,12 @@ async def setup_worktree(issue: IssueState, state: NMState) -> Path:
         log.info("Worktree %s already exists, reusing", worktree_path)
         return worktree_path
 
-    proc = await asyncio.create_subprocess_exec(
-        "git", "worktree", "add", str(worktree_path),
-        "-b", issue.branch, "dev",
-        cwd=str(REPO_ROOT),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    await _purge_stale_branch(issue.branch)
+
+    rc, stdout, stderr = await _git(
+        "worktree", "add", str(worktree_path), "-b", issue.branch, "dev",
     )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
+    if rc != 0:
         raise RuntimeError(
             f"Failed to create worktree for {issue.identifier}: "
             f"{_combine_streams(stdout, stderr)}"
