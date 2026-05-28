@@ -15,6 +15,7 @@ from .config import (
     ALLOWED_TOOLS,
     BASH_TOOL_BUDGET_MINUTES,
     DEV_AGENT_SYSTEM_PROMPT,
+    HAIKU_AGENT_PROMPT_EXTENSION,
     LINEAR_MCP_PREFIX,
     NMConfig,
     PORT_BASE_API,
@@ -260,6 +261,13 @@ async def spawn_agent(
     model = issue.agent_model or config.agent_model
     effort = issue.agent_effort or config.agent_effort
 
+    # ABS-202: haiku-class agents get a tighter prescriptive recipe appended
+    # to the system prompt to prevent self-sabotage (spec deletion, Monitor
+    # polling, running full e2e). Sonnet/opus keep judgment latitude.
+    system_prompt = DEV_AGENT_SYSTEM_PROMPT
+    if model == "haiku":
+        system_prompt += HAIKU_AGENT_PROMPT_EXTENSION
+
     cmd = [
         "claude",
         "-p",
@@ -267,7 +275,7 @@ async def spawn_agent(
         "--output-format", "stream-json",
         "--permission-mode", "acceptEdits",
         "--allowedTools", ALLOWED_TOOLS,
-        "--append-system-prompt", DEV_AGENT_SYSTEM_PROMPT,
+        "--append-system-prompt", system_prompt,
         "--session-id", session_id,
         # ABS-149: surface each NM agent in the Claude mobile app's
         # session list. Name = nm-<issue identifier> so the operator can
@@ -420,6 +428,11 @@ async def _spawn_continuation(
     model = issue.agent_model or config.agent_model
     effort = issue.agent_effort or config.agent_effort
 
+    # ABS-202: same model-dependent system prompt as spawn_agent.
+    system_prompt = DEV_AGENT_SYSTEM_PROMPT
+    if model == "haiku":
+        system_prompt += HAIKU_AGENT_PROMPT_EXTENSION
+
     cmd = [
         "claude",
         "-p",
@@ -427,7 +440,7 @@ async def _spawn_continuation(
         "--output-format", "stream-json",
         "--permission-mode", "acceptEdits",
         "--allowedTools", ALLOWED_TOOLS,
-        "--append-system-prompt", DEV_AGENT_SYSTEM_PROMPT,
+        "--append-system-prompt", system_prompt,
         "--session-id", new_session_id,
         # ABS-149: continuation reuses the same nm-<identifier> label so
         # the mobile app sees a single thread per issue across spawns.
@@ -776,6 +789,21 @@ async def monitor_agent(
         raise
 
     exit_code = proc.returncode or 0
+
+    # ABS-202: success-with-cleanup detection. When the agent already emitted
+    # a `result subtype=success` but the wrapper was killed (SIGTERM from the
+    # post-success idle watchdog, or leaked Monitor background tasks holding
+    # the wrapper open), the non-zero exit code is an artifact of cleanup —
+    # not an agent failure. Override to 0 so the downstream lifecycle routes
+    # to the review gate instead of the failure path.
+    if exit_code != 0 and success_result_at is not None:
+        log.info(
+            "Agent %s exited %d after emitting success result "
+            "— treating as success-with-cleanup (ABS-202)",
+            issue.identifier, exit_code,
+        )
+        exit_code = 0
+
     log.info(
         "Agent %s finished (exit=%d, output_len=%d)",
         issue.identifier, exit_code, len(final_output),

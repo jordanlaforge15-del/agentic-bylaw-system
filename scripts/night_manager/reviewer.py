@@ -168,6 +168,49 @@ def check_diff_touches_ticket_areas(
     return False, msg
 
 
+def check_e2e_coverage(changed_files: list[str]) -> tuple[bool, str]:
+    """Verify the diff includes e2e test coverage for production changes.
+
+    Returns (ok, message). On `ok=False` the caller should fail the
+    review and surface `message` back to the dev agent.
+
+    The gate fires when ALL of these are true:
+
+    1. `changed_files` is non-empty.
+    2. At least one changed file is NOT under a test-only prefix (i.e.
+       the diff contains production-code changes).
+    3. Zero changed files are under `web/e2e/`.
+
+    This catches the ABS-202 failure mode where an agent writes a spec
+    then deletes it, leaving the branch with a behavior change and zero
+    e2e coverage — a violation of CLAUDE.md ("Every issue must be
+    covered by Playwright e2e tests").
+    """
+    if not changed_files:
+        return True, ""
+
+    has_production_changes = any(
+        not _is_test_only_path(p) for p in changed_files
+    )
+    if not has_production_changes:
+        return True, ""
+
+    has_e2e_changes = any(p.startswith("web/e2e/") for p in changed_files)
+    if has_e2e_changes:
+        return True, ""
+
+    prod_files = [p for p in changed_files if not _is_test_only_path(p)]
+    msg = (
+        "Agent committed behavior change without e2e coverage. "
+        "The diff contains production-code changes but no new or modified "
+        "files under `web/e2e/`. Per CLAUDE.md, every issue must be covered "
+        "by Playwright e2e tests.\n\n"
+        "Production files changed:\n"
+        + "\n".join(f"  - {p}" for p in prod_files)
+    )
+    return False, msg
+
+
 async def _git_changed_files(worktree: str) -> list[str]:
     """Return `git diff --name-only dev...HEAD` as a list of paths.
 
@@ -222,8 +265,20 @@ async def code_review(issue: IssueState, config: NMConfig) -> tuple[bool, str]:
         )
         return False, areas_msg
 
+    # ABS-202: e2e coverage gate — production changes must be accompanied
+    # by at least one new/modified file under web/e2e/. Catches the
+    # self-sabotage pattern where an agent writes a spec then deletes it.
+    e2e_ok, e2e_msg = check_e2e_coverage(changed_files)
+    if not e2e_ok:
+        log.warning(
+            "Review FAILED (e2e-coverage) for %s: %s",
+            issue.identifier, e2e_msg.splitlines()[0],
+        )
+        return False, e2e_msg
+
     log.info(
-        "reviewer: diff-vs-areas check (pass) → LLM review starting for %s (model=%s)",
+        "reviewer: diff-vs-areas check (pass), e2e-coverage check (pass) "
+        "→ LLM review starting for %s (model=%s)",
         issue.identifier, config.reviewer_model,
     )
 

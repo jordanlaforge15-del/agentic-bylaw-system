@@ -537,7 +537,11 @@ class TestPostSuccessIdleWatchdog:
         assert signal.SIGTERM in proc.signals, (
             f"expected SIGTERM after post-success idle; got signals={proc.signals}"
         )
-        assert exit_code == -signal.SIGTERM
+        # ABS-202: monitor_agent now overrides exit_code to 0 when a success
+        # result was already emitted (success-with-cleanup detection).
+        assert exit_code == 0, (
+            f"expected exit_code=0 after success-with-cleanup; got {exit_code}"
+        )
 
         messages = [r.getMessage() for r in caplog.records]
         warn_lines = [

@@ -284,7 +284,10 @@ class TestCodeReviewWiresAreasGate:
         _init_repo(repo)
         _run(repo, "git", "checkout", "-q", "-b", "agent/ABS-84-test")
         (repo / "Dockerfile.advisor").write_text("FROM python:3.12\nCOPY scripts ./scripts\n")
-        _run(repo, "git", "add", "Dockerfile.advisor")
+        e2e_dir = repo / "web" / "e2e" / "functional"
+        e2e_dir.mkdir(parents=True, exist_ok=True)
+        (e2e_dir / "abs84.spec.ts").write_text("test('placeholder', () => {});\n")
+        _run(repo, "git", "add", "Dockerfile.advisor", "web/e2e/functional/abs84.spec.ts")
         _run(repo, "git", "commit", "-q", "-m", "[ABS-84] add scripts copy")
 
         import json as _json

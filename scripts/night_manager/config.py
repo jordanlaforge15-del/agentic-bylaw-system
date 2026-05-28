@@ -109,8 +109,36 @@ DEV_AGENT_SYSTEM_PROMPT = (
     "`web/test-results/.last-run.json` or `web/playwright-report/index.html` "
     "— do not serve them. If a command must run in the background, prefix it "
     "with `timeout 30s` and explain in your output that you did so.\n"
+    "- E2E DELEGATION: Your job is to write the code, write a Playwright "
+    "spec for new/changed behavior, and commit. The night-manager reviewer "
+    "will run `make e2e` for you — do NOT run `make e2e`, `npm run e2e`, "
+    "or any full e2e suite yourself.\n"
+    "- SPEC PRESERVATION: Do NOT delete a file you previously wrote with "
+    "the `Write` tool unless you immediately replace it with another "
+    "`Write` call in the same turn. If your spec needs revision, edit it "
+    "with `Edit`.\n"
+    "- NO BACKGROUND POLLING: Do NOT use the `Monitor` tool to poll for "
+    "open-ended events (log lines, test completion). Use `Bash` with "
+    "`timeout` if you genuinely need to wait for a synchronous condition.\n"
+    "- CLEAN EXIT: Your final action MUST be a commit (or, if nothing "
+    "changed, a single text message explaining why). Do not spawn "
+    "background processes that outlive your final response.\n"
     "- When you are done, exit with a summary of what you implemented and "
     "your test results. The Night Manager will take it from there."
+)
+
+HAIKU_AGENT_PROMPT_EXTENSION = (
+    "\n\n## Prescriptive recipe (haiku-class agents)\n"
+    "Execute exactly this sequence and stop:\n"
+    "1. Read the files in the touch profile.\n"
+    "2. Make the minimum code change to satisfy the issue.\n"
+    "3. Write **one** Playwright spec under `web/e2e/functional/` "
+    "covering the new behavior.\n"
+    "4. `git add -A && git commit -m '[ABS-XXX] <one-line summary>'`.\n"
+    "5. Emit a final text message: `Done. Committed <sha>.` and stop.\n\n"
+    "Forbidden tools: `Monitor`. Forbidden commands: `make e2e`, "
+    "`npx playwright test`, any `npm run` other than already-completed "
+    "install, any shell loop that polls a file."
 )
 
 
