@@ -322,32 +322,41 @@ def _reconcile_state_with_git(state: NMState) -> tuple[list[str], list[str], lis
             "log", "dev", "--oneline", "-n", "50",
             f"--grep=Revert.*{ident}",
         )
+        # ABS-210 (2026-05-28): an empty branch (agent created the
+        # branch off dev but never committed) ALSO has `tip == base`,
+        # so the previous `or not merged_into_dev` clause false-positived
+        # on every "agent ran but did nothing" branch and pushed those
+        # tickets back to Linear "Backlog" mid-resume. Require an explicit
+        # revert marker on dev — that is the genuine zombie signal (a
+        # branch whose merge was undone with `git revert -m 1`).
+        # Empty-but-never-committed branches are handled downstream by
+        # `_detect_stale_pids` (status=reviewing/in_progress + dead PID
+        # → failed) and the resume re-spawn loop.
         is_zombie = (
             tip and base and tip == base
-            and (bool(revert_marker) or not merged_into_dev)
+            and bool(revert_marker)
         )
 
-        # 1. Zombie detection comes FIRST: branch tip == merge-base AND
-        #    either the merge was reverted on dev (ABS-129 / ABS-135
-        #    case from nm-20260526-004610) OR git doesn't list the
-        #    branch as merged at all (cherry-pick / rebase orphan).
-        #    A clean merged branch ALSO has tip == merge-base when no
-        #    new commits happened after the merge, so the revert marker
-        #    is the distinguishing signal.
+        # 1. Zombie detection: tip == merge-base AND a Revert commit
+        #    for this identifier exists on dev (ABS-129 / ABS-135 case
+        #    from nm-20260526-004610).
         if is_zombie:
-            log.info(
-                "reconciled %s as zombie branch (tip == merge-base with dev; "
-                "revert_marker=%r)", ident, bool(revert_marker),
-            )
+            log.info("reconciled %s as zombie branch (revert commit on dev)", ident)
             issue.mark_blocked(
-                "zombie branch: tip == merge-base; needs re-plan"
+                "zombie branch: merge was reverted on dev; needs re-plan"
             )
             reconciled.append(ident)
             newly_blocked.append(ident)
             continue
 
         # 2. Branch merged into dev (no revert in play).
-        if merged_into_dev:
+        # ABS-210 corollary: `git branch --merged dev` also lists empty
+        # branches whose tip is just an ancestor of dev (no unique
+        # commits). To avoid mis-marking an NM-active issue's empty
+        # branch as merged, require the same status guard as step 3 —
+        # an out-of-band merge would never happen while the issue is
+        # still `in_progress` or `reviewing` (NM holds the worktree).
+        if merged_into_dev and issue.status in ("queued", "failed", "blocked"):
             log.info(
                 "reconciled %s as already-on-dev (branch %s merged into dev)",
                 ident, issue.branch,

@@ -21,15 +21,27 @@ log = logging.getLogger("night_manager.reviewer")
 HEARTBEAT_INTERVAL = 60  # seconds between "still alive" log lines
 _FLAKE_CANDIDATE_THRESHOLD = 3  # flakes needed before surfacing flake_candidate=true
 
-# ABS-206: keywords that indicate the agent crashed on an authentication
+# ABS-206: patterns that indicate the agent crashed on an authentication
 # failure before producing any commits. Scanned by the empty-diff guard in
 # `review_and_gate` so an empty branch is reported with the actual root
 # cause ("401 Invalid authentication credentials" etc.) rather than a
 # generic "agent produced no commits" line.
-AUTH_ERROR_MARKERS: tuple[str, ...] = (
-    "401",
-    "invalid authentication credentials",
-    "authentication failed",
+#
+# Each pattern requires an explicit HTTP/auth context — a bare "401" is
+# not enough. ABS-210 (2026-05-28) hit a false positive: the agent ran
+# `Read` on docs/TERMS_AND_CONDITIONS.md, the tool result emitted the
+# line-numbered prefix "401\t..." for the file's 401st line, and the
+# previous substring match flagged it as an auth crash. Anchoring the
+# numeric markers to HTTP / JSON / status keywords avoids that.
+AUTH_ERROR_PATTERNS: tuple[re.Pattern, ...] = (
+    # HTTP/1.1 401, HTTP 401
+    re.compile(r"\bhttp(?:/[\d.]+)?\s+401\b", re.IGNORECASE),
+    # "401 Unauthorized", "401 Invalid authentication credentials"
+    re.compile(r"\b401\s+(?:unauthorized|invalid)\b", re.IGNORECASE),
+    # status: 401, status=401, "status": 401
+    re.compile(r'(?:"?status"?)\s*[:=]\s*401\b', re.IGNORECASE),
+    re.compile(r"\binvalid authentication credentials\b", re.IGNORECASE),
+    re.compile(r"\bauthentication failed\b", re.IGNORECASE),
 )
 
 # Maps test key → list of booleans (True = test recovered on that solo re-run).
@@ -242,17 +254,16 @@ def _scan_log_for_auth_error(log_file: str, start_offset: int) -> str | None:
     except OSError:
         return None
     text = raw.decode("utf-8", errors="replace")
-    lower = text.lower()
-    for marker in AUTH_ERROR_MARKERS:
-        idx = lower.find(marker)
-        if idx == -1:
+    for pattern in AUTH_ERROR_PATTERNS:
+        m = pattern.search(text)
+        if not m:
             continue
         # Small window around the hit so the operator sees the HTTP body /
         # status line that surrounded the marker, not just the marker
         # itself. Bounds are intentionally tight to keep Linear comments
         # readable.
-        start = max(0, idx - 80)
-        end = min(len(text), idx + len(marker) + 240)
+        start = max(0, m.start() - 80)
+        end = min(len(text), m.end() + 240)
         return text[start:end].strip()
     return None
 
