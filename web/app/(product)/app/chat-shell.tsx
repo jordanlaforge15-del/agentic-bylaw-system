@@ -565,7 +565,7 @@ function ProductAppPageInner() {
     }
   };
 
-  const selectSession = async (id: string) => {
+  const selectSession = async (id: string, { updateUrl = false }: { updateUrl?: boolean } = {}) => {
     if (id === activeSessionId) return;
     abortRef.current?.abort();
     setError(null);
@@ -599,7 +599,10 @@ function ProductAppPageInner() {
       setCaseTier(typeof data.tier === "string" ? data.tier : null);
       setParcel(extractParcelContext(enriched));
       // Keep URL in sync so reloads and shared links land on the right case.
-      if (newCaseId !== null) {
+      // Only user-initiated calls (updateUrl=true) update the URL; the
+      // restore effect passes updateUrl=false so it never races with a
+      // concurrent user click and reverts the URL to the prior case.
+      if (updateUrl && newCaseId !== null) {
         const params = new URLSearchParams(searchParams.toString());
         params.set("case_id", String(newCaseId));
         params.delete("case_number");
@@ -643,7 +646,7 @@ function ProductAppPageInner() {
   // drawer so the user lands back in the chat thread.
   const onSelectFromDrawer = (id: string) => {
     setSidebarOpen(false);
-    void selectSession(id);
+    void selectSession(id, { updateUrl: true });
   };
 
   return (
@@ -664,7 +667,7 @@ function ProductAppPageInner() {
         <div className="hidden lg:contents">
           <Sidebar
             onNew={onNew}
-            onSelect={selectSession}
+            onSelect={(id) => selectSession(id, { updateUrl: true })}
             activeSessionId={activeSessionId}
             refreshTrigger={sidebarRefresh}
           />

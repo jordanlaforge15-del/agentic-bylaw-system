@@ -8,25 +8,39 @@
 import { expect, openCaseViaApi, test } from "../fixtures/test-env";
 
 test("sidebar case click updates URL case_id", async ({ page }) => {
-  // Open two distinct cases so the sidebar has at least two entries.
   const ts = Date.now();
-  const { caseId: caseA } = await openCaseViaApi({
-    anchorLabel: `9001 Alpha Ave ${ts}, Halifax`,
-  });
-  const { caseId: caseB } = await openCaseViaApi({
-    anchorLabel: `9002 Beta Blvd ${ts}, Halifax`,
-  });
+  const firstMessage = "What is the minimum front yard setback?";
 
-  // Land on case A.
+  // Create case A and seed its session by navigating with first_message.
+  const anchorA = `9001 Alpha Ave ${ts}, Halifax`;
+  const { caseId: caseA } = await openCaseViaApi({ anchorLabel: anchorA });
+  await page.goto(
+    `/app?case_id=${caseA}&first_message=${encodeURIComponent(firstMessage)}`,
+  );
+  await expect(page.getByTestId("chat-thread")).toContainText(
+    /Based on the bylaw evidence/i,
+    { timeout: 15_000 },
+  );
+
+  // Create case B and seed its session the same way.
+  const anchorB = `9002 Beta Blvd ${ts}, Halifax`;
+  const { caseId: caseB } = await openCaseViaApi({ anchorLabel: anchorB });
+  await page.goto(
+    `/app?case_id=${caseB}&first_message=${encodeURIComponent(firstMessage)}`,
+  );
+  await expect(page.getByTestId("chat-thread")).toContainText(
+    /Based on the bylaw evidence/i,
+    { timeout: 15_000 },
+  );
+
+  // Navigate to case A — the sidebar loads all sessions, so case B appears.
   await page.goto(`/app?case_id=${caseA}`);
-
-  // Confirm the URL reflects case A.
   await expect(page).toHaveURL(new RegExp(`case_id=${caseA}`));
 
-  // Find case B's sidebar button and click it.
+  // Find case B's sidebar button (title contains the anchor label).
   const sidebar = page.locator("aside").first();
   const caseBButton = sidebar.getByRole("button", {
-    name: new RegExp(`Beta Blvd ${ts}`, "i"),
+    name: new RegExp(escapeRegExp(`Beta Blvd ${ts}`), "i"),
   });
   await expect(caseBButton).toBeVisible({ timeout: 8_000 });
   await caseBButton.click();
@@ -37,6 +51,9 @@ test("sidebar case click updates URL case_id", async ({ page }) => {
   });
 
   // URL must NOT still contain case A's id.
-  const url = page.url();
-  expect(url).not.toMatch(new RegExp(`case_id=${caseA}($|&)`));
+  expect(page.url()).not.toMatch(new RegExp(`case_id=${caseA}($|&)`));
 });
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
