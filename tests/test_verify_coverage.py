@@ -275,6 +275,64 @@ def test_verify_grade_degrades_with_gaps(tmp_path: Path):
     assert len(report.summary.pages_without_fragments) >= 3
 
 
+def test_structural_fragments_without_citation_not_flagged(tmp_path: Path):
+    """HEADING, PROSE, LIST_ITEM, FOOTNOTE fragments with no citation_path must
+    not produce a missing_citation_path gap — they are non-citable by design."""
+    source_file = tmp_path / "bylaw.txt"
+    source_file.write_text("Heading text\fProse text\fList item text\fFootnote text")
+    db_url = f"sqlite:///{tmp_path / 'test.db'}"
+    create_all(db_url)
+
+    with session_scope(db_url) as session:
+        doc = _seed_document(session, str(source_file), page_count=4)
+        structural_types = [
+            (FragmentType.HEADING, 1, "Heading text"),
+            (FragmentType.PROSE, 2, "Prose text"),
+            (FragmentType.LIST_ITEM, 3, "List item text"),
+            (FragmentType.FOOTNOTE, 4, "Footnote text"),
+        ]
+        for ftype, page, text in structural_types:
+            block = _seed_block(session, doc.id, page, 0, text)
+            _seed_fragment(
+                session, doc.id, page, text,
+                block_ids=[block.id],
+                fragment_type=ftype,
+                # citation_path intentionally omitted (None)
+                parse_status=ParseStatus.PARSED,
+            )
+        session.flush()
+        report = verify_document_coverage(session, doc.id)
+
+    assert report.summary.fragments_without_citation == 0
+    citation_gaps = [g for g in report.gaps if g.gap_type == "missing_citation_path"]
+    assert citation_gaps == []
+
+
+def test_citable_fragment_without_citation_is_flagged(tmp_path: Path):
+    """A SECTION fragment with parse_status=PARSED but no citation_path IS a real gap."""
+    source_file = tmp_path / "bylaw.txt"
+    source_file.write_text("Section text")
+    db_url = f"sqlite:///{tmp_path / 'test.db'}"
+    create_all(db_url)
+
+    with session_scope(db_url) as session:
+        doc = _seed_document(session, str(source_file), page_count=1)
+        block = _seed_block(session, doc.id, 1, 0, "Section text")
+        _seed_fragment(
+            session, doc.id, 1, "Section text",
+            block_ids=[block.id],
+            fragment_type=FragmentType.SECTION,
+            # citation_path intentionally omitted to simulate a real gap
+            parse_status=ParseStatus.PARSED,
+        )
+        session.flush()
+        report = verify_document_coverage(session, doc.id)
+
+    assert report.summary.fragments_without_citation == 1
+    citation_gaps = [g for g in report.gaps if g.gap_type == "missing_citation_path"]
+    assert len(citation_gaps) == 1
+
+
 def test_verify_nonexistent_document_raises(tmp_path: Path):
     db_url = f"sqlite:///{tmp_path / 'test.db'}"
     create_all(db_url)

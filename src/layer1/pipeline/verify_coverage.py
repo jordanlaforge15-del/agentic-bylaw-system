@@ -36,11 +36,24 @@ from layer1.models.coverage import (
     DocumentCoverageReport,
     PageCoverage,
 )
-from layer1.models.enums import BlockType, ParseStatus, ResolutionStatus
+from layer1.models.enums import BlockType, FragmentType, ParseStatus, ResolutionStatus
 from layer1.pipeline.audit import load_source_page_text
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
+
+# Fragment types that are individually citable and must have a citation_path.
+# Structural types (HEADING, PROSE, LIST_ITEM, FOOTNOTE) intentionally have
+# citation_path=None and must not be flagged as gaps.
+_CITABLE_FRAGMENT_TYPES: frozenset[FragmentType] = frozenset({
+    FragmentType.PART,
+    FragmentType.SECTION,
+    FragmentType.SUBSECTION,
+    FragmentType.CLAUSE,
+    FragmentType.SUBCLAUSE,
+    FragmentType.SCHEDULE,
+    FragmentType.APPENDIX,
+})
 
 
 def _normalize(text: str) -> str:
@@ -229,9 +242,13 @@ def verify_document_coverage(
         all_gaps.extend(page_gaps)
 
     # Document-level gap analysis
+    # Only flag citable fragment types — structural types (HEADING, PROSE,
+    # LIST_ITEM, FOOTNOTE) intentionally have citation_path=None by design.
     fragments_no_citation = [
         f for f in fragments
-        if not f.citation_path and f.parse_status == ParseStatus.PARSED
+        if not f.citation_path
+        and f.parse_status == ParseStatus.PARSED
+        and f.fragment_type in _CITABLE_FRAGMENT_TYPES
     ]
     if fragments_no_citation:
         all_gaps.append(CoverageGap(
