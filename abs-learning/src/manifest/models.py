@@ -115,7 +115,13 @@ class Municipality(BaseModel):
 
 
 class QAReport(BaseModel):
-    status: Literal["PASS", "PASS_WITH_FLAGS", "FAIL"]
+    status: Literal[
+        "PASS",
+        "PASS_WITH_FLAGS",
+        "PASS_PENDING_INGEST",
+        "FAIL",
+        "FAIL_WITH_RETRIEVAL_GAP",
+    ]
     citation_resolution_rate: float
     zone_completeness: float
     pattern_coverage: float

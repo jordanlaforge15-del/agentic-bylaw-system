@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 # Parent repo (agentic-bylaw-system) provides the retrieval service used by
 # the Phase 2 ValidationAgent integration tests.
-_PARENT_REPO = ROOT.parents[3]
+_PARENT_REPO = ROOT.parent
 _PARENT_SRC = _PARENT_REPO / "src"
 _PARENT_MCP = _PARENT_REPO / "mcp"
 
