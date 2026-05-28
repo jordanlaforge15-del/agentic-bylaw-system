@@ -629,3 +629,46 @@ def test_orphan_subsection_without_compound_label_stays_orphan():
     )
     assert fragments[0].fragment_type == FragmentType.SUBSECTION
     assert fragments[0].parent_index is None
+
+
+def test_sibling_subsections_under_heading_get_heading_parent():
+    """Subsections like 1(2), 1(3) under a heading with no numbered section
+    parent should fall back to the heading context, not become orphans."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("ADMINISTRATION", 0, BlockType.HEADING),
+            block("1(1) This by-law shall be administered by the Development Officer.", 1, BlockType.PARAGRAPH),
+            block("1(2) No person shall undertake a development without a permit.", 2, BlockType.PARAGRAPH),
+            block("1(3) Every application shall be accompanied by required materials.", 3, BlockType.PARAGRAPH),
+        ]
+    )
+    heading = fragments[0]
+    assert heading.fragment_type == FragmentType.HEADING
+    subs = [f for f in fragments if f.fragment_type == FragmentType.SUBSECTION]
+    assert len(subs) == 3
+    assert subs[0].citation_label == "1(1)"
+    assert subs[0].parent_index == 0
+    for sub in subs[1:]:
+        assert sub.parent_index == 0, f"{sub.citation_label} should have heading as parent"
+        assert sub.parse_status == ParseStatus.PARSED
+
+
+def test_definition_section_preserves_container_for_list_items():
+    """A citation-matched section whose title is a definition intro (e.g.
+    '2 In this by-law:') should act as definition container so subsequent
+    definition-like list items get a parent instead of becoming orphans."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("DEFINITIONS", 0, BlockType.HEADING),
+            block("2 In this by-law:", 1, BlockType.HEADING),
+            block("' HEN ' means adult female chicken.", 2, BlockType.LIST_ITEM),
+            block("' Tower Portion ' means the portion of a building that exceeds 26 metres.", 3, BlockType.LIST_ITEM),
+        ]
+    )
+    section = next(f for f in fragments if f.citation_label == "2")
+    section_idx = fragments.index(section)
+    list_items = [f for f in fragments if f.fragment_type == FragmentType.LIST_ITEM]
+    assert len(list_items) == 2
+    for li in list_items:
+        assert li.parent_index == section_idx, f"definition list item should have section as parent"
+        assert li.parse_status == ParseStatus.PARSED

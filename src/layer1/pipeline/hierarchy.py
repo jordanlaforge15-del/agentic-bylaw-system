@@ -269,6 +269,12 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
                             path = citation_path(path_parent, match.label)
                             status = ParseStatus.PARSED
                             confidence = match.confidence
+            if (
+                contextual_parent_index is None
+                and match.fragment_type in {FragmentType.SECTION, FragmentType.SUBSECTION}
+                and current_heading_context_index is not None
+            ):
+                contextual_parent_index = current_heading_context_index
             if match.fragment_type in LOW_LEVEL_FRAGMENT_TYPES and contextual_parent_index is None and definition_context_index is not None:
                 contextual_parent_index = definition_context_index
             if match.fragment_type in LOW_LEVEL_FRAGMENT_TYPES and contextual_parent_index is None and definition_container_index is not None:
@@ -305,6 +311,9 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
             if match.fragment_type not in LOW_LEVEL_FRAGMENT_TYPES:
                 definition_context_index = None
                 definition_container_index = None
+                title_text = (match.title or "").strip()
+                if _is_definition_container_heading(title_text) or _is_definition_container_intro(title_text):
+                    definition_container_index = idx
                 if match.fragment_type in {
                     FragmentType.PART,
                     FragmentType.SECTION,
