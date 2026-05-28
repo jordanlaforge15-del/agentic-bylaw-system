@@ -342,6 +342,95 @@ def test_learn_city_passes_model_to_pipeline(tmp_path, mock_manifest):
     assert captured.get("model") == "claude-opus-4-7"
 
 
+def test_learn_city_pass_pending_ingest_exits_0(tmp_path):
+    """PASS_PENDING_INGEST → pipeline_ready=True → exit 0 with advice."""
+    from manifest.models import (
+        CitationLevel,
+        CitationScheme,
+        CityIntakeManifest,
+        Municipality,
+        ParserConfig,
+        QAReport,
+        SourceDocument,
+        TaxonomyMap,
+        ZoneDesignation,
+    )
+
+    pending_manifest = CityIntakeManifest(
+        municipality=Municipality(
+            name="Testville",
+            jurisdiction_code="TST-CLI",
+            province="Nova Scotia",
+            governing_body=None,
+        ),
+        sources=[
+            SourceDocument(
+                document_name="Test Bylaw",
+                document_type="bylaw",
+                document_role="primary",
+                parent_document=None,
+                source_url="https://example.com/test.pdf",
+                format="pdf",
+                access_method="direct_download",
+                page_count_estimate=None,
+                last_amended=None,
+                amendment_series=None,
+                in_scope=True,
+            )
+        ],
+        parser_config=ParserConfig(
+            parser_version="docling:tst",
+            citation_scheme=CitationScheme(
+                full_citation_example="1 > (a)",
+                separator=" > ",
+                hierarchy=[
+                    CitationLevel(level="section", pattern=r"^\d+", label_format="{n}"),
+                ],
+            ),
+            schedule_patterns=[],
+            table_caption_pattern=None,
+            confidence=0.9,
+            flags=[],
+        ),
+        taxonomy=TaxonomyMap(
+            zone_designations=[ZoneDesignation(code="ER-1", canonical_type="residential")],
+            use_class_map={},
+            standards_categories=[],
+            companion_bylaws_required=[],
+            confidence=0.9,
+        ),
+        qa_report=QAReport(
+            status="PASS_PENDING_INGEST",
+            citation_resolution_rate=0.0,
+            zone_completeness=0.9,
+            pattern_coverage=0.1,
+            flags=[],
+            recommended_action="approve_pending_ingest",
+        ),
+        manifest_version="0.1.0",
+        status="draft",
+        pipeline_ready=True,
+        flags=[],
+    )
+    output = tmp_path / "manifest.json"
+
+    with patch.object(pipeline, "run_learning_pipeline", return_value=pending_manifest):
+        result = runner.invoke(
+            app,
+            [
+                "learn-city",
+                "--jurisdiction-code", "TST-CLI",
+                "--name", "Testville",
+                "--province", "Nova Scotia",
+                "--direct-pdf", "https://example.com/test.pdf",
+                "--output", str(output),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "pending ingest" in result.output.lower() or "validate-manifest" in result.output
+
+
 def test_learn_city_citation_samples_loaded(tmp_path, mock_manifest):
     """--citation-samples JSON file is parsed and forwarded to the pipeline."""
     output = tmp_path / "manifest.json"
@@ -369,3 +458,76 @@ def test_learn_city_citation_samples_loaded(tmp_path, mock_manifest):
 
     assert result.exit_code == 0, result.output
     assert captured.get("citation_samples") == ["Part 4 > 4.1", "Schedule C"]
+
+
+# --------------------------------------------------------------------------- #
+# validate-manifest command tests                                               #
+# --------------------------------------------------------------------------- #
+
+def test_validate_manifest_help():
+    """--help lists required flags."""
+    result = runner.invoke(app, ["validate-manifest", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--retrieval" in result.output
+
+
+def test_validate_manifest_updates_status(tmp_path, mock_manifest):
+    """validate-manifest rewrites the manifest with a fresh QAReport."""
+    from manifest.models import CityIntakeManifest, QAReport
+
+    manifest_path = tmp_path / "manifest.json"
+    # Write a PASS_PENDING_INGEST manifest
+    mock_manifest.qa_report.status = "PASS_PENDING_INGEST"
+    mock_manifest.qa_report.citation_resolution_rate = 0.0
+    mock_manifest.qa_report.recommended_action = "approve_pending_ingest"
+    manifest_path.write_text(
+        mock_manifest.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    # Mock the ValidationAgent to return a PASS report
+    from agents.validation import ValidationAgent as _RealVA
+
+    pass_report = QAReport(
+        status="PASS",
+        citation_resolution_rate=0.85,
+        zone_completeness=0.9,
+        pattern_coverage=0.1,
+        flags=[],
+        recommended_action="approve",
+    )
+
+    with patch.object(_RealVA, "validate", return_value=pass_report):
+        result = runner.invoke(
+            app,
+            [
+                "validate-manifest",
+                str(manifest_path),
+                "--retrieval", "document-id=1",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+
+    updated = CityIntakeManifest.model_validate_json(
+        manifest_path.read_text(encoding="utf-8")
+    )
+    assert updated.qa_report.status == "PASS"
+    assert updated.qa_report.citation_resolution_rate == pytest.approx(0.85)
+    assert updated.pipeline_ready is True
+
+
+def test_validate_manifest_invalid_retrieval_format(tmp_path, mock_manifest):
+    """--retrieval with wrong format is rejected."""
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        mock_manifest.model_dump_json(indent=2), encoding="utf-8"
+    )
+    result = runner.invoke(
+        app,
+        [
+            "validate-manifest",
+            str(manifest_path),
+            "--retrieval", "bad-format",
+        ],
+    )
+    assert result.exit_code != 0

@@ -83,11 +83,13 @@ def _qa_report(status: str = "PASS") -> QAReport:
     action = {
         "PASS": "approve",
         "PASS_WITH_FLAGS": "approve_with_review",
+        "PASS_PENDING_INGEST": "approve_pending_ingest",
         "FAIL": "reject_and_retry",
+        "FAIL_WITH_RETRIEVAL_GAP": "investigate_retrieval",
     }[status]
     return QAReport(
         status=status,
-        citation_resolution_rate=0.9,
+        citation_resolution_rate=0.9 if status != "PASS_PENDING_INGEST" else 0.0,
         zone_completeness=0.9,
         pattern_coverage=0.1,
         flags=[],
@@ -253,6 +255,45 @@ def test_no_primary_source_raises():
             anthropic_client=MagicMock(),
             retrieval_client=MagicMock(),
         )
+
+
+def test_abs97_pipeline_ready_true_on_pass_pending_ingest(monkeypatch):
+    """PASS_PENDING_INGEST sets pipeline_ready=True so ingest can proceed."""
+    _patch_all_agents(
+        monkeypatch,
+        parser_config=_parser_config(),
+        taxonomy=_taxonomy(),
+        qa_report=_qa_report("PASS_PENDING_INGEST"),
+    )
+
+    manifest = pipeline.run_learning_pipeline(
+        municipality=_municipality(),
+        sources=[_source()],
+        citation_samples=["Part I > 1"],
+        anthropic_client=MagicMock(),
+        retrieval_client=MagicMock(),
+    )
+    assert manifest.pipeline_ready is True
+    assert manifest.qa_report.status == "PASS_PENDING_INGEST"
+
+
+def test_abs97_pipeline_ready_false_on_fail_with_retrieval_gap(monkeypatch):
+    """FAIL_WITH_RETRIEVAL_GAP keeps pipeline_ready=False."""
+    _patch_all_agents(
+        monkeypatch,
+        parser_config=_parser_config(),
+        taxonomy=_taxonomy(),
+        qa_report=_qa_report("FAIL_WITH_RETRIEVAL_GAP"),
+    )
+
+    manifest = pipeline.run_learning_pipeline(
+        municipality=_municipality(),
+        sources=[_source()],
+        citation_samples=["Part I > 1"],
+        anthropic_client=MagicMock(),
+        retrieval_client=MagicMock(),
+    )
+    assert manifest.pipeline_ready is False
 
 
 def test_taxonomy_failure_skips_validation(monkeypatch):

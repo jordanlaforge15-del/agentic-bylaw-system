@@ -187,6 +187,130 @@ def test_t7d_error_flag_blocks_pass():
     assert status == "PASS_WITH_FLAGS"
 
 
+# -------------------------------------------------------- ABS-97: pending ingest
+def test_abs97_pass_pending_ingest_when_citation_unavailable():
+    """Pre-ingest scenario: zone+pattern pass, citation can't be tested."""
+    agent = ValidationAgent(MagicMock())
+    status, action = agent._determine_status(
+        0.0, 0.90, 0.10, [], citation_unavailable=True
+    )
+    assert status == "PASS_PENDING_INGEST"
+    assert action == "approve_pending_ingest"
+
+
+def test_abs97_pending_ingest_requires_zone_pattern_pass():
+    """citation_unavailable alone isn't enough — zone/pattern must also pass."""
+    agent = ValidationAgent(MagicMock())
+    status, _ = agent._determine_status(
+        0.0, 0.50, 0.10, [], citation_unavailable=True
+    )
+    assert status == "FAIL"
+
+
+def test_abs97_pending_ingest_blocked_by_error_flag():
+    """Error flags prevent PASS_PENDING_INGEST even if zone/pattern thresholds met."""
+    agent = ValidationAgent(MagicMock())
+    status, _ = agent._determine_status(
+        0.0, 0.90, 0.10, [{"severity": "error"}], citation_unavailable=True
+    )
+    assert status != "PASS_PENDING_INGEST"
+
+
+def test_abs97_fail_with_retrieval_gap():
+    """Post-ingest: zone+pattern pass, citation > 0 but below threshold."""
+    agent = ValidationAgent(MagicMock())
+    status, action = agent._determine_status(
+        0.40, 0.90, 0.10, [], citation_unavailable=False
+    )
+    assert status == "FAIL_WITH_RETRIEVAL_GAP"
+    assert action == "investigate_retrieval"
+
+
+def test_abs97_retrieval_gap_not_triggered_at_zero_rate():
+    """citation_rate=0 with errors should be plain FAIL, not retrieval gap."""
+    agent = ValidationAgent(MagicMock())
+    status, _ = agent._determine_status(
+        0.0, 0.90, 0.10, [], citation_unavailable=False
+    )
+    assert status == "FAIL"
+
+
+def test_abs97_validate_detects_stub_retrieval(monkeypatch, tmp_path):
+    """Full validate() call with a stub (all-None) client produces PASS_PENDING_INGEST."""
+    client = MagicMock()
+    client.lookup_citation.return_value = None
+    agent = ValidationAgent(client)
+    monkeypatch.setattr(
+        agent, "_check_zone_completeness", lambda src, tax, cfg: (0.90, [])
+    )
+    monkeypatch.setattr(
+        agent, "_check_pattern_coverage", lambda src, cfg: (0.10, [])
+    )
+
+    parser_config = ParserConfig(
+        parser_version="docling:test",
+        citation_scheme=CitationScheme(
+            full_citation_example="x",
+            separator=" > ",
+            hierarchy=[
+                CitationLevel(level="section", pattern=r"^\d+", label_format="{n}")
+            ],
+        ),
+        schedule_patterns=[],
+        table_caption_pattern=None,
+        confidence=1.0,
+        flags=[],
+    )
+    taxonomy = _make_taxonomy(["ER-1"])
+    report = agent.validate(
+        _stub_source_doc(tmp_path),
+        parser_config,
+        taxonomy,
+        citation_samples=["Part I > 1", "Part II > 2"],
+    )
+
+    assert report.status == "PASS_PENDING_INGEST"
+    assert report.citation_resolution_rate == 0.0
+
+
+def test_abs97_validate_with_real_retrieval_passes(monkeypatch, tmp_path):
+    """When retrieval returns data, normal PASS logic applies."""
+    client = MagicMock()
+    client.lookup_citation.return_value = {"text": "fragment content"}
+    agent = ValidationAgent(client)
+    monkeypatch.setattr(
+        agent, "_check_zone_completeness", lambda src, tax, cfg: (0.90, [])
+    )
+    monkeypatch.setattr(
+        agent, "_check_pattern_coverage", lambda src, cfg: (0.10, [])
+    )
+
+    parser_config = ParserConfig(
+        parser_version="docling:test",
+        citation_scheme=CitationScheme(
+            full_citation_example="x",
+            separator=" > ",
+            hierarchy=[
+                CitationLevel(level="section", pattern=r"^\d+", label_format="{n}")
+            ],
+        ),
+        schedule_patterns=[],
+        table_caption_pattern=None,
+        confidence=1.0,
+        flags=[],
+    )
+    taxonomy = _make_taxonomy(["ER-1"])
+    report = agent.validate(
+        _stub_source_doc(tmp_path),
+        parser_config,
+        taxonomy,
+        citation_samples=["Part I > 1"],
+    )
+
+    assert report.status == "PASS"
+    assert report.citation_resolution_rate == 1.0
+
+
 # ----------------------------------------------------------------------- T7-E
 def test_t7e_validate_returns_valid_qa_report(monkeypatch, tmp_path):
     agent = ValidationAgent(MagicMock())
@@ -223,7 +347,10 @@ def test_t7e_validate_returns_valid_qa_report(monkeypatch, tmp_path):
     )
 
     assert isinstance(report, QAReport)
-    assert report.status in ("PASS", "PASS_WITH_FLAGS", "FAIL")
+    assert report.status in (
+        "PASS", "PASS_WITH_FLAGS", "PASS_PENDING_INGEST",
+        "FAIL", "FAIL_WITH_RETRIEVAL_GAP",
+    )
     assert report.citation_resolution_rate == pytest.approx(0.82)
     assert report.zone_completeness == pytest.approx(0.90)
     assert report.pattern_coverage == pytest.approx(0.10)
