@@ -62,6 +62,7 @@ class Document(Base):
     fragments: Mapped[list["SourceFragment"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     tables: Mapped[list["SourceTable"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     cross_references: Mapped[list["CrossReference"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+    images: Mapped[list["SourceImage"]] = relationship(back_populates="document", cascade="all, delete-orphan")
 
 
 class IngestionRun(Base):
@@ -391,6 +392,8 @@ class SourceImage(Base):
     docling_ref: Mapped[str | None] = mapped_column(String(255))
     parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+    document: Mapped["Document"] = relationship(back_populates="images")
 
 
 class Parcel(Base):
