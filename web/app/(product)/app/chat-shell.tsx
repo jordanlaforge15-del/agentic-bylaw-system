@@ -100,6 +100,16 @@ function ProductAppPageInner() {
   const [parcel, setParcel] = useState<ParcelContext | null>(null);
   const [feedbackMap, setFeedbackMap] = useState<Record<number, SavedFeedback>>({});
   const abortRef = useRef<AbortController | null>(null);
+  // Per-case message snapshot. Saved when the user navigates away from a case
+  // mid-stream so that navigating back restores at least the user's question
+  // (and any partial reply) even if the server hasn't persisted the response
+  // yet. Entries are cleared once the server response is at least as complete.
+  const caseMessageCacheRef = useRef<Map<number, Message[]>>(new Map());
+  // Guard for the URL-based session-restore effect. Tracks which case_id has
+  // most recently been restored to prevent double-fetches from React Strict Mode
+  // double-invoke and normal re-renders. Declared here (before the effect that
+  // reads it) so the binding is initialized before the effect callback runs.
+  const restoredCaseIdRef = useRef<number | null>(null);
   // Mobile/tablet overlay state. Both default closed; opening one
   // doesn't close the other (parcel sheet on mobile sits above the
   // chat which sits behind the sidebar drawer when both happen, but
@@ -165,6 +175,12 @@ function ProductAppPageInner() {
       // New case binding → discard prior session id; the next send()
       // will mint a new session under this case.
       setSessionId(null);
+      // Allow the restore effect to re-run for the new case. Without
+      // this reset, navigating A → B → A would skip restoring A on
+      // return because restoredCaseIdRef still holds A from the first
+      // visit (React Strict Mode double-invoke guard now resets cleanly
+      // between distinct navigations).
+      restoredCaseIdRef.current = null;
     }
   }, [caseIdFromUrl, caseNumberFromUrl]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -204,7 +220,6 @@ function ProductAppPageInner() {
   // session for that case so the transcript and parcel pane aren't
   // empty. Skipped when first_message is present — that flow mints a
   // new session via send() and handles its own state hydration.
-  const restoredCaseIdRef = useRef<number | null>(null);
   useEffect(() => {
     if (caseIdFromUrl === null) return;
     if (searchParams.get("first_message")) return;
@@ -567,6 +582,16 @@ function ProductAppPageInner() {
 
   const selectSession = async (id: string, { updateUrl = false }: { updateUrl?: boolean } = {}) => {
     if (id === activeSessionId) return;
+
+    // Snapshot current case messages before switching away. This preserves
+    // the user's in-flight question (and any partial streaming reply) so
+    // that navigating back to this case shows it even if the server hasn't
+    // persisted the response yet. Only worth caching when there's more than
+    // just the opening system message.
+    if (caseIdRef.current !== null && messages.length > 1) {
+      caseMessageCacheRef.current.set(caseIdRef.current, messages);
+    }
+
     abortRef.current?.abort();
     setError(null);
     setThinking(false);
@@ -590,10 +615,28 @@ function ProductAppPageInner() {
         tier?: string | null;
       };
       const enriched = attachDbIds(data.messages, data.message_db_ids);
-      setMessages(translateHistory(enriched));
+      const newCaseId = typeof data.case_id === "number" ? data.case_id : null;
+
+      // Prefer cached messages when they contain more turns than the server
+      // returned — this happens when the stream was aborted mid-flight and
+      // the backend hasn't yet saved the response. Once the server catches up
+      // (or has always been ahead) we drop the cache entry and use the
+      // authoritative server copy.
+      const serverMessages = translateHistory(enriched);
+      const cachedMessages = newCaseId !== null
+        ? caseMessageCacheRef.current.get(newCaseId)
+        : undefined;
+      const messagesToShow =
+        cachedMessages !== undefined && cachedMessages.length > serverMessages.length
+          ? cachedMessages
+          : serverMessages;
+      if (newCaseId !== null && serverMessages.length >= (cachedMessages?.length ?? 0)) {
+        caseMessageCacheRef.current.delete(newCaseId);
+      }
+
+      setMessages(messagesToShow);
       setFeedbackMap(fbMap);
       setSessionId(id);
-      const newCaseId = typeof data.case_id === "number" ? data.case_id : null;
       setCaseIdBoth(newCaseId);
       setCaseNumber(typeof data.case_number === "number" ? data.case_number : null);
       setCaseTier(typeof data.tier === "string" ? data.tier : null);
