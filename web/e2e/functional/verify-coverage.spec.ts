@@ -12,6 +12,7 @@ import { E2E_API_URL, expect, test } from "../fixtures/test-env";
 
 
 let seededDocumentId: number;
+let seededOldDocumentId: number;
 
 function runSeeds(): void {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
@@ -33,6 +34,10 @@ function runSeeds(): void {
   const match = output.match(/document=(\d+)/);
   if (!match) throw new Error(`seed script did not print document id: ${output}`);
   seededDocumentId = parseInt(match[1], 10);
+
+  const oldMatch = output.match(/old_document=(\d+)/);
+  if (!oldMatch) throw new Error(`seed script did not print old_document id: ${output}`);
+  seededOldDocumentId = parseInt(oldMatch[1], 10);
 }
 
 
@@ -157,6 +162,76 @@ test("verify-coverage 404s for nonexistent document", async ({ request }) => {
   const response = await request.post(`${E2E_API_URL}/v1/_test/verify-coverage`, {
     headers: { "Content-Type": "application/json" },
     data: { document_id: 999999 },
+  });
+  expect(response.status()).toBe(404);
+});
+
+
+// ABS-214: --compare-to / compare_to endpoint tests
+
+test("verify-coverage with compare_to returns comparison section", async ({ request }) => {
+  // Compare the new document against the old version.
+  // Old version was seeded without cross-references, so it has no
+  // unresolved_cross_references gap — comparing new vs old shows that
+  // gap type as "introduced".
+  const response = await request.post(`${E2E_API_URL}/v1/_test/verify-coverage`, {
+    headers: { "Content-Type": "application/json" },
+    data: { document_id: seededDocumentId, compare_to: seededOldDocumentId },
+  });
+  expect(response.status(), `compare_to request failed: ${await response.text()}`).toBe(200);
+
+  const body = await response.json();
+  expect(body.comparison).toBeDefined();
+  expect(body.comparison.old_document_id).toBe(seededOldDocumentId);
+  expect(typeof body.comparison.old_grade).toBe("string");
+  expect(typeof body.comparison.new_grade).toBe("string");
+  expect(body.comparison.summary_deltas).toBeDefined();
+  expect(typeof body.comparison.summary_deltas.mean_page_overlap).toBe("string");
+  expect(typeof body.comparison.summary_deltas.pages_with_fragments).toBe("string");
+});
+
+
+test("verify-coverage compare_to detects introduced gap types", async ({ request }) => {
+  // Old document was seeded without cross-references → no unresolved_cross_references gap.
+  // New document has an unresolved cross-reference → that gap type is introduced.
+  const response = await request.post(`${E2E_API_URL}/v1/_test/verify-coverage`, {
+    headers: { "Content-Type": "application/json" },
+    data: { document_id: seededDocumentId, compare_to: seededOldDocumentId },
+  });
+  expect(response.status()).toBe(200);
+
+  const body = await response.json();
+  const introduced: Array<{ gap_type: string; old_count: number; new_count: number }> =
+    body.comparison.gaps_introduced;
+  const introTypes = introduced.map((g) => g.gap_type);
+  expect(introTypes).toContain("unresolved_cross_references");
+
+  const xrefDelta = introduced.find((g) => g.gap_type === "unresolved_cross_references");
+  expect(xrefDelta!.old_count).toBe(0);
+  expect(xrefDelta!.new_count).toBeGreaterThan(0);
+});
+
+
+test("verify-coverage compare_to self shows all gaps unchanged", async ({ request }) => {
+  // When comparing a document to itself, no gaps are introduced or resolved —
+  // all gap types appear in both versions and belong in gaps_unchanged.
+  const response = await request.post(`${E2E_API_URL}/v1/_test/verify-coverage`, {
+    headers: { "Content-Type": "application/json" },
+    data: { document_id: seededDocumentId, compare_to: seededDocumentId },
+  });
+  expect(response.status()).toBe(200);
+
+  const body = await response.json();
+  expect(body.comparison.gaps_introduced).toHaveLength(0);
+  expect(body.comparison.gaps_resolved).toHaveLength(0);
+  expect(body.comparison.gaps_unchanged.length).toBeGreaterThan(0);
+});
+
+
+test("verify-coverage compare_to 404s when old document does not exist", async ({ request }) => {
+  const response = await request.post(`${E2E_API_URL}/v1/_test/verify-coverage`, {
+    headers: { "Content-Type": "application/json" },
+    data: { document_id: seededDocumentId, compare_to: 999998 },
   });
   expect(response.status()).toBe(404);
 });

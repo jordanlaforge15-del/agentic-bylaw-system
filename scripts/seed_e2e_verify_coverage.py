@@ -49,6 +49,10 @@ DOCUMENT_FILE_HASH = "e2e-verify-coverage-1"
 DOCUMENT_MUNICIPALITY = "HRM"
 DOCUMENT_BYLAW_NAME = "Coverage E2E Bylaw"
 
+# Old version: same bylaw, no cross-references → no unresolved_cross_references gap.
+# Used by the compare-to e2e tests to verify gap_introduced detection.
+OLD_DOCUMENT_FILE_HASH = "e2e-verify-coverage-old-1"
+
 PAGE_TEXTS = {
     1: "Part 1 General Provisions This part establishes the general provisions applicable to all zones within the municipality.",
     2: "Section 4.2 Setback Requirements The minimum front yard setback shall be 6.0 metres. Additional unstructured text that was not properly parsed.",
@@ -78,7 +82,16 @@ def seed(session) -> dict[str, int]:
     _ensure_cross_references(session, document.id)
     session.flush()
 
-    return {"document_id": document.id}
+    old_document = _get_or_create_old_document(session, source_path)
+    _ensure_blocks(session, old_document.id)
+    _ensure_fragments(session, old_document.id)
+    _ensure_tables(session, old_document.id)
+    # Intentionally NO cross-references on old document — gives it no
+    # unresolved_cross_references gap, so comparing new vs old shows
+    # that gap type as "introduced" (a detectable regression signal).
+    session.flush()
+
+    return {"document_id": document.id, "old_document_id": old_document.id}
 
 
 def _get_or_create_document(session, source_path: str) -> Document:
@@ -101,6 +114,33 @@ def _get_or_create_document(session, source_path: str) -> Document:
         mime_type="text/plain",
         page_count=5,
         parser_version="e2e-seed",
+        ingestion_timestamp=utcnow(),
+    )
+    session.add(doc)
+    session.flush()
+    return doc
+
+
+def _get_or_create_old_document(session, source_path: str) -> Document:
+    doc = (
+        session.execute(
+            select(Document).where(Document.file_hash == OLD_DOCUMENT_FILE_HASH)
+        )
+        .scalars()
+        .first()
+    )
+    if doc is not None:
+        doc.source_path = source_path
+        session.flush()
+        return doc
+    doc = Document(
+        municipality=DOCUMENT_MUNICIPALITY,
+        bylaw_name=DOCUMENT_BYLAW_NAME,
+        source_path=source_path,
+        file_hash=OLD_DOCUMENT_FILE_HASH,
+        mime_type="text/plain",
+        page_count=5,
+        parser_version="e2e-seed-old",
         ingestion_timestamp=utcnow(),
     )
     session.add(doc)
@@ -315,7 +355,7 @@ def _ensure_cross_references(session, document_id: int) -> None:
 def main() -> int:
     with session_scope() as session:
         ids = seed(session)
-    print(f"seed_e2e_verify_coverage: document={ids['document_id']}")
+    print(f"seed_e2e_verify_coverage: document={ids['document_id']} old_document={ids['old_document_id']}")
     return 0
 
 
