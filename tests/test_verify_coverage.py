@@ -24,6 +24,7 @@ from layer1.pipeline.verify_coverage import (
     _normalize,
     _text_overlap_ratio,
     _token_set,
+    compare_coverage_reports,
     verify_document_coverage,
 )
 
@@ -362,3 +363,118 @@ def test_verify_missing_source_file(tmp_path: Path):
     assert report.summary.page_count == 2
     assert report.summary.mean_page_overlap == 1.0
     assert len(report.gaps) == 0
+
+
+# ---------------------------------------------------------------------------
+# compare_coverage_reports tests
+# ---------------------------------------------------------------------------
+
+def _make_report_with_gaps(doc_id: int, grade: str, gap_types: list[str]) -> "DocumentCoverageReport":
+    """Build a minimal DocumentCoverageReport with the given gap types."""
+    from layer1.models.coverage import CoverageGap, CoverageSummary, DocumentCoverageReport
+
+    gaps = [CoverageGap(gap_type=gt, severity="medium", detail=f"test {gt}") for gt in gap_types]
+    summary = CoverageSummary(
+        page_count=3,
+        pages_with_fragments=3,
+        parsed_fragments=10,
+        uncertain_fragments=1,
+        mean_page_overlap=0.85,
+        grade=grade,
+    )
+    return DocumentCoverageReport(
+        document_id=doc_id,
+        municipality="Test",
+        bylaw_name="Test Bylaw",
+        summary=summary,
+        gaps=gaps,
+    )
+
+
+def test_compare_resolved_only():
+    """All old gaps disappeared — gaps_resolved non-empty, gaps_introduced empty."""
+    old = _make_report_with_gaps(5, "B", ["missing_citation_path", "empty_page"])
+    new = _make_report_with_gaps(7, "A", [])
+
+    comp = compare_coverage_reports(old, new)
+
+    assert comp.old_document_id == 5
+    assert comp.old_grade == "B"
+    assert comp.new_grade == "A"
+    assert len(comp.gaps_introduced) == 0
+    assert len(comp.gaps_unchanged) == 0
+    resolved_types = {d.gap_type for d in comp.gaps_resolved}
+    assert resolved_types == {"missing_citation_path", "empty_page"}
+    for d in comp.gaps_resolved:
+        assert d.old_count > 0
+        assert d.new_count == 0
+
+
+def test_compare_introduced_only():
+    """New gaps appeared that didn't exist before — gaps_introduced non-empty."""
+    old = _make_report_with_gaps(5, "A", [])
+    new = _make_report_with_gaps(7, "B", ["unaccounted_blocks", "empty_tables"])
+
+    comp = compare_coverage_reports(old, new)
+
+    assert len(comp.gaps_resolved) == 0
+    assert len(comp.gaps_unchanged) == 0
+    introduced_types = {d.gap_type for d in comp.gaps_introduced}
+    assert introduced_types == {"unaccounted_blocks", "empty_tables"}
+    for d in comp.gaps_introduced:
+        assert d.old_count == 0
+        assert d.new_count > 0
+
+
+def test_compare_mixed():
+    """Some gaps resolved, some introduced, some unchanged."""
+    old = _make_report_with_gaps(5, "B", ["missing_citation_path", "uncertain_fragments"])
+    new = _make_report_with_gaps(7, "B", ["uncertain_fragments", "empty_page"])
+
+    comp = compare_coverage_reports(old, new)
+
+    resolved_types = {d.gap_type for d in comp.gaps_resolved}
+    introduced_types = {d.gap_type for d in comp.gaps_introduced}
+    unchanged_types = {d.gap_type for d in comp.gaps_unchanged}
+    assert resolved_types == {"missing_citation_path"}
+    assert introduced_types == {"empty_page"}
+    assert unchanged_types == {"uncertain_fragments"}
+
+
+def test_compare_identical_coverage():
+    """Identical reports produce no resolved/introduced gaps, all unchanged."""
+    old = _make_report_with_gaps(5, "B", ["uncertain_fragments", "orphan_fragments"])
+    new = _make_report_with_gaps(7, "B", ["uncertain_fragments", "orphan_fragments"])
+
+    comp = compare_coverage_reports(old, new)
+
+    assert len(comp.gaps_resolved) == 0
+    assert len(comp.gaps_introduced) == 0
+    unchanged_types = {d.gap_type for d in comp.gaps_unchanged}
+    assert unchanged_types == {"uncertain_fragments", "orphan_fragments"}
+
+
+def test_compare_summary_deltas():
+    """summary_deltas contains formatted delta strings for numeric fields."""
+    from layer1.models.coverage import CoverageSummary, DocumentCoverageReport
+
+    def _report(doc_id, grade, pages_with=3, parsed=10, uncertain=2, overlap=0.80):
+        summary = CoverageSummary(
+            page_count=5,
+            pages_with_fragments=pages_with,
+            parsed_fragments=parsed,
+            uncertain_fragments=uncertain,
+            mean_page_overlap=overlap,
+            grade=grade,
+        )
+        return DocumentCoverageReport(document_id=doc_id, summary=summary)
+
+    old = _report(5, "B", pages_with=3, parsed=10, uncertain=5, overlap=0.75)
+    new = _report(7, "A", pages_with=5, parsed=25, uncertain=2, overlap=0.90)
+
+    comp = compare_coverage_reports(old, new)
+
+    assert comp.summary_deltas["pages_with_fragments"] == "+2"
+    assert comp.summary_deltas["parsed_fragments"] == "+15"
+    assert comp.summary_deltas["uncertain_fragments"] == "-3"
+    assert comp.summary_deltas["mean_page_overlap"].startswith("+")

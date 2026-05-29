@@ -45,6 +45,22 @@ class CoverageSummary(BaseModel):
     grade: str = "F"
 
 
+class GapDelta(BaseModel):
+    gap_type: str
+    old_count: int
+    new_count: int
+
+
+class ComparisonSection(BaseModel):
+    old_document_id: int
+    old_grade: str
+    new_grade: str
+    gaps_resolved: list[GapDelta] = Field(default_factory=list)
+    gaps_introduced: list[GapDelta] = Field(default_factory=list)
+    gaps_unchanged: list[GapDelta] = Field(default_factory=list)
+    summary_deltas: dict[str, Any] = Field(default_factory=dict)
+
+
 class DocumentCoverageReport(BaseModel):
     document_id: int
     municipality: str | None = None
@@ -52,3 +68,4 @@ class DocumentCoverageReport(BaseModel):
     summary: CoverageSummary = Field(default_factory=CoverageSummary)
     page_details: list[PageCoverage] = Field(default_factory=list)
     gaps: list[CoverageGap] = Field(default_factory=list)
+    comparison: ComparisonSection | None = None

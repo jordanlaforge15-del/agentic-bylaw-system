@@ -31,9 +31,11 @@ from layer1.db.base import (
     SourceTableCell,
 )
 from layer1.models.coverage import (
+    ComparisonSection,
     CoverageGap,
     CoverageSummary,
     DocumentCoverageReport,
+    GapDelta,
     PageCoverage,
 )
 from layer1.models.enums import BlockType, FragmentType, ParseStatus, ResolutionStatus
@@ -360,3 +362,67 @@ def _compute_grade(
     if score >= 50:
         return "D"
     return "F"
+
+
+def compare_coverage_reports(
+    old: DocumentCoverageReport,
+    new: DocumentCoverageReport,
+) -> ComparisonSection:
+    """Compare two coverage reports for the same bylaw re-ingested after a parser fix.
+
+    Gaps are matched by (gap_type, page) key.  A gap is resolved when that key
+    exists only in *old*; introduced when it exists only in *new*; unchanged when
+    it appears in both (possibly with a different count).
+    """
+    from collections import defaultdict
+
+    def _count_by_type(gaps: list[CoverageGap]) -> dict[str, int]:
+        counts: dict[str, int] = defaultdict(int)
+        for g in gaps:
+            counts[g.gap_type] += 1
+        return counts
+
+    old_counts = _count_by_type(old.gaps)
+    new_counts = _count_by_type(new.gaps)
+
+    all_types = sorted(set(old_counts) | set(new_counts))
+
+    gaps_resolved: list[GapDelta] = []
+    gaps_introduced: list[GapDelta] = []
+    gaps_unchanged: list[GapDelta] = []
+
+    for gap_type in all_types:
+        old_n = old_counts.get(gap_type, 0)
+        new_n = new_counts.get(gap_type, 0)
+        delta = GapDelta(gap_type=gap_type, old_count=old_n, new_count=new_n)
+        if old_n > 0 and new_n == 0:
+            gaps_resolved.append(delta)
+        elif old_n == 0 and new_n > 0:
+            gaps_introduced.append(delta)
+        else:
+            gaps_unchanged.append(delta)
+
+    def _fmt_float(new_val: float, old_val: float) -> str:
+        d = new_val - old_val
+        return f"+{d:.2f}" if d >= 0 else f"{d:.2f}"
+
+    def _fmt_int(new_val: int, old_val: int) -> str:
+        d = new_val - old_val
+        return f"+{d}" if d >= 0 else str(d)
+
+    summary_deltas = {
+        "mean_page_overlap": _fmt_float(new.summary.mean_page_overlap, old.summary.mean_page_overlap),
+        "pages_with_fragments": _fmt_int(new.summary.pages_with_fragments, old.summary.pages_with_fragments),
+        "parsed_fragments": _fmt_int(new.summary.parsed_fragments, old.summary.parsed_fragments),
+        "uncertain_fragments": _fmt_int(new.summary.uncertain_fragments, old.summary.uncertain_fragments),
+    }
+
+    return ComparisonSection(
+        old_document_id=old.document_id,
+        old_grade=old.summary.grade,
+        new_grade=new.summary.grade,
+        gaps_resolved=gaps_resolved,
+        gaps_introduced=gaps_introduced,
+        gaps_unchanged=gaps_unchanged,
+        summary_deltas=summary_deltas,
+    )

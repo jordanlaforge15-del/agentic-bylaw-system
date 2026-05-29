@@ -21,7 +21,7 @@ from layer1.pipeline.audit import audit_document_pages
 from layer1.pipeline.export import export_document_json
 from layer1.pipeline.ingest import ingest_file
 from layer1.pipeline.prune import prune_superseded_documents
-from layer1.pipeline.verify_coverage import verify_document_coverage
+from layer1.pipeline.verify_coverage import compare_coverage_reports, verify_document_coverage
 from layer1.datasets.linker import find_orphan_datasets, relink_orphan_datasets
 from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 from layer1.profiles import (
@@ -330,6 +330,7 @@ def verify_coverage(
     document_id: int,
     out: Path | None = typer.Option(None, "--out", "-o", help="Write JSON coverage report to a file"),
     low_coverage_threshold: float = typer.Option(0.3, "--threshold", help="Page overlap ratio below which a page is flagged as low-coverage"),
+    compare_to: int | None = typer.Option(None, "--compare-to", help="Old document ID to diff against (regression check)"),
     db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
 ) -> None:
     """Verify that a bylaw document was fully ingested into the database.
@@ -337,6 +338,10 @@ def verify_coverage(
     Compares source PDF text page-by-page against persisted fragments,
     tables, and cross-references. Outputs a structured coverage report
     with per-page overlap ratios, gap classifications, and a letter grade.
+
+    Pass --compare-to <old_doc_id> to attach a regression diff showing which
+    gaps were resolved or introduced relative to a prior ingest of the same bylaw.
+    Exit code is 1 when the grade is D/F *or* when --compare-to finds new gaps.
     """
     with session_scope(db_url) as session:
         report = verify_document_coverage(
@@ -344,12 +349,24 @@ def verify_coverage(
             document_id,
             low_coverage_threshold=low_coverage_threshold,
         )
+        if compare_to is not None:
+            old_report = verify_document_coverage(
+                session,
+                compare_to,
+                low_coverage_threshold=low_coverage_threshold,
+            )
+            report.comparison = compare_coverage_reports(old_report, report)
+
     payload = report.model_dump(mode="json")
     _emit_json_report(payload, out)
     grade = report.summary.grade
     gap_count = len(report.gaps)
-    if grade in ("D", "F"):
-        console.print(f"[red]Grade {grade} — {gap_count} gap(s) found.[/red]")
+    introduced = len(report.comparison.gaps_introduced) if report.comparison else 0
+    if grade in ("D", "F") or introduced > 0:
+        if introduced > 0:
+            console.print(f"[red]Grade {grade} — {introduced} new gap type(s) introduced.[/red]")
+        else:
+            console.print(f"[red]Grade {grade} — {gap_count} gap(s) found.[/red]")
         raise typer.Exit(code=1)
     elif gap_count > 0:
         console.print(f"[yellow]Grade {grade} — {gap_count} gap(s) found.[/yellow]")
