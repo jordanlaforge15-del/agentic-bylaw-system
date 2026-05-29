@@ -69,7 +69,7 @@ export function AppHeader({ reading, onMenuClick }: Props) {
         <ThemeToggle size="sm" />
         <Link href="/app/billing" className="hidden sm:contents">
           <Btn variant="quiet" size="sm">
-            Account
+            Billing
           </Btn>
         </Link>
       </div>
