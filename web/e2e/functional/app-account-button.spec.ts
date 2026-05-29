@@ -1,6 +1,6 @@
 import { expect, test, openCaseViaApi } from "../fixtures/test-env";
 
-test("app header: Account button navigates to /app/billing", async ({
+test("app header: Billing button navigates to /app/billing", async ({
   page,
 }) => {
   // Open a case to have a valid case context
@@ -10,14 +10,15 @@ test("app header: Account button navigates to /app/billing", async ({
   await page.goto(`/app?case_id=${caseId}`);
   await page.waitForLoadState("networkidle");
 
-  // Look for the Account button
-  const accountLink = page.locator('a[href="/app/billing"]');
+  // Look for the Billing button by text
+  const billingButton = page.locator('a[href="/app/billing"]');
 
-  // Verify the link exists and is visible
-  await expect(accountLink).toBeVisible();
+  // Verify the link exists, is visible, and labeled "Billing"
+  await expect(billingButton).toBeVisible();
+  await expect(billingButton).toContainText("Billing");
 
-  // Click the Account button
-  await accountLink.click();
+  // Click the Billing button
+  await billingButton.click();
 
   // Verify we navigated to /app/billing
   await page.waitForURL(/\/app\/billing/, { timeout: 10000 });
