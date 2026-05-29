@@ -33,13 +33,27 @@ _FLAKE_CANDIDATE_THRESHOLD = 3  # flakes needed before surfacing flake_candidate
 # line-numbered prefix "401\t..." for the file's 401st line, and the
 # previous substring match flagged it as an auth crash. Anchoring the
 # numeric markers to HTTP / JSON / status keywords avoids that.
+#
+# ABS-216 (2026-05-29) hit a second false positive: an agent drafting a
+# Next.js route handler wrote `return NextResponse.json({ error:
+# "Unauthorized" }, { status: 401 });`. The old `(?:"?status"?)` pattern
+# made the surrounding quotes optional, so the bare TypeScript object
+# literal `status: 401` matched as if it were an Anthropic JSON error
+# envelope. The agent had actually crashed on a different failure mode
+# (CLI thinking-block round-trip — see ABS-215/ABS-217), but the
+# operator was pointed at credentials and lost an hour. The `status`
+# key is now required to be quoted (`"status"`), which matches every
+# real Anthropic error envelope while letting source-code object
+# literals through.
 AUTH_ERROR_PATTERNS: tuple[re.Pattern, ...] = (
     # HTTP/1.1 401, HTTP 401
     re.compile(r"\bhttp(?:/[\d.]+)?\s+401\b", re.IGNORECASE),
     # "401 Unauthorized", "401 Invalid authentication credentials"
     re.compile(r"\b401\s+(?:unauthorized|invalid)\b", re.IGNORECASE),
-    # status: 401, status=401, "status": 401
-    re.compile(r'(?:"?status"?)\s*[:=]\s*401\b', re.IGNORECASE),
+    # `"status":401`, `"status": 401`, `"status"=401`. The leading quote
+    # is mandatory: bare `status: 401` in TS/JS object literals (e.g. a
+    # Next.js route handler the agent is authoring) does NOT match.
+    re.compile(r'"status"\s*[:=]\s*401\b', re.IGNORECASE),
     re.compile(r"\binvalid authentication credentials\b", re.IGNORECASE),
     re.compile(r"\bauthentication failed\b", re.IGNORECASE),
 )

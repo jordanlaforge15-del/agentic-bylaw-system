@@ -395,3 +395,81 @@ class TestReviewAndGateEmptyDiffGuard:
         assert issue.status != "blocked"
         assert code_review_calls == [issue.identifier]
         assert e2e_calls == [issue.identifier]
+
+
+# ---------------------------------------------------------------------------
+# ABS-216 regression: source-code 401 boilerplate must not trip the auth guard
+# ---------------------------------------------------------------------------
+
+
+class TestAuthScannerABS216Regression:
+    """A Next.js route handler that returns `{ status: 401 }` is the most
+    common shape of "401 mentioned in source code without being an auth
+    failure". Before ABS-216 the regex `(?:"?status"?)\\s*[:=]\\s*401\\b`
+    made the surrounding quotes optional, so the bare TS/JS object literal
+    matched as if it were an Anthropic JSON error envelope. The agent had
+    actually crashed on a thinking-block round-trip (ABS-215, ABS-217),
+    but the operator got pointed at credentials.
+
+    These tests lock in:
+
+    1. The `{ status: 401 }` TS/JS shape (unquoted key) does NOT match.
+    2. The `"status": 401` JSON shape (quoted key) STILL matches — this
+       is the shape Anthropic actually returns and the original
+       `test_json_status_401_matches` already covers it; the test below
+       cross-checks the post-tightening regex against the exact bytes
+       that lit up the ABS-215 false positive.
+    """
+
+    def test_nextjs_route_handler_401_does_not_match(self, tmp_path: Path):
+        """The ABS-215 agent log contained this snippet (from the route
+        handler the agent was drafting):
+
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+        The fix requires `status` to be quoted (JSON), so the unquoted
+        TS object-literal does not match. The accompanying `error:
+        "Unauthorized"` substring also must NOT match — `Unauthorized`
+        sits before `401`, not after, so the `\\b401\\s+(?:unauthorized
+        |invalid)\\b` pattern requires the opposite order.
+        """
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            "[agent] writing web/app/api/general-feedback/route.ts\n"
+            'return NextResponse.json({ error: "Unauthorized" }, '
+            "{ status: 401 });\n"
+            "[agent] done editing\n",
+        )
+        assert _scan_log_for_auth_error(str(log_file), 0) is None
+
+    def test_bare_status_401_in_python_dict_does_not_match(
+        self, tmp_path: Path,
+    ):
+        """Same shape in a Python literal (e.g. a FastAPI route the agent
+        is authoring). The unquoted key form must not match here either.
+        """
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            "return JSONResponse({'detail': 'nope'}, status=401)\n"
+            "raise HTTPException(status=401)\n",
+        )
+        assert _scan_log_for_auth_error(str(log_file), 0) is None
+
+    def test_quoted_status_401_still_matches(self, tmp_path: Path):
+        """Real Anthropic API errors keep their JSON shape — the
+        previous `test_json_status_401_matches` covers the canonical
+        envelope; this guard checks that variants with extra whitespace,
+        `=` (legacy ad-hoc loggers), and case differences all still
+        match after the tightening.
+        """
+        for body in (
+            '{"type":"error","status":401,"message":"invalid x-api-key"}',
+            '{"status" : 401 , "error": "Unauthorized"}',
+            '"status"=401  // raw error log line',
+            '"STATUS": 401  // case insensitivity preserved',
+        ):
+            log_file = tmp_path / "agent.log"
+            log_file.write_text(body + "\n")
+            excerpt = _scan_log_for_auth_error(str(log_file), 0)
+            assert excerpt is not None, f"Should match: {body!r}"
+            assert "401" in excerpt
