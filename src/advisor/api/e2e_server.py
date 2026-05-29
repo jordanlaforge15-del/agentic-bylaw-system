@@ -64,7 +64,7 @@ from layer1.manifest_adapter import (
     profile_from_manifest,
 )
 from layer1.models.enums import IngestionStatus, ParseStatus
-from layer1.pipeline.verify_coverage import verify_document_coverage
+from layer1.pipeline.verify_coverage import compare_coverage_reports, verify_document_coverage
 from layer1.pipeline.ingest import ingest_file
 from layer1.profiles import HALIFAX_PROFILE
 from layer1.semantic.enrichment import enrich_document_semantics
@@ -276,6 +276,7 @@ class _MintJwtBody(BaseModel):
 class _VerifyCoverageBody(BaseModel):
     document_id: int
     low_coverage_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
+    compare_to: int | None = None
 
 
 # ABS-213: test-only prune-superseded endpoint.
@@ -842,6 +843,19 @@ def _mount_test_router(app: FastAPI) -> None:
                 body.document_id,
                 low_coverage_threshold=body.low_coverage_threshold,
             )
+            if body.compare_to is not None:
+                old_doc = db.get(Document, body.compare_to)
+                if old_doc is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"compare_to document {body.compare_to} not found",
+                    )
+                old_report = verify_document_coverage(
+                    db,
+                    body.compare_to,
+                    low_coverage_threshold=body.low_coverage_threshold,
+                )
+                report.comparison = compare_coverage_reports(old_report, report)
             return report.model_dump(mode="json")
 
 
