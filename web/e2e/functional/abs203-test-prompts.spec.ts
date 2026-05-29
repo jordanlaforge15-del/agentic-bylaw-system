@@ -15,7 +15,7 @@ import * as path from "path";
 import { expect, test, openCaseViaApi } from "../fixtures/test-env";
 
 // Resolve paths relative to the repo root (one level above web/).
-const REPO_ROOT = path.resolve(__dirname, "../../../../");
+const REPO_ROOT = path.resolve(__dirname, "../../../");
 const PROMPTS_FILE = path.join(REPO_ROOT, "evals", "regional_centre_test_prompts.json");
 const QUERY_SCRIPT = path.join(REPO_ROOT, "scripts", "query_test_prompts.py");
 
