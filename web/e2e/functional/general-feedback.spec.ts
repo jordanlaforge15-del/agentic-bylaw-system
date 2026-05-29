@@ -90,3 +90,59 @@ test("general feedback: submit sends feedback and shows confirmation", async ({
   await expect(page.getByTestId("general-feedback-form")).not.toBeVisible();
   await expect(page.getByTestId("general-feedback-thanks")).toBeVisible();
 });
+
+test("general feedback: acknowledgment auto-dismisses after 4 seconds", async ({
+  page,
+}) => {
+  await page.goto("/app");
+
+  await page.getByTestId("general-feedback-open").click();
+  await page.getByTestId("feedback-category-ux_issue").click();
+  await page
+    .getByTestId("general-feedback-message")
+    .fill("The sidebar is hard to find.");
+  await page.getByTestId("general-feedback-submit").click();
+
+  // Confirmation message visible
+  await expect(page.getByTestId("general-feedback-thanks")).toBeVisible();
+  // Form is not visible
+  await expect(page.getByTestId("general-feedback-form")).not.toBeVisible();
+
+  // Wait for auto-dismiss (4 seconds)
+  await page.waitForTimeout(4500);
+
+  // After dismissal, thanks message is gone and button reappears
+  await expect(page.getByTestId("general-feedback-thanks")).not.toBeVisible();
+  await expect(page.getByTestId("general-feedback-open")).toBeVisible();
+});
+
+test("general feedback: can submit again after acknowledgment auto-dismisses", async ({
+  page,
+}) => {
+  await page.goto("/app");
+
+  // First submission
+  await page.getByTestId("general-feedback-open").click();
+  await page.getByTestId("feedback-category-feature_request").click();
+  await page
+    .getByTestId("general-feedback-message")
+    .fill("First feedback message");
+  await page.getByTestId("general-feedback-submit").click();
+
+  // Wait for acknowledgment to auto-dismiss
+  await page.waitForTimeout(4500);
+
+  // Button should be visible again
+  await expect(page.getByTestId("general-feedback-open")).toBeVisible();
+
+  // Second submission
+  await page.getByTestId("general-feedback-open").click();
+  await page.getByTestId("feedback-category-ux_issue").click();
+  await page
+    .getByTestId("general-feedback-message")
+    .fill("Second feedback message");
+  await page.getByTestId("general-feedback-submit").click();
+
+  // Confirmation message for second submission visible
+  await expect(page.getByTestId("general-feedback-thanks")).toBeVisible();
+});
