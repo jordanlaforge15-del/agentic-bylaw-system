@@ -30,6 +30,7 @@ import pytest
 
 from scripts.night_manager.reviewer import (
     _scan_log_for_auth_error,
+    _scan_log_for_thinking_block_error,
     code_review,
     review_and_gate,
 )
@@ -395,3 +396,283 @@ class TestReviewAndGateEmptyDiffGuard:
         assert issue.status != "blocked"
         assert code_review_calls == [issue.identifier]
         assert e2e_calls == [issue.identifier]
+
+
+# ---------------------------------------------------------------------------
+# ABS-216 regression: source-code 401 boilerplate must not trip the auth guard
+# ---------------------------------------------------------------------------
+
+
+class TestAuthScannerABS216Regression:
+    """A Next.js route handler that returns `{ status: 401 }` is the most
+    common shape of "401 mentioned in source code without being an auth
+    failure". Before ABS-216 the regex `(?:"?status"?)\\s*[:=]\\s*401\\b`
+    made the surrounding quotes optional, so the bare TS/JS object literal
+    matched as if it were an Anthropic JSON error envelope. The agent had
+    actually crashed on a thinking-block round-trip (ABS-215, ABS-217),
+    but the operator got pointed at credentials.
+
+    These tests lock in:
+
+    1. The `{ status: 401 }` TS/JS shape (unquoted key) does NOT match.
+    2. The `"status": 401` JSON shape (quoted key) STILL matches — this
+       is the shape Anthropic actually returns and the original
+       `test_json_status_401_matches` already covers it; the test below
+       cross-checks the post-tightening regex against the exact bytes
+       that lit up the ABS-215 false positive.
+    """
+
+    def test_nextjs_route_handler_401_does_not_match(self, tmp_path: Path):
+        """The ABS-215 agent log contained this snippet (from the route
+        handler the agent was drafting):
+
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+        The fix requires `status` to be quoted (JSON), so the unquoted
+        TS object-literal does not match. The accompanying `error:
+        "Unauthorized"` substring also must NOT match — `Unauthorized`
+        sits before `401`, not after, so the `\\b401\\s+(?:unauthorized
+        |invalid)\\b` pattern requires the opposite order.
+        """
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            "[agent] writing web/app/api/general-feedback/route.ts\n"
+            'return NextResponse.json({ error: "Unauthorized" }, '
+            "{ status: 401 });\n"
+            "[agent] done editing\n",
+        )
+        assert _scan_log_for_auth_error(str(log_file), 0) is None
+
+    def test_bare_status_401_in_python_dict_does_not_match(
+        self, tmp_path: Path,
+    ):
+        """Same shape in a Python literal (e.g. a FastAPI route the agent
+        is authoring). The unquoted key form must not match here either.
+        """
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            "return JSONResponse({'detail': 'nope'}, status=401)\n"
+            "raise HTTPException(status=401)\n",
+        )
+        assert _scan_log_for_auth_error(str(log_file), 0) is None
+
+    def test_quoted_status_401_still_matches(self, tmp_path: Path):
+        """Real Anthropic API errors keep their JSON shape — the
+        previous `test_json_status_401_matches` covers the canonical
+        envelope; this guard checks that variants with extra whitespace,
+        `=` (legacy ad-hoc loggers), and case differences all still
+        match after the tightening.
+        """
+        for body in (
+            '{"type":"error","status":401,"message":"invalid x-api-key"}',
+            '{"status" : 401 , "error": "Unauthorized"}',
+            '"status"=401  // raw error log line',
+            '"STATUS": 401  // case insensitivity preserved',
+        ):
+            log_file = tmp_path / "agent.log"
+            log_file.write_text(body + "\n")
+            excerpt = _scan_log_for_auth_error(str(log_file), 0)
+            assert excerpt is not None, f"Should match: {body!r}"
+            assert "401" in excerpt
+
+
+# ---------------------------------------------------------------------------
+# ABS-217: thinking-block scanner + empty-diff classification ordering
+# ---------------------------------------------------------------------------
+
+
+# Verbatim Anthropic 400 emitted by the Claude Code wrapper when its
+# internal auto-compaction mutates a `thinking` block. Pulled from the
+# tail of `.night-manager/logs/ABS-215.jsonl` (nm-20260529-124959).
+ABS215_THINKING_BLOCK_RESULT = (
+    '{"type":"result","subtype":"success","is_error":true,'
+    '"api_error_status":400,"result":"API Error: 400 messages.1.content.24: '
+    "`thinking` or `redacted_thinking` blocks in the latest assistant "
+    'message cannot be modified. These blocks must remain as they were in '
+    'the original response."}\n'
+)
+
+
+class TestScanLogForThinkingBlockError:
+    """The narrow pattern matches the exact server-side validator string
+    and nothing else. Pattern stability is the precondition for the
+    empty-diff guard to classify the crash correctly.
+    """
+
+    def test_abs215_log_tail_matches(self, tmp_path: Path):
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(ABS215_THINKING_BLOCK_RESULT)
+        excerpt = _scan_log_for_thinking_block_error(str(log_file), 0)
+        assert excerpt is not None
+        assert "thinking" in excerpt
+        assert "cannot be modified" in excerpt
+
+    def test_redacted_thinking_only_also_matches(self, tmp_path: Path):
+        """The Anthropic error message uses `or` to join the two block
+        types; if a hypothetical variant flips them the pattern still
+        catches it.
+        """
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            "API Error: 400 messages.0.content.5: "
+            "'thinking' or 'redacted_thinking' block in the latest "
+            "assistant message cannot be modified.\n",
+        )
+        assert _scan_log_for_thinking_block_error(str(log_file), 0) is not None
+
+    def test_no_marker_returns_none(self, tmp_path: Path):
+        """Unrelated 400-class errors (e.g. context too long, malformed
+        tool_use) must not match — the operator should still see
+        "possible crash or auth failure" for those rather than be told
+        it was a thinking-block bug.
+        """
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            "API Error: 400 prompt is too long for context window\n"
+            "API Error: 400 invalid tool_use_id in tool_result\n",
+        )
+        assert _scan_log_for_thinking_block_error(str(log_file), 0) is None
+
+    def test_auth_log_does_not_match_thinking_scanner(self, tmp_path: Path):
+        """Cross-check: an auth-failure log must NOT match the
+        thinking-block scanner. This protects the empty-diff guard's
+        ordering: when both scanners run, they should respond to
+        disjoint inputs, not race to claim the same log."""
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            "HTTP/1.1 401 Unauthorized\n"
+            "Invalid authentication credentials\n",
+        )
+        assert _scan_log_for_thinking_block_error(str(log_file), 0) is None
+
+    def test_offset_skips_earlier_marker(self, tmp_path: Path):
+        """Same offset semantics as the auth scanner — a marker before
+        `start_offset` (from a prior attempt sharing the same append-only
+        log) must not leak forward."""
+        log_file = tmp_path / "agent.log"
+        log_file.write_text(
+            "prior attempt: 'thinking' or 'redacted_thinking' blocks in "
+            "the latest assistant message cannot be modified\n"
+            "===== NEW ATTEMPT =====\n"
+            "fresh run, no issues\n",
+        )
+        offset = log_file.read_text().index("===== NEW ATTEMPT")
+        assert _scan_log_for_thinking_block_error(str(log_file), offset) is None
+
+    def test_missing_log_file_returns_none(self):
+        assert _scan_log_for_thinking_block_error("", 0) is None
+        assert _scan_log_for_thinking_block_error("/no/such/path.log", 0) is None
+
+
+class TestReviewAndGateClassifiesThinkingBlockBeforeAuth:
+    """The empty-diff guard's classification order determines what shows
+    up in Linear. Thinking-block must win when both signals are present —
+    otherwise the historic ABS-215 misclassification (agent draft-
+    authored 401 boilerplate, thinking-block crash, reported as
+    "authentication error") will recur.
+    """
+
+    @pytest.fixture
+    def empty_branch_worktree(self, tmp_path: Path) -> Path:
+        repo = tmp_path / "empty-branch-worktree-217"
+        _init_repo_on_dev(repo)
+        _run(repo, "git", "checkout", "-q", "-b", "agent/ABS-217-test")
+        return repo
+
+    @pytest.mark.asyncio
+    async def test_thinking_block_log_names_cli_bug(
+        self,
+        empty_branch_worktree: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from scripts.night_manager import reviewer as rev_mod
+
+        log_file = tmp_path / "agent-ABS-217.log"
+        log_file.write_text(
+            "[agent] starting work\n"
+            + ABS215_THINKING_BLOCK_RESULT
+            + "[claude] exit code 0\n",
+        )
+
+        real_exec = rev_mod.asyncio.create_subprocess_exec
+
+        async def passthrough_exec(*cmd, **kwargs):
+            return await real_exec(*cmd, **kwargs)
+
+        monkeypatch.setattr(
+            rev_mod.asyncio, "create_subprocess_exec", passthrough_exec,
+        )
+
+        issue = _make_issue(
+            worktree=str(empty_branch_worktree),
+            log_file=str(log_file),
+            attempt_log_offset=0,
+        )
+        config = NMConfig(reviewer_model="sonnet", reviewer_token_limit=1.0)
+
+        gate_passed = await review_and_gate(issue, config)
+
+        assert gate_passed is False
+        assert issue.status == "blocked"
+        assert issue.error is not None
+        # The reason must name the CLI auto-compaction bug, not auth.
+        err_lower = issue.error.lower()
+        assert "thinking" in err_lower
+        assert "claude code cli" in err_lower
+        # And explicitly NOT point at credentials.
+        assert "credentials" not in err_lower or "not a credential" in err_lower
+        # Excerpt of the original Anthropic 400 included so the operator
+        # can verify the classification.
+        assert "cannot be modified" in issue.error
+
+    @pytest.mark.asyncio
+    async def test_thinking_block_wins_over_concurrent_401_in_log(
+        self,
+        empty_branch_worktree: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The ABS-215 shape exactly: thinking-block crash AND a 401 in
+        the same log (because the agent drafted a 401 response handler
+        before crashing). Order matters — thinking-block must be
+        reported, not auth.
+        """
+        from scripts.night_manager import reviewer as rev_mod
+
+        log_file = tmp_path / "agent-ABS-215-shape.log"
+        log_file.write_text(
+            "[agent] writing route handler\n"
+            'return NextResponse.json({ error: "Unauthorized" }, '
+            "{ status: 401 });\n"
+            "[claude] response: 401 Unauthorized\n"  # also an auth-pattern hit
+            + ABS215_THINKING_BLOCK_RESULT,
+        )
+
+        real_exec = rev_mod.asyncio.create_subprocess_exec
+
+        async def passthrough_exec(*cmd, **kwargs):
+            return await real_exec(*cmd, **kwargs)
+
+        monkeypatch.setattr(
+            rev_mod.asyncio, "create_subprocess_exec", passthrough_exec,
+        )
+
+        issue = _make_issue(
+            worktree=str(empty_branch_worktree),
+            log_file=str(log_file),
+            attempt_log_offset=0,
+        )
+        config = NMConfig(reviewer_model="sonnet", reviewer_token_limit=1.0)
+
+        gate_passed = await review_and_gate(issue, config)
+
+        assert gate_passed is False
+        assert issue.status == "blocked"
+        assert issue.error is not None
+        err_lower = issue.error.lower()
+        # Thinking-block classification wins.
+        assert "thinking" in err_lower
+        # Auth-failure language must NOT be the headline.
+        assert "authentication error detected" not in err_lower
+        assert "credentials are refreshed" not in err_lower
