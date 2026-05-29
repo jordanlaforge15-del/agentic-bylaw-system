@@ -278,6 +278,19 @@ class _VerifyCoverageBody(BaseModel):
     low_coverage_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
 
 
+# ABS-213: test-only prune-superseded endpoint.
+# Seeds synthetic Document rows for a named (municipality, bylaw_name) pair,
+# then exercises prune_superseded_documents so the Playwright spec can verify
+# dry-run scan, live delete, and municipal-filter targeting through the real
+# Postgres stack without touching production data.
+class _PruneSupersededBody(BaseModel):
+    bylaw_name: str = Field(min_length=1, max_length=256)
+    municipality: str = Field(default="Test Municipality ABS-213", min_length=1, max_length=255)
+    doc_count: int = Field(default=3, ge=1, le=10)
+    keep_latest: int = Field(default=1, ge=1, le=9)
+    dry_run: bool = True
+
+
 def _mount_test_router(app: FastAPI) -> None:
     """Wire the ``/v1/_test/...`` lifecycle endpoints onto ``app``."""
 
@@ -734,6 +747,81 @@ def _mount_test_router(app: FastAPI) -> None:
             "companions": companions_from_sources(sources),
             "llm_call_count": fake_llm.messages.create.call_count,
         }
+
+    @app.post("/v1/_test/prune-superseded")
+    async def prune_superseded_test(body: _PruneSupersededBody) -> dict[str, object]:
+        """Seed synthetic Document rows then exercise prune_superseded_documents.
+
+        Creates ``doc_count`` Document rows for (municipality, bylaw_name) with
+        staggered ``ingestion_timestamp`` values (1-second apart, oldest first),
+        runs prune_superseded_documents with the given ``keep_latest`` / ``dry_run``
+        settings, and returns the full PruneResult summary.
+
+        Idempotent: all Document rows for (municipality, bylaw_name) are dropped
+        before seeding so repeated spec runs against a shared DB stay clean.
+        """
+        import hashlib
+        from datetime import timedelta
+
+        from layer1.db.base import Document as _Document, IngestionRun as _IngestionRun
+        from layer1.models.enums import IngestionStatus
+        from layer1.pipeline.prune import prune_superseded_documents
+
+        with session_scope() as db:
+            # Clean up any prior rows from a previous spec run.
+            db.query(_Document).filter(
+                _Document.municipality == body.municipality,
+                _Document.bylaw_name == body.bylaw_name,
+            ).delete(synchronize_session=False)
+            db.flush()
+
+            # Seed `doc_count` synthetic Document rows with staggered timestamps
+            # (oldest first, 1 second apart) so prune ordering is deterministic.
+            base_time = utcnow()
+            for i in range(body.doc_count):
+                ts = base_time - timedelta(seconds=(body.doc_count - 1 - i))
+                file_hash = hashlib.sha256(
+                    f"{body.bylaw_name}-{body.municipality}-{i}".encode()
+                ).hexdigest()[:64]
+                doc = _Document(
+                    municipality=body.municipality,
+                    bylaw_name=body.bylaw_name,
+                    source_path=f"/tmp/abs213-test-{i}.txt",
+                    file_hash=file_hash,
+                    mime_type="text/plain",
+                    page_count=1,
+                    ingestion_timestamp=ts,
+                )
+                db.add(doc)
+                db.flush()
+                run = _IngestionRun(
+                    document_id=doc.id,
+                    status=IngestionStatus.COMPLETED,
+                )
+                db.add(run)
+            db.flush()
+
+            result = prune_superseded_documents(
+                db,
+                municipality=body.municipality,
+                bylaw_name=body.bylaw_name,
+                keep_latest=body.keep_latest,
+                dry_run=body.dry_run,
+            )
+            return {
+                "dry_run": result.dry_run,
+                "entries_count": len(result.entries),
+                "deleted_count": result.deleted_count,
+                "entries": [
+                    {
+                        "id": e.id,
+                        "municipality": e.municipality,
+                        "bylaw_name": e.bylaw_name,
+                        "run_count": e.run_count,
+                    }
+                    for e in result.entries
+                ],
+            }
 
     @app.post("/v1/_test/verify-coverage")
     async def verify_coverage(body: _VerifyCoverageBody) -> dict[str, object]:

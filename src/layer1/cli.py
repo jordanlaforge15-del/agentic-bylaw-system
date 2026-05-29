@@ -20,6 +20,7 @@ from layer1.models.enums import IngestionStatus
 from layer1.pipeline.audit import audit_document_pages
 from layer1.pipeline.export import export_document_json
 from layer1.pipeline.ingest import ingest_file
+from layer1.pipeline.prune import prune_superseded_documents
 from layer1.pipeline.verify_coverage import verify_document_coverage
 from layer1.datasets.linker import find_orphan_datasets, relink_orphan_datasets
 from layer1.pipeline.ingest_dataset import ingest_geo_dataset
@@ -354,6 +355,72 @@ def verify_coverage(
         console.print(f"[yellow]Grade {grade} — {gap_count} gap(s) found.[/yellow]")
     else:
         console.print(f"[green]Grade {grade} — no gaps found.[/green]")
+
+
+@app.command("prune-superseded")
+def prune_superseded(
+    municipality: str | None = typer.Option(None, "--municipality", help="Filter by municipality"),
+    bylaw_name: str | None = typer.Option(None, "--bylaw-name", help="Filter by bylaw name"),
+    keep_latest: int = typer.Option(1, "--keep-latest", min=1, help="Number of latest ingests to keep per bylaw"),
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run", help="Print plan without deleting (default: on)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    """Delete stale Document rows after re-ingest, keeping the N newest per bylaw."""
+    with session_scope(db_url) as session:
+        result = prune_superseded_documents(
+            session,
+            municipality=municipality,
+            bylaw_name=bylaw_name,
+            keep_latest=keep_latest,
+            dry_run=True,
+        )
+
+    if not result.entries:
+        console.print("[green]No superseded documents found.[/green]")
+        return
+
+    for entry in result.entries:
+        console.print(
+            {
+                "id": entry.id,
+                "municipality": entry.municipality,
+                "bylaw_name": entry.bylaw_name,
+                "ingestion_timestamp": entry.ingestion_timestamp.isoformat(),
+                "file_hash": entry.file_hash,
+                "page_count": entry.page_count,
+                "cascaded_rows": {
+                    "fragments": entry.fragment_count,
+                    "blocks": entry.block_count,
+                    "tables": entry.table_count,
+                    "cross_references": entry.cross_reference_count,
+                    "images": entry.image_count,
+                    "ingestion_runs": entry.run_count,
+                },
+            }
+        )
+
+    if dry_run:
+        console.print(f"[yellow]Dry run — {len(result.entries)} document(s) would be deleted.[/yellow]")
+        return
+
+    if not yes:
+        confirmed = typer.confirm(
+            f"Permanently delete {len(result.entries)} superseded document(s)? This cannot be undone."
+        )
+        if not confirmed:
+            console.print("[yellow]Aborted.[/yellow]")
+            return
+
+    with session_scope(db_url) as session:
+        final = prune_superseded_documents(
+            session,
+            municipality=municipality,
+            bylaw_name=bylaw_name,
+            keep_latest=keep_latest,
+            dry_run=False,
+        )
+    console.print(f"[green]Deleted {final.deleted_count} superseded document(s).[/green]")
 
 
 def _validate_from_db(session: Session, document_id: int):
