@@ -189,6 +189,152 @@ class TestPlanner:
         assert _slugify("night_manager (v2)") == "nightmanager-v2"
 
 
+class TestPlannerSubprocessResilience:
+    """nm-20260529-201304 / -202514: two consecutive launches crashed when
+    `claude -p` exited 0 with empty stdout. The planner used to bubble that
+    straight into `json.loads`, producing
+    `Expecting value: line 1 column 1 (char 0)` — useless for diagnosis.
+    The fix: bounded retry on empty/error stdout, and a diagnostic surface
+    that includes stderr + a stdout preview on real failure.
+    """
+
+    def _make_issue_pair(self):
+        from scripts.night_manager.linear_client import LinearIssue
+        def mk(i: int) -> LinearIssue:
+            return LinearIssue(
+                id=f"lin-{i}", identifier=f"ABS-{i}", title=f"issue {i}",
+                description="", priority=2, sort_order=0.0,
+                state_name="Triaged", state_id="state-t",
+                labels=["Triaged"], estimate=None, team_id="team-abs",
+            )
+        return [mk(1), mk(2)]
+
+    def _make_config(self):
+        with patch.dict(os.environ, {"LINEAR_API_KEY": "test-key"}):
+            return NMConfig(linear_api_key="test-key", max_agents=2)
+
+    def test_retries_on_empty_stdout_then_succeeds(self):
+        """First attempt: rc=0 but empty stdout (the observed transient
+        shape). Second attempt: valid JSON. Plan returns successfully and
+        the operator-visible error is suppressed."""
+        from scripts.night_manager import planner as planner_mod
+        import asyncio as aio
+
+        valid_json = (
+            '{"groups": [{"parallel": ["ABS-1", "ABS-2"]}], '
+            '"conflict_notes": "ok", '
+            '"issue_settings": {}}'
+        )
+        calls: list[int] = []
+
+        async def fake_once(prompt: str):
+            calls.append(1)
+            if len(calls) == 1:
+                return (0, "", "transient blip")  # empty stdout, rc=0
+            return (0, valid_json, "")
+
+        async def no_sleep(_s):
+            return None
+
+        with patch.object(planner_mod, "_invoke_planner_claude_once", fake_once), \
+             patch.object(planner_mod.asyncio, "sleep", no_sleep):
+            plan = aio.run(planner_mod.plan_execution(
+                self._make_issue_pair(), self._make_config(),
+            ))
+
+        assert len(calls) == 2
+        assert len(plan.groups) == 1
+        assert plan.groups[0].parallel == ["ABS-1", "ABS-2"]
+
+    def test_retries_on_nonzero_rc_then_succeeds(self):
+        """nonzero rc is also transient-eligible. e.g. session refresh
+        glitch returns rc=1 with no stdout."""
+        from scripts.night_manager import planner as planner_mod
+        import asyncio as aio
+
+        valid_json = (
+            '{"groups": [{"parallel": ["ABS-1", "ABS-2"]}], '
+            '"conflict_notes": "ok"}'
+        )
+        calls: list[tuple] = []
+
+        async def fake_once(prompt):
+            calls.append(("call",))
+            if len(calls) == 1:
+                return (1, "", "session error")
+            return (0, valid_json, "")
+
+        async def no_sleep(_s):
+            return None
+
+        with patch.object(planner_mod, "_invoke_planner_claude_once", fake_once), \
+             patch.object(planner_mod.asyncio, "sleep", no_sleep):
+            plan = aio.run(planner_mod.plan_execution(
+                self._make_issue_pair(), self._make_config(),
+            ))
+
+        assert len(calls) == 2
+        assert plan.groups[0].parallel == ["ABS-1", "ABS-2"]
+
+    def test_exhausted_retries_surfaces_stderr_and_stdout_preview(self):
+        """Every attempt empty → must raise with stderr included so the
+        operator can see what claude actually said. Bare
+        `Expecting value: line 1 column 1 (char 0)` is the regression
+        we're locking out."""
+        from scripts.night_manager import planner as planner_mod
+        import asyncio as aio
+
+        async def fake_once(prompt):
+            return (0, "", "session limit reached — try again in 5m")
+
+        async def no_sleep(_s):
+            return None
+
+        with patch.object(planner_mod, "_invoke_planner_claude_once", fake_once), \
+             patch.object(planner_mod.asyncio, "sleep", no_sleep):
+            with pytest.raises(RuntimeError) as excinfo:
+                aio.run(planner_mod.plan_execution(
+                    self._make_issue_pair(), self._make_config(),
+                ))
+
+        msg = str(excinfo.value)
+        # The error must include the stderr context that the old code dropped.
+        assert "session limit" in msg
+        assert "exhausted" in msg.lower()
+        # Must NOT be the bare JSONDecodeError text.
+        assert "Expecting value" not in msg
+
+    def test_non_json_output_includes_stdout_preview_no_retry_loop(self):
+        """rc=0 with non-JSON stdout (e.g. a model refusal) raises a clear
+        error with the preview. The JSON-parse path does NOT retry — a
+        syntactically-bad payload is a content issue, not transient."""
+        from scripts.night_manager import planner as planner_mod
+        import asyncio as aio
+
+        refusal = "I cannot help with that request."
+        calls: list[int] = []
+
+        async def fake_once(prompt):
+            calls.append(1)
+            return (0, refusal, "")
+
+        async def no_sleep(_s):
+            return None
+
+        with patch.object(planner_mod, "_invoke_planner_claude_once", fake_once), \
+             patch.object(planner_mod.asyncio, "sleep", no_sleep):
+            with pytest.raises(RuntimeError) as excinfo:
+                aio.run(planner_mod.plan_execution(
+                    self._make_issue_pair(), self._make_config(),
+                ))
+
+        msg = str(excinfo.value)
+        assert "non-JSON" in msg
+        assert refusal in msg
+        # Only ONE subprocess call — the parse failure must not loop.
+        assert len(calls) == 1
+
+
 class TestTouchProfileSerialization:
     def test_touch_profile_roundtrips(self, tmp_path: Path):
         """touch_profile + added_via_rescan survive save → load."""
