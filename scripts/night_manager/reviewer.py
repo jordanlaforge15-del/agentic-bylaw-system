@@ -40,11 +40,10 @@ _FLAKE_CANDIDATE_THRESHOLD = 3  # flakes needed before surfacing flake_candidate
 # made the surrounding quotes optional, so the bare TypeScript object
 # literal `status: 401` matched as if it were an Anthropic JSON error
 # envelope. The agent had actually crashed on a different failure mode
-# (CLI thinking-block round-trip — see ABS-215/ABS-217), but the
-# operator was pointed at credentials and lost an hour. The `status`
-# key is now required to be quoted (`"status"`), which matches every
-# real Anthropic error envelope while letting source-code object
-# literals through.
+# (CLI thinking-block round-trip — see ABS-217), but the operator was
+# pointed at credentials and lost an hour. The `status` key is now
+# required to be quoted (`"status"`), which matches every real Anthropic
+# error envelope while letting source-code object literals through.
 AUTH_ERROR_PATTERNS: tuple[re.Pattern, ...] = (
     # HTTP/1.1 401, HTTP 401
     re.compile(r"\bhttp(?:/[\d.]+)?\s+401\b", re.IGNORECASE),
@@ -56,6 +55,34 @@ AUTH_ERROR_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r'"status"\s*[:=]\s*401\b', re.IGNORECASE),
     re.compile(r"\binvalid authentication credentials\b", re.IGNORECASE),
     re.compile(r"\bauthentication failed\b", re.IGNORECASE),
+)
+
+
+# ABS-217: pattern that indicates the agent crashed on a Claude Code CLI
+# internal-state bug — auto-compaction mutates a `thinking` /
+# `redacted_thinking` content block, and the next API turn is rejected
+# by Anthropic because those blocks carry a signature that must
+# round-trip verbatim. The wrapper exits 0 (it surfaces the API error
+# as a `result` block, not via exit code), the night-manager marks the
+# issue "completed", the empty-diff guard fires, and — before this
+# pattern existed — the auth scanner happened to false-match on
+# whatever 401 boilerplate the agent had drafted. Now the empty-diff
+# guard checks this pattern FIRST so the operator sees the correct
+# root cause instead of being pointed at credentials.
+#
+# Witnessed in ABS-215 (nm-20260529-124959, 116 turns, $1.60 burned).
+# The error string is stable across model versions because Anthropic's
+# server-side validator emits it verbatim; pattern is deliberately
+# narrow to avoid false positives on other 400-class errors.
+#
+# Anthropic quotes the block-type names with backticks in the JSON
+# `result` event's `text` field and with single quotes in the raw stderr
+# stream — the character class `[`'"]?` accepts either (plus double
+# quotes for symmetry) without using a captured group.
+THINKING_BLOCK_ERROR_PATTERN: re.Pattern = re.compile(
+    r"[`'\"]?thinking[`'\"]?\s+or\s+[`'\"]?redacted_thinking[`'\"]?\s+"
+    r"blocks?\s+in\s+the\s+latest\s+assistant\s+message\s+cannot\s+be\s+modified",
+    re.IGNORECASE,
 )
 
 # Maps test key → list of booleans (True = test recovered on that solo re-run).
@@ -248,6 +275,31 @@ def check_e2e_coverage(changed_files: list[str]) -> tuple[bool, str]:
     return False, msg
 
 
+def _read_log_slice(log_file: str, start_offset: int) -> str | None:
+    """Return the log file's content from `start_offset` to EOF, or None
+    on missing path / OS error. Factored out so the auth scanner and the
+    thinking-block scanner share one file-read path.
+    """
+    if not log_file:
+        return None
+    try:
+        with open(log_file, "rb") as fh:
+            fh.seek(start_offset)
+            raw = fh.read()
+    except OSError:
+        return None
+    return raw.decode("utf-8", errors="replace")
+
+
+def _excerpt_around(text: str, match: re.Match) -> str:
+    """Tight window around a regex hit so the operator sees the marker in
+    context. 80 chars before / 240 after keeps Linear comments readable.
+    """
+    start = max(0, match.start() - 80)
+    end = min(len(text), match.end() + 240)
+    return text[start:end].strip()
+
+
 def _scan_log_for_auth_error(log_file: str, start_offset: int) -> str | None:
     """Return a short excerpt around the first auth-marker hit in the log
     slice [`start_offset`:EOF], or None when no marker is present.
@@ -259,27 +311,35 @@ def _scan_log_for_auth_error(log_file: str, start_offset: int) -> str | None:
     that shares the same log path. Mirrors the ABS-146 fix for
     `_is_rate_limited`.
     """
-    if not log_file:
+    text = _read_log_slice(log_file, start_offset)
+    if text is None:
         return None
-    try:
-        with open(log_file, "rb") as fh:
-            fh.seek(start_offset)
-            raw = fh.read()
-    except OSError:
-        return None
-    text = raw.decode("utf-8", errors="replace")
     for pattern in AUTH_ERROR_PATTERNS:
         m = pattern.search(text)
         if not m:
             continue
-        # Small window around the hit so the operator sees the HTTP body /
-        # status line that surrounded the marker, not just the marker
-        # itself. Bounds are intentionally tight to keep Linear comments
-        # readable.
-        start = max(0, m.start() - 80)
-        end = min(len(text), m.end() + 240)
-        return text[start:end].strip()
+        return _excerpt_around(text, m)
     return None
+
+
+def _scan_log_for_thinking_block_error(
+    log_file: str, start_offset: int,
+) -> str | None:
+    """Return a short excerpt around the Claude Code CLI thinking-block
+    round-trip 400, or None when the marker is absent.
+
+    See `THINKING_BLOCK_ERROR_PATTERN` for the root-cause writeup. The
+    empty-diff guard in `review_and_gate` calls this BEFORE the auth
+    scanner so a thinking-block crash isn't false-classified as an auth
+    failure (the historic ABS-215 misclassification).
+    """
+    text = _read_log_slice(log_file, start_offset)
+    if text is None:
+        return None
+    m = THINKING_BLOCK_ERROR_PATTERN.search(text)
+    if not m:
+        return None
+    return _excerpt_around(text, m)
 
 
 async def _git_changed_files(worktree: str) -> list[str]:
@@ -1196,13 +1256,32 @@ async def review_and_gate(
     # against unmodified dev (green by definition), and `merge_to_dev`
     # merges nothing — silently flipping the ticket to Done. Catch the
     # non-delivery here, before any LLM call or e2e run, and surface the
-    # auth root cause to the operator when the agent log shows one.
+    # specific root cause to the operator when the agent log shows one.
+    #
+    # ABS-217: classifier order matters. Check the thinking-block CLI
+    # crash BEFORE the auth scanner, because (a) it's more specific and
+    # (b) the historic auth pattern was loose enough to false-match a
+    # source-code 401 the agent had drafted before crashing. ABS-215
+    # was misreported as an auth failure for exactly this reason.
     changed_files = await _git_changed_files(issue.worktree)
     if not changed_files:
+        thinking_excerpt = _scan_log_for_thinking_block_error(
+            issue.log_file, issue.attempt_log_offset,
+        )
         auth_excerpt = _scan_log_for_auth_error(
             issue.log_file, issue.attempt_log_offset,
         )
-        if auth_excerpt:
+        if thinking_excerpt:
+            reason = (
+                "Agent produced no commits — Anthropic API rejected the "
+                "next turn because a `thinking` / `redacted_thinking` block "
+                "in the assistant transcript was mutated mid-run. This is "
+                "a Claude Code CLI bug in its internal auto-compaction, "
+                "not a credential issue. Re-run the ticket; if it recurs, "
+                "lower `agent_effort` or split the ticket into smaller "
+                f"deliverables.\n\nLog excerpt:\n{thinking_excerpt}"
+            )
+        elif auth_excerpt:
             reason = (
                 "Agent produced no commits — authentication error detected "
                 "in agent log. Re-run required after credentials are "
