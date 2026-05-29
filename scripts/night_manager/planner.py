@@ -195,6 +195,72 @@ def _parse_touch_profile(raw: Any) -> dict | None:
     }
 
 
+# Total attempts (initial + retries) for the planner subprocess. Observed
+# 2026-05-29: two consecutive launches (nm-20260529-201304 / -202514)
+# crashed when `claude -p` exited 0 with empty stdout — a transient Claude
+# Code session blip that cleared within minutes. One retry would have
+# saved both runs at ~$0.06 each, so the cap is set generously low at 2.
+PLANNER_MAX_ATTEMPTS = 2
+# Base sleep between attempts (seconds). Exponential: 1 s, 2 s, ...
+PLANNER_RETRY_BASE_SLEEP = 1.0
+
+
+async def _invoke_planner_claude_once(prompt: str) -> tuple[int, str, str]:
+    """One `claude -p` invocation. Returns `(returncode, stdout, stderr)`
+    all decoded to str. Pure subprocess wrapper — no error handling,
+    no retry — so the caller can decide what's transient.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "claude", "-p",
+        "--model", "sonnet",
+        "--max-budget-usd", "1",
+        prompt,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return (
+        proc.returncode or 0,
+        stdout.decode("utf-8", errors="replace").strip(),
+        stderr.decode("utf-8", errors="replace").strip(),
+    )
+
+
+async def _invoke_planner_with_retry(prompt: str) -> str:
+    """Run `claude -p` for the planner prompt with bounded retries on
+    transient subprocess failures (nonzero rc, or rc=0 with empty stdout).
+
+    Returns the stripped stdout on success.
+
+    Raises `RuntimeError` after `PLANNER_MAX_ATTEMPTS` exhausted attempts,
+    surfacing both stderr and a stdout preview from the FINAL attempt so
+    the operator has a useful clue rather than the bare
+    `Expecting value: line 1 column 1 (char 0)` the JSON decoder used to
+    raise.
+    """
+    last_rc = 0
+    last_stdout = ""
+    last_stderr = ""
+    for attempt in range(1, PLANNER_MAX_ATTEMPTS + 1):
+        last_rc, last_stdout, last_stderr = await _invoke_planner_claude_once(prompt)
+        if last_rc == 0 and last_stdout:
+            return last_stdout
+        if attempt < PLANNER_MAX_ATTEMPTS:
+            log.warning(
+                "Planner attempt %d/%d failed (rc=%d, stdout_len=%d, stderr=%r) — "
+                "retrying after backoff",
+                attempt, PLANNER_MAX_ATTEMPTS, last_rc, len(last_stdout),
+                last_stderr[:200],
+            )
+            await asyncio.sleep(PLANNER_RETRY_BASE_SLEEP * (2 ** (attempt - 1)))
+    raise RuntimeError(
+        f"Planner claude -p exhausted {PLANNER_MAX_ATTEMPTS} attempts. "
+        f"Final rc={last_rc}, stdout_len={len(last_stdout)}. "
+        f"stderr preview: {last_stderr[:500]!r}. "
+        f"stdout preview: {last_stdout[:200]!r}."
+    )
+
+
 async def plan_execution(
     issues: list[LinearIssue],
     config: NMConfig,
@@ -222,26 +288,26 @@ async def plan_execution(
         default_effort=config.agent_effort,
     )
 
-    proc = await asyncio.create_subprocess_exec(
-        "claude", "-p",
-        "--model", "sonnet",
-        "--max-budget-usd", "1",
-        prompt,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"Planner claude -p failed (exit={proc.returncode}): "
-            f"{stderr.decode()[:500]}"
-        )
+    raw = await _invoke_planner_with_retry(prompt)
 
-    raw = stdout.decode("utf-8", errors="replace").strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        # The bare `Expecting value: line 1 column 1 (char 0)` from the
+        # JSON decoder tells the operator nothing about what claude
+        # actually returned. Surface a slice so a future investigation
+        # can see whether it was a refusal, a partial response, or
+        # garbage. Don't retry on non-JSON output — empty stdout is
+        # transient (handled by `_invoke_planner_with_retry`), but a
+        # syntactically-bad payload is almost certainly a prompt /
+        # model issue that won't self-heal on the next call.
+        raise RuntimeError(
+            f"Planner claude -p returned non-JSON output: {exc}. "
+            f"stdout preview: {raw[:500]!r}"
+        ) from exc
     groups = [
         ExecutionGroup(parallel=g["parallel"])
         for g in data["groups"]
