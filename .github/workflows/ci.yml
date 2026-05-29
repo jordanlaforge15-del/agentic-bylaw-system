@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+# Cancel in-flight runs for the same ref, except on main where builds must
+# complete to avoid a partially-pushed image landing in GHCR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # lint — Python ruff
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff check
+        run: ruff check src tests
+
+  # ---------------------------------------------------------------------------
+  # typecheck — TypeScript / Next.js
+  # ---------------------------------------------------------------------------
+  typecheck:
+    name: TypeScript typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  # ---------------------------------------------------------------------------
+  # test — Python pytest
+  # Boots the project's custom postgres image (pgvector + postgis) so that
+  # migrations referencing both extensions run cleanly.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Python tests
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql+psycopg://layer1:layer1@localhost:5432/layer1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start postgres (pgvector + postgis)
+        run: |
+          docker build -t bylaw-postgres -f Dockerfile.postgres .
+          docker run -d --name postgres \
+            -e POSTGRES_USER=layer1 \
+            -e POSTGRES_PASSWORD=layer1 \
+            -e POSTGRES_DB=layer1 \
+            -p 5432:5432 \
+            bylaw-postgres
+          until docker exec postgres pg_isready -U layer1 -q; do sleep 1; done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev,advisor]"
+
+      - name: Run Alembic migrations
+        run: alembic upgrade head
+
+      - name: Run pytest
+        run: pytest --tb=short
+
+  # ---------------------------------------------------------------------------
+  # build-advisor — push Dockerfile.advisor to GHCR
+  # Runs only on push to main, gated on all CI jobs passing.
+  #
+  # Test gate: to prevent merge of failing code, enable branch protection on
+  # main/dev in GitHub Settings › Branches and mark the Lint, TypeScript
+  # typecheck, and Python tests jobs as required status checks.
+  # ---------------------------------------------------------------------------
+  build-advisor:
+    name: Build advisor image
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, test]
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/bylaw-advisor
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.advisor
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=advisor
+          cache-to: type=gha,mode=max,scope=advisor
+          platforms: linux/amd64
+
+  # ---------------------------------------------------------------------------
+  # build-web — push web/Dockerfile to GHCR
+  # Runs only on push to main, gated on all CI jobs passing.
+  #
+  # Required secrets (configure in GitHub Settings › Secrets and variables):
+  #   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY  — inlined into the client bundle
+  #   NEXT_PUBLIC_SENTRY_DSN             — optional, inlined into client bundle
+  # ---------------------------------------------------------------------------
+  build-web:
+    name: Build web image
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, test]
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/bylaw-web
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          file: web/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+          platforms: linux/amd64
+          build-args: |
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+            NEXT_PUBLIC_SENTRY_DSN=${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+            SENTRY_RELEASE=${{ github.sha }}
