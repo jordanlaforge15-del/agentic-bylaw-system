@@ -1,0 +1,427 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Retired homeowner planning a modest backyard deck"
+    },
+    "address": "1234 Oxford Street, Halifax, NS",
+    "zone": "ER-1",
+    "complexity": "simple",
+    "liability": "low",
+    "tags": ["renovation", "residential", "setbacks", "accessory_structure", "development_permit"],
+    "bylaw_features": ["rear_setback", "development_permit_exemption"],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "Hi, I own a home at 1234 Oxford Street in Halifax — it’s in the ER-1 zone. I want to build an attached wooden deck off the back of my house. My plan puts the deck edge about 4 metres from my rear property line. Do I need a development permit for this, and is 4 metres enough clearance from the rear lot line?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Great, thanks. What about the side yards — is there a side setback I need to respect for the deck as well?"
+      }
+    ],
+    "expected_bylaw_references": ["Table 3", "Section 9(a)", "Section 9(d)"],
+    "expected_answer_keywords": ["7.5 m", "rear setback", "ER-1", "1.2 m", "side setback", "development permit"],
+    "expected_topics": ["rear_setback", "side_setback", "development_permit_exemption"],
+    "notes": "Tests basic dimensional lookups (rear + side setback) plus permit exemption. Single-parameter complexity. Low construction cost."
+  },
+  {
+    "id": "TC-002",
+    "title": "Homeowner secondary suite legality in ER-2",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Young couple exploring income suite to offset mortgage"
+    },
+    "address": "567 Windsor Street, Halifax, NS",
+    "zone": "ER-2",
+    "complexity": "simple",
+    "liability": "low",
+    "tags": ["renovation", "residential", "secondary_suite", "permitted_use", "accessory_dwelling"],
+    "bylaw_features": ["use_permission", "combination_of_uses"],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "We’re on Windsor Street in Halifax in the ER-2 zone. We’re thinking of converting our basement into a secondary suite to rent out. Is a secondary suite a permitted use in ER-2?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Perfect. Can we also run a small home-based tutoring business from the house at the same time as having the secondary suite, or does that create any issue under the bylaw?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "One more thing — would adding the suite change our setback requirements at all, or do the existing ER-2 setback standards still apply?"
+      }
+    ],
+    "expected_bylaw_references": ["Table 1A", "Section 49", "Table 3"],
+    "expected_answer_keywords": ["secondary suite", "permitted", "ER-2", "home occupation", "combination of uses", "6.0 m", "1.5 m", "7.5 m"],
+    "expected_topics": ["use_permission", "combination_of_uses", "setbacks"],
+    "notes": "Tests use permission lookup, combination-of-uses provision, and baseline setback standards. Three turns escalating breadth."
+  },
+  {
+    "id": "TC-003",
+    "title": "Homeowner converting single-unit to multi-unit in ER-3",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Property owner looking to convert a larger home into a duplex or triplex"
+    },
+    "address": "89 Jubilee Road, Halifax, NS",
+    "zone": "ER-3",
+    "complexity": "medium",
+    "liability": "medium",
+    "tags": ["renovation", "residential", "multi_unit", "permitted_use", "lot_coverage", "conversion"],
+    "bylaw_features": ["use_permission", "setbacks", "lot_coverage", "height"],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I have a large older home on Jubilee Road in the ER-3 zone in Halifax. I’m thinking of converting it into a three-unit building — two upper units and a ground floor unit. Is a multi-unit dwelling permitted in ER-3?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Good to know. My lot is 650 square metres and the existing building footprint is about 200 square metres. Am I within the lot coverage limit for ER-3, and what are the setback requirements I’ll need to work within?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "The building is currently about 9 metres tall. If I add a small dormer to create one of the upper units, is there a height limit I need to stay under in ER-3?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "Would I need a development permit for this kind of interior conversion and dormer addition?"
+      }
+    ],
+    "expected_bylaw_references": ["Table 1A", "Table 3", "Table 5", "Section 9"],
+    "expected_answer_keywords": ["multi-unit dwelling", "permitted", "ER-3", "45%", "3.0 m", "1.2 m", "6.0 m", "11.0 m", "development permit"],
+    "expected_topics": ["use_permission", "setbacks", "lot_coverage", "height", "development_permit"],
+    "notes": "Medium complexity: four distinct parameters across four turns. Construction risk is moderate (structural conversion + dormer)."
+  },
+  {
+    "id": "TC-004",
+    "title": "Architect scoping a mid-rise residential building in HR-1",
+    "persona": {
+      "type": "architectural_consultant",
+      "subtype": "architect",
+      "description": "Registered architect in schematic design for a mid-rise residential client"
+    },
+    "address": "200 Bayers Road, Halifax, NS",
+    "zone": "HR-1",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": ["new_construction", "residential", "multi_unit", "height", "setbacks", "parking", "lot_coverage"],
+    "bylaw_features": ["height", "setbacks", "lot_coverage", "parking", "use_permission"],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I’m an architect working on a new mid-rise residential building at 200 Bayers Road in Halifax — the site is zoned HR-1. We’re targeting a multi-unit dwelling. First pass: what are the permitted uses and key dimensional standards — height, setbacks, and lot coverage — for HR-1?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Our site is 1,800 m². We’re planning a building footprint of roughly 900 m². Is that within the lot coverage limit? And if we push to 18 metres in height, are we within the HR-1 maximum?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "We’re designing for 40 dwelling units. What’s the minimum off-street parking we’d need to provide? Is there also a bicycle parking requirement?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "The client wants to know if a daycare could occupy the ground floor as an amenity use. Is daycare a permitted use in HR-1?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "To summarize what I’ve heard: we’re looking at 20 m max height, 60% lot coverage, 3 m setbacks on all sides, 40 parking spaces, 10 bicycle spaces, and daycare is permitted. Is that an accurate read of what the bylaw allows for HR-1?"
+      }
+    ],
+    "expected_bylaw_references": ["Table 1A", "Table 3", "Table 5", "Section 120"],
+    "expected_answer_keywords": ["multi-unit dwelling", "permitted", "HR-1", "20.0 m", "3.0 m", "60%", "1 parking space", "dwelling unit", "bicycle", "1 space per 4", "daycare", "permitted"],
+    "expected_topics": ["use_permission", "height", "setbacks", "lot_coverage", "parking"],
+    "notes": "High complexity: five parameters, five turns, synthesis confirmation in final turn. High construction cost and public occupancy (daycare)."
+  },
+  {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "persona": {
+      "type": "real_estate_developer",
+      "subtype": null,
+      "description": "Mid-size developer running a quick feasibility pass before purchasing a site"
+    },
+    "address": "100 Robie Street, Halifax, NS",
+    "zone": "HR-2",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": ["new_construction", "residential", "multi_unit", "high_rise", "feasibility", "redevelopment"],
+    "bylaw_features": ["height", "FAR", "setbacks", "lot_coverage", "parking", "permitted_use"],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "We’re looking at a site on Robie Street zoned HR-2 for a high-rise residential development — likely 60–80 units. What are the base zoning standards: height, lot coverage, setbacks?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Is there a floor area ratio (FAR) limit in HR-2, or does the bylaw rely only on height and lot coverage to control density?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "The site is 2,200 m². At 65% lot coverage and 25 metres of height, roughly how many floors could we fit? And is multi-unit dwelling confirmed as a permitted use in HR-2?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "For 70 units, what’s the parking obligation? Does the no-parking exemption that applies in some downtown zones apply here in HR-2?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "Can we add a home occupation component — say a property management office — for the building manager in one of the ground-floor units? Is home occupation permitted in HR-2?"
+      },
+      {
+        "turn": 6,
+        "role": "user",
+        "message": "Pull it all together for me: for an HR-2 site at 2,200 m², what is the realistic maximum buildable program in terms of units, height, and GFA, and what are the major bylaw constraints to flag for our architect?"
+      }
+    ],
+    "expected_bylaw_references": ["Table 1A", "Table 3", "Table 5", "Section 120(a)", "Section 120(b)"],
+    "expected_answer_keywords": ["HR-2", "25.0 m", "65%", "3.0 m", "multi-unit dwelling", "permitted", "home occupation", "not permitted", "HR-2", "1 parking space", "dwelling unit", "no off-street parking"],
+    "expected_topics": ["height", "lot_coverage", "setbacks", "FAR", "use_permission", "parking"],
+    "notes": "Six-turn developer feasibility session. Tests that agent correctly identifies home occupation is NOT permitted in HR-2 (Table 1A). High liability: 60-80 unit building."
+  },
+  {
+    "id": "TC-006",
+    "title": "Developer mixed-use tower in CEN-1 with height overlay",
+    "persona": {
+      "type": "real_estate_developer",
+      "subtype": null,
+      "description": "Large-scale developer working with a consultant team on a downtown Halifax mixed-use tower"
+    },
+    "address": "1505 Barrington Street, Halifax, NS",
+    "zone": "CEN-1",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": ["new_construction", "mixed_use", "commercial", "residential", "downtown", "redevelopment", "overlay", "high_rise"],
+    "bylaw_features": ["FAR", "height_overlay", "setbacks", "lot_coverage", "parking", "permitted_use", "heritage_overlay"],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "We’re proposing a mixed-use tower at 1505 Barrington Street in downtown Halifax — CEN-1 zone. The program is residential units on the upper floors with retail at grade. Is multi-unit dwelling a permitted use in CEN-1, and is commercial/retail included?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "What are the setback requirements in CEN-1? We’re trying to maximize the building envelope right to the street edge."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "What’s the maximum lot coverage in CEN-1? And is the building height governed by Table 5 or by Schedule 15?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "Is there also a floor area ratio limit that applies in CEN-1, and what schedule governs it?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "Our site is near some older heritage buildings on Barrington Street. Is there a heritage overlay we need to worry about, and how does it interact with our development permit?"
+      },
+      {
+        "turn": 6,
+        "role": "user",
+        "message": "Given that this is CEN-1, do we need to provide off-street parking for the residential units?"
+      }
+    ],
+    "expected_bylaw_references": ["Table 1B", "Table 4", "Table 5", "Section 111", "Section 112", "Section 110", "Section 120(b)", "Schedule 15", "Schedule 17", "Schedule 22"],
+    "expected_answer_keywords": ["multi-unit dwelling", "permitted", "CEN-1", "0.0 m", "front setback", "side setback", "3.0 m", "rear setback", "80%", "Schedule 15", "Schedule 17", "floor area ratio", "heritage conservation", "Heritage Advisory Committee", "no off-street parking"],
+    "expected_topics": ["use_permission", "setbacks", "lot_coverage", "height_overlay", "FAR_overlay", "heritage_overlay", "parking"],
+    "notes": "Six-turn complex downtown scenario. Tests three overlay interactions (height, FAR, heritage) plus base zone standards. Highest liability: 100+ unit high-rise in heritage area."
+  },
+  {
+    "id": "TC-007",
+    "title": "Realtor due diligence on CEN-2 redevelopment potential",
+    "persona": {
+      "type": "realtor",
+      "subtype": null,
+      "description": "Commercial realtor advising a buyer on development potential before making an offer"
+    },
+    "address": "5236 Sackville Street, Halifax, NS",
+    "zone": "CEN-2",
+    "complexity": "medium",
+    "liability": "medium",
+    "tags": ["due_diligence", "residential", "multi_unit", "redevelopment", "feasibility"],
+    "bylaw_features": ["permitted_use", "height", "FAR", "setbacks", "lot_coverage"],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I’m a realtor advising a client who’s considering buying a property on Sackville Street in the CEN-2 zone. Before they make an offer, I want to understand the redevelopment potential. Is multi-unit residential a permitted use in CEN-2?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "What are the setbacks and lot coverage limits in CEN-2? The site is about 900 m²."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "Is building height governed by a fixed limit in CEN-2, or is it controlled by a schedule like Schedule 15? My client needs to know if there’s a hard number or if it depends on a precinct map."
+      }
+    ],
+    "expected_bylaw_references": ["Table 1B", "Table 4", "Table 5", "Section 111", "Schedule 15"],
+    "expected_answer_keywords": ["multi-unit dwelling", "permitted", "CEN-2", "0.0 m", "3.0 m", "80%", "Schedule 15", "height precinct"],
+    "expected_topics": ["use_permission", "setbacks", "lot_coverage", "height_overlay"],
+    "notes": "Three-turn realtor due diligence. Tests height overlay awareness (Schedule 15 reference vs fixed number). Medium liability: advisory role, pre-offer stage."
+  },
+  {
+    "id": "TC-008",
+    "title": "City planner reviewing heritage demolition application in DH",
+    "persona": {
+      "type": "city_agent",
+      "subtype": "planner",
+      "description": "Municipal planner processing a development application in the heritage downtown"
+    },
+    "address": "1801 Hollis Street, Halifax, NS",
+    "zone": "DH",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": ["heritage", "demolition", "downtown", "overlay", "development_permit", "new_construction"],
+    "bylaw_features": ["heritage_overlay", "height_overlay", "setbacks", "lot_coverage", "development_permit", "parking"],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I’m a city planner reviewing an application for 1801 Hollis Street in the DH zone. The applicant wants to demolish an existing building and build a new multi-unit residential tower. What are the use permissions and base dimensional standards in DH?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "The existing building is on the heritage register. The applicant is proposing demolition — what does the Heritage Conservation District Overlay require before a demolition permit can be issued for a registered heritage property?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "Assuming demolition is approved, the new building would be 90 metres tall. Is height in the DH zone governed by Table 5 or by Schedule 15? And is 90 m a number I can evaluate against the bylaw itself, or does it depend on the height precinct map?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "The new building would have 120 residential units. Is off-street parking required in the DH zone, or does the no-parking exemption apply?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "What would the floor area ratio limit be for this DH development, and what document or schedule controls it?"
+      }
+    ],
+    "expected_bylaw_references": ["Table 1B", "Table 4", "Table 5", "Section 110", "Section 111", "Section 112", "Section 120(b)", "Schedule 15", "Schedule 17", "Schedule 22"],
+    "expected_answer_keywords": ["multi-unit dwelling", "permitted", "DH", "0.0 m", "3.0 m", "90%", "heritage conservation", "Heritage Advisory Committee", "demolition", "Schedule 15", "prevails", "no off-street parking", "Schedule 17", "floor area ratio"],
+    "expected_topics": ["use_permission", "setbacks", "lot_coverage", "heritage_overlay", "height_overlay", "parking", "FAR_overlay"],
+    "notes": "Complex five-turn city planner workflow. Tests heritage demolition gate (HAC approval required), overlay hierarchy, and downtown parking exemption. High public liability: heritage demolition in downtown core."
+  },
+  {
+    "id": "TC-009",
+    "title": "Real estate lawyer vetting a DD site for a mixed-use purchase",
+    "persona": {
+      "type": "real_estate_law_professional",
+      "subtype": null,
+      "description": "Real estate lawyer conducting zoning due diligence for a client acquiring a downtown Dartmouth commercial property"
+    },
+    "address": "100 Wyse Road, Dartmouth, NS",
+    "zone": "DD",
+    "complexity": "medium",
+    "liability": "medium",
+    "tags": ["due_diligence", "commercial", "multi_unit", "downtown_dartmouth", "parking", "uses"],
+    "bylaw_features": ["permitted_use", "parking", "setbacks", "lot_coverage", "FAR"],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I’m a real estate lawyer conducting zoning due diligence on a property at 100 Wyse Road in Dartmouth — it’s in the DD zone. My client is acquiring it to redevelop as a mixed-use building with ground-floor retail and apartments above. Confirm: is multi-unit residential permitted in the DD zone?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "The vendor is claiming there’s no minimum parking requirement for the site. Is that correct for a DD zone residential development, and if so, what’s the provision that supports that?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "What are the setback and lot coverage standards in DD? I want to know what the development envelope looks like."
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "My client’s proposed use is converting part of the ground floor to a daycare for the neighbourhood. Is daycare a permitted use in the DD zone?"
+      }
+    ],
+    "expected_bylaw_references": ["Table 1B", "Table 4", "Table 5", "Section 120(b)"],
+    "expected_answer_keywords": ["multi-unit dwelling", "permitted", "DD", "no off-street parking", "CEN-1", "CEN-2", "DH", "DD", "120", "0.0 m", "3.0 m", "80%", "daycare", "permitted"],
+    "expected_topics": ["use_permission", "parking", "setbacks", "lot_coverage"],
+    "notes": "Four-turn legal due diligence. Tests no-parking exemption scope (Section 120(b) lists DD explicitly). Daycare permitted in DD via Table 1B. Medium liability: advisory professional role."
+  },
+  {
+    "id": "TC-010",
+    "title": "Planner scoping a corridor mixed-use development in COR",
+    "persona": {
+      "type": "architectural_consultant",
+      "subtype": "planner",
+      "description": "Urban planner consulting on a medium-density mixed-use development along a corridor"
+    },
+    "address": "1959 Gottingen Street, Halifax, NS",
+    "zone": "COR",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": ["new_construction", "mixed_use", "corridor", "redevelopment", "residential", "commercial", "setbacks", "height"],
+    "bylaw_features": ["setbacks", "FAR_overlay", "height_overlay", "parking", "permitted_use", "lot_coverage"],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I’m an urban planner working on a mixed-use development on Gottingen Street in the COR zone. The client wants a building with ground-floor commercial and multi-unit residential above. What are the use permissions in COR — is multi-unit dwelling permitted, and what about commercial/retail uses?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "What are the setback requirements in COR? I’m particularly interested in whether we can build right to the front street edge or need to step back."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "Is the height in COR governed by a fixed table limit or by Schedule 15? And does the same Schedule 17 FAR overlay apply in COR as it does in the other centre zones?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "What is the maximum lot coverage in COR, and how does that compare to the adjacent CEN-1 zone?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "For a 30-unit residential component of the building, what’s the parking requirement? Does COR benefit from the no-parking exemption, or is a parking structure required?"
+      }
+    ],
+    "expected_bylaw_references": ["Table 1B", "Table 4", "Table 5", "Section 111", "Section 112", "Section 120(a)", "Schedule 15", "Schedule 17"],
+    "expected_answer_keywords": ["multi-unit dwelling", "permitted", "COR", "3.0 m", "front setback", "0.0 m", "side setback", "Schedule 15", "Schedule 17", "floor area ratio", "70%", "CEN-1", "80%", "1 parking space", "dwelling unit"],
+    "expected_topics": ["use_permission", "setbacks", "height_overlay", "FAR_overlay", "lot_coverage", "parking"],
+    "notes": "Five-turn planner scenario. Tests COR front setback (3 m, unlike CEN-1/CEN-2 at 0 m) and that COR does NOT get the no-parking exemption (Section 120(b) lists only CEN-1, CEN-2, DH, DD). High liability: full mixed-use building program."
+  }
+]
