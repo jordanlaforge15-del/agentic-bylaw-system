@@ -1,9 +1,12 @@
-"""FastAPI router for general (non-message-specific) feedback (ABS-129).
+"""FastAPI router for general (non-message-specific) feedback (ABS-129, ABS-215).
 
 Single endpoint, auth-required:
 
-* ``POST /v1/feedback`` — submit a general feedback entry (UX issue,
-  feature request, general satisfaction, or other).
+* ``POST /v1/feedback`` — submit a general feedback entry. The category is
+  optional: the categorized sidebar widget (ABS-129) supplies one of the real
+  categories, while the global free-text widget (ABS-215) submits with no
+  category at all. A missing category is stored as ``"uncategorized"`` so the
+  downstream LLM categorization pipeline knows the entry still needs a label.
 """
 from __future__ import annotations
 
@@ -22,12 +25,28 @@ logger = logging.getLogger(__name__)
 
 UserResolver = Callable[[Any, Session], User]
 
-VALID_CATEGORIES = {"ux_issue", "feature_request", "general_satisfaction", "other"}
+# Placeholder stored when the submitter does not pick a category (ABS-215).
+# The downstream LLM categorization pipeline overwrites it with a real label.
+UNCATEGORIZED = "uncategorized"
+
+VALID_CATEGORIES = {
+    "ux_issue",
+    "feature_request",
+    "general_satisfaction",
+    "other",
+    UNCATEGORIZED,
+}
 
 
 class GeneralFeedbackRequest(BaseModel):
-    category: str = Field(
-        description="'ux_issue', 'feature_request', 'general_satisfaction', or 'other'.",
+    category: str | None = Field(
+        default=None,
+        description=(
+            "Optional. One of 'ux_issue', 'feature_request', "
+            "'general_satisfaction', or 'other'. Omit it for unsolicited "
+            "free-text feedback (ABS-215); the entry is then stored as "
+            "'uncategorized' for downstream LLM categorization."
+        ),
     )
     message: str = Field(
         description="Free-text feedback message.",
@@ -75,7 +94,11 @@ def build_general_feedback_router(
         body: GeneralFeedbackRequest,
         auth_session: Any = Depends(user_dependency),
     ) -> GeneralFeedbackResponse:
-        if body.category not in VALID_CATEGORIES:
+        # ABS-215: a missing category means unsolicited free-text feedback.
+        # Store the placeholder rather than rejecting — the schema stays
+        # NOT NULL and the LLM pipeline has a clear "needs a label" marker.
+        category = body.category or UNCATEGORIZED
+        if category not in VALID_CATEGORIES:
             raise HTTPException(
                 status_code=422,
                 detail=f"category must be one of {sorted(VALID_CATEGORIES)!r}",
@@ -86,7 +109,7 @@ def build_general_feedback_router(
 
             feedback = GeneralFeedback(
                 user_id=user.id,
-                category=body.category,
+                category=category,
                 message=body.message,
             )
             db.add(feedback)
