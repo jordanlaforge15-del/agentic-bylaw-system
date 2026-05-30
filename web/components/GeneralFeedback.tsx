@@ -135,7 +135,7 @@ export function GeneralFeedback() {
         <button
           type="button"
           data-testid="app-feedback-open"
-          aria-label="Send feedback"
+          aria-label="Give feedback"
           onClick={() => {
             setOpen(true);
             setShowThanks(false);
