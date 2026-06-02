@@ -672,3 +672,23 @@ def test_definition_section_preserves_container_for_list_items():
     for li in list_items:
         assert li.parent_index == section_idx, f"definition list item should have section as parent"
         assert li.parse_status == ParseStatus.PARSED
+
+
+def test_roman_numeral_parts_i_through_xx_all_captured():
+    # ABS-264: parser previously matched only the first letter of a Roman-numeral
+    # Part heading, so "Part IV" became "Part I" and "Part XVII" became "Part I".
+    # After the fix, every Part I–XX must appear as a distinct citation_path.
+    roman_parts = [
+        "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
+        "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX",
+    ]
+    blocks = []
+    for idx, numeral in enumerate(roman_parts):
+        blocks.append(block(f"Part {numeral} Title {numeral}", idx * 2, BlockType.HEADING))
+        blocks.append(block(f"Body text for Part {numeral}.", idx * 2 + 1))
+
+    fragments = reconstruct_hierarchy(blocks)
+    part_labels = {f.citation_label for f in fragments if f.fragment_type == FragmentType.PART}
+    expected = {f"Part {r}" for r in roman_parts}
+    missing = expected - part_labels
+    assert not missing, f"These Part labels were not captured: {sorted(missing)}"

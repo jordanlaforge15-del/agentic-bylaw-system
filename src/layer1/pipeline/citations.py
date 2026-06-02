@@ -7,7 +7,7 @@ from layer1.models.enums import FragmentType
 from layer1.profiles import ParsingProfile, get_parsing_profile
 
 
-PART_RE = re.compile(r"^\s*part\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
+PART_RE = re.compile(r"^\s*part\s+([IVXLCDM]+|[A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 SCHEDULE_RE = re.compile(r"^\s*schedule\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 APPENDIX_RE = re.compile(r"^\s*appendix\s+([A-Z]|\d+)\b(?:\s*[-:]\s*)?(.*)$", re.IGNORECASE)
 COMPOUND_SECTION_RE = re.compile(
