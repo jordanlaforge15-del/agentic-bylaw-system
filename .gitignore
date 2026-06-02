@@ -58,3 +58,4 @@ data/submissions/
 # tracking it would dirty the worktree every `make e2e` and trip the
 # Night Manager merge precondition (see ABS-157).
 web/e2e/fixtures/submission-demo.ifc
+evals/runs/
