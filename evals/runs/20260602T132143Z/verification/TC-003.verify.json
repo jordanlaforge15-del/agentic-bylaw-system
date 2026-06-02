@@ -1,0 +1,472 @@
+{
+  "id": "TC-003",
+  "title": "Homeowner converting single-unit to multi-unit in ER-3",
+  "zone": "ER-3",
+  "complexity": "medium",
+  "liability": "medium",
+  "model": "claude-opus-4-5-20251101",
+  "grade": {
+    "verdict": "FAIL",
+    "reasons": [
+      "keyword rate 0.25"
+    ],
+    "citation_total": 21,
+    "citation_found": 21,
+    "citation_hallucinated": 0,
+    "keyword_expected": 36,
+    "keyword_hit": 9,
+    "keyword_rate": 0.25,
+    "hedging_failed": false
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "wall_time_s": 58.18,
+      "stop_reason": "end_turn",
+      "citation_total": 4,
+      "citation_found": 4,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "table",
+          "value": "1A",
+          "raw": "Table 1A",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "57",
+          "raw": "Section 57",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 57",
+              "page": 68,
+              "text_excerpt": "57 (1) Except as provided in Subsections 57(2), 57(3), and 57(4), on a lot zoned ER-3 or ER-2, the following are the maximum number of bedrooms permitted by land use:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "366.5",
+          "raw": "Section 366.5",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 366 > 366.5",
+              "page": 269,
+              "text_excerpt": "366.5 (1) A streetwall of a multi-unit dwelling use must consist of clear glass glazing, which may be located in a door,"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "32",
+          "raw": "Section 32",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 32",
+              "page": 39,
+              "text_excerpt": "32 Subject to Sections 33, 37, 38, and 39, and except for the CDD-2 and CDD-1 zones, and transportation reserves, which are addressed in Sections 34, 35, and 36, the use of land is regulated as follow"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 9,
+        "hit": 3,
+        "rate": 0.333,
+        "misses": [
+          "45%",
+          "3.0 m",
+          "1.2 m",
+          "6.0 m",
+          "11.0 m",
+          "development permit"
+        ]
+      },
+      "hedging": {
+        "hedged": false,
+        "markers": []
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 2,
+      "wall_time_s": 46.15,
+      "stop_reason": "end_turn",
+      "citation_total": 6,
+      "citation_found": 6,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "18",
+          "raw": "Schedule 18",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "231",
+          "raw": "Section 231",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 231",
+              "page": 191,
+              "text_excerpt": "231 (1) Subject to Subsections 231(2) and 231(3), and Section 234, the maximum required lot coverage shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "228",
+          "raw": "Section 228",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 228",
+              "page": 189,
+              "text_excerpt": "228 (1) Subject to Subsection 228(2), any portion of a main building, either above or below grade, shall have a minimum required front or flanking setback as specified on Schedule 18."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "229",
+          "raw": "Section 229",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 229",
+              "page": 189,
+              "text_excerpt": "229 (1) Subject to Subsection 229(2) and Section 234, the minimum required side setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "230",
+          "raw": "Section 230",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 230",
+              "page": 190,
+              "text_excerpt": "230 The minimum required rear setback shall be 6.0 metres."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "63",
+          "raw": "Section 63",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 63",
+              "page": 70,
+              "text_excerpt": "63 A main building within the ER-3 or ER-2 zone may be internally converted to a three-unit dwelling use, four-unit dwelling use, or multi-"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 9,
+        "hit": 3,
+        "rate": 0.333,
+        "misses": [
+          "multi-unit dwelling",
+          "45%",
+          "3.0 m",
+          "1.2 m",
+          "11.0 m",
+          "development permit"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "verify"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 3,
+      "wall_time_s": 60.15,
+      "stop_reason": "end_turn",
+      "citation_total": 4,
+      "citation_found": 4,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "15",
+          "raw": "Schedule 15",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "63",
+          "raw": "Section 63",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 63",
+              "page": 70,
+              "text_excerpt": "63 A main building within the ER-3 or ER-2 zone may be internally converted to a three-unit dwelling use, four-unit dwelling use, or multi-"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "227",
+          "raw": "Section 227",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 227",
+              "page": 189,
+              "text_excerpt": "227 Subject to Section 103 and Part X, any main building shall not exceed the maximum required building height specified on Schedule 15."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "344",
+          "raw": "Section 344",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 344",
+              "page": 245,
+              "text_excerpt": "344 (1) Subject to Subsections 344(2) and 344(3), and Section 345, any main building shall not exceed the maximum required building height specified on Schedule 15."
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 9,
+        "hit": 1,
+        "rate": 0.111,
+        "misses": [
+          "multi-unit dwelling",
+          "permitted",
+          "45%",
+          "3.0 m",
+          "1.2 m",
+          "6.0 m",
+          "11.0 m",
+          "development permit"
+        ]
+      },
+      "hedging": {
+        "hedged": false,
+        "markers": []
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 4,
+      "wall_time_s": 48.47,
+      "stop_reason": "end_turn",
+      "citation_total": 7,
+      "citation_found": 7,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "15",
+          "raw": "Schedule 15",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "6",
+          "raw": "Section 6",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 6",
+              "page": 9,
+              "text_excerpt": "6 Subject to Section 9, no person shall undertake any development without first obtaining a development permit."
+            },
+            {
+              "citation_path": "Appendix 2 > 6",
+              "page": 444,
+              "text_excerpt": "6 The Development Officer may request shadow diagrams, elevations, and views additional to those required under Sections 8 and 9 of this Appendix. Documentation may be required where changes in topogr"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "9",
+          "raw": "Section 9",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 9",
+              "page": 10,
+              "text_excerpt": "9 (1) Subject to Subsections 9(2) and 9(3), the following developments are exempt from the requirement to obtain a development permit:"
+            },
+            {
+              "citation_path": "Appendix 2 > 9",
+              "page": 445,
+              "text_excerpt": "9 Shadow diagrams shall:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "63",
+          "raw": "Section 63",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 63",
+              "page": 70,
+              "text_excerpt": "63 A main building within the ER-3 or ER-2 zone may be internally converted to a three-unit dwelling use, four-unit dwelling use, or multi-"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "435",
+          "raw": "Section 435",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 435",
+              "page": 334,
+              "text_excerpt": "435 (1) Subject to Section 436, for a low-density dwelling use excluding a townhouse dwelling use in the ER-3 zone, a maximum of 30% of the lot may be used for the parking and maneuvering of motor veh"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "366.5",
+          "raw": "Section 366.5",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 366 > 366.5",
+              "page": 269,
+              "text_excerpt": "366.5 (1) A streetwall of a multi-unit dwelling use must consist of clear glass glazing, which may be located in a door,"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "10",
+          "raw": "Section 10",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 10",
+              "page": 12,
+              "text_excerpt": "10 A development permit application shall include documents and plans, drawn to scale, that include the following, where applicable:"
+            },
+            {
+              "citation_path": "Appendix 2 > 10",
+              "page": 447,
+              "text_excerpt": "10 The written analysis shall:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 9,
+        "hit": 2,
+        "rate": 0.222,
+        "misses": [
+          "multi-unit dwelling",
+          "permitted",
+          "45%",
+          "3.0 m",
+          "1.2 m",
+          "6.0 m",
+          "11.0 m"
+        ]
+      },
+      "hedging": {
+        "hedged": false,
+        "markers": []
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    }
+  ]
+}

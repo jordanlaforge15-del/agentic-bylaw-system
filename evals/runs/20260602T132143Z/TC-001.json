@@ -1,0 +1,107 @@
+{
+  "id": "TC-001",
+  "title": "Homeowner rear deck addition in ER-1",
+  "zone": "ER-1",
+  "persona": {
+    "type": "homeowner",
+    "subtype": null,
+    "description": "Retired homeowner planning a modest backyard deck"
+  },
+  "complexity": "simple",
+  "liability": "low",
+  "address": "1234 Oxford Street, Halifax, NS",
+  "session_id": "ff82aad7-91c1-48ae-be58-4dac3da1b1bc",
+  "model": "claude-opus-4-5-20251101",
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "Hi, I own a home at 1234 Oxford Street in Halifax \u2014 it\u2019s in the ER-1 zone. I want to build an attached wooden deck off the back of my house. My plan puts the deck edge about 4 metres from my rear property line. Do I need a development permit for this, and is 4 metres enough clearance from the rear lot line?",
+      "assistant_text": "I now have what I need. Let me provide you with a clear answer:\n\n---\n\n## Important: Zone Clarification\n\nFirst, a heads-up: **the HRM zoning layer shows 1234 Oxford Street as being in the HR-1 zone (Higher-Order Residential 1), not ER-1.** The geocode confidence is 0.85, which is borderline \u2014 I'd recommend confirming your zone on [HRM's Property Information Map](https://www.halifax.ca/home/maps-apps) before finalizing plans. My answer below assumes the spatial data is correct (HR-1).\n\n---\n\n## Development Permit Requirement\n\n**Your deck likely requires a development permit.** Here's why:\n\nThe bylaw exempts only:\n> *\"uncovered structures less than 0.6 metre in height, such as balconies and patios\"* \u2014 Section 9(1)(c)\n\nA typical attached wooden deck is usually **higher than 0.6 m** above grade (especially if it's at the level of your main floor). If your deck surface is more than 0.6 m above grade, you'll need a development permit.\n\nIf your deck is truly ground-level (under 0.6 m high, excluding footings/piles), it would be exempt.\n\n---\n\n## Rear Yard Setback: Is 4 Metres Enough?\n\n**It depends on what zone your rear neighbour is in.**\n\nFor the **HR-1 zone**, Section 199(1) sets the minimum rear setback for a main building at:\n\n| Condition | Required Setback |\n|-----------|------------------|\n| Rear lot abuts an **ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK** zone | **6.0 metres** |\n| All other cases | **3.0 metres** |\n\n**However**, an attached deck is typically considered part of the main building for setback purposes \u2014 it's not a detached accessory structure.\n\n### Encroachment allowance for decks\n\nSection 340(a) allows:\n> *\"patios that are less than 0.6 metre in height and access ramps are permitted in any required setback\"*\n\nSo:\n- **Deck \u2264 0.6 m high**: Can encroach into the setback \u2014 your 4 m clearance is fine regardless of the neighbour's zone.\n- **Deck > 0.6 m high**: Must respect the full rear setback:\n  - If your rear neighbour is in an ER, CH, PCF, or RPK zone \u2192 **6.0 m required** \u2192 your 4 m is **not compliant**.\n  - If your rear neighbour is in HR, COR, CEN, DD, or similar \u2192 **3.0 m required** \u2192 your 4 m is **compliant**.\n\n---\n\n## What You Should Do\n\n1. **Confirm your zone** on HRM's mapping tools (the spatial data suggests HR-1, not ER-1).\n2. **Check your rear neighbour's zone** \u2014 this determines whether you need 3 m or 6 m.\n3. **Measure your deck height** above grade:\n   - If < 0.6 m \u2192 no permit needed, no setback restriction.\n   - If \u2265 0.6 m \u2192 permit required, and setback must be met.\n4. If your deck is > 0.6 m and your neighbour is in an ER/CH/PCF/RPK zone, you'd need to either **pull the deck back to 6 m** or **apply for a variance**.\n\n---\n\n**Citations:**\n- Section 9(1)(c) \u2014 development permit exemption for uncovered structures < 0.6 m\n- Section 199(1)(a)\u2013(b) \u2014 HR-1/HR-2 rear setback requirements\n- Section 340(a) \u2014 encroachment allowance for patios < 0.6 m",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 5101,
+        "output_tokens": 937,
+        "cache_creation_input_tokens": 1762,
+        "cache_read_input_tokens": 11714
+      },
+      "wall_time_s": 43.79,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Great, thanks. What about the side yards \u2014 is there a side setback I need to respect for the deck as well?",
+      "assistant_text": "Now I have the full picture for HR-1 side setbacks. Let me give you a clear answer:\n\n---\n\n## Side Setback Requirements for HR-1 Zone\n\nYes, there are side setback requirements. Under **Section 198(1)** (Chapter 7: HR-2 and HR-1 Zones), the minimum side setback for your main building depends on your **side neighbours' zones** and your **building type**:\n\n| Condition | Required Side Setback |\n|-----------|----------------------|\n| Side lot abuts an **ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK** zone | **6.0 metres** |\n| Side lot abuts a **DD, DH, CEN-2, CEN-1, or COR** zone | **0.0 metres** |\n| **Townhouse** (along common wall between units) | **0.0 metres** |\n| **Townhouse** (elsewhere) | **3.0 metres** |\n| **All other cases** (general \"elsewhere\" provision) | **2.5 metres** |\n\n---\n\n## How This Applies to Your Deck\n\nThe same logic from the rear yard applies:\n\n1. **If your deck is \u2264 0.6 m above grade**: Per Section 340(a), patios less than 0.6 m in height are permitted in any required setback \u2014 so no side setback restriction applies.\n\n2. **If your deck is > 0.6 m above grade**: The deck is treated as part of the main building and must respect the side setback:\n   - If your side neighbour is in an **ER, CH, PCF, or RPK** zone \u2192 **6.0 m** from that side lot line\n   - If your side neighbour is in an **HR, COR, CEN, DD, or DH** zone \u2192 **0.0\u20132.5 m** depending on specific conditions\n\n---\n\n## Practical Bottom Line\n\nFor a typical residential lot on Oxford Street, your side neighbours are likely also in HR-1 or a similar residential zone. If they're in HR-1 (not ER/CH), the default side setback is **2.5 metres**.\n\n**Your deck at 4 m from the rear line** \u2014 if it also maintains at least 2.5 m from each side lot line (or 6 m if a side neighbour is ER/CH), you're compliant on sides, *assuming the deck is over 0.6 m high*. If it's under 0.6 m, you can go right to the side lot line.\n\n---\n\n**Citations:**\n- Section 198(1)(a)\u2013(f) \u2014 HR-1/HR-2 side setback requirements\n- Section 340(a) \u2014 encroachment allowance for patios < 0.6 m",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 3810,
+        "output_tokens": 676,
+        "cache_creation_input_tokens": 212,
+        "cache_read_input_tokens": 30858
+      },
+      "wall_time_s": 38.97,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    }
+  ],
+  "spec": {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Retired homeowner planning a modest backyard deck"
+    },
+    "address": "1234 Oxford Street, Halifax, NS",
+    "zone": "ER-1",
+    "complexity": "simple",
+    "liability": "low",
+    "tags": [
+      "renovation",
+      "residential",
+      "setbacks",
+      "accessory_structure",
+      "development_permit"
+    ],
+    "bylaw_features": [
+      "rear_setback",
+      "development_permit_exemption"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "Hi, I own a home at 1234 Oxford Street in Halifax \u2014 it\u2019s in the ER-1 zone. I want to build an attached wooden deck off the back of my house. My plan puts the deck edge about 4 metres from my rear property line. Do I need a development permit for this, and is 4 metres enough clearance from the rear lot line?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Great, thanks. What about the side yards \u2014 is there a side setback I need to respect for the deck as well?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 3",
+      "Section 9(a)",
+      "Section 9(d)"
+    ],
+    "expected_answer_keywords": [
+      "7.5 m",
+      "rear setback",
+      "ER-1",
+      "1.2 m",
+      "side setback",
+      "development permit"
+    ],
+    "expected_topics": [
+      "rear_setback",
+      "side_setback",
+      "development_permit_exemption"
+    ],
+    "notes": "Tests basic dimensional lookups (rear + side setback) plus permit exemption. Single-parameter complexity. Low construction cost."
+  },
+  "case_wall_time_s": 82.77
+}
