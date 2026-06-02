@@ -28,7 +28,7 @@
       "hierarchy": [
         {
           "level": "part",
-          "pattern": "^\\s*part\\s+([A-Z]|\\d+)\\b",
+          "pattern": "^\\s*part\\s+([IVXLCDM]+|[A-Z]|\\d+)\\b",
           "label_format": "Part {n}"
         },
         {

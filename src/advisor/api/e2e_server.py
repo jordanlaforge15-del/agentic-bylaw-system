@@ -858,6 +858,25 @@ def _mount_test_router(app: FastAPI) -> None:
                 report.comparison = compare_coverage_reports(old_report, report)
             return report.model_dump(mode="json")
 
+    class _DeleteDocumentsBody(BaseModel):
+        bylaw_name: str = Field(min_length=1, max_length=512)
+
+    @app.post("/v1/_test/delete-documents")
+    async def delete_documents(body: _DeleteDocumentsBody) -> dict[str, object]:
+        """Delete all Document rows with the given bylaw_name.
+
+        Used by e2e specs that ingest a synthetic document during the test
+        and need to remove it afterwards so it does not pollute the
+        lookup_citation scope for concurrently-running specs.
+        """
+        with session_scope() as db:
+            deleted = (
+                db.query(Document)
+                .filter(Document.bylaw_name == body.bylaw_name)
+                .delete(synchronize_session=False)
+            )
+            return {"deleted_count": deleted}
+
 
 class _SeedSessionBody(BaseModel):
     """Body for ``POST /v1/_test/seed-session``.

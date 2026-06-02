@@ -99,3 +99,36 @@ def test_subsection_label_simple_numeric_paren():
     assert match is not None
     assert match.label == "5(1)(a)"
     assert match.fragment_type == FragmentType.CLAUSE
+
+
+def test_parse_roman_numeral_part_labels():
+    # ABS-264: [A-Z] only matched a single letter, so "Part IV" was captured as
+    # "Part I" with the remaining characters absorbed into the title. The fix
+    # uses [IVXLCDM]+ to greedily match multi-character Roman numerals.
+    cases = [
+        ("Part I General Provisions", "Part I"),
+        ("Part II Permitted Uses", "Part II"),
+        ("Part III Zones", "Part III"),
+        ("Part IV: Lot Requirements", "Part IV"),
+        ("Part V Parking", "Part V"),
+        ("Part VI Signs", "Part VI"),
+        ("Part VII Landscaping", "Part VII"),
+        ("Part VIII Lighting", "Part VIII"),
+        ("Part IX Noise", "Part IX"),
+        ("Part X Definitions", "Part X"),
+        ("Part XI Enforcement", "Part XI"),
+        ("Part XII Amendments", "Part XII"),
+        ("Part XIII Variances", "Part XIII"),
+        ("Part XIV Appeals", "Part XIV"),
+        ("Part XV Penalties", "Part XV"),
+        ("Part XVI Repeal", "Part XVI"),
+        ("Part XVII: Definitions", "Part XVII"),
+        ("Part XVIII Special Provisions", "Part XVIII"),
+        ("Part XIX Transitional", "Part XIX"),
+        ("Part XX Coming into Force", "Part XX"),
+    ]
+    for text, expected_label in cases:
+        m = parse_citation_label(text)
+        assert m is not None, f"Expected match for {text!r}"
+        assert m.label == expected_label, f"Got {m.label!r}, expected {expected_label!r} for {text!r}"
+        assert m.fragment_type == FragmentType.PART, f"Expected PART for {text!r}, got {m.fragment_type}"
