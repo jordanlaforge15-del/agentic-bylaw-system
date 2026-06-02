@@ -35,6 +35,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from advisor.chat.hedging import apply_hedge
 from advisor.chat.history_compaction import (
     compact_history_for_submission,
     resolve_keep_recent,
@@ -211,6 +212,27 @@ class ChatSession:
             handlers=self.tool_handlers,
             token_budget=self.token_budget,
         )
+
+        # ABS-263: deterministic safety net for high-liability answers. If the
+        # final turn is a feasibility-grade answer (multiple built-form
+        # dimensions stacked together) that forgot to point the user at HRM /
+        # a planner, append a templated qualifier. ``apply_hedge`` is a no-op
+        # for narrow lookups and already-hedged answers, so simple homeowner
+        # questions stay lean. We patch BOTH the response we stream back and
+        # the assistant turn we persist so the user sees, and we store, the
+        # same text. See ``advisor.chat.hedging``.
+        hedged_content = apply_hedge(result.final_response.content)
+        if hedged_content is not result.final_response.content:
+            result.final_response = result.final_response.model_copy(
+                update={"content": hedged_content}
+            )
+            if (
+                result.conversation
+                and result.conversation[-1].role == LLMRole.ASSISTANT
+            ):
+                result.conversation[-1] = result.conversation[-1].model_copy(
+                    update={"content": hedged_content}
+                )
 
         # Splice the loop's newly-appended messages back onto the
         # FULL prefix. ``result.conversation[:prefix_len]`` is the

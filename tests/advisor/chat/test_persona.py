@@ -76,6 +76,19 @@ def test_load_persona_with_custom_path(tmp_path: Path):
     assert text == "You are a senior urban planner who knows things."
 
 
+def test_load_persona_includes_high_liability_hedging_clause():
+    """ABS-263: the shipped persona must instruct the model to hedge on
+    feasibility-grade / high-liability answers (recommend confirming with
+    HRM or a planner, flag 'not legal advice'). We pin the key wording so
+    a careless edit doesn't quietly reintroduce the TC-005 failure."""
+    text = load_persona().lower()
+    assert "not legal advice" in text
+    assert "planner" in text
+    assert "hrm planning" in text
+    # And it must stay proportionate — the carve-out for narrow lookups.
+    assert "proportionate" in text
+
+
 def test_load_persona_no_divider_returns_full_text(tmp_path: Path):
     """If a freshly-written persona forgets the divider, we fall
     back to returning the entire file rather than producing an

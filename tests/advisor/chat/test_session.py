@@ -111,6 +111,48 @@ async def test_send_user_message_blocking_with_tool_use():
 
 
 @pytest.mark.asyncio
+async def test_feasibility_answer_gets_hedge_appended():
+    """ABS-263: a feasibility-grade final answer (multiple built-form
+    dimensions, no hedging) gets the verify-with-a-planner qualifier
+    appended on both the returned response and the persisted turn."""
+    session = _empty_session()
+    feasibility = (
+        "Max height: 25.0 m. Max FAR: 2.0. Lot coverage: 65%. "
+        "Front setback: 3.0 m. Parking: 1 space per dwelling unit."
+    )
+    gateway = MockGateway(scripted=[text_response(feasibility)])
+
+    response = await session.send_user_message_blocking(
+        gateway, "Feasibility for a tower on this HR-2 site?"
+    )
+
+    text = response.content[-1].text
+    assert text.startswith(feasibility)
+    # Hedge markers the ABS-260 verifier scans for.
+    low = text.lower()
+    assert "planner" in low and "hrm" in low and "not legal advice" in low
+    # The persisted assistant turn carries the same hedged text.
+    assert session.messages[-1].role == LLMRole.ASSISTANT
+    assert session.messages[-1].content[-1].text == text
+
+
+@pytest.mark.asyncio
+async def test_simple_lookup_answer_is_not_hedged():
+    """ABS-263 carve-out: a narrow single-dimension lookup stays lean —
+    no hedge dance appended."""
+    session = _empty_session()
+    answer = "The rear-yard setback in ER-1 is 7.5 m (RC-LUB §6.2)."
+    gateway = MockGateway(scripted=[text_response(answer)])
+
+    response = await session.send_user_message_blocking(
+        gateway, "What's the rear-yard setback in ER-1?"
+    )
+
+    assert response.content[-1].text == answer
+    assert "qualified planner" not in response.content[-1].text
+
+
+@pytest.mark.asyncio
 async def test_send_user_message_streams_in_correct_order():
     """The synthetic stream must start with MessageStartEvent and end
     with MessageStopEvent — that's the contract the SSE frontend
