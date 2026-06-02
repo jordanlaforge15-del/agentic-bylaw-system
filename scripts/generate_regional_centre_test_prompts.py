@@ -3,8 +3,11 @@
 Generator for Regional Centre bylaw test case prompts.
 
 This script generates new test cases following the schema defined in
-evals/regional_centre_test_prompts.json. It uses the Claude API to produce
-realistic multi-turn conversation prompts given a spec (zone, persona, complexity, etc.).
+evals/regional_centre_test_prompts.json. It shells out to the `claude` CLI
+(Claude Code's headless mode, `claude -p`) to produce realistic multi-turn
+conversation prompts given a spec (zone, persona, complexity, etc.). This
+bills generation against the operator's Claude Max plan instead of paid
+Anthropic API tokens.
 
 Usage:
   # Generate a single test case interactively
@@ -28,10 +31,10 @@ Usage:
     --zone HR-2 --persona homeowner --complexity simple --liability low \
     --dry-run
 
-Environment variables required:
-  ANTHROPIC_API_KEY — Claude API key for agentic generation mode.
-  If not set, the script falls back to a template-only stub mode that
-  produces a skeleton with placeholder messages.
+Requirements:
+  `claude` CLI must be on PATH (Claude Code's headless mode is invoked via
+  `claude -p`). If the binary is missing, the script falls back to a
+  template-only stub mode that produces a skeleton with placeholder messages.
 
 Output:
   By default, prints the generated JSON test case to stdout.
@@ -41,7 +44,8 @@ Output:
 
 import argparse
 import json
-import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -140,35 +144,79 @@ Example output:
 """
 
 
-def generate_turns_via_api(spec: dict) -> list[dict]:
-    try:
-        import anthropic
-    except ImportError:
-        print("[WARNING] anthropic package not installed. Falling back to stub mode.", file=sys.stderr)
-        return generate_turns_stub(spec)
+def _extract_json_array(text: str) -> list[dict]:
+    """Pull the first JSON array of turn-objects out of a free-form text response.
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("[WARNING] ANTHROPIC_API_KEY not set. Falling back to stub mode.", file=sys.stderr)
-        return generate_turns_stub(spec)
-
-    client = anthropic.Anthropic(api_key=api_key)
-    prompt = build_generation_prompt(spec)
-
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2048,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    content = response.content[0].text.strip()
+    `claude -p` (text mode) usually returns the bare array we asked for, but it can
+    occasionally wrap it in markdown fences or prepend a sentence. Be tolerant of
+    both while still raising loudly if no array is found — silent corruption of the
+    corpus is worse than a hard fail.
+    """
+    content = text.strip()
     # Strip markdown code fences if present
     if content.startswith("```"):
         lines = content.split("\n")
-        content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
+        # Drop first fence line and (if present) trailing fence line
+        if lines and lines[-1].strip() == "```":
+            content = "\n".join(lines[1:-1])
+        else:
+            content = "\n".join(lines[1:])
+        content = content.strip()
+    # If model added a preamble, locate the first '[' and matching final ']'
+    if not content.startswith("["):
+        start = content.find("[")
+        end = content.rfind("]")
+        if start == -1 or end == -1 or end < start:
+            raise ValueError(f"No JSON array found in claude -p output:\n{text}")
+        content = content[start : end + 1]
     return json.loads(content)
+
+
+def generate_turns_via_api(spec: dict) -> list[dict]:
+    """Generate user-turn objects via `claude -p` (Claude Code headless mode).
+
+    Function name is preserved for backward compatibility with callers, but the
+    transport is now the local `claude` CLI billed against the operator's
+    Claude Max plan rather than the paid Anthropic API.
+    """
+    if shutil.which("claude") is None:
+        print(
+            "[WARNING] `claude` CLI not found on PATH. Install Claude Code "
+            "(https://docs.claude.com/claude-code) or fall back to stub mode.",
+            file=sys.stderr,
+        )
+        return generate_turns_stub(spec)
+
+    prompt = build_generation_prompt(spec)
+    # `claude -p` accepts the prompt as a positional arg. We pass the system prompt
+    # via --append-system-prompt so the test-case authoring rules are in force, and
+    # request text output (which still contains the JSON array we asked for in the
+    # prompt itself — keeps parsing identical to the old API path).
+    cmd = [
+        "claude",
+        "-p",
+        prompt,
+        "--append-system-prompt",
+        SYSTEM_PROMPT,
+        "--output-format",
+        "text",
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        print(
+            f"[ERROR] `claude -p` exited with code {result.returncode}.\n"
+            f"stderr: {result.stderr.strip()}",
+            file=sys.stderr,
+        )
+        raise RuntimeError(f"claude -p failed (exit {result.returncode})")
+
+    return _extract_json_array(result.stdout)
 
 
 def generate_turns_stub(spec: dict) -> list[dict]:
