@@ -184,7 +184,16 @@ class OpenAIToolExecutor:
             ).model_dump(mode="json")
         if tool_name == "lookup_citation":
             request = _validated(CitationLookupRequest, args)
-            return service.lookup_citation(request).model_dump(mode="json")
+            response = service.lookup_citation(request)
+            # ABS-261: lookup_citation now returns a
+            # CitationLookupResponse envelope. To preserve the existing
+            # OpenAI-adapter contract for hits (flat RetrievalMatch
+            # shape), unwrap on success. Misses surface the new
+            # match-null + suggestions envelope so the calling LLM can
+            # self-correct instead of retrying random variants.
+            if response.match is not None:
+                return response.match.model_dump(mode="json")
+            return response.model_dump(mode="json")
         if tool_name == "search_bylaw_evidence":
             request = _validated(RetrievalRequest, args)
             return service.search(request).model_dump(mode="json")

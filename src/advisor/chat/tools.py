@@ -33,6 +33,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from advisor.chat.compact import (
+    compact_citation_lookup,
     compact_document_list,
     compact_match,
     compact_outline,
@@ -70,7 +71,11 @@ _DESC_GET_DOCUMENT_OUTLINE = (
 
 _DESC_LOOKUP_CITATION = (
     "Retrieve the authoritative fragment for an exact citation path such as '4.2' or 'Schedule B > 3'. "
-    "Use this when the user or agent already knows the citation."
+    "Use this when the user or agent already knows the citation.\n\n"
+    "Response shape: `{match: <fragment> | null, suggestions: [<path>, ...], instruction: <next-step>}`. "
+    "If `match` is null, DO NOT retry lookup_citation with a guessed variant. Instead: "
+    "(a) if `suggestions` is non-empty, pick the closest candidate verbatim and re-issue lookup_citation with that exact string; "
+    "(b) if `suggestions` is empty, switch to `search_bylaw_evidence` or `get_document_outline` — the path doesn't exist in this document."
 )
 
 # This is the long form copied from ``server.py:search_bylaw_evidence``
@@ -445,8 +450,15 @@ def build_bylaw_tools(
         # as a tool_result error so it can self-correct.
         request = CitationLookupRequest.model_validate(payload)
         with _resolve_cm() as service:
-            match = service.lookup_citation(request)
-            return json.dumps(compact_match(match))
+            response = service.lookup_citation(request)
+            # Before ABS-261 this called compact_match() directly and a
+            # missed path raised ValueError out of the service — the
+            # tool loop then thrashed re-issuing variants until it hit
+            # max_iterations. compact_citation_lookup now produces a
+            # match-or-suggestions envelope with an inline instruction
+            # telling the model exactly what to do next, eliminating
+            # the destructive retry pattern.
+            return json.dumps(compact_citation_lookup(response))
 
     async def search_bylaw_evidence_handler(payload: dict[str, Any]) -> str:
         # Mirror the MCP server's location-slot handling: a missing

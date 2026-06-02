@@ -957,19 +957,41 @@ def create_app(
             include_cross_references=False,
             include_tables=False,
         )
+        # ABS-261: service.lookup_citation now returns a
+        # CitationLookupResponse envelope (match-or-suggestions) and only
+        # raises on the ambiguous-across-documents case. We preserve the
+        # public 404-on-miss contract for /v1/citation because the UI
+        # (parcel-pane.tsx → /api/citation) throws on non-200; but on miss
+        # we now surface the nearest stored paths in the detail body so
+        # future UI iterations can let the user pick the right form.
         try:
             if callable(factory):
                 result = factory()
                 if hasattr(result, "__enter__"):
                     with result as service:
-                        match = service.lookup_citation(request)
+                        response = service.lookup_citation(request)
                 else:
-                    match = result.lookup_citation(request)
+                    response = result.lookup_citation(request)
             else:
-                match = factory.lookup_citation(request)
+                response = factory.lookup_citation(request)
         except ValueError as exc:
+            # Ambiguous-across-documents — caller must add a document_id.
+            # Kept as 404 for backward compatibility with the prior
+            # contract (the UI only checks `r.ok`); the change of
+            # semantics is left to a future endpoint cleanup.
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return compact_match(match)
+        if response.match is None:
+            scope = (
+                f" in document {document_id}" if document_id is not None else ""
+            )
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": f"Citation '{citation_path}' not found{scope}",
+                    "suggestions": list(response.suggestions),
+                },
+            )
+        return compact_match(response.match)
 
     return app
 

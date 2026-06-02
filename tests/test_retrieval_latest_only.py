@@ -267,8 +267,11 @@ def test_lookup_citation_with_default_picks_latest_for_ambiguous_path(tmp_path: 
         service = RetrievalService(
             session, default_document_id_resolver=latest_document_id_resolver
         )
-        match = service.lookup_citation(CitationLookupRequest(citation_path="40"))
-    assert match.document_id == new_id
+        # ABS-261: lookup_citation now returns a CitationLookupResponse
+        # envelope. The hit case still resolves; we just unwrap ``.match``.
+        response = service.lookup_citation(CitationLookupRequest(citation_path="40"))
+    assert response.match is not None
+    assert response.match.document_id == new_id
 
 
 def test_lookup_citation_explicit_document_id_cannot_escape_default(tmp_path: Path):
@@ -282,12 +285,20 @@ def test_lookup_citation_explicit_document_id_cannot_escape_default(tmp_path: Pa
         service = RetrievalService(
             session, default_document_id_resolver=latest_document_id_resolver
         )
-        # Old doc has citation_path="40" but the service should refuse and
-        # only resolve against the new (latest) doc — which has no "40" yet.
-        with pytest.raises(ValueError, match="not found"):
-            service.lookup_citation(
-                CitationLookupRequest(citation_path="40", document_id=old_id)
-            )
+        # Old doc has citation_path="40" but the service must scope to
+        # the new (latest) doc — which has no "40" yet. ABS-261 changed
+        # the contract: instead of raising on not-found, the service
+        # returns an empty CitationLookupResponse so the calling agent
+        # can self-correct without thrashing in a tool-use loop.
+        response = service.lookup_citation(
+            CitationLookupRequest(citation_path="40", document_id=old_id)
+        )
+        assert response.match is None, (
+            "explicit document_id should be overridden, returning no match"
+        )
+        # No suggestions either: the latest doc has no citation_paths
+        # remotely similar to '40' in this fixture.
+        assert response.suggestions == []
 
 
 def test_resolver_runs_per_request_so_new_ingest_is_picked_up(tmp_path: Path):
