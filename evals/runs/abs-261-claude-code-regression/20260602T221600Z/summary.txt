@@ -1,0 +1,11 @@
+ABS-261 lookup_citation regression via claude -p
+  run_dir: /Users/christopherrafuse/dev/agentic-bylaw-system/.claude/worktrees/abs-261/evals/runs/abs-261-claude-code-regression/20260602T221600Z
+  prompts: 5
+  passed:  5
+  failed:  0
+
+  [PASS] table_1a               lookup_calls=2 suggestions=Y stop=end_turn tried=['Table 1A', 'Appendix 3 > [Table A2-1] > (a)']
+  [PASS] section_9              lookup_calls=2 suggestions=Y stop=end_turn tried=['Section 9', 'Appendix 2 > 9']
+  [PASS] part_iii               lookup_calls=1 suggestions=Y stop=end_turn tried=['Part III']
+  [PASS] part_xvii              lookup_calls=1 suggestions=Y stop=end_turn tried=['Part XVII']
+  [PASS] exact_part_x_398       lookup_calls=1 suggestions=n stop=end_turn tried=['Part X > 398']

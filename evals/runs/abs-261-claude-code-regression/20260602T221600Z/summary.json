@@ -1,0 +1,171 @@
+{
+  "worktree": "/Users/christopherrafuse/dev/agentic-bylaw-system/.claude/worktrees/abs-261",
+  "mcp_config": "/Users/christopherrafuse/dev/agentic-bylaw-system/.claude/worktrees/abs-261/evals/runs/abs-261-claude-code-regression/20260602T221600Z/mcp-config-bylaw.rendered.json",
+  "captured_at_utc": "2026-06-02T22:20:45.289943+00:00",
+  "results": [
+    {
+      "id": "table_1a",
+      "prompt": "What does Table 1A in the Halifax Regional Centre Land Use By-law cover? Use lookup_citation against document_id=4.",
+      "expects_suggestions": true,
+      "lookup_calls": 2,
+      "lookup_paths_tried": [
+        "Table 1A",
+        "Appendix 3 > [Table A2-1] > (a)"
+      ],
+      "suggestions_seen": true,
+      "suggestions_samples": [
+        [
+          "Appendix 3 > [Table A2-1] > (a)",
+          "Appendix 3 > [Table A2-1] > (b)",
+          "Appendix 3 > [Table A2-1] > (b) > [Table A2-1] > (i)",
+          "Appendix 3 > [Table A2-1] > (b) > [Table A2-1] > (ii)",
+          "Part X > 460 > [Variable Message Signs] > (a)",
+          "Part X > 460 > [Variable Message Signs] > (b)",
+          "Part X > 483 > [Unacceptable Forms of Public Art] > (a)",
+          "Part X > 483 > [Unacceptable Forms of Public Art] > (b)"
+        ]
+      ],
+      "other_tool_calls": {
+        "ToolSearch": 2
+      },
+      "stop_reason": "end_turn",
+      "terminal_reason": "completed",
+      "is_error": false,
+      "final_text": "`lookup_citation` against document_id=4 (HRM Regional Centre Land Use By-law) found **no citation matching \"Table 1A.\"**\n\n- The first call (`citation_path: \"Table 1A\"`) returned `match: null` with only loosely-related suggestions \u2014 none of them an actual \"Table 1A.\"\n- The closest table-like suggestion, `Appendix 3 > [Table A2-1] > (a)`, resolves to **Table A2-1**, which is part of *Appendix 2: Shadow Impact Assessment Protocol and Performance Standards* (p. 449\u2013450) \u2014 the shadow-impact calculation formula. That is **not** a \"Table 1A.\"\n\nSo this by-law doesn't appear to contain a table identified as \"Table 1A.\" A few possibilities:\n\n1. **The table is labeled differently** \u2014 Regional Centre LUB tables use the `A2-1`-style scheme (appendix-prefixed) rather than `1A`. If you're thinking of a specific table, its real identifier is likely something like `Table A2-1`, a Part-X table, etc.\n2. **It's from a different document** \u2014 \"Table 1A\" is a common label in other Halifax planning instruments (e.g., a Municipal Planning Strategy or a different LUB). This MCP corpus has document_id=4 as the Regional Centre LUB only.\n\nIf you can tell me what the table is supposed to *cover* (e.g., permitted uses, height precincts, parking), I can run `search_bylaw_evidence` to find the actual citation that holds that content. Want me to do that?",
+      "duration_ms": 26426,
+      "num_turns": 5,
+      "passed": true,
+      "notes": []
+    },
+    {
+      "id": "section_9",
+      "prompt": "What is Section 9 of the Halifax Regional Centre Land Use By-law about? Use lookup_citation with document_id=4.",
+      "expects_suggestions": true,
+      "lookup_calls": 2,
+      "lookup_paths_tried": [
+        "Section 9",
+        "Appendix 2 > 9"
+      ],
+      "suggestions_seen": true,
+      "suggestions_samples": [
+        [
+          "Appendix 2 > 9",
+          "Appendix 2 > 9 > [Standards] > (a)",
+          "Appendix 2 > 9 > [Standards] > (b)",
+          "Appendix 2 > 9 > [Standards] > (c)",
+          "Appendix 2 > 9 > [Standards] > (d)",
+          "Appendix 2 > 9 > [Standards] > (e)",
+          "Appendix 2 > 9 > [Standards] > (f)",
+          "Appendix 2 > 9 > [Standards] > (g)"
+        ]
+      ],
+      "other_tool_calls": {
+        "ToolSearch": 1
+      },
+      "stop_reason": "end_turn",
+      "terminal_reason": "completed",
+      "is_error": false,
+      "final_text": "There's no standalone \"Section 9\" (or Part 9) in this by-law. The only \"9\" in the document is **item 9 of Appendix 2: \"Shadow Impact Assessment Protocol and Performance Standards\"** (page 445).\n\nThat item reads **\"9 Shadow diagrams shall:\"** and introduces a list of standards (sub-clauses (a) through (g)) specifying the requirements a shadow diagram must meet as part of a shadow impact assessment.\n\nIf you were looking for a different provision \u2014 e.g. a specific numbered Part of the main by-law text rather than this appendix \u2014 let me know what topic you're after and I can search for it.",
+      "duration_ms": 15029,
+      "num_turns": 4,
+      "passed": true,
+      "notes": []
+    },
+    {
+      "id": "part_iii",
+      "prompt": "Summarize Part III of the Halifax Regional Centre Land Use By-law. Use lookup_citation with document_id=4.",
+      "expects_suggestions": true,
+      "lookup_calls": 1,
+      "lookup_paths_tried": [
+        "Part III"
+      ],
+      "suggestions_seen": true,
+      "suggestions_samples": [
+        [
+          "Part I > 10 > [Development Permit Applications] > (a)",
+          "Part I > 10 > [Development Permit Applications] > (b)",
+          "Part I > 10 > [Development Permit Applications] > (c)",
+          "Part I > 10 > [Development Permit Applications] > (d)",
+          "Part I > 10 > [Development Permit Applications] > (e)",
+          "Part I > 10 > [Development Permit Applications] > (f)",
+          "Part I > 10 > [Development Permit Applications] > (g)",
+          "Part I > 10 > [Development Permit Applications] > (h)"
+        ]
+      ],
+      "other_tool_calls": {
+        "ToolSearch": 1,
+        "mcp__bylaw_retrieval__get_document_outline": 2,
+        "Bash": 12
+      },
+      "stop_reason": "end_turn",
+      "terminal_reason": "completed",
+      "is_error": false,
+      "final_text": "I have the full structure of Part III. Here's the summary.\n\n## Part III \u2014 *Land Use* (Halifax Regional Centre Land Use By-law, document_id 4)\n\nPart III sets the **use-based regulations**: what activities are permitted and the conditions attached to them, as opposed to the zoning map (Part II) or the physical built-form rules (Part V). It runs across pages ~58+ and is organized into six chapters.\n\n### Chapter 1 \u2014 General Land Use Requirements\nBaseline rules that apply across zones:\n- **Access Uses Prohibited** (\u00a740) \u2014 can't access a use in one zone from a different zone unless the use is permitted in both, or specifically allowed in Tables 1A\u20131D.\n- **Exterior Lighting** (\u00a741) \u2014 must not be directed toward abutting lots or streets.\n- **Recreational Vehicles** (\u00a742) \u2014 can't be used as a dwelling unit / backyard suite (except temporary construction use).\n- Plus **Landmark Buildings**, **Cannabis-Related Uses**, **Temporary Construction Uses**, **Temporary Rock Crushers**, **Uses Near Railways**, and **Solid Waste Management Areas**.\n\n### Chapter 2 \u2014 Residential Use Requirements (the largest chapter)\nDetailed conditions on housing types, including: combination of uses and **small shared housing** in established residential zones; **home occupation / home office / short-term rental** uses; **daycare** and **backyard suite** uses; **maximum-bedroom** caps (ER-3/ER-2 zones, multi-residential lots, Young Avenue Sub-Area A); **internal conversions**; **dwelling-unit mix** rules for new buildings, additions, and conversions; **amenity space** for high-density and cluster housing; ground-floor use requirements on non-pedestrian-oriented commercial streets; and **work-live units**.\n\n### Chapter 3 \u2014 Urban Agriculture Use Requirements\nGeneral urban-agriculture rules, plus accessory **keeping of bees** and **keeping of egg-laying hens**.\n\n### Chapter 4 \u2014 Environmental Requirements\nLocation-sensitive protections: **coastal areas**, **watercourse buffers**, **wetlands**, and named special areas \u2014 **Northwest Arm (NWA)**, **Dartmouth Cove (DC)**, and **Lake Banook (LB) / Lake Micmac (LM)**.\n\n### Chapter 5 \u2014 Heritage Requirements\nRules for **registered heritage properties** (and properties abutting them or a Heritage Conservation District), **construction/addition/renovation/conservation** of registered heritage buildings, and **properties within a Heritage Conservation District**.\n\n### Chapter 6 \u2014 Buildings in the WA Zone\nUse requirements specific to buildings in the **WA (Waterfront) zone**.\n\n---\n\n**A note on the lookup:** `lookup_citation(\"Part III\", document_id=4)` returned no match (its suggestions pointed only into Part I), so I derived this from the document outline. One data quirk worth flagging: the numbered sections in Part III (e.g. \u00a740 \"Access Uses Prohibited\") are stored with a `Part I > 40` citation-path prefix even though their headings place them in Part III \u2014 relevant context given this branch (ABS-261) is reworking `lookup_citation` fuzzy matching. If you want the verbatim text of any specific section, I can pull it by its `Part I > N` path.",
+      "duration_ms": 130548,
+      "num_turns": 17,
+      "passed": true,
+      "notes": []
+    },
+    {
+      "id": "part_xvii",
+      "prompt": "What does Part XVII of the Halifax Regional Centre Land Use By-law cover? Use lookup_citation with document_id=4.",
+      "expects_suggestions": true,
+      "lookup_calls": 1,
+      "lookup_paths_tried": [
+        "Part XVII"
+      ],
+      "suggestions_seen": true,
+      "suggestions_samples": [
+        [
+          "Part I > 10 > [Development Permit Applications] > (a)",
+          "Part I > 10 > [Development Permit Applications] > (b)",
+          "Part I > 10 > [Development Permit Applications] > (c)",
+          "Part I > 10 > [Development Permit Applications] > (d)",
+          "Part I > 10 > [Development Permit Applications] > (e)",
+          "Part I > 10 > [Development Permit Applications] > (f)",
+          "Part I > 10 > [Development Permit Applications] > (g)",
+          "Part I > 10 > [Development Permit Applications] > (h)"
+        ]
+      ],
+      "other_tool_calls": {
+        "ToolSearch": 3,
+        "mcp__bylaw_retrieval__get_document_outline": 1,
+        "Bash": 5,
+        "Read": 1,
+        "mcp__bylaw_retrieval__search_bylaw_evidence": 2
+      },
+      "stop_reason": "end_turn",
+      "terminal_reason": "completed",
+      "is_error": false,
+      "final_text": "`lookup_citation` couldn't return Part XVII directly, and the reason is informative: in the ingested copy of the by-law (document_id=4), **only Part I is present as structured, retrievable fragments** \u2014 that's why the suggestions it offered were all from Part I, and why a `Part XVII` citation-prefix search returns zero matches. The text of Part XVII itself isn't in the retrieval index.\n\nThat said, what Part XVII *covers* is unambiguous from the cross-references that point at it from within Part I:\n\n- **Part I > 27** \u2014 \"All terms not defined in **Part XVII** of this By-law, in the Charter, or by the Nova Scotia Interpretation Act shall have their ordinary and grammatical meaning.\"\n- **Part I > 32 (d)** \u2014 \"Each use listed in Tables 1A, 1B, 1C, or 1D is defined in **Part XVII**.\"\n- **Part I > 32 (h)** \u2014 \"Where a use is defined in **Part XVII**, the definition may be deemed to include any similar use, except where expressly excluded.\"\n\n## Answer\n\n**Part XVII is the \"Definitions\" part of the Regional Centre Land Use By-law** \u2014 the glossary that defines the terms and land-use categories used throughout the document, including every use listed in the permitted-use tables (1A\u20131D). Any term not defined there falls back to its ordinary meaning (per \u00a727).\n\nOne caveat worth flagging: I'm inferring the *title/scope* of Part XVII from the clauses that reference it, not from Part XVII's own text, because that text isn't in the ingested document. If you need the actual definitions (e.g., how a specific use is defined), they aren't currently retrievable through this MCP \u2014 only Part I (Administration) has been parsed into citable fragments. That looks like an ingestion-coverage gap rather than a `lookup_citation` bug.",
+      "duration_ms": 88771,
+      "num_turns": 14,
+      "passed": true,
+      "notes": []
+    },
+    {
+      "id": "exact_part_x_398",
+      "prompt": "Look up the canonical citation 'Part X > 398' in the Halifax Regional Centre Land Use By-law (document_id=4) and tell me what it says.",
+      "expects_suggestions": false,
+      "lookup_calls": 1,
+      "lookup_paths_tried": [
+        "Part X > 398"
+      ],
+      "suggestions_seen": false,
+      "suggestions_samples": [],
+      "other_tool_calls": {
+        "ToolSearch": 1
+      },
+      "stop_reason": "end_turn",
+      "terminal_reason": "completed",
+      "is_error": false,
+      "final_text": "Citation **Part X > 398** (Halifax Regional Centre Land Use By-law) says:\n\n> **398 (1)** A development shall not protrude into a view plane, a Halifax Citadel rampart sight line, or a waterfront view corridor.\n\n**Context:**\n- It's a **section** on page 298, parsed cleanly (confidence 0.9, exact path match).\n- It sits under **Part X, Chapter 1: General Requirements for View Planes, Halifax Citadel Rampart Sight Lines, and Waterfront View Corridors**.\n\nIn plain terms: this is the core prohibition protecting Halifax's protected sightlines \u2014 no development may intrude into a designated view plane, a Citadel rampart sight line, or a waterfront view corridor. The fragment only returned subsection (1); if you want the rest of section 398 (any further subsections/exceptions) or the specific geometry of those view planes, let me know and I can pull the surrounding section or search for the related definitions/tables.",
+      "duration_ms": 17967,
+      "num_turns": 3,
+      "passed": true,
+      "notes": []
+    }
+  ],
+  "passed": 5,
+  "failed": 0
+}
