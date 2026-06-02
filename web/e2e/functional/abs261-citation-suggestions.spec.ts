@@ -28,7 +28,40 @@
 // but the new shape with `suggestions` in the detail is what the agent
 // uses to stop thrashing. We assert the array exists.
 
+import { execSync } from "node:child_process";
+import * as path from "node:path";
+
 import { test, expect, E2E_API_URL, DEMO_USER_ID } from "../fixtures/test-env";
+
+// The "4.2" citation_path these tests exercise is owned by the Coverage
+// E2E Bylaw, seeded by scripts/seed_e2e_verify_coverage.py. That seed is
+// otherwise only run from verify-coverage.spec.ts's beforeAll. Because
+// Playwright shards spec FILES across parallel workers, this spec can run
+// in a worker where verify-coverage's beforeAll hasn't executed yet — in
+// which case "4.2" doesn't exist, the exact-hit lookup 404s, and the
+// suggestions array comes back empty (no citation_paths in scope). Seeding
+// our own dependency here makes the spec self-contained and deterministic
+// regardless of worker scheduling. The seed is idempotent (get-or-create
+// by file_hash), so running it here AND in verify-coverage.spec.ts is safe.
+test.beforeAll(() => {
+  const repoRoot = path.resolve(__dirname, "..", "..", "..");
+  const venvPython = path.join(repoRoot, ".venv", "bin", "python");
+  // ABS-207: honor PG_PORT so the seed lands in the right Postgres when a
+  // parallel worktree runs on a non-default port triplet.
+  const pgPort = process.env.PG_PORT || "5432";
+  const databaseUrl =
+    process.env.DATABASE_URL ||
+    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const env = {
+    ...process.env,
+    DATABASE_URL: databaseUrl,
+    PYTHONPATH: `${path.join(repoRoot, "src")}:${process.env.PYTHONPATH || ""}`,
+  };
+  execSync(
+    `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_verify_coverage.py")}"`,
+    { env, encoding: "utf-8" },
+  );
+});
 
 /** Hit the FastAPI /v1/citation endpoint directly with X-Test-User-Id
  *  (same auth shape ABS-9 uses for /v1/chat). Bypassing the Next proxy
