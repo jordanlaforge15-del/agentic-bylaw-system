@@ -118,10 +118,23 @@ def citation_exists(conn: psycopg.Connection, doc_id: int, kind: str, value: str
                 (doc_id, f"%{label_pat}%", f"%{label_pat}%", f"%{label_pat}%"),
             )
         elif kind == "part":
+            # The ingest's hierarchy parser only captures a subset of Part
+            # numbers in citation_path (Parts I / V / X). The rest live
+            # only in fragment text (e.g. "Part IV: Lot Requirements" on
+            # page 94). Fall back to a text-prefix probe so we don't
+            # false-positive on real Parts the parser missed.
             cur.execute(
                 "SELECT citation_path, page_start, left(text, 200) FROM source_fragment "
-                "WHERE document_id = %s AND citation_path ILIKE %s LIMIT 5",
-                (doc_id, f"Part {value}%"),
+                "WHERE document_id = %s AND ("
+                "  citation_path ILIKE %s "
+                "  OR text ~ %s"
+                ") LIMIT 5",
+                (
+                    doc_id,
+                    f"Part {value}%",
+                    # Postgres POSIX regex: no \b — use explicit boundary char.
+                    rf"^Part {re.escape(value)}([^A-Za-z0-9]|$)",
+                ),
             )
         else:
             # section / rclub_ref
