@@ -20,6 +20,13 @@
 // citation paths all starting with "Part I >" — a post-fix build must return
 // paths starting with "Part I >", "Part II >", "Part III >", and "Part IV >"
 // as distinct top-level parts.
+//
+// Isolation note: this spec ingests into the shared e2e DB. Playwright runs
+// specs fullyParallel with 4 workers, so a leftover document pollutes the
+// lookup_citation candidate list for concurrently-running specs (ABS-261
+// expects "4.2" to rank first for "Section 4.2" but gets "Part I" from the
+// Halifax doc instead). The afterAll hook calls /v1/_test/delete-documents to
+// remove the synthetic document before other specs can be affected.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -35,6 +42,10 @@ const HALIFAX_MANIFEST = path.join(
   "halifax-regional-centre",
   "manifest.json",
 );
+
+// Fixed bylaw_name constant — used in the test body AND in the afterAll
+// cleanup. Both must match or the cleanup won't find the document.
+const BYLAW_NAME = "ABS-264 Roman-numeral Parts E2E";
 
 // Synthetic bylaw with four Roman-numeral Parts. Each Part has one Section so
 // the ingest produces at least one citation_path per Part — giving us something
@@ -66,6 +77,16 @@ type IngestResponse = {
 };
 
 test.describe("ABS-264: Roman-numeral Part parsing via manifest-driven ingest", () => {
+  // Remove the synthetic document after the spec finishes so it does not
+  // linger in the shared e2e DB and corrupt lookup_citation scope for
+  // concurrently-running specs (ABS-261 in particular).
+  test.afterAll(async ({ request }) => {
+    await request.post(`${E2E_API_URL}/v1/_test/delete-documents`, {
+      headers: { "Content-Type": "application/json" },
+      data: { bylaw_name: BYLAW_NAME },
+    });
+  });
+
   test("four Roman-numeral Parts produce four distinct top-level citation path prefixes", async ({
     request,
   }) => {
@@ -85,7 +106,7 @@ test.describe("ABS-264: Roman-numeral Part parsing via manifest-driven ingest", 
           data: {
             manifest_path: HALIFAX_MANIFEST,
             bylaw_path: bylawPath,
-            bylaw_name: "ABS-264 Roman-numeral Parts E2E",
+            bylaw_name: BYLAW_NAME,
           },
         },
       );
