@@ -32,6 +32,11 @@ export function GeneralFeedback() {
     return () => clearTimeout(timer);
   }, [showThanks]);
 
+  // Hidden behind a feature gate — set NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true to show.
+  if (process.env.NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED !== "true") {
+    return null;
+  }
+
   // Only available on authorized (auth-gated) product pages.
   if (!pathname || !isProtectedPath(pathname)) {
     return null;
