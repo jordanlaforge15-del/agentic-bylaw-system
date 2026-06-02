@@ -1,0 +1,131 @@
+{
+  "id": "TC-002",
+  "title": "Homeowner secondary suite legality in ER-2",
+  "zone": "ER-2",
+  "persona": {
+    "type": "homeowner",
+    "subtype": null,
+    "description": "Young couple exploring income suite to offset mortgage"
+  },
+  "complexity": "simple",
+  "liability": "low",
+  "address": "567 Windsor Street, Halifax, NS",
+  "session_id": "27c906ed-7660-464d-9c51-5047fd86d8d3",
+  "model": "claude-opus-4-5-20251101",
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "We\u2019re on Windsor Street in Halifax in the ER-2 zone. We\u2019re thinking of converting our basement into a secondary suite to rent out. Is a secondary suite a permitted use in ER-2?",
+      "assistant_text": "Based on my research, I need to clarify an important terminology difference and give you a direct answer:\n\n## Short Answer: Yes, but the RCLUB calls it something different\n\nThe Regional Centre Land Use By-law doesn't use the term \"secondary suite.\" Instead, what you're describing \u2014 converting your basement into a separate rental unit \u2014 would make your building a **two-unit dwelling use** under the RCLUB's terminology.\n\n**In the ER-2 zone, a two-unit dwelling use is a permitted use.** The ER-2 zone permits what the bylaw calls \"low-density dwelling uses,\" which includes two-unit dwellings (Section 54 references \"low-density dwelling use\" in the context of ER-2).\n\n## What I Couldn't Confirm Directly\n\nThe permitted use tables (Tables 1A, 1B, 1C, or 1D) are where the specific ER-2 permissions are shown with black dots (\u25cf) indicating permitted uses. My retrieval didn't pull the actual table rows for ER-2 residential uses \u2014 I'd need to look at **Table 1A or 1C** (whichever contains the ER zones) to give you a citation-confirmed answer showing the two-unit dwelling use is marked as permitted in the ER-2 column.\n\n## Key Definitions Found\n\n- **Duplex apartment use**: \"a two-unit dwelling use that is joined with another two-unit dwelling use, or another dwelling unit, along a single lot line divided vertically by a shared wall\" (Section 499(76.5))\n- Uses are defined in **Part XVII** of the bylaw\n\n## What You Should Confirm\n\n1. Whether your basement conversion meets the Building Code requirements for a separate dwelling unit (egress, fire separation, ceiling height, etc.)\n2. The specific lot and building requirements in the ER-2 zone for two-unit dwellings\n\n**Recommendation**: To give you a definitive answer with the exact table citation, I'd need to retrieve the ER-2 column from the permitted use tables. However, based on the bylaw's structure and the references to low-density dwelling uses being permitted in ER-2, converting to a two-unit dwelling should be permitted as-of-right, subject to meeting all applicable building and design requirements.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 35328,
+        "output_tokens": 519,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "wall_time_s": 54.33,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Perfect. Can we also run a small home-based tutoring business from the house at the same time as having the secondary suite, or does that create any issue under the bylaw?",
+      "assistant_text": "Based on my research, I can now give you a clear answer:\n\n## Short Answer: Yes \u2014 tutoring is explicitly permitted as a home occupation use\n\n**Tutoring is specifically listed** as a permitted home occupation use in **Section 51(1)(l)** of the Regional Centre Land Use By-law. There's no inherent conflict with also having a secondary suite (two-unit dwelling use) on the same property.\n\n## What I Found\n\n**Section 51** governs home occupation uses and lists the following permitted activities:\n- (c) makerspace use\n- (d) grooming and haircutting salon\n- (e) medical clinic use\n- (f) office use\n- (g) pet daycare use (max 5 animals)\n- (h) pet grooming\n- (i) studio use\n- (j) tailoring and shoe repair\n- (k) tattooing\n- **(l) tutoring** \u2713\n\nThe opening of Section 51(1) states: *\"Excluding a home occupation use contained within a grade-related dwelling unit use, a home occupation use shall...\"* \u2014 this indicates there are specific requirements for home occupation uses, though my retrieval didn't capture the full list of operational restrictions (e.g., floor area limits, employee limits, signage requirements).\n\n## What I Couldn't Fully Retrieve\n\nThe **detailed operational requirements** in Section 51 \u2014 such as maximum floor area, employee restrictions, and other conditions \u2014 weren't fully captured. These typically include things like:\n- The business must be operated by a resident of the dwelling\n- Maximum floor area devoted to the use\n- Limits on non-resident employees\n- Restrictions on external alterations to the building\n\n## Signage Rules (if you want a sign)\n\nIf you put up a sign for the tutoring business, **Section 469** limits it to:\n- Maximum one sign per use\n- Ground sign, fascia sign, or projecting sign only\n- Maximum 0.6 m\u00b2 in area\n- Ground signs max 1.2 m height\n- No illumination\n\n## Bottom Line\n\nYou can have both a **two-unit dwelling use** (your main unit + basement suite) and a **tutoring home occupation use** on the same property in ER-2. The tutoring business would need to comply with the operational requirements in Section 51 \u2014 I'd recommend confirming those details with HRM Planning & Development or reviewing the full text of Section 51 before proceeding.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 4196,
+        "output_tokens": 557,
+        "cache_creation_input_tokens": 150,
+        "cache_read_input_tokens": 57270
+      },
+      "wall_time_s": 54.74,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 3,
+      "user_message": "One more thing \u2014 would adding the suite change our setback requirements at all, or do the existing ER-2 setback standards still apply?",
+      "assistant_text": "Based on my research, I can now give you a clear answer:\n\n## Short Answer: No change \u2014 the same ER-2 setback standards apply\n\nConverting from a single-unit dwelling to a two-unit dwelling (by adding a basement suite) **does not change your setback requirements**. The setbacks in the ER-2 zone are based on the zone itself, not the specific dwelling type.\n\n## ER-2 Setback Standards (Part V, Chapter 9)\n\n| Setback | Requirement | Citation |\n|---------|-------------|----------|\n| **Front/Flanking** | As specified on **Schedule 18** | Section 228(1) |\n| **Side** | Varies by Special Area (see table below); otherwise per Schedule 19 | Section 229 |\n| **Rear** | **6.0 metres** | Section 230 |\n\n### Side Setbacks by Established Residential Special Area (Section 229)\n\nIf your Windsor Street property falls within one of these Special Areas (Schedule 3C), the side setback is:\n\n| Special Area | Side Setback |\n|--------------|--------------|\n| Grant Street (GS) | 1.5 m |\n| Young Avenue (YA) | 10% of lot width, max 3.0 m |\n| Oakland Road (OR) | 10% of lot width, max 2.0 m |\n| Armview (AV) | 4.5 m |\n| North End Halifax 1 (NEH-1) | 1.5 m one side, 0.0 m other |\n| North End Halifax 2 (NEH-2) | 0.0 m |\n| Dartmouth North 1 (DN-1) | 2.0 m |\n| Dartmouth North 2 (DN-2) | 2.5 m |\n| Historic Dartmouth Neighbourhoods (HDN) | 2.0 m *(truncated in retrieval)* |\n\nIf you're **not** in a Special Area, the standard side setback from Schedule 19 applies.\n\n## Why the Use Doesn't Matter for Setbacks\n\nThe RCLUB's setback provisions in Part V, Chapter 9 (Sections 228\u2013230) apply to \"any portion of a main building\" \u2014 they don't differentiate between single-unit, two-unit, or multi-unit dwellings. The only use-specific setback variations I found were for:\n- **Semi-detached dwellings or duplex apartments**: 0.0 m side setback along the common wall (Section 229(b))\n- **Townhouse dwellings**: 0.0 m along common walls, 1.2 m at end units (Section 229(a))\n\nSince you're doing an **internal basement conversion** (not building a semi-detached or townhouse), none of these apply.\n\n## Bottom Line\n\nYour existing building's setbacks remain compliant. A basement suite conversion is an internal change that doesn't alter the building footprint, so setbacks aren't triggered at all \u2014 you're not moving any walls closer to lot lines. The same ER-2 standards (Sections 228\u2013230, Schedules 18\u201319) continue to govern your property whether it's a single-unit or two-unit dwelling.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 4163,
+        "output_tokens": 771,
+        "cache_creation_input_tokens": 3048,
+        "cache_read_input_tokens": 46166
+      },
+      "wall_time_s": 49.94,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    }
+  ],
+  "spec": {
+    "id": "TC-002",
+    "title": "Homeowner secondary suite legality in ER-2",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Young couple exploring income suite to offset mortgage"
+    },
+    "address": "567 Windsor Street, Halifax, NS",
+    "zone": "ER-2",
+    "complexity": "simple",
+    "liability": "low",
+    "tags": [
+      "renovation",
+      "residential",
+      "secondary_suite",
+      "permitted_use",
+      "accessory_dwelling"
+    ],
+    "bylaw_features": [
+      "use_permission",
+      "combination_of_uses"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "We\u2019re on Windsor Street in Halifax in the ER-2 zone. We\u2019re thinking of converting our basement into a secondary suite to rent out. Is a secondary suite a permitted use in ER-2?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Perfect. Can we also run a small home-based tutoring business from the house at the same time as having the secondary suite, or does that create any issue under the bylaw?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "One more thing \u2014 would adding the suite change our setback requirements at all, or do the existing ER-2 setback standards still apply?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Section 49",
+      "Table 3"
+    ],
+    "expected_answer_keywords": [
+      "secondary suite",
+      "permitted",
+      "ER-2",
+      "home occupation",
+      "combination of uses",
+      "6.0 m",
+      "1.5 m",
+      "7.5 m"
+    ],
+    "expected_topics": [
+      "use_permission",
+      "combination_of_uses",
+      "setbacks"
+    ],
+    "notes": "Tests use permission lookup, combination-of-uses provision, and baseline setback standards. Three turns escalating breadth."
+  },
+  "case_wall_time_s": 159.01
+}
