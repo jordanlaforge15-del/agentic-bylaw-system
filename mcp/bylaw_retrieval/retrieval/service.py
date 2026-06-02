@@ -8,9 +8,12 @@ from sqlalchemy import Select, String, Text, bindparam, cast, desc, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, JSONB
 from sqlalchemy.orm import Session
 
+from rapidfuzz import fuzz, process
+
 from bylaw_retrieval.retrieval.schemas import (
     AncestorFragment,
     CitationLookupRequest,
+    CitationLookupResponse,
     CrossReferenceSummary,
     DatasetFeatureMatch,
     DocumentOutlineItem,
@@ -187,7 +190,41 @@ class RetrievalService:
             ],
         )
 
-    def lookup_citation(self, request: CitationLookupRequest) -> RetrievalMatch:
+    # Number of nearest-citation suggestions returned when an exact
+    # lookup misses. Tuned to fit comfortably in one tool_result
+    # payload (~10 short strings) — high enough that the right form
+    # is almost always in the list, low enough that the agent doesn't
+    # spend a turn re-reading dozens of candidates.
+    _LOOKUP_SUGGESTION_LIMIT = 8
+
+    # rapidfuzz score cutoff for the suggestion list. WRatio is in
+    # the 0..100 range; 30 is intentionally generous so that very
+    # short queries like "Table 1A" against longer canonical paths
+    # like "Part II > [Table 1A]" survive (typical score ~90). The
+    # cap is *only* there to filter pure-noise paths in a large
+    # corpus from showing up.
+    _LOOKUP_SUGGESTION_CUTOFF = 30.0
+
+    def lookup_citation(self, request: CitationLookupRequest) -> CitationLookupResponse:
+        """Resolve an exact ``citation_path`` against the scoped document.
+
+        Returns a :class:`CitationLookupResponse`:
+
+        * **Exact match** → ``match`` populated, ``suggestions`` empty.
+        * **No exact match** → ``match`` is ``None`` and ``suggestions``
+          carries up to :attr:`_LOOKUP_SUGGESTION_LIMIT` of the nearest
+          stored ``citation_path`` values (rapidfuzz WRatio ranking).
+          Critically, **this is no longer an exception**: a missed
+          path is the most common case during agent exploration
+          (the model formats "Table 1A" while the ingest stores
+          "Part II > [Table 1A]"), and raising forced the tool-use
+          loop into a destructive retry pattern. See ABS-261.
+        * **Ambiguous across documents** *still* raises
+          ``ValueError`` — the only sensible response there is for
+          the caller to add a ``document_id`` and try again, and a
+          suggestion list of identical paths in different docs would
+          mislead more than help.
+        """
         stmt = select(SourceFragment).where(SourceFragment.citation_path == request.citation_path)
         # Hard scope: default document ids AND with the request's
         # document_id. See _fragment_scope_statement for rationale.
@@ -197,23 +234,78 @@ class RetrievalService:
         if request.document_id is not None:
             stmt = stmt.where(SourceFragment.document_id == request.document_id)
         fragments = self.session.execute(stmt.order_by(SourceFragment.id).limit(2)).scalars().all()
+
         if not fragments:
-            scope = f" in document {request.document_id}" if request.document_id is not None else ""
-            raise ValueError(f"Citation '{request.citation_path}' not found{scope}")
+            # Path didn't match exactly. Surface the nearest stored
+            # citation_paths so the agent can correct its formatting
+            # in one extra round-trip instead of guessing in a loop.
+            suggestions = self._suggest_citation_paths(
+                request.citation_path,
+                document_id=request.document_id,
+                default_ids=default_ids,
+            )
+            return CitationLookupResponse(match=None, suggestions=suggestions)
+
         if request.document_id is None and len(fragments) > 1:
             document_ids = ", ".join(str(fragment.document_id) for fragment in fragments)
             raise ValueError(
                 f"Citation '{request.citation_path}' is ambiguous across documents; "
                 f"provide document_id. Matching document IDs include: {document_ids}"
             )
+
         fragment = fragments[0]
-        return self._build_match(
+        match = self._build_match(
             fragment,
             score=1000.0,
             include_context=request.include_context,
             include_cross_references=request.include_cross_references,
             include_tables=request.include_tables,
         )
+        return CitationLookupResponse(match=match, suggestions=[])
+
+    def _suggest_citation_paths(
+        self,
+        requested: str,
+        *,
+        document_id: int | None,
+        default_ids: list[int] | None,
+    ) -> list[str]:
+        """Return up to ``_LOOKUP_SUGGESTION_LIMIT`` nearest citation_paths.
+
+        Scoped identically to the lookup itself: the request's
+        ``document_id`` AND-ed with the service's ``default_ids``, so
+        suggestions can never escape the scope the caller asked for.
+
+        Uses rapidfuzz ``WRatio`` (handles partial / token-set / token-sort
+        equivalence in one scorer) — well-suited to the asymmetric query
+        case we hit in practice, where a short human-style label like
+        ``"Table 1A"`` needs to find a longer canonical form like
+        ``"Part II > [Table 1A]"``.
+        """
+        stmt = (
+            select(SourceFragment.citation_path)
+            .where(SourceFragment.citation_path.is_not(None))
+            .distinct()
+        )
+        if default_ids is not None:
+            stmt = stmt.where(SourceFragment.document_id.in_(default_ids))
+        if document_id is not None:
+            stmt = stmt.where(SourceFragment.document_id == document_id)
+        candidates = [row for row in self.session.execute(stmt).scalars().all() if row]
+        if not candidates:
+            return []
+        ranked = process.extract(
+            requested,
+            candidates,
+            scorer=fuzz.WRatio,
+            limit=self._LOOKUP_SUGGESTION_LIMIT,
+            score_cutoff=self._LOOKUP_SUGGESTION_CUTOFF,
+        )
+        # process.extract returns (choice, score, index) tuples ordered
+        # by descending score. We only need the path strings — the score
+        # is internal ranking signal, not something the agent should see
+        # (it can't meaningfully act on a fuzz score).
+        return [choice for choice, _score, _idx in ranked]
 
     # Spatial-channel scoring constants. The values are deliberately higher
     # than typical text-channel scores so a confident spatial hit (the input

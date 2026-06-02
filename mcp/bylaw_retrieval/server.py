@@ -128,7 +128,12 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         )
         with session_scope(db_url) as session:
             service = _service(session)
-            return service.lookup_citation(request).model_dump(mode="json")
+            response = service.lookup_citation(request)
+            # ABS-261: envelope unwrapping for MCP backward compat —
+            # see openai_tools.py for the rationale.
+            if response.match is not None:
+                return response.match.model_dump(mode="json")
+            return response.model_dump(mode="json")
 
     @mcp.tool()
     def search_bylaw_evidence(

@@ -64,12 +64,32 @@ def create_app(db_url: str | None = None):
 
     @app.post("/lookup-citation")
     def lookup_citation(request: CitationLookupRequest) -> dict[str, Any]:
+        # ABS-261: service.lookup_citation no longer raises ValueError on
+        # path-not-found; it returns CitationLookupResponse with match=None
+        # and suggestions=[...]. We still surface 404 to HTTP clients
+        # (preserving the old contract) but enrich the detail with the
+        # suggestion list so callers can resolve the right form. The
+        # ValueError-on-ambiguous case is unchanged.
         try:
             with session_scope(db_url) as session:
                 service = RetrievalService(session)
-                return service.lookup_citation(request).model_dump(mode="json")
+                response = service.lookup_citation(request)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if response.match is None:
+            scope = (
+                f" in document {request.document_id}"
+                if request.document_id is not None
+                else ""
+            )
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": f"Citation '{request.citation_path}' not found{scope}",
+                    "suggestions": list(response.suggestions),
+                },
+            )
+        return response.match.model_dump(mode="json")
 
     return app
 

@@ -49,6 +49,7 @@ from typing import Any
 
 from bylaw_retrieval.retrieval.schemas import (
     AncestorFragment,
+    CitationLookupResponse,
     CrossReferenceSummary,
     DocumentOutlineResponse,
     DocumentSummary,
@@ -196,6 +197,50 @@ def compact_match(match: RetrievalMatch) -> dict[str, Any]:
         out["linked_datasets"] = [
             compact_linked_dataset(ds) for ds in match.linked_datasets
         ]
+    return out
+
+
+def compact_citation_lookup(response: CitationLookupResponse) -> dict[str, Any]:
+    """Project ``CitationLookupResponse`` into a tool_result payload.
+
+    Three shapes the model can dispatch on without re-parsing:
+
+    * Exact hit: ``{"match": {...compact_match...}}``.
+    * No exact hit + suggestions: ``{"match": null, "suggestions":
+      [...], "instruction": "Re-issue lookup_citation with the closest
+      candidate; do not guess further variants."}``.
+    * No exact hit + nothing similar: ``{"match": null, "suggestions":
+      [], "instruction": "Path not present in this document. Switch to
+      search_bylaw_evidence or get_document_outline; do not retry
+      lookup_citation."}``.
+
+    The inline ``instruction`` field is what stops ABS-261's
+    max_iterations thrash — the model would otherwise see ``match: null``
+    and treat it as a transient failure to retry. The instruction
+    converts the empty result into an explicit next action.
+    """
+    out: dict[str, Any] = {}
+    if response.match is not None:
+        out["match"] = compact_match(response.match)
+        # Even on a hit, surface suggestions if the service decided to
+        # ship them (currently it doesn't, but the schema allows it
+        # and future tuning might use them for disambiguation hints).
+        if response.suggestions:
+            out["suggestions"] = list(response.suggestions)
+        return out
+    out["match"] = None
+    out["suggestions"] = list(response.suggestions)
+    if response.suggestions:
+        out["instruction"] = (
+            "No exact citation_path match. Re-issue lookup_citation with the "
+            "closest candidate from suggestions; do NOT guess further variants."
+        )
+    else:
+        out["instruction"] = (
+            "Citation path not present in this document and no near matches "
+            "found. Switch to search_bylaw_evidence or get_document_outline "
+            "instead of retrying lookup_citation."
+        )
     return out
 
 

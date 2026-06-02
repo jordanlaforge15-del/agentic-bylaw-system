@@ -115,8 +115,11 @@ async def test_lookup_citation_handler_returns_json(seeded_service):
         {"citation_path": cited["citation_path"], "document_id": document_id}
     )
     parsed = json.loads(raw)
-    assert parsed["citation_path"] == cited["citation_path"]
-    assert "text" in parsed
+    # ABS-261: handler now returns a match-or-suggestions envelope.
+    # On a hit, ``match`` is populated and the canonical citation_path
+    # lives under it.
+    assert parsed["match"]["citation_path"] == cited["citation_path"]
+    assert "text" in parsed["match"]
 
 
 @pytest.mark.asyncio
@@ -232,15 +235,32 @@ async def test_factory_context_manager_exits_after_each_call(seeded_service):
 async def test_factory_context_manager_exits_on_handler_exception(
     seeded_service,
 ):
-    """If a handler raises (e.g. malformed input), the cm must still
+    """If the wrapped service call raises mid-handler, the cm must still
     exit so the SQLAlchemy session rolls back rather than leaking.
+
+    ABS-261 changed the contract: ``lookup_citation`` no longer raises on
+    path-not-found (it returns ``match=None`` + suggestions). The
+    exception path inside the cm now belongs to:
+
+    * search/lookup with an exception raised by the underlying ORM
+      (e.g. transient DB failure), or
+    * the still-raising ambiguous-across-documents case in
+      ``lookup_citation``.
+
+    We simulate that by yielding a stub service whose ``lookup_citation``
+    method raises — that puts the failure squarely inside the cm scope
+    (after ``model_validate`` succeeds, after ``__enter__`` returns)
+    which is where we need to prove ``__exit__`` still runs.
     """
-    service, _ = seeded_service
     exits = {"n": 0}
+
+    class RaisingService:
+        def lookup_citation(self, request):  # noqa: ARG002
+            raise RuntimeError("simulated DB blip inside cm scope")
 
     class TrackingCm:
         def __enter__(self):
-            return service
+            return RaisingService()
 
         def __exit__(self, exc_type, exc, tb):
             exits["n"] += 1
@@ -250,13 +270,9 @@ async def test_factory_context_manager_exits_on_handler_exception(
         return TrackingCm()
 
     _, handlers = build_bylaw_tools(factory)
-    # lookup_citation requires citation_path; omitting it raises
-    # ValidationError BEFORE the service is touched. Even so the cm
-    # never gets entered, so we exercise the exception path with a
-    # request that does enter the service:
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match="simulated DB blip"):
         await handlers["lookup_citation"](
-            {"citation_path": "this-path-does-not-exist", "document_id": 999_999}
+            {"citation_path": "Part I > 9", "document_id": 1}
         )
     assert exits["n"] == 1
 
@@ -345,11 +361,14 @@ async def test_lookup_citation_returns_compact_match(seeded_service):
         {"citation_path": cited["citation_path"], "document_id": document_id}
     )
     parsed = json.loads(raw)
-    assert parsed["citation_path"] == cited["citation_path"]
-    assert "text" in parsed
-    assert "fragment_type" not in parsed
-    assert "metadata_json" not in parsed
-    assert "parse_status" not in parsed
+    # ABS-261: handler now returns an envelope { match: {...} } on hit.
+    # The compact noise-stripping rules still apply to the wrapped match.
+    match = parsed["match"]
+    assert match["citation_path"] == cited["citation_path"]
+    assert "text" in match
+    assert "fragment_type" not in match
+    assert "metadata_json" not in match
+    assert "parse_status" not in match
 
 
 @pytest.mark.asyncio

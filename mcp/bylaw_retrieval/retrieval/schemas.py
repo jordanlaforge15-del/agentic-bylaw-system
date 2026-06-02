@@ -250,6 +250,48 @@ class CitationLookupRequest(BaseModel):
     include_tables: bool = Field(default=True)
 
 
+class CitationLookupResponse(BaseModel):
+    """Result envelope for ``lookup_citation``.
+
+    Before ABS-261 the service returned ``RetrievalMatch`` directly and
+    raised ``ValueError`` when nothing matched. That forced the agent's
+    tool-use loop to treat a missed path as a tool error, retry with
+    random variations, and burn through ``max_iterations`` worth of
+    ``messages.create`` calls before falling back to synthesis (~2×
+    the necessary token spend on ~38% of multi-turn advisor turns).
+
+    The envelope now distinguishes three cases — and only one of them
+    is an exception (ambiguous-across-documents, which the caller
+    must resolve before any sensible match exists):
+
+    * ``match`` populated, ``suggestions`` empty: exact hit.
+    * ``match`` is ``None``, ``suggestions`` non-empty: no exact path
+      matched, but here are the closest stored ``citation_path``
+      values ranked by fuzzy score. The caller should pick one and
+      re-issue ``lookup_citation``.
+    * ``match`` is ``None``, ``suggestions`` empty: nothing remotely
+      similar exists in this document (e.g. ``Schedule 99``). The
+      caller should switch tools to ``search_bylaw_evidence`` or
+      ``get_document_outline`` instead of more lookups.
+    """
+
+    match: RetrievalMatch | None = Field(
+        default=None,
+        description=(
+            "The fragment for an exact citation_path hit. Null when the "
+            "requested path did not resolve in the scoped document."
+        ),
+    )
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ranked candidate citation_path values when ``match`` is null. "
+            "Pick the closest one and re-issue lookup_citation with it; do "
+            "NOT guess further variants."
+        ),
+    )
+
+
 class DocumentOutlineItem(BaseModel):
     fragment_id: int
     fragment_type: str

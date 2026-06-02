@@ -1,5 +1,6 @@
 from bylaw_retrieval.retrieval.schemas import (
     CitationLookupRequest,
+    CitationLookupResponse,
     DatasetFeatureMatch,
     DocumentOutlineResponse,
     DocumentSummary,
@@ -18,6 +19,7 @@ from bylaw_retrieval.retrieval.service import (
 
 __all__ = [
     "CitationLookupRequest",
+    "CitationLookupResponse",
     "DatasetFeatureMatch",
     "DocumentIdResolver",
     "DocumentOutlineResponse",
