@@ -37,6 +37,13 @@ Scenario keywords in the user message override the default rules:
 * ``"MOCK_EMPTY_TURN"`` — the assistant returns an empty text block
   with no tool_use, exercising the "non-qualifying turn" refund path.
 
+* ``"MOCK_FEASIBILITY"`` — the final answer is a feasibility-grade reply
+  that stacks several built-form dimensions (height, FAR, coverage,
+  setback, parking) with no hedging language. The ABS-263 hedge injector
+  in ``advisor.chat.session`` appends a verify-with-a-planner qualifier
+  before the SSE stream is built, so tests can assert the hedge appears
+  without depending on live-model phrasing.
+
 * ``"MOCK_WITH_LOCATION"`` — the ``search_bylaw_evidence`` call
   includes a ``location`` slot (``civic_number="1234"``,
   ``street="Elm St"``) so the parcel pane renders with zone data and
@@ -159,6 +166,29 @@ def _classifier_response(request: CompletionRequest) -> CompletionResponse:
 
 
 def _final_answer_response(user_text: str) -> CompletionResponse:
+    if "MOCK_FEASIBILITY" in user_text:
+        # A feasibility-grade answer that stacks several built-form
+        # dimensions (height, FAR, coverage, setback, parking) and
+        # deliberately omits any hedging language. The real ChatSession
+        # pipeline runs the ABS-263 hedge injector over this turn, so the
+        # SSE stream the e2e decodes should carry the appended
+        # verify-with-a-planner qualifier even though the mock never wrote
+        # one. This exercises product code, not a hard-coded hedge string.
+        body = (
+            "Feasibility envelope for the site:\n\n"
+            "- Max height: 25.0 m\n"
+            "- Max FAR: 2.0\n"
+            "- Lot coverage: 65%\n"
+            "- Front setback: 3.0 m\n"
+            "- Parking: 1 space per dwelling unit\n\n"
+            "Source: RC-LUB Table 1A, §15.4, Table 3."
+        )
+        return text_response(
+            body,
+            usage=TokenUsage(input_tokens=160, output_tokens=120),
+            stop_reason="end_turn",
+        )
+
     citation_line = (
         f"\n\nSource: {_DEFAULT_CITATION}"
         if "no_citation" not in user_text.lower()
