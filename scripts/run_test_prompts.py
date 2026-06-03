@@ -121,6 +121,12 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
     model: str | None = None
     session_id: str | None = None
     case_id: Any = None
+    # ABS-266: per-turn tool-loop rollup emitted after the content
+    # stream (one event per user message). Carries iterations,
+    # per-iteration usage, terminated_reason, and per-tool-call
+    # latency / error state. Captured verbatim so downstream scripts
+    # can reason about loop behaviour without re-deriving from logs.
+    tool_loop_metrics: dict[str, Any] | None = None
 
     for ev in events:
         et = ev.get("event")
@@ -130,6 +136,8 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
             case_id = data.get("case_id")
         elif et == "message_start":
             model = data.get("model") or model
+        elif et == "tool_loop_metrics":
+            tool_loop_metrics = data
         elif et == "content_block_start":
             idx = data.get("index")
             block = data.get("content_block") or {}
@@ -186,6 +194,7 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
         "model": model,
         "session_id": session_id,
         "case_id": case_id,
+        "tool_loop_metrics": tool_loop_metrics,
     }
 
 
@@ -262,6 +271,12 @@ def run_case(
             "raw_event_count": result.get("raw_event_count"),
             "error": result.get("error"),
             "body_excerpt": result.get("body_excerpt"),
+            # ABS-266: per-turn tool-loop observability (iterations,
+            # terminated_reason, per-iteration usage, per-tool-call
+            # error/latency). ``None`` for servers that haven't been
+            # upgraded to emit the event — runner stays backward
+            # compatible with older deployments.
+            "tool_loop_metrics": result.get("tool_loop_metrics"),
         })
         if result.get("error"):
             print(f"    !! error on turn {turn['turn']}: {result['error']}", file=sys.stderr)

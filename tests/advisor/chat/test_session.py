@@ -155,8 +155,12 @@ async def test_simple_lookup_answer_is_not_hedged():
 @pytest.mark.asyncio
 async def test_send_user_message_streams_in_correct_order():
     """The synthetic stream must start with MessageStartEvent and end
-    with MessageStopEvent — that's the contract the SSE frontend
-    relies on for opening and closing render frames."""
+    its CONTENT frame with MessageStopEvent — that's the contract the
+    SSE frontend relies on for opening and closing render frames.
+
+    ABS-266 appends a ``tool_loop_metrics`` event after the content
+    stream for out-of-band consumers; the chat UI ignores unknown
+    event types so this doesn't affect render."""
     session = _empty_session()
     gateway = MockGateway(scripted=[text_response("hello there")])
 
@@ -166,7 +170,14 @@ async def test_send_user_message_streams_in_correct_order():
     ]
 
     assert isinstance(events[0], MessageStartEvent)
-    assert isinstance(events[-1], MessageStopEvent)
+    # MessageStopEvent is the last event of the CONTENT stream;
+    # tool_loop_metrics (ABS-266) is appended after it.
+    stop_indices = [
+        i for i, e in enumerate(events) if isinstance(e, MessageStopEvent)
+    ]
+    assert len(stop_indices) == 1
+    assert events[stop_indices[0] + 1].type == "tool_loop_metrics"
+    assert stop_indices[0] + 1 == len(events) - 1
     # And the user message landed on the session even though we
     # consumed via the streaming path:
     assert any(
@@ -657,3 +668,130 @@ async def test_no_case_anchor_leaves_system_prompt_unchanged():
     await session.send_user_message_blocking(gateway, "anything")
 
     assert seen_systems == ["You are a senior urban planner."]
+
+
+# ----------------------------------------------------------------------
+# ABS-266: ChatSession surfaces tool-loop observability via the
+# streaming SSE path so test runners can audit cost and behaviour
+# without scraping server logs.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_blocking_turn_populates_last_tool_loop_metrics():
+    """After ``send_user_message_blocking`` returns, the session
+    exposes a ``ToolLoopMetricsEvent`` summarising the loop. Fields
+    must reflect the actual loop run, not zeros."""
+    from advisor.llm import ToolLoopMetricsEvent
+
+    session = _empty_session()
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+            ),
+            text_response("done."),
+        ]
+    )
+    session.tool_defs = [
+        ToolDefinition(
+            name="search_bylaw_evidence",
+            description="d",
+            input_schema={"type": "object"},
+        )
+    ]
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return "ok"
+
+    session.tool_handlers = {"search_bylaw_evidence": handler}
+
+    await session.send_user_message_blocking(gateway, "hi")
+
+    metrics = session.last_tool_loop_metrics
+    assert isinstance(metrics, ToolLoopMetricsEvent)
+    assert metrics.type == "tool_loop_metrics"
+    assert metrics.iterations == 2
+    assert metrics.terminated_reason == "end_turn"
+    assert metrics.total_usage is not None
+    assert metrics.total_usage.input_tokens > 0
+    assert len(metrics.per_iteration) == 2
+    assert metrics.per_iteration[0].tool_call_count == 1
+    assert metrics.per_iteration[1].tool_call_count == 0
+    assert len(metrics.tool_calls) == 1
+    assert metrics.tool_calls[0].name == "search_bylaw_evidence"
+    assert metrics.tool_calls[0].is_error is False
+
+
+@pytest.mark.asyncio
+async def test_streaming_yields_tool_loop_metrics_event_after_message_stop():
+    """The streaming path appends the metrics event after the
+    synthetic content stream completes. Order matters: chat UIs
+    terminate on ``message_stop``, so the metrics must come AFTER it
+    or out-of-band consumers will miss it. Verifying the relative
+    position pins both the contract for runners and the
+    no-UI-impact guarantee."""
+    session = _empty_session()
+    gateway = MockGateway(scripted=[text_response("hello there")])
+
+    events = [
+        event
+        async for event in session.send_user_message(gateway, "hi")
+    ]
+
+    # The synthetic stream contains message_start ... message_stop.
+    stop_idx = next(
+        i for i, e in enumerate(events) if isinstance(e, MessageStopEvent)
+    )
+    metrics_idx = next(
+        i for i, e in enumerate(events) if e.type == "tool_loop_metrics"
+    )
+    assert metrics_idx == len(events) - 1, (
+        "tool_loop_metrics must be the very last event"
+    )
+    assert metrics_idx > stop_idx, (
+        "tool_loop_metrics must come AFTER message_stop"
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_metrics_event_reports_tool_errors():
+    """A handler that raises shows up in the metrics event as a
+    tool_call with ``is_error=True``. That's the signal a runner uses
+    to distinguish 'tool was called and succeeded' from 'tool was
+    called and the model had to recover'."""
+    session = _empty_session()
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_boom",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+            ),
+            text_response("apologies."),
+        ]
+    )
+    session.tool_defs = [
+        ToolDefinition(
+            name="search_bylaw_evidence",
+            description="d",
+            input_schema={"type": "object"},
+        )
+    ]
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        raise RuntimeError("boom")
+
+    session.tool_handlers = {"search_bylaw_evidence": handler}
+
+    events = [
+        event
+        async for event in session.send_user_message(gateway, "hi")
+    ]
+
+    metrics = next(e for e in events if e.type == "tool_loop_metrics")
+    assert len(metrics.tool_calls) == 1
+    assert metrics.tool_calls[0].is_error is True
+    assert metrics.tool_calls[0].name == "search_bylaw_evidence"

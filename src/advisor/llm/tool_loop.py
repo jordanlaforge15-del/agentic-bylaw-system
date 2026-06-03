@@ -23,6 +23,7 @@ and recover, rather than the whole conversation aborting.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,6 +32,7 @@ from advisor.llm.base import (
     CompletionRequest,
     CompletionResponse,
     ContentBlock,
+    IterationMetric,
     LLMGateway,
     LLMRole,
     Message,
@@ -92,18 +94,31 @@ class ToolLoopResult:
     total_usage: TokenUsage | None = None
     terminated_reason: str = "end_turn"
     circuit_trip: CircuitTripInfo | None = None
+    # ABS-266: One entry per gateway round, in dispatch order. Carries
+    # the round's reported ``usage`` and wall-clock ``latency_ms`` so
+    # callers can reconstruct the staircase of context growth instead
+    # of seeing only the aggregate. Includes the forced-synthesis round
+    # when the loop terminated on ``iteration_cap`` or
+    # ``cost_circuit_trip``.
+    per_iteration: list[IterationMetric] = field(default_factory=list)
 
 
 @dataclass
 class ToolInvocation:
     """One tool call within the loop. Records what the LLM asked for
-    and what the handler returned (or raised)."""
+    and what the handler returned (or raised).
+
+    ``latency_ms`` is the handler's wall-clock execution time, NOT
+    including the gateway round-trip that requested the tool. Used by
+    ABS-266 to expose per-tool perf in ``ToolLoopMetricsEvent``.
+    """
 
     tool_use_id: str
     tool_name: str
     input: dict[str, Any]
     output: str | list[ContentBlock] | None
     error: str | None = None
+    latency_ms: int = 0
 
 
 class ToolLoopError(Exception):
@@ -186,6 +201,8 @@ async def run_tool_loop(
     conversation = list(request.messages)
     tool_calls: list[ToolInvocation] = []
     total_usage: TokenUsage | None = None
+    # ABS-266: capture per-round metrics in dispatch order.
+    per_iteration: list[IterationMetric] = []
 
     for iteration in range(1, max_iterations + 1):
         current_request = request.model_copy(
@@ -216,9 +233,12 @@ async def run_tool_loop(
                 nudge=_COST_CIRCUIT_NUDGE,
                 terminated_reason="cost_circuit_trip",
                 circuit_trip=trip,
+                per_iteration=per_iteration,
             )
 
+        gateway_t0 = time.monotonic()
         response = await gateway.complete(current_request)
+        gateway_latency_ms = int((time.monotonic() - gateway_t0) * 1000)
         total_usage = _accumulate_usage(total_usage, response.usage)
 
         # Always append the assistant turn to the conversation, even
@@ -230,6 +250,14 @@ async def run_tool_loop(
         )
 
         tool_use_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
+        per_iteration.append(
+            IterationMetric(
+                iteration=iteration,
+                usage=response.usage,
+                latency_ms=gateway_latency_ms,
+                tool_call_count=len(tool_use_blocks),
+            )
+        )
         if not tool_use_blocks:
             return ToolLoopResult(
                 final_response=response,
@@ -238,6 +266,7 @@ async def run_tool_loop(
                 iterations=iteration,
                 total_usage=total_usage,
                 terminated_reason="end_turn",
+                per_iteration=per_iteration,
             )
 
         result_blocks: list[ContentBlock] = []
@@ -272,6 +301,7 @@ async def run_tool_loop(
         conversation=conversation,
         tool_calls=tool_calls,
         total_usage=total_usage,
+        per_iteration=per_iteration,
         iterations=max_iterations,
         nudge=_ITERATION_CAP_NUDGE,
         terminated_reason="iteration_cap",
@@ -290,6 +320,7 @@ async def _force_synthesis(
     nudge: str,
     terminated_reason: str,
     circuit_trip: CircuitTripInfo | None,
+    per_iteration: list[IterationMetric] | None = None,
 ) -> ToolLoopResult:
     """Tack a stop-and-answer nudge onto the last user message and
     make one final tools-stripped call.
@@ -332,10 +363,24 @@ async def _force_synthesis(
     synthesis_request = request.model_copy(
         update={"messages": list(conversation), "tools": []}
     )
+    syn_t0 = time.monotonic()
     final_response = await gateway.complete(synthesis_request)
+    syn_latency_ms = int((time.monotonic() - syn_t0) * 1000)
     total_usage = _accumulate_usage(total_usage, final_response.usage)
     conversation.append(
         Message(role=LLMRole.ASSISTANT, content=list(final_response.content))
+    )
+    metrics = list(per_iteration) if per_iteration else []
+    # The forced-synthesis call is itself a billable round; record it
+    # under ``iteration = iterations + 1`` so per_iteration[].iteration
+    # remains monotonic even when the loop terminated abnormally.
+    metrics.append(
+        IterationMetric(
+            iteration=iterations + 1,
+            usage=final_response.usage,
+            latency_ms=syn_latency_ms,
+            tool_call_count=0,  # tools were stripped for synthesis
+        )
     )
     return ToolLoopResult(
         final_response=final_response,
@@ -345,6 +390,7 @@ async def _force_synthesis(
         total_usage=total_usage,
         terminated_reason=terminated_reason,
         circuit_trip=circuit_trip,
+        per_iteration=metrics,
     )
 
 
@@ -368,6 +414,7 @@ async def _run_one_handler(
             output=None,
             error=message,
         )
+    t0 = time.monotonic()
     try:
         output = await handler(block.input)
     except Exception as exc:  # noqa: BLE001 — surface the error to the LLM
@@ -378,12 +425,14 @@ async def _run_one_handler(
             input=dict(block.input),
             output=None,
             error=f"{type(exc).__name__}: {exc}",
+            latency_ms=int((time.monotonic() - t0) * 1000),
         )
     return ToolInvocation(
         tool_use_id=block.id,
         tool_name=block.name,
         input=dict(block.input),
         output=output,
+        latency_ms=int((time.monotonic() - t0) * 1000),
     )
 
 

@@ -50,7 +50,9 @@ from advisor.llm import (
     StreamEvent,
     TextBlock,
     TokenUsage,
+    ToolCallMetric,
     ToolDefinition,
+    ToolLoopMetricsEvent,
 )
 from advisor.llm.budget import CircuitTripInfo, default_token_budget
 from advisor.llm.mock import MockGateway
@@ -149,6 +151,15 @@ class ChatSession:
     # without having to know about the tool registry's internals.
     last_turn_upgrade_requests: list[dict[str, str]] = field(
         default_factory=list, repr=False, compare=False
+    )
+    # ABS-266: Tool-loop observability event built at the end of the
+    # most recent ``send_user_message_blocking`` call. The streaming
+    # ``send_user_message`` yields this AFTER the synthetic content
+    # stream so out-of-band consumers (test runners, dev consoles) can
+    # see iteration count, per-iteration usage, and terminated reason
+    # without scraping server logs. ``None`` between turns.
+    last_tool_loop_metrics: ToolLoopMetricsEvent | None = field(
+        default=None, repr=False, compare=False
     )
     # How many recent user-prompt turns to keep intact when compacting
     # history for LLM submission. ``None`` defers to the
@@ -251,6 +262,27 @@ class ChatSession:
         # value rather than carrying it forward.
         self.last_turn_usage = result.total_usage
         self.last_turn_circuit_trip = result.circuit_trip
+        # ABS-266: build the observability event once, here, so both
+        # the blocking and streaming entry points emit identical
+        # metrics. The flat ``tool_calls`` list mirrors loop dispatch
+        # order; we deliberately drop tool arguments and outputs from
+        # the event because they can be large and contain user data —
+        # the event is for cost/perf observability, not transcript
+        # capture (transcripts live in ``self.messages``).
+        self.last_tool_loop_metrics = ToolLoopMetricsEvent(
+            iterations=result.iterations,
+            terminated_reason=result.terminated_reason,
+            total_usage=result.total_usage,
+            per_iteration=list(result.per_iteration),
+            tool_calls=[
+                ToolCallMetric(
+                    name=inv.tool_name,
+                    is_error=inv.error is not None,
+                    latency_ms=inv.latency_ms,
+                )
+                for inv in result.tool_calls
+            ],
+        )
         self.updated_at = datetime.now(timezone.utc)
         # Drain any tier-upgrade requests fired by the
         # ``request_tier_upgrade`` tool during this turn. The chat
@@ -294,6 +326,13 @@ class ChatSession:
         incremental streaming during tool use will land when we drive
         ``gateway.stream()`` directly inside the loop, which is not
         yet implemented. See module docstring for rationale.
+
+        After the synthetic content stream finishes, ABS-266's
+        ``ToolLoopMetricsEvent`` is yielded as the very last event so
+        out-of-band consumers (test runners, dev consoles) can capture
+        true per-turn iteration count and per-iteration usage. The
+        chat UI ignores unknown event types, so this is invisible to
+        end users.
         """
         final_response = await self.send_user_message_blocking(gateway, text)
         # Reuse the mock's chunker so the event sequence exactly
@@ -301,6 +340,14 @@ class ChatSession:
         # frontend can't tell the difference from a real stream.
         async for event in MockGateway._stream_from_response(final_response):
             yield event
+        # ABS-266: emit the tool-loop rollup after the Anthropic-shape
+        # stream completes so message_stop still terminates the
+        # content stream from the UI's perspective. Skipped when no
+        # metrics were captured (e.g. a turn that errored before the
+        # loop populated them — defensive, shouldn't happen in
+        # practice).
+        if self.last_tool_loop_metrics is not None:
+            yield self.last_tool_loop_metrics
 
 
 _ANCHOR_KIND_LABELS = {
