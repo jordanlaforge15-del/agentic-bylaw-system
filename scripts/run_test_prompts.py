@@ -304,6 +304,16 @@ def main() -> None:
     parser.add_argument("--turn-timeout", type=float, default=180.0, help="Seconds per /v1/chat call (Opus + tool use can be slow).")
     parser.add_argument("--ids", nargs="*", help="Optional subset of TC IDs to run.")
     parser.add_argument("--out-dir", help="Override output directory. Defaults to evals/runs/<UTC timestamp>/.")
+    parser.add_argument(
+        "--model",
+        help=(
+            "Expected main chat model (e.g. claude-haiku-4-5). When set, "
+            "the runner pings /healthz before any spend and aborts if "
+            "the live advisor reports a different model. Set "
+            "ADVISOR_LLM_MAIN_MODEL on the advisor process to actually "
+            "switch the model — this flag only verifies."
+        ),
+    )
     args = parser.parse_args()
 
     cases = load_prompts()
@@ -312,6 +322,33 @@ def main() -> None:
         cases = [c for c in cases if c["id"] in wanted]
         if not cases:
             parser.error(f"No cases matched IDs: {args.ids}")
+
+    # ABS-267: model-precondition check. We assert against /healthz
+    # BEFORE spending money on a run that would otherwise hit the
+    # wrong model (e.g. a Haiku-baseline command accidentally exercising
+    # the still-configured Opus stack). Healthz is unauthenticated, so
+    # this works even when CLERK is on.
+    if args.model:
+        try:
+            r = httpx.get(f"{args.base_url}/healthz", timeout=10.0)
+            r.raise_for_status()
+            live_model = (r.json().get("llm") or {}).get("main_model")
+        except httpx.HTTPError as exc:
+            parser.error(
+                f"--model precondition: could not read /healthz from "
+                f"{args.base_url}: {exc}"
+            )
+        if live_model != args.model:
+            parser.error(
+                f"--model precondition: advisor reports main_model="
+                f"{live_model!r}, but --model={args.model!r} was requested. "
+                "Set ADVISOR_LLM_MAIN_MODEL on the advisor process and "
+                "restart before re-running."
+            )
+        print(
+            f"model precondition OK: {args.base_url} is serving {live_model}",
+            file=sys.stderr,
+        )
 
     if args.out_dir:
         out_dir = Path(args.out_dir).resolve()
