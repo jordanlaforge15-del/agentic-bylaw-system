@@ -259,6 +259,18 @@ def create_app(
     else:
         store = InMemorySessionStore()
 
+    # Resolve the main chat model up front so every request uses the
+    # configured value. ABS-267: ``AdvisorLLMSettings.main_model``
+    # honours ``ADVISOR_LLM_MAIN_MODEL`` (or legacy ``ADVISOR_LLM_MODEL``)
+    # — previously this setting was loaded but never threaded down to
+    # ``ChatSession.model``, so the env var was dead code from a
+    # deployment-config perspective.
+    from advisor.llm.registry import (  # noqa: PLC0415
+        get_settings as _get_llm_settings,
+    )
+
+    _chat_main_model = _get_llm_settings().main_model
+
     app = FastAPI(title="Halifax Bylaw Advisor", version="0.1.0")
 
     # Stash dependencies on app.state so route handlers can grab them
@@ -517,12 +529,20 @@ def create_app(
         except Exception:  # noqa: BLE001
             sli = None
 
+        # ABS-267: surface the active chat model so out-of-band runners
+        # can verify they're hitting the model they expected before
+        # spending money on an Opus run when they meant Haiku, etc.
+        body: dict[str, Any] = {
+            "status": "ok",
+            "checks": checks,
+            "sli": sli,
+            "llm": {"main_model": _chat_main_model},
+        }
+
         if db_status == "unreachable":
-            return JSONResponse(
-                content={"status": "degraded", "checks": checks, "sli": sli},
-                status_code=503,
-            )
-        return JSONResponse(content={"status": "ok", "checks": checks, "sli": sli})
+            body["status"] = "degraded"
+            return JSONResponse(content=body, status_code=503)
+        return JSONResponse(content=body)
 
     @app.get("/readyz", response_model=None)
     async def readyz():
@@ -559,6 +579,7 @@ def create_app(
             session_id=body.session_id,
             persona_text=persona,
             retrieval_factory=factory,
+            model=_chat_main_model,
         )
 
         # Pre-flight (case-credit + RPM) BEFORE we start streaming.
@@ -1539,6 +1560,7 @@ def _resolve_or_create_session(
     session_id: str | None,
     persona_text: str,
     retrieval_factory: Callable[[], Any],
+    model: str | None = None,
 ) -> ChatSession:
     """Look up a session by id or mint a new one with bound tools.
 
@@ -1546,6 +1568,16 @@ def _resolve_or_create_session(
     re-bind them per request because that would stomp any handlers
     the test may have monkey-patched. A new session gets a fresh
     factory-bound tool set.
+
+    ``model`` overrides the dataclass default ``"claude-opus-4-5"``
+    when set; passed through verbatim to ``store.create``. The chat
+    route reads ``AdvisorLLMSettings.main_model`` and forwards it
+    here so deployments can swap models via env var
+    (``ADVISOR_LLM_MAIN_MODEL`` or the legacy ``ADVISOR_LLM_MODEL``)
+    without code changes. ABS-267 added this — previously the env
+    var was honoured by the settings model but never reached the
+    chat session, so cheap-model regression runs against the real
+    advisor were impossible.
     """
     if session_id is not None:
         existing = store.get(session_id)
@@ -1562,6 +1594,7 @@ def _resolve_or_create_session(
         system_prompt=persona_text,
         tool_defs=tool_defs,
         tool_handlers=tool_handlers,
+        model=model,
     )
 
 

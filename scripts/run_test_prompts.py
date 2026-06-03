@@ -121,6 +121,12 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
     model: str | None = None
     session_id: str | None = None
     case_id: Any = None
+    # ABS-266: per-turn tool-loop rollup emitted after the content
+    # stream (one event per user message). Carries iterations,
+    # per-iteration usage, terminated_reason, and per-tool-call
+    # latency / error state. Captured verbatim so downstream scripts
+    # can reason about loop behaviour without re-deriving from logs.
+    tool_loop_metrics: dict[str, Any] | None = None
 
     for ev in events:
         et = ev.get("event")
@@ -130,6 +136,8 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
             case_id = data.get("case_id")
         elif et == "message_start":
             model = data.get("model") or model
+        elif et == "tool_loop_metrics":
+            tool_loop_metrics = data
         elif et == "content_block_start":
             idx = data.get("index")
             block = data.get("content_block") or {}
@@ -186,6 +194,7 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
         "model": model,
         "session_id": session_id,
         "case_id": case_id,
+        "tool_loop_metrics": tool_loop_metrics,
     }
 
 
@@ -262,6 +271,12 @@ def run_case(
             "raw_event_count": result.get("raw_event_count"),
             "error": result.get("error"),
             "body_excerpt": result.get("body_excerpt"),
+            # ABS-266: per-turn tool-loop observability (iterations,
+            # terminated_reason, per-iteration usage, per-tool-call
+            # error/latency). ``None`` for servers that haven't been
+            # upgraded to emit the event — runner stays backward
+            # compatible with older deployments.
+            "tool_loop_metrics": result.get("tool_loop_metrics"),
         })
         if result.get("error"):
             print(f"    !! error on turn {turn['turn']}: {result['error']}", file=sys.stderr)
@@ -289,6 +304,16 @@ def main() -> None:
     parser.add_argument("--turn-timeout", type=float, default=180.0, help="Seconds per /v1/chat call (Opus + tool use can be slow).")
     parser.add_argument("--ids", nargs="*", help="Optional subset of TC IDs to run.")
     parser.add_argument("--out-dir", help="Override output directory. Defaults to evals/runs/<UTC timestamp>/.")
+    parser.add_argument(
+        "--model",
+        help=(
+            "Expected main chat model (e.g. claude-haiku-4-5). When set, "
+            "the runner pings /healthz before any spend and aborts if "
+            "the live advisor reports a different model. Set "
+            "ADVISOR_LLM_MAIN_MODEL on the advisor process to actually "
+            "switch the model — this flag only verifies."
+        ),
+    )
     args = parser.parse_args()
 
     cases = load_prompts()
@@ -297,6 +322,33 @@ def main() -> None:
         cases = [c for c in cases if c["id"] in wanted]
         if not cases:
             parser.error(f"No cases matched IDs: {args.ids}")
+
+    # ABS-267: model-precondition check. We assert against /healthz
+    # BEFORE spending money on a run that would otherwise hit the
+    # wrong model (e.g. a Haiku-baseline command accidentally exercising
+    # the still-configured Opus stack). Healthz is unauthenticated, so
+    # this works even when CLERK is on.
+    if args.model:
+        try:
+            r = httpx.get(f"{args.base_url}/healthz", timeout=10.0)
+            r.raise_for_status()
+            live_model = (r.json().get("llm") or {}).get("main_model")
+        except httpx.HTTPError as exc:
+            parser.error(
+                f"--model precondition: could not read /healthz from "
+                f"{args.base_url}: {exc}"
+            )
+        if live_model != args.model:
+            parser.error(
+                f"--model precondition: advisor reports main_model="
+                f"{live_model!r}, but --model={args.model!r} was requested. "
+                "Set ADVISOR_LLM_MAIN_MODEL on the advisor process and "
+                "restart before re-running."
+            )
+        print(
+            f"model precondition OK: {args.base_url} is serving {live_model}",
+            file=sys.stderr,
+        )
 
     if args.out_dir:
         out_dir = Path(args.out_dir).resolve()
