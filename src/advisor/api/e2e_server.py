@@ -1030,8 +1030,48 @@ def _mount_seed_session_endpoint(app: FastAPI) -> None:
             return {"session_id": str(session_row.id)}
 
 
+class _SearchEvidenceBody(BaseModel):
+    query: str
+    bylaw_name: str | None = None
+    municipality: str | None = None
+    limit: int = Field(default=5, ge=1, le=50)
+
+
+def _mount_search_evidence_endpoint(app: FastAPI) -> None:
+    """ABS-271: expose search_bylaw_evidence over HTTP for e2e limit tests.
+
+    Accepts ``query`` + optional ``bylaw_name`` / ``municipality`` scope and
+    a ``limit`` parameter (1–50). Returns the fragment IDs and scores in
+    ranked order so Playwright can assert on count and ordering invariants.
+    """
+    from bylaw_retrieval.retrieval import RetrievalRequest, RetrievalService  # noqa: PLC0415
+
+    @app.post("/v1/_test/search-evidence")
+    async def search_evidence(body: _SearchEvidenceBody) -> dict[str, object]:
+        with session_scope() as session:
+            service = RetrievalService(session)
+            request = RetrievalRequest(
+                query=body.query,
+                bylaw_name=body.bylaw_name,
+                municipality=body.municipality,
+                limit=body.limit,
+                include_context=False,
+                include_cross_references=False,
+                include_tables=False,
+                include_datasets=False,
+            )
+            response = service.search(request)
+            return {
+                "total_matches": response.total_matches,
+                "match_count": len(response.matches),
+                "fragment_ids": [m.fragment_id for m in response.matches],
+                "scores": [m.score for m in response.matches],
+            }
+
+
 app = build_e2e_app()
 _mount_seed_session_endpoint(app)
+_mount_search_evidence_endpoint(app)
 
 
 if __name__ == "__main__":  # pragma: no cover
