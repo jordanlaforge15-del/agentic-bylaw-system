@@ -30,7 +30,7 @@ from advisor.chat.tools import build_bylaw_tools
 from bylaw_retrieval.retrieval import RetrievalService, ZoneProfile
 from bylaw_retrieval.retrieval.schemas import CitationLookupRequest
 from layer1.db.session import session_scope
-from tests.test_get_zone_profile import _seed_regional_centre
+from test_get_zone_profile import _seed_regional_centre
 
 
 # ---------------------------------------------------------------------------
