@@ -436,7 +436,7 @@ class RetrievalService:
         dims_match = self._zone_best_match(f"{zone} maximum height lot coverage", zone_pattern)
         setback_match = self._zone_best_match(f"{zone} setback", zone_pattern)
         far_match = self._zone_best_match(f"{zone} floor area ratio", zone_pattern)
-        uses_match = self._zone_best_match(f"{zone} permitted use", zone_pattern)
+        uses_match = self._zone_best_match(f"{zone} use permissions permitted", zone_pattern)
 
         zone_found = any(
             m is not None
@@ -1553,13 +1553,15 @@ def _extract_uses(text: str, zone: str) -> tuple[list[str], list[str]]:
     """Split a use-permission row into (permitted, not_permitted).
 
     Operates on flattened table-row text like
-    ``"HR-2 single-unit dwelling N secondary suite N multi-unit
-    dwelling P home occupation N daycare P"`` where each use phrase is
-    followed by a ``P`` (permitted) or ``N`` (not permitted) marker.
-    The zone code is stripped first so it doesn't get absorbed into the
-    first use phrase.
+    ``"Use Permissions HR-2 single-unit dwelling N secondary suite N
+    multi-unit dwelling P home occupation N daycare P"`` where each use
+    phrase is followed by a ``P`` (permitted) or ``N`` (not permitted)
+    marker. Parsing starts immediately after the first occurrence of the
+    zone code so a leading table caption ("Use Permissions") is dropped
+    and never absorbed into the first use phrase.
     """
-    body = _zone_pattern(zone).sub(" ", text)
+    anchor = _zone_pattern(zone).search(text)
+    body = text[anchor.end():] if anchor else text
     permitted: list[str] = []
     not_permitted: list[str] = []
     for name, marker in re.findall(
