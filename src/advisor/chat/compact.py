@@ -341,7 +341,7 @@ def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
         out["citations"] = [
             {
                 "citation_path": c.citation_path,
-                **({"fields": list(c.fields)} if c.fields else {}),
+                **({"backs": list(c.backs)} if c.backs else {}),
             }
             for c in profile.citations
         ]
@@ -428,7 +428,7 @@ def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
             {
                 k: v
                 for k, v in {
-                    "source": c.source,
+                    "backs": c.backs,
                     "citation_path": c.citation_path,
                     "citation_label": c.citation_label,
                     "document_id": c.document_id,

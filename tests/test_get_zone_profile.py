@@ -388,5 +388,5 @@ def test_get_zone_profile_low_confidence_returns_null_field(tmp_path: Path):
     assert profile.dimensions is not None
     assert profile.dimensions.max_height_m is None
     assert "max_height_m" not in profile.confidence
-    cited_fields = [field for c in profile.citations for field in c.fields]
+    cited_fields = [field for c in profile.citations for field in c.backs]
     assert "max_height_m" not in cited_fields

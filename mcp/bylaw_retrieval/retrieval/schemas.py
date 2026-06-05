@@ -447,17 +447,22 @@ class OverlayRef(BaseModel):
 
 
 class CitationRef(BaseModel):
-    """A pointer to the authoritative bylaw fragment behind a profile field.
+    """A traceable pointer from a populated thick-DTO field (ZoneProfile,
+    AddressProfile, …) back to the authoritative bylaw source fragment.
 
-    ``get_address_profile`` emits one ``CitationRef`` per overlay that
-    contributed a value, so an answer grounded on the profile can cite the
-    specific schedule/clause rather than presenting an opaque result. The
-    ``source`` tag names which profile facet the citation backs (the same
-    vocabulary as ``OverlayRef.kind``).
+    Unified across get_zone_profile and get_address_profile. ``backs``
+    names which DTO facet(s)/field(s) this citation supports — it
+    subsumes the former ``source`` (single facet, e.g. 'zone',
+    'height_precinct') and ``fields`` (zone-profile field names, e.g.
+    ['max_height_m', 'max_lot_coverage_pct']). ``citation_path`` is
+    optional: address overlays may cite a dataset that has no resolvable
+    path, while zone-field citations always set it (and can pass it to
+    lookup_citation to retrieve the original fragment).
     """
 
     citation_path: str | None = Field(
-        default=None, description="Stored citation_path of the linked fragment, if any."
+        default=None,
+        description="Stored citation_path of the linked fragment, if any; resolvable via lookup_citation.",
     )
     citation_label: str | None = Field(
         default=None,
@@ -466,9 +471,15 @@ class CitationRef(BaseModel):
     document_id: int | None = Field(default=None, description="Owning document id, if resolved.")
     municipality: str | None = Field(default=None, description="Owning document municipality.")
     bylaw_name: str | None = Field(default=None, description="Owning document bylaw name.")
-    source: str = Field(
-        ...,
-        description="Which profile facet this citation backs ('zone', 'height_precinct', …).",
+    page_start: int | None = Field(default=None, description="Source page range start.")
+    page_end: int | None = Field(default=None, description="Source page range end.")
+    backs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Which DTO facet(s)/field(s) this citation supports. Single-element "
+            "for address overlays (e.g. ['zone']); multi-element for zone fields "
+            "(e.g. ['max_height_m', 'max_lot_coverage_pct'])."
+        ),
     )
 
 
@@ -549,34 +560,6 @@ class AddressProfile(BaseModel):
 # ``search_bylaw_evidence`` the agent would have called — it just does
 # so in one place and extracts the structured values for the caller.
 # ---------------------------------------------------------------------------
-
-
-class CitationRef(BaseModel):
-    """A traceable pointer from a populated ``ZoneProfile`` field back to
-    the bylaw source fragment it was extracted from.
-
-    Every populated field in a :class:`ZoneProfile` is backed by at
-    least one ``CitationRef`` (FR-2.4). The caller can pass
-    ``citation_path`` straight to ``lookup_citation`` to retrieve the
-    original fragment text and verify the extracted value.
-    """
-
-    citation_path: str = Field(
-        ..., description="Exact stored citation path; resolvable via lookup_citation."
-    )
-    citation_label: str | None = Field(
-        default=None, description="Human-facing citation label, when the fragment has one."
-    )
-    fields: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Names of the ZoneProfile fields this fragment is the source "
-            "for (e.g. ['max_height_m', 'max_lot_coverage_pct']). Lets the "
-            "caller show a field-level citation instead of one blanket source."
-        ),
-    )
-    page_start: int | None = Field(default=None, description="Source page range start.")
-    page_end: int | None = Field(default=None, description="Source page range end.")
 
 
 class ZoneDimensions(BaseModel):

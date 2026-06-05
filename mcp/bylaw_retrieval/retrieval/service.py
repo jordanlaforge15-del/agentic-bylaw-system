@@ -925,7 +925,7 @@ class RetrievalService:
             document_id=document.id if document else None,
             municipality=document.municipality if document else None,
             bylaw_name=document.bylaw_name if document else None,
-            source=source,
+            backs=[source],
         )
 
     def _build_response_notes(
@@ -1660,15 +1660,15 @@ class _CitationAccumulator:
             self._by_path[path] = CitationRef(
                 citation_path=path,
                 citation_label=match.citation_label,
-                fields=list(fields),
+                backs=list(fields),
                 page_start=match.page_start,
                 page_end=match.page_end,
             )
             self._order.append(path)
         else:
             for field in fields:
-                if field not in existing.fields:
-                    existing.fields.append(field)
+                if field not in existing.backs:
+                    existing.backs.append(field)
 
     def to_list(self) -> list[CitationRef]:
         return [self._by_path[path] for path in self._order]
