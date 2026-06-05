@@ -69,6 +69,7 @@ def test_build_bylaw_tools_returns_full_tool_set(seeded_service):
         "lookup_citation",
         "search_bylaw_evidence",
         "get_address_profile",
+        "get_zone_profile",
         "evaluate_submission_against_bylaws",
         "request_tier_upgrade",
     }

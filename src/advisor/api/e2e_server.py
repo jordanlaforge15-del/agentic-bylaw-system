@@ -1120,9 +1120,38 @@ def _mount_search_evidence_endpoint(app: FastAPI) -> None:
             }
 
 
+class _ZoneProfileBody(BaseModel):
+    zone: str
+    include: list[str] | None = None
+
+
+def _mount_zone_profile_endpoint(app: FastAPI) -> None:
+    """ABS-272: expose get_zone_profile over HTTP for e2e coverage.
+
+    Calls ``RetrievalService.get_zone_profile`` and returns the compact
+    projection plus the ``unknown_zone`` flag so Playwright can assert
+    the thick tool composes a full DTO for a known zone and degrades to
+    an unknown-zone marker (no 500) for a bogus one.
+    """
+    from advisor.chat.compact import compact_zone_profile  # noqa: PLC0415
+    from bylaw_retrieval.retrieval import RetrievalService  # noqa: PLC0415
+
+    @app.post("/v1/_test/zone-profile")
+    async def zone_profile(body: _ZoneProfileBody) -> dict[str, object]:
+        with session_scope() as session:
+            service = RetrievalService(session)
+            profile = service.get_zone_profile(zone=body.zone, include=body.include)
+            return {
+                "unknown_zone": profile.unknown_zone,
+                "citation_count": len(profile.citations),
+                "profile": compact_zone_profile(profile),
+            }
+
+
 app = build_e2e_app()
 _mount_seed_session_endpoint(app)
 _mount_search_evidence_endpoint(app)
+_mount_zone_profile_endpoint(app)
 
 
 if __name__ == "__main__":  # pragma: no cover
