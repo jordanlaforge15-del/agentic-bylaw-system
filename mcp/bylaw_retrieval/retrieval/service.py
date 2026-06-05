@@ -11,9 +11,11 @@ from sqlalchemy.orm import Session
 from rapidfuzz import fuzz, process
 
 from bylaw_retrieval.retrieval.schemas import (
+    AddressProfile,
     AncestorFragment,
     CitationLookupRequest,
     CitationLookupResponse,
+    CitationRef,
     CrossReferenceSummary,
     DatasetFeatureMatch,
     DocumentOutlineItem,
@@ -21,6 +23,7 @@ from bylaw_retrieval.retrieval.schemas import (
     DocumentSummary,
     LinkedDataset,
     LocationSlot,
+    OverlayRef,
     RetrievalMatch,
     RetrievalRequest,
     RetrievalResponse,
@@ -381,6 +384,233 @@ class RetrievalService:
             notes=notes,
         )
 
+    def _scoped_linked_datasets(
+        self,
+        *,
+        document_id: int | None = None,
+        municipality: str | None = None,
+        bylaw_name: str | None = None,
+    ) -> list[ExternalDataset]:
+        """Return every linked geo dataset visible under the active scope.
+
+        Shared by the spatial retrieval channel (``_spatial_channel_scores``)
+        and the thick ``get_address_profile`` tool so both see exactly the
+        same dataset set — the default-document resolver AND-ed with any
+        explicit document/municipality/bylaw filter. Keeping this in one
+        place is what FR-3.3 means by "reuse the spatial-join code": the
+        profile composes the established scoping rather than re-deriving them
+        and risking divergence from the evaluator's view of the corpus.
+        """
+        dataset_stmt = (
+            select(ExternalDataset)
+            .join(SourceFragment, SourceFragment.id == ExternalDataset.linked_fragment_id)
+            .join(Document, Document.id == SourceFragment.document_id)
+            .where(ExternalDataset.linked_fragment_id.is_not(None))
+        )
+        default_ids = self._resolve_default_document_ids()
+        if default_ids is not None:
+            dataset_stmt = dataset_stmt.where(SourceFragment.document_id.in_(default_ids))
+        if document_id is not None:
+            dataset_stmt = dataset_stmt.where(SourceFragment.document_id == document_id)
+        if municipality:
+            dataset_stmt = dataset_stmt.where(Document.municipality.ilike(f"%{municipality}%"))
+        if bylaw_name:
+            dataset_stmt = dataset_stmt.where(Document.bylaw_name.ilike(f"%{bylaw_name}%"))
+        return list(self.session.execute(dataset_stmt).scalars().all())
+
+    # ------------------------------------------------------------------
+    # Thick tool: get_address_profile (ABS-273 / Phase 3)
+    # ------------------------------------------------------------------
+    #
+    # Maps a linked dataset to the AddressProfile facet it populates. Keyed
+    # on a lowercase substring of the dataset name — the same disambiguation
+    # convention the rest of the retrieval surface uses ("the dataset name
+    # makes it clear which 'district' the field describes", see
+    # layer1.datasets.canonical). Order matters: the first matching keyword
+    # wins, so the more specific tokens are listed before the generic ones.
+    _OVERLAY_ROLE_KEYWORDS: tuple[tuple[str, str], ...] = (
+        ("heritage", "heritage"),
+        ("bonus", "bonus_zoning"),
+        ("shadow", "shadow_impact"),
+        ("far", "far_precinct"),
+        ("floor_area", "far_precinct"),
+        ("height", "height_precinct"),
+        ("zoning", "zone"),
+        ("zone", "zone"),
+    )
+
+    def get_address_profile(self, address: str) -> AddressProfile:
+        """Resolve an address to its zone + overlay grounding context.
+
+        Free-text ``address`` is parsed with the same deterministic
+        extractor the retrieval surface uses, geocoded through the existing
+        layered resolver, then intersected against every linked geo dataset
+        in scope. The well-known overlays (zoning, height, FAR, heritage,
+        bonus zoning) populate the dedicated DTO fields; everything else is
+        surfaced under ``overlays``. Each contributing overlay yields a
+        ``CitationRef`` so a grounded answer can cite the schedule.
+
+        Never raises for an unresolvable address — FR-3.4 — returning an
+        ``AddressProfile`` with ``unresolvable=True`` and empty citations so
+        the calling agent can fall back to the thin tools cleanly.
+        """
+        refs = RegexLocationExtractor().extract(address)
+        if not refs:
+            return AddressProfile(address=address, unresolvable=True)
+
+        ref = refs[0]
+        resolved, _detail = resolve_location_with_detail(self.session, ref)
+        canonical_address = ref.raw_text or address
+        if resolved is None:
+            return AddressProfile(
+                address=canonical_address,
+                civic_number=ref.civic_number,
+                street=ref.street,
+                pid=ref.parcel_id,
+                unresolvable=True,
+            )
+        return self._build_address_profile(canonical_address, ref, resolved)
+
+    def _overlay_role(self, dataset: ExternalDataset) -> str:
+        name = (dataset.name or "").lower()
+        for keyword, role in self._OVERLAY_ROLE_KEYWORDS:
+            if keyword in name:
+                return role
+        return "overlay"
+
+    def _build_address_profile(
+        self,
+        address: str,
+        ref: LocationReference,
+        resolved: ResolvedLocation,
+    ) -> AddressProfile:
+        profile = AddressProfile(
+            address=address,
+            civic_number=ref.civic_number,
+            street=ref.street,
+            pid=ref.parcel_id,
+            unresolvable=False,
+        )
+        overlays: list[OverlayRef] = []
+        citations: list[CitationRef] = []
+        # "available" = a dataset of this role is in scope, so a non-match is
+        # a meaningful False rather than an unknown None.
+        heritage_available = False
+        bonus_available = False
+
+        for dataset in self._scoped_linked_datasets():
+            role = self._overlay_role(dataset)
+            if role == "heritage":
+                heritage_available = True
+            elif role == "bonus_zoning":
+                bonus_available = True
+
+            matches = query_features(
+                self.session, dataset_id=dataset.id, location=resolved
+            )
+            if not matches:
+                continue
+            # Strongest match wins (query_features sorts containment/overlap
+            # first), mirroring how the spatial channel keeps the best hit.
+            best = matches[0]
+            canonical = dict(best.feature.canonical_attributes_json or {})
+            label = self._overlay_label(role, canonical, best.feature.feature_key)
+
+            overlays.append(
+                OverlayRef(
+                    kind=role,
+                    dataset_name=dataset.name,
+                    label=label,
+                    citation=dataset.linked_fragment_citation,
+                    attributes=canonical,
+                )
+            )
+            citations.append(self._citation_ref_for_dataset(dataset, source=role))
+
+            if role == "zone":
+                profile.zone = canonical.get("zone_code") or label
+            elif role == "height_precinct":
+                profile.height_precinct = label
+            elif role == "far_precinct":
+                profile.far_precinct = label
+            elif role == "heritage":
+                profile.heritage = True
+            elif role == "bonus_zoning":
+                profile.bonus_zoning_eligible = True
+
+        # A checked-but-unmatched heritage / bonus dataset is a definitive
+        # "no", distinct from "no such dataset in scope" (left as None).
+        if profile.heritage is None and heritage_available:
+            profile.heritage = False
+        if profile.bonus_zoning_eligible is None and bonus_available:
+            profile.bonus_zoning_eligible = False
+
+        profile.overlays = overlays
+        profile.citations = citations
+        return profile
+
+    @staticmethod
+    def _overlay_label(
+        role: str, canonical: dict[str, object], feature_key: str
+    ) -> str | None:
+        """Pick the headline label for an overlay from its canonical attrs.
+
+        Prefers an explicit ``display_label`` when the dataset carries one.
+        Otherwise synthesises the precinct shorthand the issue's examples
+        use ("HP-25", "FA-3.5") from the height/FAR value, so the agent
+        sees a stable identifier instead of a bare number.
+        """
+        display = canonical.get("display_label")
+        if isinstance(display, str) and display:
+            return display
+        if role == "zone":
+            zone = canonical.get("zone_code")
+            return str(zone) if zone is not None else None
+        if role == "height_precinct":
+            height_m = canonical.get("max_height_m")
+            if height_m is not None:
+                return f"HP-{float(height_m):g}"
+            storeys = canonical.get("max_height_storeys")
+            if storeys is not None:
+                return f"HP-{int(storeys)}st"
+            return None
+        if role == "far_precinct":
+            far = canonical.get("max_far")
+            return f"FA-{float(far):g}" if far is not None else None
+        if role == "heritage":
+            return _first_str(canonical, "district_name", "district_label", "district_code")
+        if role == "bonus_zoning":
+            return _first_str(canonical, "district_code", "district_name")
+        # Generic overlay: any district-ish name, else the feature key.
+        return _first_str(
+            canonical, "district_name", "district_label", "district_code"
+        ) or feature_key
+
+    def _citation_ref_for_dataset(
+        self, dataset: ExternalDataset, *, source: str
+    ) -> CitationRef:
+        fragment = (
+            self.session.get(SourceFragment, dataset.linked_fragment_id)
+            if dataset.linked_fragment_id is not None
+            else None
+        )
+        document = None
+        if fragment is not None:
+            document = self.session.get(Document, fragment.document_id)
+        elif dataset.linked_document_id is not None:
+            document = self.session.get(Document, dataset.linked_document_id)
+        return CitationRef(
+            citation_path=fragment.citation_path if fragment else None,
+            citation_label=(
+                (fragment.citation_label if fragment else None)
+                or dataset.linked_fragment_citation
+            ),
+            document_id=document.id if document else None,
+            municipality=document.municipality if document else None,
+            bylaw_name=document.bylaw_name if document else None,
+            source=source,
+        )
+
     def _build_response_notes(
         self,
         request: RetrievalRequest,
@@ -477,26 +707,11 @@ class RetrievalService:
         # Mirror the same scope rules used by the text channel so a request
         # under --latest-only (or with explicit document_id / municipality /
         # bylaw_name) constrains the spatial channel identically.
-        dataset_stmt = (
-            select(ExternalDataset)
-            .join(SourceFragment, SourceFragment.id == ExternalDataset.linked_fragment_id)
-            .join(Document, Document.id == SourceFragment.document_id)
-            .where(ExternalDataset.linked_fragment_id.is_not(None))
+        datasets = self._scoped_linked_datasets(
+            document_id=request.document_id,
+            municipality=request.municipality,
+            bylaw_name=request.bylaw_name,
         )
-        default_ids = self._resolve_default_document_ids()
-        if default_ids is not None:
-            dataset_stmt = dataset_stmt.where(SourceFragment.document_id.in_(default_ids))
-        if request.document_id is not None:
-            dataset_stmt = dataset_stmt.where(SourceFragment.document_id == request.document_id)
-        if request.municipality:
-            dataset_stmt = dataset_stmt.where(
-                Document.municipality.ilike(f"%{request.municipality}%")
-            )
-        if request.bylaw_name:
-            dataset_stmt = dataset_stmt.where(
-                Document.bylaw_name.ilike(f"%{request.bylaw_name}%")
-            )
-        datasets = self.session.execute(dataset_stmt).scalars().all()
 
         scored: dict[int, float] = {}
         # When the caller restricts to a specific attribute, the
@@ -939,6 +1154,17 @@ def _attribute_tag_filter_clause(attribute_tags: list[str], *, dialect_name: str
 
 def _tokenize(text: str) -> list[str]:
     return [token.lower() for token in TOKEN_RE.findall(text)]
+
+
+def _first_str(mapping: dict[str, object], *keys: str) -> str | None:
+    """Return the first non-empty string value among ``keys`` in ``mapping``."""
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if value is not None and not isinstance(value, str):
+            return str(value)
+    return None
 
 
 def _truncate(text: str, max_chars: int) -> str:

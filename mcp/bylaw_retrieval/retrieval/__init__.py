@@ -1,11 +1,14 @@
 from bylaw_retrieval.retrieval.schemas import (
+    AddressProfile,
     CitationLookupRequest,
     CitationLookupResponse,
+    CitationRef,
     DatasetFeatureMatch,
     DocumentOutlineResponse,
     DocumentSummary,
     LinkedDataset,
     LocationSlot,
+    OverlayRef,
     RetrievalMatch,
     RetrievalRequest,
     RetrievalResponse,
@@ -18,14 +21,17 @@ from bylaw_retrieval.retrieval.service import (
 )
 
 __all__ = [
+    "AddressProfile",
     "CitationLookupRequest",
     "CitationLookupResponse",
+    "CitationRef",
     "DatasetFeatureMatch",
     "DocumentIdResolver",
     "DocumentOutlineResponse",
     "DocumentSummary",
     "LinkedDataset",
     "LocationSlot",
+    "OverlayRef",
     "RetrievalMatch",
     "RetrievalRequest",
     "RetrievalResponse",

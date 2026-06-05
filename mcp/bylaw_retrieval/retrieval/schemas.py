@@ -315,3 +315,138 @@ class DocumentOutlineResponse(BaseModel):
     document: DocumentSummary
     fragments: list[DocumentOutlineItem] = Field(default_factory=list)
 
+
+class OverlayRef(BaseModel):
+    """A single schedule-keyed overlay that intersects a resolved address.
+
+    Produced by ``get_address_profile`` for every linked geo dataset whose
+    feature contains (or overlaps) the resolved point — zoning, height,
+    FAR, heritage, bonus-zoning, shadow-impact, etc. The dedicated
+    ``AddressProfile`` fields (``zone``, ``height_precinct``, …) carry the
+    headline value for the well-known overlays; ``overlays`` is the
+    exhaustive list so a caller can read any additional schedule-keyed
+    layer the corpus links without the DTO having to grow a field per
+    schedule.
+    """
+
+    kind: str = Field(
+        ...,
+        description=(
+            "Coarse overlay class derived from the linked dataset — one of "
+            "'zone', 'height_precinct', 'far_precinct', 'heritage', "
+            "'bonus_zoning', 'shadow_impact', or 'overlay' (catch-all)."
+        ),
+    )
+    dataset_name: str = Field(..., description="The linked ExternalDataset.name.")
+    label: str | None = Field(
+        default=None,
+        description=(
+            "Human-readable value for this overlay — the zone code, the "
+            "synthesised precinct label, the heritage district name, etc."
+        ),
+    )
+    citation: str | None = Field(
+        default=None,
+        description=(
+            "The bylaw citation the dataset is bound to (e.g. 'Schedule 15'), "
+            "copied from the dataset's linked fragment."
+        ),
+    )
+    attributes: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "The matched feature's canonical attributes (zone_code, "
+            "max_height_m, max_far, district_name, …) verbatim."
+        ),
+    )
+
+
+class CitationRef(BaseModel):
+    """A pointer to the authoritative bylaw fragment behind a profile field.
+
+    ``get_address_profile`` emits one ``CitationRef`` per overlay that
+    contributed a value, so an answer grounded on the profile can cite the
+    specific schedule/clause rather than presenting an opaque result. The
+    ``source`` tag names which profile facet the citation backs (the same
+    vocabulary as ``OverlayRef.kind``).
+    """
+
+    citation_path: str | None = Field(
+        default=None, description="Stored citation_path of the linked fragment, if any."
+    )
+    citation_label: str | None = Field(
+        default=None,
+        description="Human-readable citation label (falls back to the dataset's linked_fragment_citation).",
+    )
+    document_id: int | None = Field(default=None, description="Owning document id, if resolved.")
+    municipality: str | None = Field(default=None, description="Owning document municipality.")
+    bylaw_name: str | None = Field(default=None, description="Owning document bylaw name.")
+    source: str = Field(
+        ...,
+        description="Which profile facet this citation backs ('zone', 'height_precinct', …).",
+    )
+
+
+class AddressProfile(BaseModel):
+    """One-call grounding context for a case-bound, address-anchored query.
+
+    Collapses the address → zone spatial resolution plus every linked
+    overlay lookup (height precinct, FAR precinct, heritage, bonus zoning,
+    …) into a single response, so the agent gets the case's context up
+    front instead of spending 4+ tool calls assembling it. Built by
+    ``RetrievalService.get_address_profile``; see FR-3.2.
+
+    When the address cannot be geocoded/matched, ``unresolvable`` is True
+    and the spatial fields stay null — the method never raises (FR-3.4).
+    """
+
+    address: str = Field(
+        ..., description="The address echoed back (canonical form when resolved)."
+    )
+    civic_number: str | None = Field(default=None, description="Parsed civic number, if any.")
+    street: str | None = Field(default=None, description="Parsed street name, if any.")
+    pid: str | None = Field(default=None, description="Parcel identifier, when supplied or resolved.")
+    zone: str | None = Field(default=None, description="Zone code, e.g. 'HR-2'.")
+    zone_chapter: str | None = Field(
+        default=None,
+        description=(
+            "Bylaw chapter/part that governs the zone, e.g. 'Part V'. Left "
+            "null until the Phase-2 zone-profile composition lands; the thin "
+            "tools surface the zone detail in the meantime."
+        ),
+    )
+    height_precinct: str | None = Field(
+        default=None, description="Height-precinct label, e.g. 'HP-25' (from Schedule 15)."
+    )
+    far_precinct: str | None = Field(
+        default=None, description="Floor-area-ratio precinct label, e.g. 'FA-3.5' (from Schedule 17)."
+    )
+    heritage: bool | None = Field(
+        default=None,
+        description=(
+            "True when the address falls in a heritage conservation district; "
+            "False when a heritage dataset was checked and did not match; null "
+            "when no heritage dataset is in scope."
+        ),
+    )
+    bonus_zoning_eligible: bool | None = Field(
+        default=None,
+        description=(
+            "True when the address falls in a bonus/incentive zoning rate "
+            "district; False when checked and unmatched; null when no bonus "
+            "dataset is in scope."
+        ),
+    )
+    overlays: list[OverlayRef] = Field(
+        default_factory=list,
+        description="Every schedule-keyed overlay that intersected the resolved address.",
+    )
+    citations: list[CitationRef] = Field(
+        default_factory=list,
+        description="One citation per overlay that contributed a value.",
+    )
+    unresolvable: bool = Field(
+        default=False,
+        description="True when the address could not be geocoded/matched; spatial fields stay null.",
+    )
+
