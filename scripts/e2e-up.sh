@@ -294,6 +294,7 @@ start_fastapi() {
     ADVISOR_E2E_CORS_ORIGINS="http://localhost:${E2E_WEB_PORT}" \
     ADVISOR_ADMIN_API_ENABLED=true \
     ADVISOR_ADMIN_CLERK_USER_IDS="${E2E_USER_ID}" \
+    MONITOR_TARGET_URL="http://127.0.0.1:${E2E_FASTAPI_PORT}/healthz" \
     nohup "${REPO_ROOT}/.venv/bin/uvicorn" advisor.api.e2e_server:app \
       --host 127.0.0.1 --port "$E2E_FASTAPI_PORT" &
     echo $! >"${PID_DIR}/fastapi.pid"
