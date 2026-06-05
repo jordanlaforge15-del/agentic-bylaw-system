@@ -16,6 +16,10 @@ from bylaw_retrieval.retrieval.schemas import (
     ScheduleRowQuery,
     StructuredCitationQuery,
     ZoneAttributeQuery,
+    ZoneDimensions,
+    ZoneParking,
+    ZoneProfile,
+    ZoneUses,
 )
 from bylaw_retrieval.retrieval.service import (
     DocumentIdResolver,
@@ -44,6 +48,10 @@ __all__ = [
     "ScheduleRowQuery",
     "StructuredCitationQuery",
     "ZoneAttributeQuery",
+    "ZoneDimensions",
+    "ZoneParking",
+    "ZoneProfile",
+    "ZoneUses",
     "latest_document_id_resolver",
     "latest_per_bylaw_resolver",
 ]

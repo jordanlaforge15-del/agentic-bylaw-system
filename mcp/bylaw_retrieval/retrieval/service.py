@@ -32,6 +32,10 @@ from bylaw_retrieval.retrieval.schemas import (
     TableCellSummary,
     TableSummary,
     ZoneAttributeQuery,
+    ZoneDimensions,
+    ZoneParking,
+    ZoneProfile,
+    ZoneUses,
 )
 from layer1.db.base import (
     CrossReference,
@@ -364,6 +368,265 @@ class RetrievalService:
         )
         return self.lookup_citation(path_request)
 
+    # ------------------------------------------------------------------
+    # ABS-272 — get_zone_profile thick tool
+    # ------------------------------------------------------------------
+    #
+    # The valid section names for the ``include`` filter. ``citations``
+    # is always populated regardless of the filter (FR-2.1).
+    _ZONE_PROFILE_SECTIONS = ("dimensions", "uses", "parking", "citations")
+
+    # Internal semantic searches run with a higher limit than the
+    # default thin-tool call (Phase 1B). A zone's standards are spread
+    # across several table-row fragments; 10 comfortably surfaces the
+    # right row even when sibling zones share keyword tokens.
+    _ZONE_PROFILE_SEARCH_LIMIT = 10
+
+    # Confidence normalisation. ``_score_fragment`` is unbounded but a
+    # *zone-anchored* hit — where the zone code appears in the matched
+    # fragment's citation_path or label, not just its body text — scores
+    # well above this when the dimension keywords also land. Dividing by
+    # this constant maps a solid zone-anchored hit to ~1.0 while a
+    # body-text-only brush (the zone is mentioned but the dimension
+    # keywords are absent) lands below ``_ZONE_FIELD_MIN_CONFIDENCE``.
+    _ZONE_FIELD_FULL_SCORE = 40.0
+
+    # Below this normalised confidence a field is treated as "not
+    # confidently extracted": the value is dropped to None and NO
+    # citation is emitted for it (AC-2.9). Keeps the DTO honest — a
+    # value the retrieval couldn't stand behind never reaches the LLM.
+    _ZONE_FIELD_MIN_CONFIDENCE = 0.5
+
+    def get_zone_profile(
+        self,
+        zone: str,
+        include: list[str] | None = None,
+    ) -> ZoneProfile:
+        """Assemble a one-call :class:`ZoneProfile` for ``zone`` (ABS-272).
+
+        This is a *thick* tool: instead of forcing the agent through
+        3–5 thin ``search`` + ``lookup_citation`` round-trips to gather
+        a zone's height, coverage, setbacks, uses and parking, it
+        composes those semantic searches server-side (FR-2.3) and
+        extracts the structured values with documented regex heuristics
+        (see the ``_extract_zone_*`` module functions).
+
+        ``include`` filters which sections are populated:
+        ``"dimensions"``, ``"uses"``, ``"parking"``. ``citations`` is
+        always populated and every non-null field traces to at least
+        one citation (FR-2.4). ``None`` requests all sections.
+
+        An unrecognised ``zone`` returns
+        ``ZoneProfile(zone=zone, unknown_zone=True, citations=[])`` and
+        does **not** raise — mirroring the ABS-261 tool-loop-friendly
+        pattern (FR-2.5).
+        """
+        wanted = (
+            set(self._ZONE_PROFILE_SECTIONS)
+            if include is None
+            else {section for section in include if section in self._ZONE_PROFILE_SECTIONS}
+        )
+
+        zone_pattern = _zone_pattern(zone)
+        citations = _CitationAccumulator()
+        confidence: dict[str, float] = {}
+
+        # --- Zone identity (always run; also drives unknown-zone) ------
+        identity = self._zone_best_match(f"{zone} zone", zone_pattern)
+        dims_match = self._zone_best_match(f"{zone} maximum height lot coverage", zone_pattern)
+        setback_match = self._zone_best_match(f"{zone} setback", zone_pattern)
+        far_match = self._zone_best_match(f"{zone} floor area ratio", zone_pattern)
+        uses_match = self._zone_best_match(f"{zone} use permissions permitted", zone_pattern)
+
+        zone_found = any(
+            m is not None
+            for m in (identity, dims_match, setback_match, far_match, uses_match)
+        )
+        if not zone_found:
+            # No fragment anywhere mentions the zone — treat as unknown.
+            # No exception, empty citations (FR-2.5 / ABS-261 pattern).
+            return ZoneProfile(zone=zone, unknown_zone=True, citations=[])
+
+        # --- Zone full name + chapter (best-effort, ungated) ----------
+        zone_full_name: str | None = None
+        chapter: str | None = None
+        if identity is not None:
+            zone_full_name = _extract_zone_full_name(identity.text, zone)
+            chapter = _extract_chapter(identity.citation_path)
+            if (zone_full_name or chapter) and identity.citation_path:
+                citations.add(identity, ["zone_full_name", "chapter"])
+
+        dimensions: ZoneDimensions | None = None
+        if "dimensions" in wanted:
+            dimensions = self._build_zone_dimensions(
+                dims_match, setback_match, far_match, citations, confidence
+            )
+
+        uses: ZoneUses | None = None
+        if "uses" in wanted:
+            uses = self._build_zone_uses(uses_match, zone, citations, confidence)
+
+        parking: ZoneParking | None = None
+        if "parking" in wanted:
+            parking = self._build_zone_parking(zone, citations, confidence)
+
+        return ZoneProfile(
+            zone=zone,
+            zone_full_name=zone_full_name,
+            chapter=chapter,
+            dimensions=dimensions,
+            uses=uses,
+            parking=parking,
+            citations=citations.to_list(),
+            unknown_zone=False,
+            confidence=confidence,
+        )
+
+    def _zone_search(self, query: str) -> list[RetrievalMatch]:
+        """Run the internal semantic search used by ``get_zone_profile``.
+
+        Drops the context/cross-ref/table/dataset payloads the profile
+        builder doesn't need so the composed searches stay cheap.
+        """
+        request = RetrievalRequest(
+            query=query,
+            limit=self._ZONE_PROFILE_SEARCH_LIMIT,
+            include_context=False,
+            include_cross_references=False,
+            include_tables=False,
+            include_datasets=False,
+        )
+        return self.search(request).matches
+
+    def _zone_best_match(self, query: str, zone_pattern) -> RetrievalMatch | None:
+        """Highest-scoring search match whose text/citation names the zone.
+
+        Filtering to fragments that actually mention the zone code is
+        what keeps a sibling zone's row (which shares dimension keywords)
+        from being mistaken for this zone's row.
+        """
+        for match in self._zone_search(query):
+            haystack = " ".join(
+                part
+                for part in (match.text, match.citation_path, match.citation_label)
+                if part
+            )
+            if zone_pattern.search(haystack):
+                return match
+        return None
+
+    def _field_confidence(self, match: RetrievalMatch) -> float:
+        return min(1.0, match.score / self._ZONE_FIELD_FULL_SCORE)
+
+    def _build_zone_dimensions(
+        self,
+        dims_match: RetrievalMatch | None,
+        setback_match: RetrievalMatch | None,
+        far_match: RetrievalMatch | None,
+        citations: "_CitationAccumulator",
+        confidence: dict[str, float],
+    ) -> ZoneDimensions:
+        dims = ZoneDimensions()
+
+        # Height + lot coverage live in one row (Table 5), so they share
+        # the same match + citation.
+        if dims_match is not None:
+            conf = self._field_confidence(dims_match)
+            if conf >= self._ZONE_FIELD_MIN_CONFIDENCE:
+                height = _extract_height_m(dims_match.text)
+                coverage = _extract_coverage_pct(dims_match.text)
+                if height is not None:
+                    dims.max_height_m = height
+                    confidence["max_height_m"] = round(conf, 3)
+                    citations.add(dims_match, ["max_height_m"])
+                if coverage is not None:
+                    dims.max_lot_coverage_pct = coverage
+                    confidence["max_lot_coverage_pct"] = round(conf, 3)
+                    citations.add(dims_match, ["max_lot_coverage_pct"])
+
+        if setback_match is not None:
+            conf = self._field_confidence(setback_match)
+            if conf >= self._ZONE_FIELD_MIN_CONFIDENCE:
+                for kind, attr in (
+                    ("front", "front_setback_m"),
+                    ("side", "side_setback_m"),
+                    ("rear", "rear_setback_m"),
+                ):
+                    value = _extract_setback_m(setback_match.text, kind)
+                    if value is not None:
+                        setattr(dims, attr, value)
+                        confidence[attr] = round(conf, 3)
+                        citations.add(setback_match, [attr])
+
+        if far_match is not None:
+            conf = self._field_confidence(far_match)
+            if conf >= self._ZONE_FIELD_MIN_CONFIDENCE:
+                far = _extract_far(far_match.text)
+                if far is not None:
+                    dims.max_far = far
+                    confidence["max_far"] = round(conf, 3)
+                    citations.add(far_match, ["max_far"])
+
+        return dims
+
+    def _build_zone_uses(
+        self,
+        uses_match: RetrievalMatch | None,
+        zone: str,
+        citations: "_CitationAccumulator",
+        confidence: dict[str, float],
+    ) -> ZoneUses:
+        uses = ZoneUses()
+        if uses_match is None:
+            return uses
+        conf = self._field_confidence(uses_match)
+        if conf < self._ZONE_FIELD_MIN_CONFIDENCE:
+            return uses
+        permitted, not_permitted = _extract_uses(uses_match.text, zone)
+        if permitted or not_permitted:
+            uses.permitted = permitted
+            uses.not_permitted = not_permitted
+            confidence["uses"] = round(conf, 3)
+            citations.add(uses_match, ["uses"])
+        return uses
+
+    def _build_zone_parking(
+        self,
+        zone: str,
+        citations: "_CitationAccumulator",
+        confidence: dict[str, float],
+    ) -> ZoneParking:
+        """Parking is general (zone-independent) with per-zone exemptions,
+        so this intent does NOT zone-filter the match — it takes the top
+        off-street-parking fragment and derives ``applies`` from the
+        exemption clause.
+        """
+        parking = ZoneParking()
+        matches = self._zone_search("off-street parking requirements")
+        if not matches:
+            return parking
+        match = matches[0]
+        conf = self._field_confidence(match)
+        if conf < self._ZONE_FIELD_MIN_CONFIDENCE:
+            return parking
+
+        parking.min_spaces_per_dwelling_unit = _extract_parking_min_per_unit(match.text)
+        parking.schedule_reference = _extract_parking_schedule_ref(match.text)
+        applies, notes = _extract_parking_applicability(match.text, zone)
+        parking.applies = applies
+        parking.notes = notes
+        if any(
+            value is not None
+            for value in (
+                parking.applies,
+                parking.min_spaces_per_dwelling_unit,
+                parking.schedule_reference,
+            )
+        ):
+            confidence["parking"] = round(conf, 3)
+            citations.add(match, ["parking"])
+        return parking
+
     # Spatial-channel scoring constants. The values are deliberately higher
     # than typical text-channel scores so a confident spatial hit (the input
     # point falls inside a precinct polygon) surfaces near the top, even when
@@ -662,7 +925,7 @@ class RetrievalService:
             document_id=document.id if document else None,
             municipality=document.municipality if document else None,
             bylaw_name=document.bylaw_name if document else None,
-            source=source,
+            backs=[source],
         )
 
     def _build_response_notes(
@@ -1219,6 +1482,196 @@ def _first_str(mapping: dict[str, object], *keys: str) -> str | None:
         if value is not None and not isinstance(value, str):
             return str(value)
     return None
+
+
+# ---------------------------------------------------------------------------
+# ABS-272 — zone-profile extraction heuristics
+#
+# These functions turn the top zone-matching fragment's text into the
+# structured values on the ZoneProfile DTO. They are deliberately simple
+# regex extractors over the Regional Centre LUB's table-row phrasing
+# (e.g. "HR-2 Maximum Height 25.0 m Maximum Lot Coverage 65%"). If a
+# future ingest changes how table cells are flattened into fragment
+# text, update the patterns here — they are the single place the
+# bylaw's surface form is assumed.
+# ---------------------------------------------------------------------------
+
+
+def _zone_pattern(zone: str):
+    """Word-bounded, case-insensitive matcher for a zone code.
+
+    Hand-rolled boundaries (``[A-Za-z0-9]`` lookarounds) instead of
+    ``\\b`` so that ``HR-2`` does not match inside ``HR-21`` — the
+    trailing digit would otherwise satisfy ``\\b`` after the ``2``.
+    """
+    return re.compile(
+        rf"(?<![A-Za-z0-9]){re.escape(zone)}(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+
+
+def _extract_height_m(text: str) -> float | None:
+    """Maximum building height in metres, e.g. 'Maximum Height 25.0 m'."""
+    match = re.search(
+        r"height\D{0,15}?(\d+(?:\.\d+)?)\s*(?:m\b|metre|meter)", text, re.IGNORECASE
+    )
+    return float(match.group(1)) if match else None
+
+
+def _extract_coverage_pct(text: str) -> float | None:
+    """Maximum lot coverage percentage, e.g. 'Maximum Lot Coverage 65%'."""
+    match = re.search(
+        r"lot coverage\D{0,15}?(\d+(?:\.\d+)?)\s*%", text, re.IGNORECASE
+    )
+    return float(match.group(1)) if match else None
+
+
+def _extract_setback_m(text: str, kind: str) -> float | None:
+    """Front/side/rear setback in metres, e.g. 'Front Setback 3.0 m'."""
+    match = re.search(
+        rf"{kind} setback\D{{0,12}}?(\d+(?:\.\d+)?)\s*m", text, re.IGNORECASE
+    )
+    return float(match.group(1)) if match else None
+
+
+def _extract_far(text: str) -> float | None:
+    """Numeric maximum floor area ratio, when stated inline.
+
+    Returns None when FAR is delegated to an external schedule (the
+    fixture's "governed by Schedule 17" case) — there is no number to
+    extract, which is the correct ``None`` outcome.
+    """
+    match = re.search(
+        r"(?:floor area ratio|\bFAR\b|maximum far)\D{0,15}?(\d+(?:\.\d+)?)",
+        text,
+        re.IGNORECASE,
+    )
+    return float(match.group(1)) if match else None
+
+
+def _extract_uses(text: str, zone: str) -> tuple[list[str], list[str]]:
+    """Split a use-permission row into (permitted, not_permitted).
+
+    Operates on flattened table-row text like
+    ``"Use Permissions HR-2 single-unit dwelling N secondary suite N
+    multi-unit dwelling P home occupation N daycare P"`` where each use
+    phrase is followed by a ``P`` (permitted) or ``N`` (not permitted)
+    marker. Parsing starts immediately after the first occurrence of the
+    zone code so a leading table caption ("Use Permissions") is dropped
+    and never absorbed into the first use phrase.
+    """
+    anchor = _zone_pattern(zone).search(text)
+    body = text[anchor.end():] if anchor else text
+    permitted: list[str] = []
+    not_permitted: list[str] = []
+    for name, marker in re.findall(
+        r"([A-Za-z][A-Za-z0-9 \-]*?)\s+(P|N)(?![A-Za-z0-9])", body
+    ):
+        cleaned = name.strip()
+        if not cleaned:
+            continue
+        if marker == "P":
+            permitted.append(cleaned)
+        else:
+            not_permitted.append(cleaned)
+    return permitted, not_permitted
+
+
+def _extract_parking_min_per_unit(text: str) -> float | None:
+    """Minimum off-street spaces per dwelling unit, e.g. 'minimum of 1
+    parking space per dwelling unit'.
+    """
+    match = re.search(
+        r"minimum of (\d+(?:\.\d+)?)\s+parking space", text, re.IGNORECASE
+    )
+    return float(match.group(1)) if match else None
+
+
+def _extract_parking_schedule_ref(text: str) -> str | None:
+    """The Table/Schedule governing detailed (non-residential) ratios."""
+    match = re.search(r"\b(Table\s+\d+[A-Za-z]?|Schedule\s+\d+[A-Za-z]?)\b", text)
+    return match.group(1) if match else None
+
+
+def _extract_parking_applicability(text: str, zone: str) -> tuple[bool | None, str | None]:
+    """Decide whether off-street parking applies to ``zone``.
+
+    Looks for the exemption clause ("no off-street parking is required
+    ... in the CEN-1, CEN-2, DH, or DD zone") and returns ``applies =
+    zone not in exempt_zones``. When no exemption clause is present but a
+    parking fragment was found, the general requirement applies
+    (``True``). ``notes`` carries the exemption snippet for context.
+    """
+    exemption = re.search(
+        r"no off-street parking is required[^.]*", text, re.IGNORECASE
+    )
+    if not exemption:
+        # A parking fragment exists but states no exemption — the
+        # general requirement applies to every zone.
+        return True, None
+    snippet = exemption.group(0).strip()
+    exempt_zones = {
+        token.upper() for token in re.findall(r"\b[A-Z]{2,3}(?:-\d)?\b", snippet)
+    }
+    applies = zone.upper() not in exempt_zones
+    return applies, snippet
+
+
+def _extract_zone_full_name(text: str, zone: str) -> str | None:
+    """Expanded zone name from 'HR-2 Higher Order Residential 2 Zone'."""
+    match = re.search(
+        rf"{re.escape(zone)}\s+(.+?)\s+Zone\b", text, re.IGNORECASE
+    )
+    if not match:
+        return None
+    name = match.group(1).strip()
+    return name or None
+
+
+def _extract_chapter(citation_path: str | None) -> str | None:
+    """Top-level Part/chapter from a citation path like 'Part II > 30'."""
+    if not citation_path:
+        return None
+    match = re.search(r"\b(Part\s+[IVXLCDM]+)\b", citation_path, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+class _CitationAccumulator:
+    """Collects :class:`CitationRef`s for a profile, de-duplicating by
+    ``citation_path`` and unioning the field lists.
+
+    A single fragment (e.g. the Table 5 row) backs more than one field
+    (height and coverage); accumulating by path keeps the citations list
+    compact while still recording every field each source supports.
+    """
+
+    def __init__(self) -> None:
+        self._by_path: dict[str, CitationRef] = {}
+        self._order: list[str] = []
+
+    def add(self, match: RetrievalMatch, fields: list[str]) -> None:
+        path = match.citation_path
+        if not path:
+            # A field can only be cited if its fragment has a resolvable
+            # citation_path (lookup_citation keys on it). Skip otherwise.
+            return
+        existing = self._by_path.get(path)
+        if existing is None:
+            self._by_path[path] = CitationRef(
+                citation_path=path,
+                citation_label=match.citation_label,
+                backs=list(fields),
+                page_start=match.page_start,
+                page_end=match.page_end,
+            )
+            self._order.append(path)
+        else:
+            for field in fields:
+                if field not in existing.backs:
+                    existing.backs.append(field)
+
+    def to_list(self) -> list[CitationRef]:
+        return [self._by_path[path] for path in self._order]
 
 
 def _truncate(text: str, max_chars: int) -> str:

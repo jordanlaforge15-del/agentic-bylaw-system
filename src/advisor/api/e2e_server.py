@@ -1120,9 +1120,48 @@ def _mount_search_evidence_endpoint(app: FastAPI) -> None:
             }
 
 
+class _ZoneProfileBody(BaseModel):
+    zone: str
+    include: list[str] | None = None
+    # Optional document scope. Production runs --latest-only (one document);
+    # the e2e corpus holds many bylaws, several staging the same zone codes,
+    # so a spec passes its own seeded document_id to isolate get_zone_profile
+    # to its data (mirrors the document_id scoping on lookup_citation).
+    document_id: int | None = None
+
+
+def _mount_zone_profile_endpoint(app: FastAPI) -> None:
+    """ABS-272: expose get_zone_profile over HTTP for e2e coverage.
+
+    Calls ``RetrievalService.get_zone_profile`` and returns the compact
+    projection plus the ``unknown_zone`` flag so Playwright can assert
+    the thick tool composes a full DTO for a known zone and degrades to
+    an unknown-zone marker (no 500) for a bogus one.
+    """
+    from advisor.chat.compact import compact_zone_profile  # noqa: PLC0415
+    from bylaw_retrieval.retrieval import RetrievalService  # noqa: PLC0415
+
+    @app.post("/v1/_test/zone-profile")
+    async def zone_profile(body: _ZoneProfileBody) -> dict[str, object]:
+        with session_scope() as session:
+            resolver = (
+                (lambda _session, _id=body.document_id: _id)
+                if body.document_id is not None
+                else None
+            )
+            service = RetrievalService(session, default_document_id_resolver=resolver)
+            profile = service.get_zone_profile(zone=body.zone, include=body.include)
+            return {
+                "unknown_zone": profile.unknown_zone,
+                "citation_count": len(profile.citations),
+                "profile": compact_zone_profile(profile),
+            }
+
+
 app = build_e2e_app()
 _mount_seed_session_endpoint(app)
 _mount_search_evidence_endpoint(app)
+_mount_zone_profile_endpoint(app)
 
 
 if __name__ == "__main__":  # pragma: no cover

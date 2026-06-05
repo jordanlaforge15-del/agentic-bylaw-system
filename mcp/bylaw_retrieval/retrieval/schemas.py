@@ -447,17 +447,22 @@ class OverlayRef(BaseModel):
 
 
 class CitationRef(BaseModel):
-    """A pointer to the authoritative bylaw fragment behind a profile field.
+    """A traceable pointer from a populated thick-DTO field (ZoneProfile,
+    AddressProfile, …) back to the authoritative bylaw source fragment.
 
-    ``get_address_profile`` emits one ``CitationRef`` per overlay that
-    contributed a value, so an answer grounded on the profile can cite the
-    specific schedule/clause rather than presenting an opaque result. The
-    ``source`` tag names which profile facet the citation backs (the same
-    vocabulary as ``OverlayRef.kind``).
+    Unified across get_zone_profile and get_address_profile. ``backs``
+    names which DTO facet(s)/field(s) this citation supports — it
+    subsumes the former ``source`` (single facet, e.g. 'zone',
+    'height_precinct') and ``fields`` (zone-profile field names, e.g.
+    ['max_height_m', 'max_lot_coverage_pct']). ``citation_path`` is
+    optional: address overlays may cite a dataset that has no resolvable
+    path, while zone-field citations always set it (and can pass it to
+    lookup_citation to retrieve the original fragment).
     """
 
     citation_path: str | None = Field(
-        default=None, description="Stored citation_path of the linked fragment, if any."
+        default=None,
+        description="Stored citation_path of the linked fragment, if any; resolvable via lookup_citation.",
     )
     citation_label: str | None = Field(
         default=None,
@@ -466,9 +471,15 @@ class CitationRef(BaseModel):
     document_id: int | None = Field(default=None, description="Owning document id, if resolved.")
     municipality: str | None = Field(default=None, description="Owning document municipality.")
     bylaw_name: str | None = Field(default=None, description="Owning document bylaw name.")
-    source: str = Field(
-        ...,
-        description="Which profile facet this citation backs ('zone', 'height_precinct', …).",
+    page_start: int | None = Field(default=None, description="Source page range start.")
+    page_end: int | None = Field(default=None, description="Source page range end.")
+    backs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Which DTO facet(s)/field(s) this citation supports. Single-element "
+            "for address overlays (e.g. ['zone']); multi-element for zone fields "
+            "(e.g. ['max_height_m', 'max_lot_coverage_pct'])."
+        ),
     )
 
 
@@ -533,5 +544,126 @@ class AddressProfile(BaseModel):
     unresolvable: bool = Field(
         default=False,
         description="True when the address could not be geocoded/matched; spatial fields stay null.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# ABS-272 — get_zone_profile thick tool
+#
+# A "thick" tool collapses the 3–5 thin retrieval round-trips an agent
+# previously made to assemble a single zone's standards (height,
+# coverage, setbacks, uses, parking) into ONE call. The DTO below is
+# the return shape. Every nested field is optional: ``None`` means the
+# bylaw does not specify the value OR semantic retrieval could not
+# extract it with enough confidence. The intelligence is preserved
+# because the server-side implementation composes the same semantic
+# ``search_bylaw_evidence`` the agent would have called — it just does
+# so in one place and extracts the structured values for the caller.
+# ---------------------------------------------------------------------------
+
+
+class ZoneDimensions(BaseModel):
+    """Dimensional standards for a zone. All fields optional — ``None``
+    when the bylaw doesn't specify the value or it couldn't be extracted
+    with sufficient confidence.
+    """
+
+    max_height_m: float | None = Field(
+        default=None,
+        description="Maximum building height in metres. None when governed by an external precinct schedule or unspecified.",
+    )
+    max_lot_coverage_pct: float | None = Field(
+        default=None,
+        description="Maximum lot coverage as a percentage (e.g. 65 for 65%).",
+    )
+    front_setback_m: float | None = Field(default=None, description="Minimum front setback in metres.")
+    side_setback_m: float | None = Field(default=None, description="Minimum side setback in metres.")
+    rear_setback_m: float | None = Field(default=None, description="Minimum rear setback in metres.")
+    max_far: float | None = Field(
+        default=None,
+        description="Maximum floor area ratio. None when governed by an external schedule or unspecified.",
+    )
+
+
+class ZoneUses(BaseModel):
+    """Use permissions for a zone. ``permitted`` lists explicitly
+    permitted uses; ``not_permitted`` lists uses explicitly marked as
+    not permitted. Either may be empty when retrieval found no use table
+    for the zone.
+    """
+
+    permitted: list[str] = Field(
+        default_factory=list,
+        description="Uses explicitly permitted in this zone (table cell 'P').",
+    )
+    not_permitted: list[str] = Field(
+        default_factory=list,
+        description="Uses explicitly NOT permitted in this zone (table cell 'N').",
+    )
+
+
+class ZoneParking(BaseModel):
+    """Parking applicability and references for a zone. Parking rules in
+    the Regional Centre LUB are general (not per-zone) with per-zone
+    exemptions, so ``applies`` records whether the general requirement is
+    waived for this zone.
+    """
+
+    applies: bool | None = Field(
+        default=None,
+        description="True when off-street parking is required in this zone; False when the zone is explicitly exempt.",
+    )
+    min_spaces_per_dwelling_unit: float | None = Field(
+        default=None,
+        description="Minimum off-street parking spaces required per dwelling unit, when specified.",
+    )
+    schedule_reference: str | None = Field(
+        default=None,
+        description="Reference to the schedule/table governing non-residential or detailed parking ratios (e.g. 'Table 8').",
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Short free-text note (e.g. the exemption clause text) for context.",
+    )
+
+
+class ZoneProfile(BaseModel):
+    """One-call profile of a zone's standards (ABS-272).
+
+    Returned by ``get_zone_profile``. Sections are populated according
+    to the caller's ``include`` filter; ``citations`` is always
+    populated and every non-null field traces to at least one entry in
+    it. ``unknown_zone`` distinguishes "the zone wasn't found" from "the
+    zone exists but the bylaw is silent on these fields" — the former
+    returns an otherwise-empty profile WITHOUT raising (FR-2.5).
+    """
+
+    zone: str = Field(..., description="The zone code, echoed from the request (e.g. 'HR-2').")
+    zone_full_name: str | None = Field(
+        default=None, description="Expanded zone name (e.g. 'Higher Order Residential 2'), when extractable."
+    )
+    chapter: str | None = Field(
+        default=None, description="Top-level chapter/part the zone is established under (e.g. 'Part II')."
+    )
+    dimensions: ZoneDimensions | None = Field(
+        default=None, description="Dimensional standards; populated when 'dimensions' is in the include set."
+    )
+    uses: ZoneUses | None = Field(
+        default=None, description="Use permissions; populated when 'uses' is in the include set."
+    )
+    parking: ZoneParking | None = Field(
+        default=None, description="Parking applicability; populated when 'parking' is in the include set."
+    )
+    citations: list[CitationRef] = Field(
+        default_factory=list,
+        description="Source citations for every populated field. Always present (empty only for an unknown zone).",
+    )
+    unknown_zone: bool = Field(
+        default=False,
+        description="True when no fragment mentioning the zone could be found. citations is empty and all sections null.",
+    )
+    confidence: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-field semantic match confidence (0..1), keyed by DTO field name, for populated fields.",
     )
 

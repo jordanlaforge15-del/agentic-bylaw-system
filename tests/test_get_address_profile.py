@@ -216,7 +216,7 @@ def test_get_address_profile_returns_dto_for_known_address(seeded_db: str) -> No
     assert profile.street == "Robie Street"
     assert profile.citations, "expected at least one citation"
     # The zone citation must point at the zoning schedule fragment.
-    zone_citations = [c for c in profile.citations if c.source == "zone"]
+    zone_citations = [c for c in profile.citations if "zone" in c.backs]
     assert zone_citations
     assert zone_citations[0].citation_path == "zoning_schedule"
 

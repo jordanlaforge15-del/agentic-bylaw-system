@@ -277,6 +277,36 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             return service.get_address_profile(address).model_dump(mode="json")
 
     @mcp.tool()
+    def get_zone_profile(
+        zone: str,
+        include: list[str] | None = None,
+    ) -> dict:
+        """Use this when the user asks about a specific zone's standards.
+
+        Returns a one-call structured ``ZoneProfile`` — height, lot
+        coverage, setbacks and floor area ratio under ``dimensions``;
+        permitted / not-permitted use lists under ``uses``; parking
+        applicability under ``parking``; and a ``citations`` list that
+        backs every populated field.
+
+        Prefer this over issuing several ``search_bylaw_evidence`` calls
+        for the same zone — it collapses that sequence into one call.
+        The implementation still composes semantic retrieval internally,
+        so edge cases the DTO doesn't anticipate can fall back to
+        ``search_bylaw_evidence``.
+
+        ``include`` filters the sections (any of ``dimensions``, ``uses``,
+        ``parking``, ``citations``); omit it for everything. A field is
+        ``null`` when the bylaw is silent or retrieval couldn't extract it
+        confidently; ``unknown_zone`` is ``true`` when the zone wasn't
+        found (no exception is raised). For drill-down on a single
+        citation, pass its ``citation_path`` to ``lookup_citation``.
+        """
+        with session_scope(db_url) as session:
+            service = _service(session)
+            return service.get_zone_profile(zone=zone, include=include).model_dump(mode="json")
+
+    @mcp.tool()
     def evaluate_submission_against_bylaws(
         attributes: list[dict[str, Any]],
         location: dict[str, Any] | None = None,

@@ -58,6 +58,7 @@ from bylaw_retrieval.retrieval.schemas import (
     RetrievalMatch,
     RetrievalResponse,
     TableSummary,
+    ZoneProfile,
 )
 
 
@@ -279,6 +280,76 @@ def compact_search_response(
     return out
 
 
+def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
+    """Project a ``ZoneProfile`` to its LLM-essential fields.
+
+    Unlike search/citation payloads, the zone profile is already
+    structured and small. The compact rule here is to PRESERVE the
+    structured shape (FR-2 implementation note: "compact should preserve
+    the structured shape, not flatten to a prose blob") while dropping
+    null fields so the model isn't billed for keys carrying no
+    information. The nested ``dimensions``/``uses``/``parking`` objects
+    keep their field names so the model can read e.g.
+    ``dimensions.max_height_m`` directly.
+    """
+    out: dict[str, Any] = {"zone": profile.zone}
+    if profile.unknown_zone:
+        # Mirror the lookup_citation "miss" convention: an explicit
+        # instruction so the model doesn't retry the same zone code.
+        out["unknown_zone"] = True
+        out["instruction"] = (
+            "Zone not found. Verify the zone code, or use "
+            "search_bylaw_evidence / get_document_outline to discover the "
+            "correct code; do not retry get_zone_profile with the same value."
+        )
+        return out
+
+    if profile.zone_full_name:
+        out["zone_full_name"] = profile.zone_full_name
+    if profile.chapter:
+        out["chapter"] = profile.chapter
+
+    if profile.dimensions is not None:
+        dims = {
+            key: value
+            for key, value in profile.dimensions.model_dump().items()
+            if value is not None
+        }
+        if dims:
+            out["dimensions"] = dims
+
+    if profile.uses is not None and (
+        profile.uses.permitted or profile.uses.not_permitted
+    ):
+        uses: dict[str, Any] = {}
+        if profile.uses.permitted:
+            uses["permitted"] = list(profile.uses.permitted)
+        if profile.uses.not_permitted:
+            uses["not_permitted"] = list(profile.uses.not_permitted)
+        out["uses"] = uses
+
+    if profile.parking is not None:
+        parking = {
+            key: value
+            for key, value in profile.parking.model_dump().items()
+            if value is not None
+        }
+        if parking:
+            out["parking"] = parking
+
+    if profile.citations:
+        out["citations"] = [
+            {
+                "citation_path": c.citation_path,
+                **({"backs": list(c.backs)} if c.backs else {}),
+            }
+            for c in profile.citations
+        ]
+    if profile.confidence:
+        out["confidence"] = dict(profile.confidence)
+    return out
+
+
 def compact_outline(outline: DocumentOutlineResponse) -> dict[str, Any]:
     return {
         "document": compact_document_summary(outline.document),
@@ -357,7 +428,7 @@ def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
             {
                 k: v
                 for k, v in {
-                    "source": c.source,
+                    "backs": c.backs,
                     "citation_path": c.citation_path,
                     "citation_label": c.citation_label,
                     "document_id": c.document_id,

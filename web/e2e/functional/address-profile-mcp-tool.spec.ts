@@ -120,7 +120,7 @@ test("resolves a known address into zone + overlay precincts with citations", as
   // Every contributing overlay must carry a citation — the grounding
   // contract the issue calls out ("returns ... citations in one call").
   expect(profile.citations.length).toBeGreaterThan(0);
-  const sources = new Set(profile.citations.map((c) => c.source));
+  const sources = new Set(profile.citations.flatMap((c) => c.backs));
   expect(sources).toEqual(
     new Set(["zone", "height_precinct", "far_precinct", "heritage"]),
   );

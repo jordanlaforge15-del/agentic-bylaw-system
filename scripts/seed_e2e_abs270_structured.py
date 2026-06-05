@@ -32,6 +32,14 @@ ABS270_BYLAW_NAME = "ABS-270 Structured Query E2E Bylaw"
 
 
 def seed(session) -> dict[str, int]:
+    if session.bind.dialect.name == "postgresql":
+        from sqlalchemy import text as sa_text  # noqa: PLC0415
+
+        # Stable arbitrary 64-bit key, distinct from other seed scripts.
+        # Serialises concurrent beforeAll invocations across Playwright
+        # workers so the unique-key inserts below don't race.
+        session.execute(sa_text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2702700270))
+
     doc = _get_or_create_document(session)
     _ensure_blocks(session, doc.id)
     _ensure_fragments(session, doc.id)
