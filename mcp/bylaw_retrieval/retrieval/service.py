@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from rapidfuzz import fuzz, process
 
 from bylaw_retrieval.retrieval.schemas import (
+    ATTRIBUTE_VOCABULARY,
     AddressProfile,
     AncestorFragment,
     CitationLookupRequest,
@@ -27,8 +28,10 @@ from bylaw_retrieval.retrieval.schemas import (
     RetrievalMatch,
     RetrievalRequest,
     RetrievalResponse,
+    ScheduleRowQuery,
     TableCellSummary,
     TableSummary,
+    ZoneAttributeQuery,
 )
 from layer1.db.base import (
     CrossReference,
@@ -209,7 +212,10 @@ class RetrievalService:
     _LOOKUP_SUGGESTION_CUTOFF = 30.0
 
     def lookup_citation(self, request: CitationLookupRequest) -> CitationLookupResponse:
-        """Resolve an exact ``citation_path`` against the scoped document.
+        """Resolve a citation against the scoped document.
+
+        Accepts either a ``citation_path`` string (existing behaviour) or a
+        ``structured`` query (new — see ``_lookup_via_structured``).
 
         Returns a :class:`CitationLookupResponse`:
 
@@ -228,6 +234,12 @@ class RetrievalService:
           suggestion list of identical paths in different docs would
           mislead more than help.
         """
+        if request.structured is not None:
+            return self._lookup_via_structured(request)
+
+        # request.citation_path is guaranteed non-None here (enforced by the
+        # model_validator on CitationLookupRequest).
+        assert request.citation_path is not None
         stmt = select(SourceFragment).where(SourceFragment.citation_path == request.citation_path)
         # Hard scope: default document ids AND with the request's
         # document_id. See _fragment_scope_statement for rationale.
@@ -309,6 +321,48 @@ class RetrievalService:
         # is internal ranking signal, not something the agent should see
         # (it can't meaningfully act on a fuzz score).
         return [choice for choice, _score, _idx in ranked]
+
+    def _lookup_via_structured(
+        self, request: CitationLookupRequest
+    ) -> CitationLookupResponse:
+        """Resolve a ``StructuredCitationQuery`` to a canonical citation path
+        and delegate to the path-string lookup.
+
+        Resolution strategy:
+        - ``ZoneAttributeQuery(zone, attribute)`` → canonical path
+          ``"{zone} > {attribute}"``.  Unknown attributes raise immediately
+          with the accepted vocabulary so the model can self-correct without
+          an extra round-trip.
+        - ``ScheduleRowQuery(schedule, row)`` → canonical path
+          ``"{schedule} > {row}"``.
+
+        The constructed path is fed back into the existing path-string lookup,
+        so misses surface suggestions via the same rapidfuzz ranking as
+        free-text misses (ABS-261 contract preserved).
+        """
+        structured = request.structured
+        if isinstance(structured, ZoneAttributeQuery):
+            if structured.attribute not in ATTRIBUTE_VOCABULARY:
+                raise ValueError(
+                    f"Unknown attribute {structured.attribute!r}. "
+                    f"Accepted values: {sorted(ATTRIBUTE_VOCABULARY)}"
+                )
+            canonical_path = f"{structured.zone} > {structured.attribute}"
+        elif isinstance(structured, ScheduleRowQuery):
+            canonical_path = f"{structured.schedule} > {structured.row}"
+        else:
+            raise ValueError(
+                f"Unsupported structured query kind: {type(structured).__name__}"
+            )
+
+        path_request = CitationLookupRequest(
+            citation_path=canonical_path,
+            document_id=request.document_id,
+            include_context=request.include_context,
+            include_cross_references=request.include_cross_references,
+            include_tables=request.include_tables,
+        )
+        return self.lookup_citation(path_request)
 
     # Spatial-channel scoring constants. The values are deliberately higher
     # than typical text-channel scores so a confident spatial hit (the input
