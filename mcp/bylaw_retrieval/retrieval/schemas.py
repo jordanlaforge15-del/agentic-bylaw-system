@@ -535,3 +535,152 @@ class AddressProfile(BaseModel):
         description="True when the address could not be geocoded/matched; spatial fields stay null.",
     )
 
+
+# ---------------------------------------------------------------------------
+# ABS-272 — get_zone_profile thick tool
+#
+# A "thick" tool collapses the 3–5 thin retrieval round-trips an agent
+# previously made to assemble a single zone's standards (height,
+# coverage, setbacks, uses, parking) into ONE call. The DTO below is
+# the return shape. Every nested field is optional: ``None`` means the
+# bylaw does not specify the value OR semantic retrieval could not
+# extract it with enough confidence. The intelligence is preserved
+# because the server-side implementation composes the same semantic
+# ``search_bylaw_evidence`` the agent would have called — it just does
+# so in one place and extracts the structured values for the caller.
+# ---------------------------------------------------------------------------
+
+
+class CitationRef(BaseModel):
+    """A traceable pointer from a populated ``ZoneProfile`` field back to
+    the bylaw source fragment it was extracted from.
+
+    Every populated field in a :class:`ZoneProfile` is backed by at
+    least one ``CitationRef`` (FR-2.4). The caller can pass
+    ``citation_path`` straight to ``lookup_citation`` to retrieve the
+    original fragment text and verify the extracted value.
+    """
+
+    citation_path: str = Field(
+        ..., description="Exact stored citation path; resolvable via lookup_citation."
+    )
+    citation_label: str | None = Field(
+        default=None, description="Human-facing citation label, when the fragment has one."
+    )
+    fields: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Names of the ZoneProfile fields this fragment is the source "
+            "for (e.g. ['max_height_m', 'max_lot_coverage_pct']). Lets the "
+            "caller show a field-level citation instead of one blanket source."
+        ),
+    )
+    page_start: int | None = Field(default=None, description="Source page range start.")
+    page_end: int | None = Field(default=None, description="Source page range end.")
+
+
+class ZoneDimensions(BaseModel):
+    """Dimensional standards for a zone. All fields optional — ``None``
+    when the bylaw doesn't specify the value or it couldn't be extracted
+    with sufficient confidence.
+    """
+
+    max_height_m: float | None = Field(
+        default=None,
+        description="Maximum building height in metres. None when governed by an external precinct schedule or unspecified.",
+    )
+    max_lot_coverage_pct: float | None = Field(
+        default=None,
+        description="Maximum lot coverage as a percentage (e.g. 65 for 65%).",
+    )
+    front_setback_m: float | None = Field(default=None, description="Minimum front setback in metres.")
+    side_setback_m: float | None = Field(default=None, description="Minimum side setback in metres.")
+    rear_setback_m: float | None = Field(default=None, description="Minimum rear setback in metres.")
+    max_far: float | None = Field(
+        default=None,
+        description="Maximum floor area ratio. None when governed by an external schedule or unspecified.",
+    )
+
+
+class ZoneUses(BaseModel):
+    """Use permissions for a zone. ``permitted`` lists explicitly
+    permitted uses; ``not_permitted`` lists uses explicitly marked as
+    not permitted. Either may be empty when retrieval found no use table
+    for the zone.
+    """
+
+    permitted: list[str] = Field(
+        default_factory=list,
+        description="Uses explicitly permitted in this zone (table cell 'P').",
+    )
+    not_permitted: list[str] = Field(
+        default_factory=list,
+        description="Uses explicitly NOT permitted in this zone (table cell 'N').",
+    )
+
+
+class ZoneParking(BaseModel):
+    """Parking applicability and references for a zone. Parking rules in
+    the Regional Centre LUB are general (not per-zone) with per-zone
+    exemptions, so ``applies`` records whether the general requirement is
+    waived for this zone.
+    """
+
+    applies: bool | None = Field(
+        default=None,
+        description="True when off-street parking is required in this zone; False when the zone is explicitly exempt.",
+    )
+    min_spaces_per_dwelling_unit: float | None = Field(
+        default=None,
+        description="Minimum off-street parking spaces required per dwelling unit, when specified.",
+    )
+    schedule_reference: str | None = Field(
+        default=None,
+        description="Reference to the schedule/table governing non-residential or detailed parking ratios (e.g. 'Table 8').",
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Short free-text note (e.g. the exemption clause text) for context.",
+    )
+
+
+class ZoneProfile(BaseModel):
+    """One-call profile of a zone's standards (ABS-272).
+
+    Returned by ``get_zone_profile``. Sections are populated according
+    to the caller's ``include`` filter; ``citations`` is always
+    populated and every non-null field traces to at least one entry in
+    it. ``unknown_zone`` distinguishes "the zone wasn't found" from "the
+    zone exists but the bylaw is silent on these fields" — the former
+    returns an otherwise-empty profile WITHOUT raising (FR-2.5).
+    """
+
+    zone: str = Field(..., description="The zone code, echoed from the request (e.g. 'HR-2').")
+    zone_full_name: str | None = Field(
+        default=None, description="Expanded zone name (e.g. 'Higher Order Residential 2'), when extractable."
+    )
+    chapter: str | None = Field(
+        default=None, description="Top-level chapter/part the zone is established under (e.g. 'Part II')."
+    )
+    dimensions: ZoneDimensions | None = Field(
+        default=None, description="Dimensional standards; populated when 'dimensions' is in the include set."
+    )
+    uses: ZoneUses | None = Field(
+        default=None, description="Use permissions; populated when 'uses' is in the include set."
+    )
+    parking: ZoneParking | None = Field(
+        default=None, description="Parking applicability; populated when 'parking' is in the include set."
+    )
+    citations: list[CitationRef] = Field(
+        default_factory=list,
+        description="Source citations for every populated field. Always present (empty only for an unknown zone).",
+    )
+    unknown_zone: bool = Field(
+        default=False,
+        description="True when no fragment mentioning the zone could be found. citations is empty and all sections null.",
+    )
+    confidence: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-field semantic match confidence (0..1), keyed by DTO field name, for populated fields.",
+    )
+
