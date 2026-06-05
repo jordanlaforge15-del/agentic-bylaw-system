@@ -40,6 +40,7 @@ from advisor.chat.compact import (
     compact_match,
     compact_outline,
     compact_search_response,
+    compact_zone_profile,
 )
 from advisor.llm import ToolDefinition
 from advisor.llm.tool_loop import ToolHandler
@@ -323,6 +324,56 @@ _SCHEMA_GET_ADDRESS_PROFILE: dict[str, Any] = {
         },
     },
     "required": ["address"],
+    "additionalProperties": False,
+}
+
+
+# --- get_zone_profile (ABS-272 thick tool) --------------------------------
+#
+# Description copied verbatim from ``mcp/bylaw_retrieval/server.py``
+# (get_zone_profile docstring). FR-2.6: tell the model this is the
+# one-call path for a zone's standards, and point drill-down at
+# lookup_citation. Keep the two strings in sync.
+_DESC_GET_ZONE_PROFILE = (
+    "Use this when the user asks about a specific zone's standards "
+    "(height, lot coverage, setbacks, floor area ratio, permitted/"
+    "not-permitted uses, parking). Returns everything in one call as a "
+    "structured ZoneProfile — height, coverage, setbacks and FAR under "
+    "'dimensions'; permitted/not-permitted lists under 'uses'; parking "
+    "applicability under 'parking'; and a 'citations' list backing every "
+    "populated field.\n\n"
+    "Prefer this over issuing several search_bylaw_evidence calls for the "
+    "same zone — it collapses that sequence into one call. The internal "
+    "implementation still uses semantic retrieval, so edge cases the DTO "
+    "doesn't anticipate can fall back to search_bylaw_evidence.\n\n"
+    "Filter the response with 'include' (any of 'dimensions', 'uses', "
+    "'parking', 'citations'); omit it to get everything. A field is null "
+    "when the bylaw is silent or retrieval couldn't extract it "
+    "confidently, and 'unknown_zone' is true when the zone wasn't found "
+    "(no exception is raised). For drill-down on any single citation, "
+    "pass its citation_path to lookup_citation."
+)
+
+_SCHEMA_GET_ZONE_PROFILE: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "zone": {
+            "type": "string",
+            "description": "Zone code, e.g. 'HR-2', 'COR', 'CEN-2'.",
+        },
+        "include": {
+            "type": "array",
+            "description": (
+                "Optional list of sections to populate. Any of 'dimensions', "
+                "'uses', 'parking', 'citations'. Omit for all sections."
+            ),
+            "items": {
+                "type": "string",
+                "enum": ["dimensions", "uses", "parking", "citations"],
+            },
+        },
+    },
+    "required": ["zone"],
     "additionalProperties": False,
 }
 
@@ -612,6 +663,17 @@ def build_bylaw_tools(
             profile = service.get_address_profile(address)
             return json.dumps(compact_address_profile(profile))
 
+    async def get_zone_profile_handler(payload: dict[str, Any]) -> str:
+        # ABS-272 thick tool. ``zone`` is required; ``include`` filters
+        # which sections are populated. An unknown zone returns a DTO
+        # with unknown_zone=True rather than raising, so the tool loop
+        # never thrashes on a typo'd zone code.
+        zone = payload["zone"]
+        include = payload.get("include")
+        with _resolve_cm() as service:
+            profile = service.get_zone_profile(zone=zone, include=include)
+            return json.dumps(compact_zone_profile(profile))
+
     async def evaluate_submission_handler(payload: dict[str, Any]) -> str:
         """Run the compliance evaluator against the supplied attributes + location.
 
@@ -728,6 +790,11 @@ def build_bylaw_tools(
             input_schema=_SCHEMA_GET_ADDRESS_PROFILE,
         ),
         ToolDefinition(
+            name="get_zone_profile",
+            description=_DESC_GET_ZONE_PROFILE,
+            input_schema=_SCHEMA_GET_ZONE_PROFILE,
+        ),
+        ToolDefinition(
             name="evaluate_submission_against_bylaws",
             description=_DESC_EVALUATE_SUBMISSION,
             input_schema=_SCHEMA_EVALUATE_SUBMISSION,
@@ -745,6 +812,7 @@ def build_bylaw_tools(
         "lookup_citation": lookup_citation_handler,
         "search_bylaw_evidence": search_bylaw_evidence_handler,
         "get_address_profile": get_address_profile_handler,
+        "get_zone_profile": get_zone_profile_handler,
         "evaluate_submission_against_bylaws": evaluate_submission_handler,
         "request_tier_upgrade": request_tier_upgrade_handler,
     }
