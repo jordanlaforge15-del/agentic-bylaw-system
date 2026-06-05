@@ -34,6 +34,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from advisor.chat.compact import (
+    compact_address_profile,
     compact_citation_lookup,
     compact_document_list,
     compact_match,
@@ -231,6 +232,43 @@ _SCHEMA_SEARCH_BYLAW_EVIDENCE: dict[str, Any] = {
         },
     },
     "required": ["query"],
+    "additionalProperties": False,
+}
+
+
+# --- get_address_profile -------------------------------------------------
+#
+# Thick case-open tool (ABS-273 / Phase 3). Description copied verbatim from
+# the MCP server's tool docstring headline so the LLM sees the same wording
+# across both surfaces. FR-3.5.
+_DESC_GET_ADDRESS_PROFILE = (
+    "Use this at the start of a case-bound conversation when the user "
+    "mentions an address, parcel, or named place. Returns the zone, overlay "
+    "precincts, heritage status, and citations in one call. Saves multiple "
+    "lookups.\n\n"
+    "The 'address' argument is free text in the same shape the "
+    "search_bylaw_evidence 'location' slot accepts — a civic address "
+    "(\"100 Robie Street\") or a parcel id (\"PID 00012345\"). The tool "
+    "resolves the address spatially, then composes the zone plus every "
+    "linked overlay (height precinct, FAR precinct, heritage district, "
+    "bonus zoning) into one AddressProfile.\n\n"
+    "If the address can't be resolved, the response carries "
+    "'unresolvable': true with empty citations rather than an error — fall "
+    "back to search_bylaw_evidence with the location slot in that case."
+)
+
+_SCHEMA_GET_ADDRESS_PROFILE: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "address": {
+            "type": "string",
+            "description": (
+                "Free-text address, parcel id, or named place to ground the "
+                "case on, e.g. '100 Robie Street' or 'PID 00012345'."
+            ),
+        },
+    },
+    "required": ["address"],
     "additionalProperties": False,
 }
 
@@ -508,6 +546,18 @@ def build_bylaw_tools(
             response = service.search(request)
             return json.dumps(compact_search_response(response))
 
+    async def get_address_profile_handler(payload: dict[str, Any]) -> str:
+        """Resolve a free-text address into its zone + overlay profile.
+
+        Returns the compact projection so the (replayed-every-turn)
+        tool_result stays small; the unresolvable case carries an explicit
+        fall-back instruction the model can act on.
+        """
+        address = str(payload.get("address") or "")
+        with _resolve_cm() as service:
+            profile = service.get_address_profile(address)
+            return json.dumps(compact_address_profile(profile))
+
     async def evaluate_submission_handler(payload: dict[str, Any]) -> str:
         """Run the compliance evaluator against the supplied attributes + location.
 
@@ -619,6 +669,11 @@ def build_bylaw_tools(
             input_schema=_SCHEMA_SEARCH_BYLAW_EVIDENCE,
         ),
         ToolDefinition(
+            name="get_address_profile",
+            description=_DESC_GET_ADDRESS_PROFILE,
+            input_schema=_SCHEMA_GET_ADDRESS_PROFILE,
+        ),
+        ToolDefinition(
             name="evaluate_submission_against_bylaws",
             description=_DESC_EVALUATE_SUBMISSION,
             input_schema=_SCHEMA_EVALUATE_SUBMISSION,
@@ -635,6 +690,7 @@ def build_bylaw_tools(
         "get_document_outline": get_document_outline_handler,
         "lookup_citation": lookup_citation_handler,
         "search_bylaw_evidence": search_bylaw_evidence_handler,
+        "get_address_profile": get_address_profile_handler,
         "evaluate_submission_against_bylaws": evaluate_submission_handler,
         "request_tier_upgrade": request_tier_upgrade_handler,
     }

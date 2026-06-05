@@ -48,6 +48,7 @@ import os
 from typing import Any
 
 from bylaw_retrieval.retrieval.schemas import (
+    AddressProfile,
     AncestorFragment,
     CitationLookupResponse,
     CrossReferenceSummary,
@@ -304,3 +305,67 @@ def compact_outline(outline: DocumentOutlineResponse) -> dict[str, Any]:
 
 def compact_document_list(docs: list[DocumentSummary]) -> dict[str, Any]:
     return {"documents": [compact_document_summary(d) for d in docs]}
+
+
+def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
+    """Project ``AddressProfile`` to the fields the LLM grounds an answer on.
+
+    Drops null facets and the per-overlay ``attributes`` blob — the headline
+    value already lives on the dedicated field / overlay ``label``, and the
+    raw canonical attributes duplicate it byte-for-byte on every replayed
+    turn. The ``citations`` list is kept whole (it's the grounding contract),
+    with empty fields elided.
+    """
+    out: dict[str, Any] = {"address": profile.address}
+    if profile.unresolvable:
+        out["unresolvable"] = True
+        out["instruction"] = (
+            "Address could not be resolved spatially. Fall back to "
+            "search_bylaw_evidence with the location slot, or ask the user "
+            "to verify the address."
+        )
+        return out
+
+    for field in (
+        "civic_number",
+        "street",
+        "pid",
+        "zone",
+        "zone_chapter",
+        "height_precinct",
+        "far_precinct",
+    ):
+        value = getattr(profile, field)
+        if value is not None:
+            out[field] = value
+    if profile.heritage is not None:
+        out["heritage"] = profile.heritage
+    if profile.bonus_zoning_eligible is not None:
+        out["bonus_zoning_eligible"] = profile.bonus_zoning_eligible
+    if profile.overlays:
+        out["overlays"] = [
+            {
+                "kind": o.kind,
+                "dataset_name": o.dataset_name,
+                **({"label": o.label} if o.label else {}),
+                **({"citation": o.citation} if o.citation else {}),
+            }
+            for o in profile.overlays
+        ]
+    if profile.citations:
+        out["citations"] = [
+            {
+                k: v
+                for k, v in {
+                    "source": c.source,
+                    "citation_path": c.citation_path,
+                    "citation_label": c.citation_label,
+                    "document_id": c.document_id,
+                    "municipality": c.municipality,
+                    "bylaw_name": c.bylaw_name,
+                }.items()
+                if v is not None
+            }
+            for c in profile.citations
+        ]
+    return out

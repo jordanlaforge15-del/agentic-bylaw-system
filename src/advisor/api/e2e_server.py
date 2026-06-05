@@ -204,6 +204,15 @@ class _EvaluateBylawsBody(BaseModel):
     persist_decision: bool = False
 
 
+# ABS-273: test-only address-profile endpoint. Bypasses the chat / SSE
+# pipeline so the Playwright spec can assert directly on the AddressProfile
+# the get_address_profile MCP tool returns, exercised over real-stack HTTP +
+# Postgres/PostGIS so a missing migration, geometry-column gap, or proxy
+# misconfig trips e2e rather than staying invisible until production.
+class _AddressProfileBody(BaseModel):
+    address: str = Field(min_length=1, max_length=512)
+
+
 # ABS-163: test-only table-search endpoint. Verifies that SourceTable rows
 # with proper captions are found by the retrieval layer's
 # _structured_permission_table_candidates() path. The Playwright spec seeds
@@ -445,6 +454,21 @@ def _mount_test_router(app: FastAPI) -> None:
             )
             response = evaluator.evaluate(request)
             return response.to_json()
+
+    @app.post("/v1/_test/address-profile")
+    async def address_profile(body: _AddressProfileBody) -> dict[str, object]:
+        """Resolve an address to its zone + overlay profile.
+
+        Mirrors the ``get_address_profile`` MCP tool over HTTP so the
+        Playwright spec can seed Postgres, hit the real proxy, and assert on
+        the structured ``AddressProfile`` (zone, height/FAR precincts,
+        heritage, citations) without standing up the chat-loop machinery.
+        Returns the full DTO (not the compact projection) so the spec can
+        assert on every field.
+        """
+        with session_scope() as session:
+            service = RetrievalService(session)
+            return service.get_address_profile(body.address).model_dump(mode="json")
 
     @app.post("/v1/_test/search-tables")
     async def search_tables(body: _SearchTablesBody) -> dict[str, object]:
