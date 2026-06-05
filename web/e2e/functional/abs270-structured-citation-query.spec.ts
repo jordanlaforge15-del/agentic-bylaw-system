@@ -183,8 +183,16 @@ test.describe("ABS-270: structured query support on lookup_citation", () => {
   test("ScheduleRowQuery hit — match is populated with schedule row text", async ({
     request,
   }) => {
+    // Scope to the ABS-270 seed document: the shared e2e corpus contains
+    // other bylaws that also stage a "Table 1A > HR-2" path (e.g. the
+    // zone-profile seed), which makes an unscoped lookup ambiguous.
+    expect(
+      abs270DocumentId,
+      "beforeAll seed failed to capture document_id — check seed output",
+    ).not.toBeNull();
     const { status, json } = await lookupCitation(request, {
       structured: { kind: "schedule_row", schedule: "Table 1A", row: "HR-2" },
+      document_id: abs270DocumentId,
     });
     expect(
       status,

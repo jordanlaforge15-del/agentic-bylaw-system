@@ -1123,6 +1123,11 @@ def _mount_search_evidence_endpoint(app: FastAPI) -> None:
 class _ZoneProfileBody(BaseModel):
     zone: str
     include: list[str] | None = None
+    # Optional document scope. Production runs --latest-only (one document);
+    # the e2e corpus holds many bylaws, several staging the same zone codes,
+    # so a spec passes its own seeded document_id to isolate get_zone_profile
+    # to its data (mirrors the document_id scoping on lookup_citation).
+    document_id: int | None = None
 
 
 def _mount_zone_profile_endpoint(app: FastAPI) -> None:
@@ -1139,7 +1144,12 @@ def _mount_zone_profile_endpoint(app: FastAPI) -> None:
     @app.post("/v1/_test/zone-profile")
     async def zone_profile(body: _ZoneProfileBody) -> dict[str, object]:
         with session_scope() as session:
-            service = RetrievalService(session)
+            resolver = (
+                (lambda _session, _id=body.document_id: _id)
+                if body.document_id is not None
+                else None
+            )
+            service = RetrievalService(session, default_document_id_resolver=resolver)
             profile = service.get_zone_profile(zone=body.zone, include=body.include)
             return {
                 "unknown_zone": profile.unknown_zone,

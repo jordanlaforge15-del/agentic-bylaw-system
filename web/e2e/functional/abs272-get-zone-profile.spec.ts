@@ -23,6 +23,11 @@ import * as path from "node:path";
 
 import { test, expect, E2E_API_URL, DEMO_USER_ID } from "../fixtures/test-env";
 
+// Seeded zone-profile document id, captured in beforeAll and used to scope
+// every get_zone_profile call to this spec's own bylaw — the shared e2e
+// corpus stages the same zone codes (HR-2, Table 1A …) in other documents.
+let zoneDocumentId: number | null = null;
+
 test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
@@ -35,10 +40,12 @@ test.beforeAll(() => {
     DATABASE_URL: databaseUrl,
     PYTHONPATH: `${path.join(repoRoot, "src")}:${path.join(repoRoot, "mcp")}:${process.env.PYTHONPATH || ""}`,
   };
-  execSync(
+  const output = execSync(
     `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_zone_profile.py")}"`,
     { env, encoding: "utf-8" },
   );
+  const m = output.match(/document=(\d+)/);
+  zoneDocumentId = m ? parseInt(m[1], 10) : null;
 });
 
 async function zoneProfile(
@@ -51,7 +58,11 @@ async function zoneProfile(
       "Content-Type": "application/json",
       "X-Test-User-Id": DEMO_USER_ID,
     },
-    data: include ? { zone, include } : { zone },
+    data: {
+      zone,
+      ...(include ? { include } : {}),
+      ...(zoneDocumentId !== null ? { document_id: zoneDocumentId } : {}),
+    },
   });
 }
 
