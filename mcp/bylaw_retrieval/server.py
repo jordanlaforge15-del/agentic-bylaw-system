@@ -122,15 +122,31 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
 
     @mcp.tool()
     def lookup_citation(
-        citation_path: str,
+        citation_path: str | None = None,
+        structured: dict[str, Any] | None = None,
         document_id: int | None = None,
         include_context: bool = True,
         include_cross_references: bool = True,
         include_tables: bool = True,
     ) -> dict:
-        """Use this when the user or agent already knows a citation and needs the authoritative source fragment."""
+        """Retrieve the authoritative source fragment for a citation.
+
+        Provide EXACTLY ONE of:
+          - ``citation_path``: the exact path string, e.g. '4.2' or
+            'Schedule B > 3'. Use when you already know the path.
+          - ``structured``: a structured query that the server resolves to a
+            canonical path internally, so you don't have to guess the format:
+              * {"kind": "zone_attribute", "zone": "HR-2", "attribute": "max_height"}
+              * {"kind": "schedule_row", "schedule": "Table 1A", "row": "HR-2"}
+
+        Supplying both, or neither, is a validation error. Accepted
+        ``attribute`` values: max_height, max_height_storeys,
+        max_lot_coverage, min_front_setback, min_side_setback,
+        min_rear_setback, max_far, permitted_uses, parking_requirement.
+        """
         request = CitationLookupRequest(
             citation_path=citation_path,
+            structured=structured,
             document_id=document_id,
             include_context=include_context,
             include_cross_references=include_cross_references,

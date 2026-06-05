@@ -55,7 +55,7 @@ from advisor.db.models import InviteRequest, User
 from advisor.llm.mock import MockGateway
 from advisor.logging import CorrelationIdMiddleware, setup_logging
 from advisor.llm.mock_dispatcher import build_dispatcher
-from bylaw_retrieval.retrieval import LocationSlot, RetrievalService
+from bylaw_retrieval.retrieval import CitationLookupRequest, LocationSlot, RetrievalService
 from layer1.db.base import Document, SemanticEntity, SourceFragment, utcnow
 from layer1.db.session import session_scope
 from layer1.manifest_adapter import (
@@ -881,6 +881,33 @@ def _mount_test_router(app: FastAPI) -> None:
                 )
                 report.comparison = compare_coverage_reports(old_report, report)
             return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/lookup-citation")
+    async def test_lookup_citation(body: CitationLookupRequest) -> dict[str, object]:
+        """Invoke ``lookup_citation`` directly against the e2e test DB.
+
+        Accepts the same JSON body as ``CitationLookupRequest``:
+        - ``{"citation_path": "4.2"}``
+        - ``{"structured": {"kind": "zone_attribute", "zone": "HR-2", "attribute": "max_height"}}``
+        - ``{"structured": {"kind": "schedule_row", "schedule": "Table 1A", "row": "HR-2"}}``
+
+        Returns a ``CitationLookupResponse`` dict (``match`` + ``suggestions``).
+        Returns 422 when FastAPI/Pydantic rejects the body (missing required
+        field, both supplied, unknown attribute vocabulary violation) and 400
+        on ``ValueError`` (ambiguous across documents).
+        Scoped with no default document resolver so the full test corpus is
+        visible — tests can narrow scope via ``document_id`` in the body.
+        """
+        try:
+            with session_scope() as session:
+                service = RetrievalService(session)
+                response = service.lookup_citation(body)
+                return response.model_dump(mode="json")
+        except ValueError as exc:
+            # Semantic errors from the service: unknown attribute vocabulary,
+            # ambiguous-across-documents, etc. All are client input problems,
+            # so 422 is the right shape for this test-only endpoint.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     class _DeleteDocumentsBody(BaseModel):
         bylaw_name: str = Field(min_length=1, max_length=512)

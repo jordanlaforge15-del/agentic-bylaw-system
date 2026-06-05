@@ -1,4 +1,5 @@
 from bylaw_retrieval.retrieval.schemas import (
+    ATTRIBUTE_VOCABULARY,
     AddressProfile,
     CitationLookupRequest,
     CitationLookupResponse,
@@ -12,6 +13,9 @@ from bylaw_retrieval.retrieval.schemas import (
     RetrievalMatch,
     RetrievalRequest,
     RetrievalResponse,
+    ScheduleRowQuery,
+    StructuredCitationQuery,
+    ZoneAttributeQuery,
 )
 from bylaw_retrieval.retrieval.service import (
     DocumentIdResolver,
@@ -21,6 +25,7 @@ from bylaw_retrieval.retrieval.service import (
 )
 
 __all__ = [
+    "ATTRIBUTE_VOCABULARY",
     "AddressProfile",
     "CitationLookupRequest",
     "CitationLookupResponse",
@@ -36,6 +41,9 @@ __all__ = [
     "RetrievalRequest",
     "RetrievalResponse",
     "RetrievalService",
+    "ScheduleRowQuery",
+    "StructuredCitationQuery",
+    "ZoneAttributeQuery",
     "latest_document_id_resolver",
     "latest_per_bylaw_resolver",
 ]

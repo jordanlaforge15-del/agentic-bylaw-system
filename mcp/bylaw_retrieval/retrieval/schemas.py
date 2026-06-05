@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class DocumentSummary(BaseModel):
@@ -251,12 +251,97 @@ class RetrievalResponse(BaseModel):
     )
 
 
+# High-frequency attribute vocabulary visible in the TC-005 tool-sequence
+# baseline.  Unknown attributes are rejected before the DB is touched so
+# the model gets a tight error with the accepted list rather than an empty
+# suggestions envelope.
+ATTRIBUTE_VOCABULARY: frozenset[str] = frozenset(
+    [
+        "max_height",
+        "max_height_storeys",
+        "max_lot_coverage",
+        "min_front_setback",
+        "min_side_setback",
+        "min_rear_setback",
+        "max_far",
+        "permitted_uses",
+        "parking_requirement",
+    ]
+)
+
+
+class ZoneAttributeQuery(BaseModel):
+    """Look up a zone's attribute rule, e.g. max height for HR-2."""
+
+    kind: Literal["zone_attribute"] = "zone_attribute"
+    zone: str = Field(..., description="Zone code, e.g. 'HR-2'.")
+    attribute: str = Field(
+        ...,
+        description=(
+            f"Attribute to retrieve. Accepted values: {sorted(ATTRIBUTE_VOCABULARY)}"
+        ),
+    )
+
+
+class ScheduleRowQuery(BaseModel):
+    """Look up a specific row in a named schedule."""
+
+    kind: Literal["schedule_row"] = "schedule_row"
+    schedule: str = Field(..., description="Schedule name, e.g. 'Table 1A'.")
+    row: str = Field(..., description="Row identifier within the schedule, e.g. 'HR-2'.")
+
+
+# Discriminated union — the 'kind' field lets Pydantic (and JSON Schema
+# validators) route the payload to the right variant without ambiguity.
+StructuredCitationQuery = Annotated[
+    ZoneAttributeQuery | ScheduleRowQuery,
+    Field(discriminator="kind"),
+]
+
+
 class CitationLookupRequest(BaseModel):
-    citation_path: str = Field(..., min_length=1, description="Exact citation path to retrieve.")
+    """Request envelope for ``lookup_citation``.
+
+    Exactly one of ``citation_path`` or ``structured`` must be supplied.
+    Supplying both raises a Pydantic ``ValidationError``; supplying neither
+    also raises.  This is enforced by the ``@model_validator`` below rather
+    than at the JSON-Schema level so the error message can name both fields.
+    """
+
+    citation_path: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Exact citation path to retrieve, e.g. '4.2' or 'Schedule B > 3'. "
+            "Mutually exclusive with 'structured'."
+        ),
+    )
+    structured: StructuredCitationQuery | None = Field(
+        default=None,
+        description=(
+            "Structured query variant.  Use instead of 'citation_path' when "
+            "the zone code and attribute (or schedule + row) are known. "
+            "Mutually exclusive with 'citation_path'."
+        ),
+    )
     document_id: int | None = Field(default=None, description="Optional document scope.")
     include_context: bool = Field(default=True)
     include_cross_references: bool = Field(default=True)
     include_tables: bool = Field(default=True)
+
+    @model_validator(mode="after")
+    def _require_exactly_one(self) -> "CitationLookupRequest":
+        has_path = self.citation_path is not None
+        has_structured = self.structured is not None
+        if has_path and has_structured:
+            raise ValueError(
+                "Provide either 'citation_path' or 'structured', not both."
+            )
+        if not has_path and not has_structured:
+            raise ValueError(
+                "One of 'citation_path' or 'structured' is required."
+            )
+        return self
 
 
 class CitationLookupResponse(BaseModel):

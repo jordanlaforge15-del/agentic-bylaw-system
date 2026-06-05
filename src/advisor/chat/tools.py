@@ -44,6 +44,7 @@ from advisor.chat.compact import (
 from advisor.llm import ToolDefinition
 from advisor.llm.tool_loop import ToolHandler
 from bylaw_retrieval.retrieval import (
+    ATTRIBUTE_VOCABULARY,
     CitationLookupRequest,
     LocationSlot,
     RetrievalRequest,
@@ -167,14 +168,67 @@ _SCHEMA_GET_DOCUMENT_OUTLINE: dict[str, Any] = {
 
 _SCHEMA_LOOKUP_CITATION: dict[str, Any] = {
     "type": "object",
+    "description": (
+        "Provide exactly one of 'citation_path' or 'structured'. "
+        "Use 'citation_path' when you already know the exact path string. "
+        "Use 'structured' (zone_attribute or schedule_row) to resolve by "
+        "zone + attribute or schedule + row without guessing the path format."
+    ),
     "properties": {
-        "citation_path": {"type": "string"},
+        "citation_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Exact citation path, e.g. '4.2' or 'Schedule B > 3'. "
+                "Mutually exclusive with 'structured'."
+            ),
+        },
+        "structured": {
+            "description": (
+                "Structured query variant. Mutually exclusive with 'citation_path'. "
+                "Set 'kind' to 'zone_attribute' or 'schedule_row'."
+            ),
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["kind", "zone", "attribute"],
+                    "properties": {
+                        "kind": {"type": "string", "const": "zone_attribute"},
+                        "zone": {
+                            "type": "string",
+                            "description": "Zone code, e.g. 'HR-2'.",
+                        },
+                        "attribute": {
+                            "type": "string",
+                            "enum": sorted(ATTRIBUTE_VOCABULARY),
+                            "description": "Attribute to look up.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["kind", "schedule", "row"],
+                    "properties": {
+                        "kind": {"type": "string", "const": "schedule_row"},
+                        "schedule": {
+                            "type": "string",
+                            "description": "Schedule name, e.g. 'Table 1A'.",
+                        },
+                        "row": {
+                            "type": "string",
+                            "description": "Row identifier within the schedule, e.g. 'HR-2'.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ],
+        },
         "document_id": {"type": "integer"},
         "include_context": {"type": "boolean", "default": True},
         "include_cross_references": {"type": "boolean", "default": True},
         "include_tables": {"type": "boolean", "default": True},
     },
-    "required": ["citation_path"],
     "additionalProperties": False,
 }
 

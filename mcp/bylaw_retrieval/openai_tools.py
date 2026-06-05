@@ -7,7 +7,12 @@ from typing import Any
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from bylaw_retrieval.retrieval import CitationLookupRequest, RetrievalRequest, RetrievalService
+from bylaw_retrieval.retrieval import (
+    ATTRIBUTE_VOCABULARY,
+    CitationLookupRequest,
+    RetrievalRequest,
+    RetrievalService,
+)
 
 
 def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
@@ -52,18 +57,59 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
             "name": "lookup_citation",
             "description": (
                 "Retrieve the authoritative fragment for an exact citation path such as '4.2' or 'Schedule B > 3'. "
-                "Use this when the user or agent already knows the citation."
+                "Use this when the user or agent already knows the citation.\n\n"
+                "Provide exactly one of 'citation_path' or 'structured'. "
+                "Use 'structured' with kind='zone_attribute' to look up a zone's attribute rule "
+                "without guessing the canonical path format."
             ),
             "parameters": {
                 "type": "object",
+                "description": (
+                    "Provide exactly one of 'citation_path' or 'structured'."
+                ),
                 "properties": {
-                    "citation_path": {"type": "string"},
+                    "citation_path": {
+                        "type": "string",
+                        "description": (
+                            "Exact citation path. Mutually exclusive with 'structured'."
+                        ),
+                    },
+                    "structured": {
+                        "description": (
+                            "Structured query. Mutually exclusive with 'citation_path'. "
+                            "Set 'kind' to 'zone_attribute' or 'schedule_row'."
+                        ),
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "required": ["kind", "zone", "attribute"],
+                                "properties": {
+                                    "kind": {"type": "string", "const": "zone_attribute"},
+                                    "zone": {"type": "string"},
+                                    "attribute": {
+                                        "type": "string",
+                                        "enum": sorted(ATTRIBUTE_VOCABULARY),
+                                    },
+                                },
+                                "additionalProperties": False,
+                            },
+                            {
+                                "type": "object",
+                                "required": ["kind", "schedule", "row"],
+                                "properties": {
+                                    "kind": {"type": "string", "const": "schedule_row"},
+                                    "schedule": {"type": "string"},
+                                    "row": {"type": "string"},
+                                },
+                                "additionalProperties": False,
+                            },
+                        ],
+                    },
                     "document_id": {"type": "integer"},
                     "include_context": {"type": "boolean", "default": True},
                     "include_cross_references": {"type": "boolean", "default": True},
                     "include_tables": {"type": "boolean", "default": True},
                 },
-                "required": ["citation_path"],
                 "additionalProperties": False,
             },
         },
