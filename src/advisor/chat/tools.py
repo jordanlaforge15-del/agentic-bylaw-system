@@ -28,6 +28,7 @@ Each handler:
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -501,7 +502,7 @@ def build_bylaw_tools(
             include_cross_references=payload.get("include_cross_references", True),
             include_tables=payload.get("include_tables", True),
             include_datasets=payload.get("include_datasets", True),
-            limit=payload.get("limit", 5),
+            limit=int(os.environ["ADVISOR_FORCE_SEARCH_LIMIT"]) if "ADVISOR_FORCE_SEARCH_LIMIT" in os.environ else payload.get("limit", 5),
         )
         with _resolve_cm() as service:
             response = service.search(request)
