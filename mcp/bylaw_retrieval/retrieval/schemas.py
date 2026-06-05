@@ -222,7 +222,16 @@ class RetrievalRequest(BaseModel):
         default=True,
         description="Include any external geo datasets linked to matching fragments.",
     )
-    limit: int = Field(default=8, ge=1, le=25)
+    limit: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description=(
+            "Maximum number of fragments to return. Default 5; bump to 15 when the "
+            "question covers multiple dimensions (e.g. zone feasibility + height + setbacks); "
+            "cap is 50. Higher values reduce iteration count at the cost of larger tool-result payloads."
+        ),
+    )
 
 
 class RetrievalResponse(BaseModel):
