@@ -65,20 +65,22 @@ _TABLE_PREVIEW_CHARS = 500
 _TABLE_PREVIEW_CELLS = 24
 
 
-def _max_matches() -> int:
-    """Cap on matches returned in compact mode.
+def _compact_ceiling() -> int:
+    """Hard ceiling on matches returned in compact mode.
 
-    ``ADVISOR_COMPACT_MAX_MATCHES`` lets ops tune this without a
-    redeploy. The default of 10 covers the common search shape where
-    the request defaults to ``limit=8`` — most calls won't truncate.
-    Higher-limit callers (e.g. an outline-style sweep) get clipped.
+    ``ADVISOR_COMPACT_MAX_MATCHES`` lets ops lower this without a
+    redeploy (e.g. to protect against runaway payloads on constrained
+    infra). Default 50 matches the schema's max ``limit`` value so
+    that a caller requesting ``limit=50`` gets all 50 results rather
+    than being silently clipped. The ceiling is applied as
+    ``min(request.limit, ceiling)`` in ``compact_search_response``.
     """
-    raw = os.environ.get("ADVISOR_COMPACT_MAX_MATCHES", "10")
+    raw = os.environ.get("ADVISOR_COMPACT_MAX_MATCHES", "50")
     try:
         value = int(raw)
     except ValueError:
-        return 10
-    return value if value > 0 else 10
+        return 50
+    return value if value > 0 else 50
 
 
 def _truncate(text: str, max_chars: int) -> str:
@@ -257,7 +259,7 @@ def compact_search_response(
     location slot and ``include_*`` toggles) on every tool turn was
     pure cache bloat.
     """
-    cap = max_matches if max_matches is not None else _max_matches()
+    cap = max_matches if max_matches is not None else min(response.request.limit, _compact_ceiling())
     matches = response.matches[:cap]
     out: dict[str, Any] = {
         "total_matches": response.total_matches,

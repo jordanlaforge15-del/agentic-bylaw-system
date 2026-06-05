@@ -127,7 +127,16 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                     "include_cross_references": {"type": "boolean", "default": True},
                     "include_tables": {"type": "boolean", "default": True},
                     "include_datasets": {"type": "boolean", "default": True},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 8},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 5,
+                        "description": (
+                            "Maximum fragments to return. Default 5; bump to 15 when the "
+                            "question covers multiple dimensions (e.g. zone feasibility); cap is 50."
+                        ),
+                    },
                 },
                 "required": ["query"],
                 "additionalProperties": False,

@@ -125,7 +125,14 @@ _DESC_SEARCH_BYLAW_EVIDENCE = (
     "The response's top-level ``notes`` array carries server-side "
     "advisories. If you see a note saying the address should have been "
     "in the 'location' field, RE-ISSUE the call with the slot populated "
-    "— do not just ignore it."
+    "— do not just ignore it.\n\n"
+    "--------------------------------------------------------------------\n"
+    "Tuning the result-set size via 'limit':\n\n"
+    "Default 5; bump to 15 when the question covers multiple dimensions "
+    "(e.g. zone feasibility, height, setbacks, and FAR all at once). "
+    "Cap is 50. Higher limits reduce iteration count but increase the "
+    "payload size billed on every subsequent turn — use the smallest "
+    "value that covers the question's breadth."
 )
 
 
@@ -211,7 +218,16 @@ _SCHEMA_SEARCH_BYLAW_EVIDENCE: dict[str, Any] = {
         "include_cross_references": {"type": "boolean", "default": True},
         "include_tables": {"type": "boolean", "default": True},
         "include_datasets": {"type": "boolean", "default": True},
-        "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 8},
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 5,
+            "description": (
+                "Maximum fragments to return. Default 5; bump to 15 when the question covers "
+                "multiple dimensions (e.g. zone feasibility); cap is 50."
+            ),
+        },
     },
     "required": ["query"],
     "additionalProperties": False,
@@ -485,7 +501,7 @@ def build_bylaw_tools(
             include_cross_references=payload.get("include_cross_references", True),
             include_tables=payload.get("include_tables", True),
             include_datasets=payload.get("include_datasets", True),
-            limit=payload.get("limit", 8),
+            limit=payload.get("limit", 5),
         )
         with _resolve_cm() as service:
             response = service.search(request)
