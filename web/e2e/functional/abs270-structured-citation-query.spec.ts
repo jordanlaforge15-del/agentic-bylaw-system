@@ -34,14 +34,22 @@ import { E2E_API_URL, expect, test } from "../fixtures/test-env";
 const ABS270_BYLAW_NAME = "ABS-270 Structured Query E2E Bylaw";
 
 
-function runSeed(): void {
+/** Run the ABS-270 seed and return the seeded document_id.
+ *
+ * The seed script prints "seed_e2e_abs270_structured: document=<id>" on
+ * stdout. Capturing the id lets the near-miss suggestion test scope its
+ * lookup to just the ABS-270 document so the suggestion corpus is the
+ * three seeded HR-2 / Table-1A fragments only — not the full multi-bylaw
+ * test corpus. Without scoping, HR-2 paths can fall outside the top-8
+ * when the corpus is large. */
+function runSeed(): number | null {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   const pgPort = process.env.PG_PORT || "5432";
   const databaseUrl =
     process.env.DATABASE_URL ||
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
-  execSync(
+  const output = execSync(
     `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_abs270_structured.py")}"`,
     {
       env: {
@@ -49,14 +57,19 @@ function runSeed(): void {
         DATABASE_URL: databaseUrl,
         PYTHONPATH: `${path.join(repoRoot, "src")}:${process.env.PYTHONPATH || ""}`,
       },
-      stdio: "inherit",
+      encoding: "utf-8",
     },
   );
+  const m = output.match(/document=(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
 }
 
 
+// Seeded document_id, set by beforeAll and used by the scoped suggestion test.
+let abs270DocumentId: number | null = null;
+
 test.beforeAll(() => {
-  runSeed();
+  abs270DocumentId = runSeed();
 });
 
 
@@ -126,11 +139,22 @@ test.describe("ABS-270: structured query support on lookup_citation", () => {
   test("ZoneAttributeQuery miss with known-zone — suggestions include near-match paths", async ({
     request,
   }) => {
-    // Zone "HR-2" exists (citation_paths include "HR-2 > max_height" and
-    // "HR-2 > max_lot_coverage"). Querying for "HR-2 > min_front_setback"
-    // (a path not seeded) should return suggestions that include other HR-2 paths.
+    // Zone "HR-2" exists in the ABS-270 seed doc (citation_paths include
+    // "HR-2 > max_height" and "HR-2 > max_lot_coverage"). Querying for
+    // "HR-2 > min_front_setback" (a path not seeded) should return
+    // suggestions that include other HR-2 paths.
+    //
+    // The lookup is scoped to abs270DocumentId so the suggestion corpus
+    // contains only the three seeded HR-2 / Table-1A paths. Without scoping,
+    // the full multi-bylaw test corpus can rank other paths ahead and push
+    // the HR-2 ones outside the top-8 limit.
+    expect(
+      abs270DocumentId,
+      "beforeAll seed failed to capture document_id — check seed output",
+    ).not.toBeNull();
     const { status, json } = await lookupCitation(request, {
       structured: { kind: "zone_attribute", zone: "HR-2", attribute: "min_front_setback" },
+      document_id: abs270DocumentId,
     });
     expect(status).toBe(200);
     const body = json as { match: unknown; suggestions: string[] };
@@ -138,7 +162,7 @@ test.describe("ABS-270: structured query support on lookup_citation", () => {
     expect(Array.isArray(body.suggestions)).toBe(true);
     // At least one HR-2 path should surface as a suggestion.
     const hasHR2Suggestion = body.suggestions.some((s) => s.startsWith("HR-2"));
-    expect(hasHR2Suggestion).toBe(true);
+    expect(hasHR2Suggestion, `suggestions were: ${JSON.stringify(body.suggestions)}`).toBe(true);
   });
 
 
