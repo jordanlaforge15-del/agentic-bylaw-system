@@ -68,6 +68,7 @@ def test_build_bylaw_tools_returns_full_tool_set(seeded_service):
         "get_document_outline",
         "lookup_citation",
         "search_bylaw_evidence",
+        "get_address_profile",
         "evaluate_submission_against_bylaws",
         "request_tier_upgrade",
     }
@@ -146,6 +147,22 @@ async def test_get_document_outline_handler_returns_json(seeded_service):
     assert parsed["document"]["id"] == document_id
     assert isinstance(parsed["fragments"], list)
     assert len(parsed["fragments"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_get_address_profile_handler_returns_json(seeded_service):
+    """The get_address_profile handler must round-trip through the service
+    and emit the compact projection. The seed corpus has no spatial datasets
+    or geocode cache, so a free-text address resolves to the graceful
+    unresolvable shape (never an exception) with the fall-back instruction.
+    """
+    service, _ = seeded_service
+    _, handlers = build_bylaw_tools(service)
+    raw = await handlers["get_address_profile"]({"address": "100 Robie Street"})
+    parsed = json.loads(raw)
+    assert parsed["address"]
+    assert parsed["unresolvable"] is True
+    assert "instruction" in parsed
 
 
 @pytest.mark.asyncio

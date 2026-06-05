@@ -69,6 +69,16 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             "location={civic_number: '6321', street: 'Quinpool Road'}. "
             "If the response contains a 'notes' array warning that the "
             "location was missing, re-issue the call with the slot set.\n\n"
+            "CASE-OPEN SHORTCUT — get_address_profile.\n"
+            "When a case-bound conversation opens on a specific address, "
+            "parcel, or named place, call get_address_profile(address) FIRST. "
+            "It resolves the address and returns the zone, overlay precincts "
+            "(height, FAR), heritage status, bonus-zoning eligibility, and "
+            "citations in a single call — collapsing what would otherwise be "
+            "several search_bylaw_evidence round-trips into one. Spend the "
+            "rest of the tool budget on the actual question. If the profile "
+            "comes back with unresolvable=true, fall back to "
+            "search_bylaw_evidence with the location slot.\n\n"
             "WHEN TO USE evaluate_submission_against_bylaws.\n"
             "Use this fifth tool ONLY when the user has stated specific "
             "proposed attribute values (height, setbacks, use class, "
@@ -227,6 +237,28 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         with session_scope(db_url) as session:
             service = _service(session)
             return service.search(request).model_dump(mode="json")
+
+    @mcp.tool()
+    def get_address_profile(address: str) -> dict:
+        """Use this at the start of a case-bound conversation when the user mentions an address, parcel, or named place.
+
+        Returns the zone, overlay precincts, heritage status, and citations
+        in one call. Saves multiple lookups.
+
+        The ``address`` argument is free text in the same shape the
+        ``search_bylaw_evidence`` ``location`` slot accepts — a civic address
+        ("100 Robie Street") or a parcel id ("PID 00012345"). The tool
+        resolves the address spatially, then composes the zone plus every
+        linked overlay (height precinct, FAR precinct, heritage district,
+        bonus zoning) into a single ``AddressProfile``.
+
+        If the address can't be resolved, the response carries
+        ``unresolvable: true`` with empty citations rather than an error —
+        fall back to the thin tools (``search_bylaw_evidence``) in that case.
+        """
+        with session_scope(db_url) as session:
+            service = _service(session)
+            return service.get_address_profile(address).model_dump(mode="json")
 
     @mcp.tool()
     def evaluate_submission_against_bylaws(

@@ -142,6 +142,27 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
         },
+        {
+            "type": "function",
+            "name": "get_address_profile",
+            "description": (
+                "Use this at the start of a case-bound conversation when the user "
+                "mentions an address, parcel, or named place. Returns the zone, "
+                "overlay precincts, heritage status, and citations in one call. "
+                "Saves multiple lookups. The 'address' argument is free text in the "
+                "same shape the search_bylaw_evidence 'location' slot accepts. If the "
+                "address can't be resolved, the response carries 'unresolvable': true "
+                "with empty citations rather than an error."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "address": {"type": "string"},
+                },
+                "required": ["address"],
+                "additionalProperties": False,
+            },
+        },
     ]
 
 
@@ -206,6 +227,10 @@ class OpenAIToolExecutor:
         if tool_name == "search_bylaw_evidence":
             request = _validated(RetrievalRequest, args)
             return service.search(request).model_dump(mode="json")
+        if tool_name == "get_address_profile":
+            return service.get_address_profile(str(args.get("address") or "")).model_dump(
+                mode="json"
+            )
         raise ValueError(f"Unsupported OpenAI retrieval tool: {tool_name}")
 
 
