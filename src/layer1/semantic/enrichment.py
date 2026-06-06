@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+import os
 import re
 from typing import Iterable
 
@@ -34,12 +35,28 @@ from layer1.semantic.extractors import (
     looks_like_section_label,
     looks_like_use_label,
     normalize_use,
+    normalize_zone,
     reset_profile_overlay,
     use_profile_overlay,
 )
 
 EXTRACTOR_VERSION = "semantic-v1"
 REVIEW_AUTO = "auto_accepted"
+REVIEW_NEEDS = "needs_review"
+
+# ABS-278: axis bindings whose confidence is at or below this threshold are
+# flagged for human review (``metadata_json.review = "needs_review"``) rather
+# than trusted for automated (use, zone) → cell resolution. Recovered header-
+# bleed columns and ambiguous labels land here. Configurable via env so a
+# jurisdiction with noisier source tables can loosen/tighten the gate without a
+# code change.
+AXIS_REVIEW_CONFIDENCE_THRESHOLD = float(
+    os.environ.get("ABS_AXIS_REVIEW_THRESHOLD", "0.6")
+)
+# Confidence assigned to a zone column recovered from header-bleed (a bare zone
+# code found in the data region rather than the header row). Deliberately at/
+# below the review threshold — these are corrections, not first-class headers.
+HEADER_BLEED_CONFIDENCE = 0.55
 PERMISSION_MARKERS = {"●", "", "•", "■", "x", "X"}
 
 
@@ -509,23 +526,54 @@ def _extract_permission_table_facts(
     header_idx = _header_row_index(rows)
     header_cells = rows.get(header_idx, [])
     column_entities: dict[int, SemanticEntity] = {}
-    for cell in header_cells[1:]:
-        zones = extract_zones(cell.text)
-        if not zones:
-            continue
+
+    def _bind_column_zone(
+        col_index: int,
+        zone_code: str,
+        raw_label: str,
+        cell: SourceTableCell,
+        confidence: float,
+    ) -> None:
         entity = _get_or_create_entity(
             session,
             report,
             cache,
             document_id=table.document_id,
             entity_type="zone",
-            canonical_name=zones[0],
-            source_text=cell.text,
-            confidence=0.95,
+            canonical_name=zone_code,
+            source_text=raw_label,
+            confidence=confidence,
             metadata={"source_table_id": table.id, "source_table_cell_id": cell.id},
         )
-        column_entities[cell.col_index] = entity
-        _add_axis_binding(session, report, table, "column", cell.col_index, entity, cell.text, 0.95)
+        column_entities[col_index] = entity
+        _add_axis_binding(
+            session, report, table, "column", col_index, entity, raw_label, confidence
+        )
+
+    # 1. Primary: zone codes sitting in the detected header row.
+    for cell in header_cells[1:]:
+        zones = extract_zones(cell.text)
+        if not zones:
+            # FR5: a populated header column we couldn't map to a zone is logged
+            # rather than silently dropped, so it surfaces for later review.
+            if _cell_text(cell):
+                report.warnings.append(
+                    f"table {table.id}: unmapped column header "
+                    f"{_cell_text(cell)!r} at col {cell.col_index} "
+                    "(no zone code resolved)"
+                )
+            continue
+        _bind_column_zone(cell.col_index, zones[0], cell.text, cell, 0.95)
+
+    # 2. ABS-278 Defect C: header-bleed correction. Some source tables spill a
+    # zone-header band into the body (e.g. table 1057 rows 8–9), so bare zone
+    # codes appear as data-cell values. Promote those to column bindings for any
+    # column still missing a zone, and flag the offending cells so they are not
+    # read as permission markers.
+    _correct_header_bleed(
+        session, report, table, rows, header_idx, column_entities, _bind_column_zone
+    )
+
     for row_index, row_cells in rows.items():
         if row_index == header_idx or _is_repeated_header_row(row_cells):
             continue
@@ -533,6 +581,13 @@ def _extract_permission_table_facts(
         is_use_label = looks_like_use_label(row_label)
         is_section_label = (not is_use_label) and looks_like_section_label(row_label)
         if not (is_use_label or is_section_label):
+            # FR5: a non-empty row label that maps to neither a use class nor a
+            # section reference is logged for review instead of dropped.
+            if row_label:
+                report.warnings.append(
+                    f"table {table.id}: unmapped row label {row_label!r} at "
+                    f"row {row_index} (neither use nor section label)"
+                )
             continue
         # ABS-105: when the row is a section-number label (no use-class
         # wording), still create a "use" entity but mark it section-keyed
@@ -561,6 +616,15 @@ def _extract_permission_table_facts(
         )
         _add_axis_binding(session, report, table, "row", row_index, use_entity, row_label, row_confidence)
         for cell in row_cells[1:]:
+            # ABS-278 Defect C: a bare zone code sitting in a use row's data
+            # region is bled header content, not a permission value. Re-attribute
+            # it to the column axis and flag the cell so it no longer reports the
+            # zone code as its value.
+            if (cell.metadata_json or {}).get("header_bleed") or _is_pure_zone_token(cell.text):
+                _flag_header_bleed_cell(
+                    session, report, table, cell, column_entities, _bind_column_zone
+                )
+                continue
             marker = cell.text.strip()
             if not marker:
                 continue
@@ -1104,6 +1168,11 @@ def _add_axis_binding(
     raw_label: str,
     confidence: float,
 ) -> None:
+    # FR5: bindings at/below the review threshold are flagged (not dropped) so a
+    # reviewer can confirm or correct the low-confidence resolution later.
+    metadata: dict = {}
+    if confidence <= AXIS_REVIEW_CONFIDENCE_THRESHOLD:
+        metadata["review"] = REVIEW_NEEDS
     binding = TableAxisBinding(
         table_id=table.id,
         axis=axis,
@@ -1111,7 +1180,7 @@ def _add_axis_binding(
         entity_id=entity.id,
         raw_label=raw_label,
         confidence=confidence,
-        metadata_json={},
+        metadata_json=metadata,
     )
     session.add(binding)
     session.flush()
@@ -1214,6 +1283,163 @@ def _zone_density(labels: list[str]) -> float:
 def _is_repeated_header_row(row_cells: list[SourceTableCell]) -> bool:
     labels = [_cell_text(cell) for cell in row_cells]
     return len(labels) > 2 and _zone_density(labels[1:]) >= 0.5
+
+
+def _is_pure_zone_token(text: str | None) -> bool:
+    """True when ``text`` is *only* a single zone code (e.g. ``"DH"``, ``"CEN-2"``).
+
+    A permission-matrix data cell should hold a marker (●, a circled number,
+    blank, a condition ref) — never a bare zone code. When it does, that's
+    header-bleed: a zone header spilled into the body (ABS-278 Defect C).
+    """
+    stripped = re.sub(r"\s+", " ", (text or "")).strip()
+    if not stripped:
+        return False
+    zones = extract_zones(stripped)
+    return len(zones) == 1 and normalize_zone(stripped) == zones[0]
+
+
+def _row_is_bled_zone_header(row_cells: list[SourceTableCell]) -> bool:
+    """True when a body row is really a mis-attributed zone-header band.
+
+    Fires when the majority of the row's non-empty data cells (everything past
+    the row-label column) are bare zone codes — the signature of a header that
+    spilled into the table body.
+    """
+    data = sorted(row_cells, key=lambda item: item.col_index)[1:]
+    nonempty = [cell for cell in data if _cell_text(cell)]
+    if len(nonempty) < 2:
+        return False
+    pure = [cell for cell in nonempty if _is_pure_zone_token(cell.text)]
+    return len(pure) / len(nonempty) >= 0.6
+
+
+def _flag_header_bleed_cell(
+    session: Session,
+    report: SemanticEnrichmentReport,
+    table: SourceTable,
+    cell: SourceTableCell,
+    column_entities: dict[int, SemanticEntity],
+    bind_column_zone,
+) -> None:
+    """Re-attribute a bled zone-code cell to its column axis and flag it.
+
+    Marks ``metadata_json.header_bleed`` so downstream consumers (retrieval,
+    fact extraction) skip the cell as a value, records the recovered zone, and —
+    if the column has no zone yet — promotes the code to a low-confidence column
+    binding flagged for review.
+    """
+    zones = extract_zones(cell.text or "")
+    if not zones:
+        return
+    zone_code = zones[0]
+    meta = dict(cell.metadata_json or {})
+    if not meta.get("header_bleed") or meta.get("recovered_zone") != zone_code:
+        meta["header_bleed"] = True
+        meta["recovered_zone"] = zone_code
+        cell.metadata_json = meta
+    if cell.col_index not in column_entities:
+        bind_column_zone(
+            cell.col_index, zone_code, cell.text, cell, HEADER_BLEED_CONFIDENCE
+        )
+        report.warnings.append(
+            f"table {table.id}: recovered header-bleed zone {zone_code!r} for "
+            f"column {cell.col_index} (cell row {cell.row_index})"
+        )
+
+
+def _correct_header_bleed(
+    session: Session,
+    report: SemanticEnrichmentReport,
+    table: SourceTable,
+    rows: dict[int, list[SourceTableCell]],
+    header_idx: int,
+    column_entities: dict[int, SemanticEntity],
+    bind_column_zone,
+) -> None:
+    """Promote zone codes from fully-bled body rows to column bindings.
+
+    Per-cell bleed inside genuine use rows is handled inline in the marker loop;
+    this pass catches whole rows that are really repeated/mis-placed zone-header
+    bands (which the use-row loop skips via :func:`_is_repeated_header_row`), so
+    their zone codes would otherwise be lost entirely.
+    """
+    for row_index, row_cells in rows.items():
+        if row_index == header_idx:
+            continue
+        if not _row_is_bled_zone_header(row_cells):
+            continue
+        for cell in sorted(row_cells, key=lambda item: item.col_index)[1:]:
+            if not _is_pure_zone_token(cell.text):
+                continue
+            _flag_header_bleed_cell(
+                session, report, table, cell, column_entities, bind_column_zone
+            )
+
+
+def resolve_permission_cell(
+    session: Session,
+    *,
+    table_id: int,
+    use_name: str,
+    zone: str,
+) -> dict | None:
+    """Resolve a (use, zone) pair to the addressed permission-matrix cell.
+
+    Uses the bound axes (ABS-278): the use resolves a ``row`` binding, the zone
+    resolves a ``column`` binding, and their indices address the cell. Returns
+    ``None`` when either axis can't be resolved. The returned dict carries the
+    resolved indices plus the cell's recovered ``permission_marker`` so callers
+    don't need a second query.
+    """
+    use_norm = normalize_use(use_name)
+    zone_norm = normalize_zone(zone)
+    row_binding = (
+        session.query(TableAxisBinding)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id == table_id,
+            TableAxisBinding.axis == "row",
+            SemanticEntity.entity_type == "use",
+            SemanticEntity.canonical_name == use_norm,
+        )
+        .order_by(TableAxisBinding.confidence.desc())
+        .first()
+    )
+    col_binding = (
+        session.query(TableAxisBinding)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id == table_id,
+            TableAxisBinding.axis == "column",
+            SemanticEntity.entity_type == "zone",
+            SemanticEntity.canonical_name == zone_norm,
+        )
+        .order_by(TableAxisBinding.confidence.desc())
+        .first()
+    )
+    if row_binding is None or col_binding is None:
+        return None
+    cell = (
+        session.query(SourceTableCell)
+        .filter(
+            SourceTableCell.table_id == table_id,
+            SourceTableCell.row_index == row_binding.index,
+            SourceTableCell.col_index == col_binding.index,
+        )
+        .first()
+    )
+    meta = (cell.metadata_json or {}) if cell is not None else {}
+    return {
+        "table_id": table_id,
+        "row_index": row_binding.index,
+        "col_index": col_binding.index,
+        "use": use_norm,
+        "zone": zone_norm,
+        "cell_text": cell.text if cell is not None else None,
+        "permission_marker": meta.get("permission_marker"),
+        "footnote": meta.get("footnote"),
+    }
 
 
 def _normalize_permission_marker(marker: str) -> dict:

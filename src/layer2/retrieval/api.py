@@ -845,6 +845,12 @@ def _structured_permission_table_candidates(
             values = []
             matched_zone = False
             for cell in ordered[1:]:
+                # ABS-278 Defect C: a cell flagged as header-bleed holds a zone
+                # code that spilled out of the header band, not a permission
+                # value — skip it so the zone code doesn't leak into candidate
+                # text as if it were a marker.
+                if (cell.metadata_json or {}).get("header_bleed"):
+                    continue
                 header = headers.get(cell.col_index, f"column {cell.col_index}")
                 if zone_forms and not _contains_any_zone(header, zone_forms):
                     continue
