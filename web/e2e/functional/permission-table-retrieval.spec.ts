@@ -74,6 +74,51 @@ test("retrieval returns zone-specific cell for restaurant use", async ({ request
 });
 
 
+// ABS-277: the "Home occupation use" row is seeded with symbol-font markers —
+// DD is the U+F098 dot (renders blank), DH is a circled-three conditional, ER-3
+// is empty. The seed's recovery pass must classify them into
+// metadata_json.permission_marker, surfaced here via the search-tables cells[].
+test("recovers symbol-font permission markers into permission_marker", async ({
+  request,
+}) => {
+  const response = await request.post(`${E2E_API_URL}/v1/_test/search-tables`, {
+    headers: { "Content-Type": "application/json" },
+    data: {
+      bylaw_name: "Regional Centre Land Use By-law",
+      use_name: "Home occupation use",
+    },
+  });
+  expect(response.status(), `search-tables failed: ${await response.text()}`).toBe(200);
+
+  const body = await response.json();
+  type Cell = {
+    row_header_path: string | null;
+    col_header_path: string | null;
+    permission_marker: string | null;
+    footnote: number | null;
+  };
+  const homeCells: Cell[] = body.cells.filter(
+    (c: Cell) => c.row_header_path === "Home occupation use",
+  );
+  const byZone = (zone: string) =>
+    homeCells.find((c) => c.col_header_path === zone);
+
+  // U+F098 dot -> permitted (the core ABS-277 recovery).
+  expect(byZone("DD")?.permission_marker).toBe("permitted");
+  // Circled-three -> conditional with footnote ordinal 3.
+  expect(byZone("DH")?.permission_marker).toBe("conditional");
+  expect(byZone("DH")?.footnote).toBe(3);
+  // Empty cell -> not_permitted.
+  expect(byZone("ER-3")?.permission_marker).toBe("not_permitted");
+
+  // Header / row-label cells carry no marker semantics.
+  const headerCell = body.cells.find(
+    (c: Cell) => c.row_header_path === null && c.col_header_path === "DD",
+  );
+  expect(headerCell?.permission_marker ?? null).toBeNull();
+});
+
+
 test("retrieval returns candidates for office use in CEN-2", async ({ request }) => {
   const response = await request.post(`${E2E_API_URL}/v1/_test/search-tables`, {
     headers: { "Content-Type": "application/json" },
