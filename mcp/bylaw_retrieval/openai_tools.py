@@ -209,6 +209,34 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
         },
+        {
+            "type": "function",
+            "name": "bylaw_query",
+            "description": (
+                "Use this when the user has stated both a location AND a "
+                "specific intent (feasibility, use permission, dimensional "
+                "check). Saves multiple round-trips by composing the full "
+                "answer server-side. For exploratory questions where you "
+                "don't yet know the intent, use the thin tools. 'intent' is "
+                "one of zone_feasibility, address_lookup, use_check, "
+                "dimensional_check. Pass 'zone' for zone-scoped intents, "
+                "'address' for address_lookup, and 'proposed' (e.g. "
+                "{\"height_m\": 80}) for dimensional_check. An unrecognised "
+                "intent returns 'unrecognized_intent': true with a "
+                "'suggested_tools' list rather than an error."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "intent": {"type": "string"},
+                    "address": {"type": "string"},
+                    "zone": {"type": "string"},
+                    "proposed": {"type": "object", "additionalProperties": True},
+                },
+                "required": ["intent"],
+                "additionalProperties": False,
+            },
+        },
     ]
 
 
@@ -277,6 +305,13 @@ class OpenAIToolExecutor:
             return service.get_address_profile(str(args.get("address") or "")).model_dump(
                 mode="json"
             )
+        if tool_name == "bylaw_query":
+            return service.bylaw_query(
+                intent=str(args.get("intent") or ""),
+                address=args.get("address"),
+                zone=args.get("zone"),
+                proposed=args.get("proposed"),
+            ).model_dump(mode="json")
         raise ValueError(f"Unsupported OpenAI retrieval tool: {tool_name}")
 
 

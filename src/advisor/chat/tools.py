@@ -35,6 +35,7 @@ from typing import Any
 
 from advisor.chat.compact import (
     compact_address_profile,
+    compact_bylaw_query,
     compact_citation_lookup,
     compact_document_list,
     compact_match,
@@ -46,6 +47,7 @@ from advisor.llm import ToolDefinition
 from advisor.llm.tool_loop import ToolHandler
 from bylaw_retrieval.retrieval import (
     ATTRIBUTE_VOCABULARY,
+    BYLAW_INTENTS,
     CitationLookupRequest,
     LocationSlot,
     RetrievalRequest,
@@ -506,6 +508,79 @@ _SCHEMA_EVALUATE_SUBMISSION: dict[str, Any] = {
 }
 
 
+# --- bylaw_query (ABS-274 / Phase 4 intent-routed mega-tool) --------------
+#
+# Description per FR-4.5. Registered AFTER the thin tools and the Phase 2/3
+# thick tools (see build order below) so the model preferentially reaches
+# for the narrower tools when its intent is ambiguous; bylaw_query is the
+# explicit "I already know the location AND the intent" shortcut.
+#
+# The valid intents are listed inline (BYLAW_INTENTS — the shared
+# vocabulary) so the model sees them, but ``intent`` is deliberately NOT a
+# hard JSON-Schema enum: an out-of-vocabulary intent must still reach the
+# server so it can return unrecognized_intent=True with thin-tool
+# suggestions (FR-4.2) rather than being rejected at the schema layer.
+_DESC_BYLAW_QUERY = (
+    "Use this when the user has stated both a location AND a specific "
+    "intent (feasibility, use permission, dimensional check). Saves "
+    "multiple round-trips by composing the full answer server-side. For "
+    "exploratory questions where you don't yet know the intent, use the "
+    "thin tools.\n\n"
+    "Declare 'intent' as one of: "
+    + ", ".join(BYLAW_INTENTS)
+    + ".\n"
+    "  - zone_feasibility: pass 'zone' — returns the full ZoneProfile "
+    "(dimensions + uses + parking) in one call.\n"
+    "  - address_lookup: pass 'address' — returns the AddressProfile "
+    "(zone + overlays + citations).\n"
+    "  - use_check: pass 'zone' — returns the zone's permitted / "
+    "not-permitted use lists.\n"
+    "  - dimensional_check: pass 'zone' and 'proposed' (e.g. "
+    "{\"height_m\": 80}) — returns the dimensions plus a ConformanceCheck "
+    "flagging each proposed value as pass / fail / inconclusive.\n\n"
+    "An intent outside this list returns 'unrecognized_intent': true with "
+    "a 'suggested_tools' list to fall back to — never an error."
+)
+
+_SCHEMA_BYLAW_QUERY: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "intent": {
+            "type": "string",
+            "description": (
+                "The intent to route on. One of: " + ", ".join(BYLAW_INTENTS) + "."
+            ),
+        },
+        "address": {
+            "type": "string",
+            "description": (
+                "Free-text address / parcel / named place. Required for "
+                "intent='address_lookup'."
+            ),
+        },
+        "zone": {
+            "type": "string",
+            "description": (
+                "Zone code, e.g. 'HR-2'. Required for zone_feasibility, "
+                "use_check, and dimensional_check."
+            ),
+        },
+        "proposed": {
+            "type": "object",
+            "description": (
+                "Proposed dimensional values for intent='dimensional_check', "
+                "e.g. {\"height_m\": 80, \"front_setback_m\": 2}. Keys: "
+                "height_m, lot_coverage_pct, far, front_setback_m, "
+                "side_setback_m, rear_setback_m."
+            ),
+            "additionalProperties": True,
+        },
+    },
+    "required": ["intent"],
+    "additionalProperties": False,
+}
+
+
 # Tier-upgrade tool — the agent calls this when it self-detects that
 # the user's question outgrew the purchased tier. Distinct from a
 # text-only convention because a structured tool call gives the
@@ -695,6 +770,22 @@ def build_bylaw_tools(
             profile = service.get_zone_profile(zone=zone, include=include)
             return json.dumps(compact_zone_profile(profile))
 
+    async def bylaw_query_handler(payload: dict[str, Any]) -> str:
+        # ABS-274 / Phase 4 intent-routed composer. ``intent`` is required;
+        # the service dispatches to get_zone_profile / get_address_profile
+        # per intent (FR-4.2/4.4). An unrecognised intent or a missing
+        # required slot returns a fall-back envelope rather than raising,
+        # so the tool loop never thrashes.
+        intent = str(payload.get("intent") or "")
+        with _resolve_cm() as service:
+            response = service.bylaw_query(
+                intent=intent,
+                address=payload.get("address"),
+                zone=payload.get("zone"),
+                proposed=payload.get("proposed"),
+            )
+            return json.dumps(compact_bylaw_query(response))
+
     async def evaluate_submission_handler(payload: dict[str, Any]) -> str:
         """Run the compliance evaluator against the supplied attributes + location.
 
@@ -820,6 +911,13 @@ def build_bylaw_tools(
             description=_DESC_EVALUATE_SUBMISSION,
             input_schema=_SCHEMA_EVALUATE_SUBMISSION,
         ),
+        # Phase 4 mega-tool — placed AFTER the thin + Phase 2/3 thick tools
+        # so the model tries the narrower tools first when intent is unclear.
+        ToolDefinition(
+            name="bylaw_query",
+            description=_DESC_BYLAW_QUERY,
+            input_schema=_SCHEMA_BYLAW_QUERY,
+        ),
         ToolDefinition(
             name="request_tier_upgrade",
             description=_DESC_REQUEST_TIER_UPGRADE,
@@ -835,6 +933,7 @@ def build_bylaw_tools(
         "get_address_profile": get_address_profile_handler,
         "get_zone_profile": get_zone_profile_handler,
         "evaluate_submission_against_bylaws": evaluate_submission_handler,
+        "bylaw_query": bylaw_query_handler,
         "request_tier_upgrade": request_tier_upgrade_handler,
     }
 

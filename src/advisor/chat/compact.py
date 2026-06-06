@@ -50,6 +50,7 @@ from typing import Any
 from bylaw_retrieval.retrieval.schemas import (
     AddressProfile,
     AncestorFragment,
+    BylawQueryResponse,
     CitationLookupResponse,
     CrossReferenceSummary,
     DocumentOutlineResponse,
@@ -486,5 +487,75 @@ def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
                 if v is not None
             }
             for c in profile.citations
+        ]
+    return out
+
+
+def compact_bylaw_query(response: BylawQueryResponse) -> dict[str, Any]:
+    """Project a ``BylawQueryResponse`` to its LLM-essential fields (ABS-274).
+
+    Reuses ``compact_zone_profile`` / ``compact_address_profile`` for the
+    composed sub-DTOs so the projection rules stay in one place, and elides
+    null facets. An unrecognised intent carries an explicit fall-back
+    instruction (mirroring the lookup_citation / unknown-zone convention) so
+    the model pivots to the thin tools without re-issuing the same intent.
+    """
+    out: dict[str, Any] = {"intent": response.intent}
+    if response.unrecognized_intent:
+        out["unrecognized_intent"] = True
+        out["suggested_tools"] = list(response.suggested_tools)
+        out["instruction"] = (
+            "Intent not recognised. Use one of the suggested_tools (thin "
+            "tools) to answer this question; do not retry bylaw_query with "
+            "the same intent."
+        )
+        return out
+
+    if response.suggested_tools:
+        # Recognised intent but a required slot (zone/address) was missing.
+        out["suggested_tools"] = list(response.suggested_tools)
+        out["instruction"] = (
+            "This intent needs a zone or address. Supply it, or fall back to "
+            "the suggested_tools."
+        )
+        return out
+
+    if response.zone_profile is not None:
+        out["zone_profile"] = compact_zone_profile(response.zone_profile)
+    if response.address_profile is not None:
+        out["address_profile"] = compact_address_profile(response.address_profile)
+    if response.conformance_check is not None:
+        check = response.conformance_check
+        out["conformance_check"] = {
+            "zone": check.zone,
+            "overall": check.overall,
+            "results": [
+                {
+                    k: v
+                    for k, v in {
+                        "attribute": r.attribute,
+                        "proposed": r.proposed,
+                        "limit": r.limit,
+                        "comparison": r.comparison,
+                        "status": r.status,
+                        "note": r.note,
+                    }.items()
+                    if v is not None
+                }
+                for r in check.results
+            ],
+        }
+    if response.citations:
+        out["citations"] = [
+            {
+                k: v
+                for k, v in {
+                    "backs": c.backs,
+                    "citation_path": c.citation_path,
+                    "citation_label": c.citation_label,
+                }.items()
+                if v
+            }
+            for c in response.citations
         ]
     return out

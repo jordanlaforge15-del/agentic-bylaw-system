@@ -12,11 +12,16 @@ from rapidfuzz import fuzz, process
 
 from bylaw_retrieval.retrieval.schemas import (
     ATTRIBUTE_VOCABULARY,
+    BYLAW_INTENTS,
     AddressProfile,
     AncestorFragment,
+    BylawIntent,
+    BylawQueryResponse,
     CitationLookupRequest,
     CitationLookupResponse,
     CitationRef,
+    ConformanceAttribute,
+    ConformanceCheck,
     CrossReferenceSummary,
     DatasetFeatureMatch,
     DocumentOutlineItem,
@@ -1054,6 +1059,203 @@ class RetrievalService:
                 unresolvable=True,
             )
         return self._build_address_profile(canonical_address, ref, resolved)
+
+    # -- Phase 4 (ABS-274): intent-routed bylaw_query mega-tool -----------
+    #
+    # Thin tools the model should pivot to when an intent doesn't fit any
+    # server-side composition. ``search_bylaw_evidence`` + ``lookup_citation``
+    # lead the list (FR-4.2) because they cover the broadest fallback.
+    _BYLAW_QUERY_SUGGESTED_TOOLS: tuple[str, ...] = (
+        "search_bylaw_evidence",
+        "lookup_citation",
+        "get_zone_profile",
+        "get_address_profile",
+        "get_document_outline",
+    )
+
+    # Maps a caller-supplied ``proposed`` key to the governing
+    # ``ZoneDimensions`` field and the bound type. ``max`` => the proposal
+    # must not exceed the limit (height, coverage, FAR); ``min`` => the
+    # proposal must not fall below it (setbacks). Aliases are included so the
+    # model can use the natural attribute name or the DTO field name.
+    _DIMENSIONAL_CHECKS: dict[str, tuple[str, str]] = {
+        "height_m": ("max_height_m", "max"),
+        "max_height_m": ("max_height_m", "max"),
+        "building_height_m": ("max_height_m", "max"),
+        "lot_coverage_pct": ("max_lot_coverage_pct", "max"),
+        "max_lot_coverage_pct": ("max_lot_coverage_pct", "max"),
+        "far": ("max_far", "max"),
+        "max_far": ("max_far", "max"),
+        "floor_area_ratio": ("max_far", "max"),
+        "front_setback_m": ("front_setback_m", "min"),
+        "side_setback_m": ("side_setback_m", "min"),
+        "rear_setback_m": ("rear_setback_m", "min"),
+    }
+
+    def bylaw_query(
+        self,
+        intent: str,
+        address: str | None = None,
+        zone: str | None = None,
+        proposed: dict | None = None,
+    ) -> BylawQueryResponse:
+        """Intent-routed composer over the Phase 2/3 thick tools (ABS-274).
+
+        The caller declares its ``intent`` once and the server dispatches to
+        the right composition, encoding the "which tool fits?" choice
+        server-side instead of leaving it to the model's tool-use loop
+        (FR-4.1/4.2):
+
+        * ``zone_feasibility`` -> ``get_zone_profile(zone)`` (full DTO:
+          dimensions + uses + parking in ONE call).
+        * ``address_lookup``   -> ``get_address_profile(address)``.
+        * ``use_check``        -> ``get_zone_profile(zone, include=['uses'])``.
+        * ``dimensional_check``-> ``get_zone_profile(zone, include=['dimensions'])``
+          plus a :class:`ConformanceCheck` of ``proposed`` against the zone.
+
+        Composition reuses the Phase 2/3 implementations directly — no
+        duplicated retrieval logic (FR-4.4) — so a bug there propagates here
+        rather than drifting.
+
+        An ``intent`` outside :class:`BylawIntent` returns
+        ``unrecognized_intent=True`` with thin-tool suggestions and never
+        raises (FR-4.2). A recognised intent missing its required slot
+        (``zone``/``address``) likewise degrades to thin-tool suggestions
+        rather than crashing.
+        """
+        if intent not in BYLAW_INTENTS:
+            return BylawQueryResponse(
+                intent=intent,
+                unrecognized_intent=True,
+                suggested_tools=list(self._BYLAW_QUERY_SUGGESTED_TOOLS),
+            )
+
+        if intent == BylawIntent.ADDRESS_LOOKUP.value:
+            if not address:
+                return BylawQueryResponse(
+                    intent=intent,
+                    suggested_tools=list(self._BYLAW_QUERY_SUGGESTED_TOOLS),
+                )
+            profile = self.get_address_profile(address)
+            return BylawQueryResponse(
+                intent=intent,
+                address_profile=profile,
+                citations=list(profile.citations),
+            )
+
+        # All remaining intents are zone-scoped.
+        if not zone:
+            return BylawQueryResponse(
+                intent=intent,
+                suggested_tools=list(self._BYLAW_QUERY_SUGGESTED_TOOLS),
+            )
+
+        if intent == BylawIntent.USE_CHECK.value:
+            zone_profile = self.get_zone_profile(zone=zone, include=["uses"])
+            return BylawQueryResponse(
+                intent=intent,
+                zone_profile=zone_profile,
+                citations=list(zone_profile.citations),
+            )
+
+        if intent == BylawIntent.DIMENSIONAL_CHECK.value:
+            zone_profile = self.get_zone_profile(zone=zone, include=["dimensions"])
+            conformance = self._build_conformance_check(zone, zone_profile, proposed or {})
+            return BylawQueryResponse(
+                intent=intent,
+                zone_profile=zone_profile,
+                conformance_check=conformance,
+                citations=list(zone_profile.citations),
+            )
+
+        # zone_feasibility — the full profile in a single get_zone_profile
+        # call (include=None -> dimensions + uses + parking), so a sibling of
+        # AC-4.6 can mock get_zone_profile and assert exactly one call.
+        zone_profile = self.get_zone_profile(zone=zone)
+        return BylawQueryResponse(
+            intent=intent,
+            zone_profile=zone_profile,
+            citations=list(zone_profile.citations),
+        )
+
+    def _build_conformance_check(
+        self, zone: str, zone_profile: ZoneProfile, proposed: dict
+    ) -> ConformanceCheck:
+        """Evaluate each ``proposed`` value against the zone's dimensions.
+
+        Maximums (height/coverage/FAR) fail when the proposal exceeds the
+        limit; minimums (setbacks) fail when it falls short. A key with no
+        mapped standard, a zone silent on the field, or a non-numeric
+        proposal is ``inconclusive`` rather than ``fail`` (FR-4.3).
+        """
+        dims = zone_profile.dimensions
+        results: list[ConformanceAttribute] = []
+        for key, value in proposed.items():
+            mapping = self._DIMENSIONAL_CHECKS.get(key)
+            if mapping is None:
+                results.append(
+                    ConformanceAttribute(
+                        attribute=key,
+                        proposed=value,
+                        comparison="unknown",
+                        status="inconclusive",
+                        note=f"No dimensional standard is mapped for '{key}'.",
+                    )
+                )
+                continue
+            field_name, bound = mapping
+            limit = getattr(dims, field_name, None) if dims is not None else None
+            numeric = value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+            if limit is None or numeric is None:
+                note = (
+                    f"Zone {zone} is silent on {field_name} (governed by a "
+                    "schedule or unspecified)."
+                    if numeric is not None
+                    else f"Proposed value for '{key}' is not numeric."
+                )
+                results.append(
+                    ConformanceAttribute(
+                        attribute=key,
+                        proposed=value,
+                        limit=limit,
+                        comparison=bound,
+                        status="inconclusive",
+                        note=note,
+                    )
+                )
+                continue
+            if bound == "max":
+                ok = numeric <= limit
+                note = (
+                    f"{numeric:g} m/unit is within the {limit:g} maximum."
+                    if ok
+                    else f"{numeric:g} exceeds the {limit:g} maximum for zone {zone}."
+                )
+            else:  # min
+                ok = numeric >= limit
+                note = (
+                    f"{numeric:g} meets the {limit:g} minimum."
+                    if ok
+                    else f"{numeric:g} is below the {limit:g} minimum for zone {zone}."
+                )
+            results.append(
+                ConformanceAttribute(
+                    attribute=key,
+                    proposed=value,
+                    limit=float(limit),
+                    comparison=bound,
+                    status="pass" if ok else "fail",
+                    note=note,
+                )
+            )
+
+        if any(r.status == "fail" for r in results):
+            overall = "fail"
+        elif results and all(r.status == "pass" for r in results):
+            overall = "pass"
+        else:
+            overall = "inconclusive"
+        return ConformanceCheck(zone=zone, results=results, overall=overall)
 
     def _overlay_role(self, dataset: ExternalDataset) -> str:
         name = (dataset.name or "").lower()
