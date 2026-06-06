@@ -224,6 +224,17 @@ class _SearchTablesBody(BaseModel):
     zone: str | None = None
 
 
+# ABS-278: test-only endpoint that runs semantic enrichment for a bylaw and
+# returns the resulting permission-matrix profiles + bound axes, plus an
+# optional (use, zone) -> cell resolution. The Playwright spec seeds a matrix
+# (including a header-bleed cell), hits this, and asserts axes are bound to zone/
+# use entities and the bleed is corrected.
+class _ProfilePermissionTablesBody(BaseModel):
+    bylaw_name: str = Field(min_length=1, max_length=256)
+    use_name: str | None = Field(default=None, max_length=256)
+    zone: str | None = Field(default=None, max_length=64)
+
+
 # ABS-75: test-only Discovery Agent endpoint. Exercises the classifier →
 # parent-resolution → SourceDocument assembly path through the real FastAPI
 # stack. The crawler half (HTTP fetch + link extraction) is unit-tested in
@@ -546,6 +557,117 @@ def _mount_test_router(app: FastAPI) -> None:
                     for c in candidates
                 ],
                 "cells": cells_out,
+            }
+
+    @app.post("/v1/_test/profile-permission-tables")
+    async def profile_permission_tables(
+        body: _ProfilePermissionTablesBody,
+    ) -> dict[str, object]:
+        """Enrich a bylaw and return its permission-matrix profiles + axes.
+
+        ABS-278: proves the axes are bound to zone/use entities, that the
+        header-bleed correction fires, and that a (use, zone) pair resolves to
+        the addressed cell.
+        """
+        from sqlalchemy import select as sa_select
+
+        from layer1.db.base import (
+            SemanticEntity,
+            SourceTable,
+            TableAxisBinding,
+            TableSemanticProfile,
+        )
+        from layer1.semantic.enrichment import (
+            enrich_document_semantics,
+            resolve_permission_cell,
+        )
+
+        with session_scope() as db:
+            doc = db.execute(
+                sa_select(Document).where(Document.bylaw_name == body.bylaw_name)
+            ).scalars().first()
+            if doc is None:
+                raise HTTPException(
+                    status_code=404, detail=f"No document named '{body.bylaw_name}'"
+                )
+
+            enrich_document_semantics(db, document_id=doc.id)
+
+            tables = (
+                db.execute(
+                    sa_select(SourceTable)
+                    .where(SourceTable.document_id == doc.id)
+                    .where(SourceTable.caption.ilike("Table 1%Permitted uses by zone%"))
+                    .order_by(SourceTable.page_start, SourceTable.id)
+                )
+                .scalars()
+                .all()
+            )
+
+            profiles_out: list[dict[str, object]] = []
+            for table in tables:
+                profile = (
+                    db.execute(
+                        sa_select(TableSemanticProfile).where(
+                            TableSemanticProfile.table_id == table.id
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                bindings = (
+                    db.execute(
+                        sa_select(TableAxisBinding, SemanticEntity)
+                        .join(
+                            SemanticEntity,
+                            SemanticEntity.id == TableAxisBinding.entity_id,
+                        )
+                        .where(TableAxisBinding.table_id == table.id)
+                        .order_by(TableAxisBinding.axis, TableAxisBinding.index)
+                    )
+                    .all()
+                )
+                profiles_out.append(
+                    {
+                        "table_id": table.id,
+                        "caption": table.caption,
+                        "profile_type": profile.profile_type if profile else None,
+                        "row_axis_type": profile.row_axis_type if profile else None,
+                        "column_axis_type": profile.column_axis_type if profile else None,
+                        "value_type": profile.value_type if profile else None,
+                        "axes": [
+                            {
+                                "axis": binding.axis,
+                                "index": binding.index,
+                                "entity_type": entity.entity_type,
+                                "canonical_name": entity.canonical_name,
+                                "raw_label": binding.raw_label,
+                                "confidence": binding.confidence,
+                                "review": (binding.metadata_json or {}).get("review"),
+                            }
+                            for binding, entity in bindings
+                        ],
+                    }
+                )
+
+            resolution: dict[str, object] | None = None
+            if body.use_name and body.zone and tables:
+                for table in tables:
+                    resolved = resolve_permission_cell(
+                        db,
+                        table_id=table.id,
+                        use_name=body.use_name,
+                        zone=body.zone,
+                    )
+                    if resolved is not None:
+                        resolution = resolved
+                        break
+
+            return {
+                "document_id": doc.id,
+                "table_count": len(tables),
+                "profiles": profiles_out,
+                "resolution": resolution,
             }
 
     @app.post("/v1/_test/manifest-ingest")
