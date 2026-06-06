@@ -291,10 +291,27 @@ class ScheduleRowQuery(BaseModel):
     row: str = Field(..., description="Row identifier within the schedule, e.g. 'HR-2'.")
 
 
+class PermittedUseQuery(BaseModel):
+    """Resolve a single permitted-use matrix cell: is ``use`` allowed in ``zone``?
+
+    ABS-279 (Phase 3). Unlike ``zone_attribute`` — which returns a zone's
+    whole permitted-uses prose — this addresses the exact ``(use, zone)``
+    cell of the Table 1A permission matrix via the Phase-2 axis bindings and
+    returns a typed permission (permitted / conditional / not_permitted) plus
+    any footnote condition. Carried inside the ``lookup_citation`` structured
+    envelope rather than a new top-level tool to keep the agent's tool count
+    flat (Token Optimization direction).
+    """
+
+    kind: Literal["permitted_use"] = "permitted_use"
+    use: str = Field(..., description="Use name, e.g. 'Restaurant use'.")
+    zone: str = Field(..., description="Zone code, e.g. 'HR-2'.")
+
+
 # Discriminated union — the 'kind' field lets Pydantic (and JSON Schema
 # validators) route the payload to the right variant without ambiguity.
 StructuredCitationQuery = Annotated[
-    ZoneAttributeQuery | ScheduleRowQuery,
+    ZoneAttributeQuery | ScheduleRowQuery | PermittedUseQuery,
     Field(discriminator="kind"),
 ]
 
@@ -382,6 +399,14 @@ class CitationLookupResponse(BaseModel):
             "Ranked candidate citation_path values when ``match`` is null. "
             "Pick the closest one and re-issue lookup_citation with it; do "
             "NOT guess further variants."
+        ),
+    )
+    permitted_use: "PermittedUseResult | None" = Field(
+        default=None,
+        description=(
+            "Populated only for a structured 'permitted_use' query (ABS-279): "
+            "the resolved (use, zone) permission-matrix cell. ``match`` and "
+            "``suggestions`` stay empty in that case."
         ),
     )
 
@@ -480,6 +505,68 @@ class CitationRef(BaseModel):
             "for address overlays (e.g. ['zone']); multi-element for zone fields "
             "(e.g. ['max_height_m', 'max_lot_coverage_pct'])."
         ),
+    )
+
+
+class PermittedUseResult(BaseModel):
+    """Resolved permitted-use matrix cell for a single ``(use, zone)`` pair.
+
+    ABS-279 (Phase 3). Returned inside ``CitationLookupResponse.permitted_use``
+    for a structured ``permitted_use`` query. Two mutually-exclusive shapes the
+    caller dispatches on:
+
+    * **Resolved** — ``indeterminate=False``, ``permission`` is one of
+      ``permitted`` / ``conditional`` / ``not_permitted``. ``footnote_ordinal``
+      and ``condition_text`` are populated only when ``conditional``.
+      ``citation`` traces the answer to the source table.
+    * **Indeterminate** — ``indeterminate=True``, ``permission`` is null, and
+      ``reason`` / ``reason_code`` explain why the cell could not be addressed
+      (unknown use, unknown zone, no permission matrix in scope, or an unbound
+      cell). This is a *typed* not-found, never a silent empty success.
+    """
+
+    use: str = Field(..., description="The use as queried (echoed).")
+    zone: str = Field(..., description="The zone as queried (echoed).")
+    indeterminate: bool = Field(
+        default=False,
+        description="True when the cell could not be resolved; see 'reason'.",
+    )
+    reason_code: str | None = Field(
+        default=None,
+        description=(
+            "Machine-readable indeterminate cause: 'unknown_use', "
+            "'unknown_zone', 'unknown_use_and_zone', 'unbound_cell', or "
+            "'no_permission_matrix'. Null when resolved."
+        ),
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Human-readable explanation when 'indeterminate' is true.",
+    )
+    permission: Literal["permitted", "conditional", "not_permitted"] | None = Field(
+        default=None,
+        description="The resolved permission; null when indeterminate.",
+    )
+    footnote_ordinal: int | None = Field(
+        default=None,
+        description="Footnote ordinal (e.g. 3 for ③) when permission is 'conditional'.",
+    )
+    condition_text: str | None = Field(
+        default=None,
+        description=(
+            "The footnote's condition text, joined from the table's footnote "
+            "fragments, when permission is 'conditional'."
+        ),
+    )
+    citation: CitationRef | None = Field(
+        default=None,
+        description="Citation back to the source permission-matrix table.",
+    )
+    document_id: int | None = Field(
+        default=None, description="Owning document id of the resolved table."
+    )
+    table_id: int | None = Field(
+        default=None, description="Source permission-matrix table id."
     )
 
 

@@ -55,6 +55,7 @@ from bylaw_retrieval.retrieval.schemas import (
     DocumentOutlineResponse,
     DocumentSummary,
     LinkedDataset,
+    PermittedUseResult,
     RetrievalMatch,
     RetrievalResponse,
     TableSummary,
@@ -224,6 +225,13 @@ def compact_citation_lookup(response: CitationLookupResponse) -> dict[str, Any]:
     converts the empty result into an explicit next action.
     """
     out: dict[str, Any] = {}
+    # ABS-279: a structured permitted_use query resolves a single matrix
+    # cell rather than a citation_path. Surface it as its own key (and stop
+    # here) so the model reads the typed permission directly instead of
+    # treating the empty match/suggestions as a miss to retry.
+    if response.permitted_use is not None:
+        out["permitted_use"] = compact_permitted_use(response.permitted_use)
+        return out
     if response.match is not None:
         out["match"] = compact_match(response.match)
         # Even on a hit, surface suggestions if the service decided to
@@ -245,6 +253,46 @@ def compact_citation_lookup(response: CitationLookupResponse) -> dict[str, Any]:
             "found. Switch to search_bylaw_evidence or get_document_outline "
             "instead of retrying lookup_citation."
         )
+    return out
+
+
+def compact_permitted_use(result: PermittedUseResult) -> dict[str, Any]:
+    """Project a ``PermittedUseResult`` (ABS-279) to its LLM-essential fields.
+
+    Preserves the typed shape — ``permission`` plus the footnote condition on
+    a conditional cell, or ``indeterminate``/``reason`` on a miss — and drops
+    null fields so the model isn't billed for empty keys. The ``citation`` is
+    collapsed to the same compact citation shape used elsewhere.
+    """
+    out: dict[str, Any] = {"use": result.use, "zone": result.zone}
+    if result.indeterminate:
+        out["indeterminate"] = True
+        if result.reason_code is not None:
+            out["reason_code"] = result.reason_code
+        if result.reason is not None:
+            out["reason"] = result.reason
+        return out
+
+    out["permission"] = result.permission
+    if result.footnote_ordinal is not None:
+        out["footnote_ordinal"] = result.footnote_ordinal
+    if result.condition_text is not None:
+        out["condition_text"] = result.condition_text
+    if result.citation is not None:
+        citation: dict[str, Any] = {}
+        if result.citation.citation_path is not None:
+            citation["citation_path"] = result.citation.citation_path
+        if result.citation.citation_label is not None:
+            citation["citation_label"] = result.citation.citation_label
+        if result.citation.page_start is not None:
+            citation["page_start"] = result.citation.page_start
+        if result.citation.page_end is not None:
+            citation["page_end"] = result.citation.page_end
+        if result.citation.municipality is not None:
+            citation["municipality"] = result.citation.municipality
+        if result.citation.bylaw_name is not None:
+            citation["bylaw_name"] = result.citation.bylaw_name
+        out["citation"] = citation
     return out
 
 

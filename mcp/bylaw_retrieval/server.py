@@ -134,15 +134,22 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         Provide EXACTLY ONE of:
           - ``citation_path``: the exact path string, e.g. '4.2' or
             'Schedule B > 3'. Use when you already know the path.
-          - ``structured``: a structured query that the server resolves to a
-            canonical path internally, so you don't have to guess the format:
+          - ``structured``: a structured query that the server resolves
+            internally, so you don't have to guess the format:
               * {"kind": "zone_attribute", "zone": "HR-2", "attribute": "max_height"}
               * {"kind": "schedule_row", "schedule": "Table 1A", "row": "HR-2"}
+              * {"kind": "permitted_use", "use": "Restaurant use", "zone": "HR-2"}
 
         Supplying both, or neither, is a validation error. Accepted
         ``attribute`` values: max_height, max_height_storeys,
         max_lot_coverage, min_front_setback, min_side_setback,
         min_rear_setback, max_far, permitted_uses, parking_requirement.
+
+        The ``permitted_use`` kind addresses a single use × zone cell of the
+        permission matrix and returns its result under the ``permitted_use``
+        key — a typed permission (permitted / conditional / not_permitted)
+        plus any footnote condition, or a typed indeterminate result with a
+        reason when the use or zone isn't in the matrix.
         """
         request = CitationLookupRequest(
             citation_path=citation_path,
