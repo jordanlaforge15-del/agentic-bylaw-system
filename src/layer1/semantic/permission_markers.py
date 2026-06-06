@@ -100,10 +100,13 @@ def ordinal_to_circled(ordinal: int) -> str | None:
     return chr(codepoint) if codepoint is not None else None
 
 
-# SQL ``ILIKE`` pattern that matches a Table 1x permission-matrix caption.
-# Kept in lockstep with :func:`is_permission_matrix_caption` and the retrieval
-# layer's table lookup so ingest, backfill, and retrieval agree.
-PERMISSION_MATRIX_CAPTION_LIKE = "Table 1%Permitted uses by zone%"
+# The semantic-profile type that marks a table as the permitted-uses matrix.
+# Detection keys off this (written by enrichment's ``_classify_table`` into
+# ``table_semantic_profile.profile_type``), NOT the caption. Real-corpus
+# captions are empty on all 1,147 tables, so the earlier caption gate matched
+# zero tables and silently no-op'd the whole feature (ABS-281). The structural
+# classifier already populates this for every enriched bylaw.
+PERMISSION_MATRIX_PROFILE = "permission_matrix"
 
 
 # Canonical marker values, exported so callers don't hard-code strings.
@@ -169,17 +172,24 @@ def classify_permission_marker(text: str | None) -> dict[str, Any]:
     return {"permission_marker": NOT_PERMITTED}
 
 
-def is_permission_matrix_caption(caption: str | None) -> bool:
-    """True when a table caption looks like a Table 1x permission matrix.
+def is_permission_matrix_table(table: Any) -> bool:
+    """True when ``table`` carries a ``permission_matrix`` semantic profile.
 
-    Mirrors the SQL pattern the retrieval layer uses to find these tables
-    (``Table 1%Permitted uses by zone%``) so ingest, backfill, and retrieval
-    all agree on what counts as a permission matrix.
+    This is the single source of truth for "is this a permitted-uses matrix",
+    shared by ingest/enrichment annotation, the backfill, and the retrieval
+    layer. It reads the structural classification that enrichment's
+    ``_classify_table`` writes to ``table_semantic_profile`` — captions are NOT
+    consulted because the real corpus stores none (ABS-281).
+
+    Accepts any object exposing a ``semantic_profiles`` iterable of objects with
+    a ``profile_type`` attribute (the ORM ``SourceTable.semantic_profiles``
+    relationship, or a lightweight stand-in in tests).
     """
-    if not caption:
-        return False
-    lowered = caption.lower()
-    return lowered.startswith("table 1") and "permitted uses by zone" in lowered
+    profiles = getattr(table, "semantic_profiles", None) or []
+    return any(
+        getattr(profile, "profile_type", None) == PERMISSION_MATRIX_PROFILE
+        for profile in profiles
+    )
 
 
 def annotate_cell(cell: Any, *, apply: bool = True) -> bool:
@@ -208,19 +218,32 @@ def annotate_cell(cell: Any, *, apply: bool = True) -> bool:
     return True
 
 
-def annotate_permission_matrix_table(table: Any, *, apply: bool = True) -> int:
-    """Annotate every value cell of a permission-matrix table.
+def annotate_value_cells(cells: Any, *, apply: bool = True) -> int:
+    """Annotate the value grid of an already-known permission matrix.
 
-    No-op for tables whose caption isn't a permission matrix. Header cells
-    (row 0 and the row-label column 0) are skipped — the marker semantics
-    only apply to the value grid. Returns the number of cells changed.
+    Header cells (row 0 and the row-label column 0) carry no marker semantics
+    and are skipped. Returns the number of cells changed. Callers that have
+    already established the table is a permission matrix (e.g. the enrichment
+    classifier, which only invokes this in its ``permission_matrix`` branch)
+    use this directly; :func:`annotate_permission_matrix_table` is the
+    predicate-gated wrapper for callers that haven't.
     """
-    if not is_permission_matrix_caption(getattr(table, "caption", None)):
-        return 0
     changed = 0
-    for cell in table.cells:
+    for cell in cells:
         if cell.row_index == 0 or cell.col_index == 0:
             continue
         if annotate_cell(cell, apply=apply):
             changed += 1
     return changed
+
+
+def annotate_permission_matrix_table(table: Any, *, apply: bool = True) -> int:
+    """Annotate every value cell of a permission-matrix table.
+
+    No-op for tables that do not carry a ``permission_matrix`` semantic profile
+    (see :func:`is_permission_matrix_table`). Returns the number of cells
+    changed.
+    """
+    if not is_permission_matrix_table(table):
+        return 0
+    return annotate_value_cells(table.cells, apply=apply)

@@ -55,12 +55,13 @@ from layer1.db.base import (
     SourceTable,
     SourceTableCell,
     TableAxisBinding,
+    TableSemanticProfile,
 )
 from layer1.models.enums import FragmentType
 from layer1.semantic.enrichment import resolve_permission_cell
 from layer1.semantic.extractors import normalize_use, normalize_zone
 from layer1.semantic.permission_markers import (
-    PERMISSION_MATRIX_CAPTION_LIKE,
+    PERMISSION_MATRIX_PROFILE,
     classify_permission_marker,
     ordinal_to_circled,
 )
@@ -467,9 +468,16 @@ class RetrievalService:
         ANDs with it. A request for a doc outside the pinned scope therefore
         returns nothing rather than crossing into another bylaw (FR4).
         """
+        # ABS-281: permission matrices are identified by their semantic profile
+        # (profile_type='permission_matrix'), not the caption — the real corpus
+        # carries no captions, so the old caption ILIKE matched nothing.
         stmt = (
             select(SourceTable)
-            .where(SourceTable.caption.ilike(PERMISSION_MATRIX_CAPTION_LIKE))
+            .join(
+                TableSemanticProfile,
+                TableSemanticProfile.table_id == SourceTable.id,
+            )
+            .where(TableSemanticProfile.profile_type == PERMISSION_MATRIX_PROFILE)
             .order_by(SourceTable.page_start, SourceTable.id)
         )
         default_ids = self._resolve_default_document_ids()

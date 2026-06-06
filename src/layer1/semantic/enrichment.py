@@ -39,6 +39,7 @@ from layer1.semantic.extractors import (
     reset_profile_overlay,
     use_profile_overlay,
 )
+from layer1.semantic.permission_markers import annotate_value_cells
 
 EXTRACTOR_VERSION = "semantic-v1"
 REVIEW_AUTO = "auto_accepted"
@@ -387,6 +388,12 @@ def _enrich_table(
         confidence=confidence,
     )
     if profile_type == "permission_matrix":
+        # ABS-281: recover the ●/circled-number permission markers into
+        # ``metadata_json.permission_marker`` now that this table is confirmed a
+        # permission matrix. This is the single annotation trigger — the old
+        # ingest-time hook (which ran before this profile existed and gated on
+        # captions that the corpus doesn't carry) is removed.
+        annotate_value_cells(cells, apply=True)
         _extract_permission_table_facts(session, report, cache, table, rows)
     elif profile_type == "parking_matrix":
         _extract_parking_table_facts(session, report, cache, table, rows)
