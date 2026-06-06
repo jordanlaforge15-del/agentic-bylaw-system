@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -754,3 +755,130 @@ class ZoneProfile(BaseModel):
         description="Per-field semantic match confidence (0..1), keyed by DTO field name, for populated fields.",
     )
 
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 (ABS-274) — intent-routed bylaw_query mega-tool
+# ---------------------------------------------------------------------------
+#
+# bylaw_query is a *composer* over the Phase 2/3 thick tools
+# (get_zone_profile, get_address_profile). The LLM declares its intent once
+# and the server dispatches to the right composition, encoding the
+# "which tool fits this question?" decision server-side. See FR-4.1–4.5.
+#
+# The intent vocabulary lives here (a shared schema module) precisely so the
+# tool schema AND any system-prompt copy can reference the same canonical
+# values — implementation note in the ticket. ``BylawIntent`` is a
+# ``str, Enum`` so ``intent in {e.value for e in BylawIntent}`` is the
+# single source of truth for "is this a recognised intent?".
+
+
+class BylawIntent(str, Enum):
+    """Canonical intent vocabulary for ``bylaw_query`` (FR-4.2).
+
+    Each value names a server-side composition over the thin/thick tools.
+    An ``intent`` outside this set is *not* an error — ``bylaw_query``
+    returns ``unrecognized_intent=True`` with thin-tool suggestions so the
+    model pivots without burning an exception-driven retry (FR-4.2).
+    """
+
+    ZONE_FEASIBILITY = "zone_feasibility"
+    ADDRESS_LOOKUP = "address_lookup"
+    USE_CHECK = "use_check"
+    DIMENSIONAL_CHECK = "dimensional_check"
+
+
+# Ordered list of the canonical intent string values — handy for the tool
+# schema description and the system prompt so the model sees the same
+# vocabulary the dispatcher recognises.
+BYLAW_INTENTS: tuple[str, ...] = tuple(intent.value for intent in BylawIntent)
+
+
+class ConformanceAttribute(BaseModel):
+    """A single proposed value evaluated against the governing zone standard.
+
+    ``status`` is ``pass``/``fail``/``inconclusive`` (FR-4.3): ``fail`` when
+    the proposed value violates the standard (exceeds a maximum or falls
+    short of a minimum), ``pass`` when it conforms, and ``inconclusive``
+    when the zone is silent on the attribute, the attribute isn't a known
+    dimensional standard, or the proposed value isn't comparable.
+    """
+
+    attribute: str = Field(..., description="Proposed attribute key, echoed from the request.")
+    proposed: float | int | str | bool | None = Field(
+        default=None, description="The proposed value supplied by the caller."
+    )
+    limit: float | None = Field(
+        default=None,
+        description="The governing zone standard the proposal was compared against, when known.",
+    )
+    comparison: Literal["max", "min", "unknown"] = Field(
+        default="unknown",
+        description=(
+            "Bound type: 'max' (proposal must not exceed the limit, e.g. "
+            "height), 'min' (proposal must not fall below it, e.g. setback), "
+            "or 'unknown' (no dimensional standard mapped)."
+        ),
+    )
+    status: Literal["pass", "fail", "inconclusive"] = Field(
+        ..., description="Per-attribute verdict against the zone standard."
+    )
+    note: str | None = Field(
+        default=None, description="Short human-readable explanation of the verdict."
+    )
+
+
+class ConformanceCheck(BaseModel):
+    """Per-attribute pass/fail/inconclusive of ``proposed`` against a zone's
+    dimensional standards (FR-4.3). Populated only for the
+    ``dimensional_check`` intent. ``overall`` is ``fail`` if any attribute
+    fails, ``pass`` if every attribute passes, otherwise ``inconclusive``.
+    """
+
+    zone: str = Field(..., description="Zone the proposal was evaluated against.")
+    results: list[ConformanceAttribute] = Field(
+        default_factory=list, description="One entry per proposed attribute."
+    )
+    overall: Literal["pass", "fail", "inconclusive"] = Field(
+        ..., description="Roll-up verdict across all evaluated attributes."
+    )
+
+
+class BylawQueryResponse(BaseModel):
+    """Envelope returned by the intent-routed ``bylaw_query`` tool (FR-4.3).
+
+    Exactly which of ``address_profile`` / ``zone_profile`` /
+    ``conformance_check`` is populated depends on ``intent``:
+
+    * ``zone_feasibility`` / ``use_check`` -> ``zone_profile``
+    * ``address_lookup`` -> ``address_profile``
+    * ``dimensional_check`` -> ``zone_profile`` + ``conformance_check``
+
+    An unrecognised ``intent`` sets ``unrecognized_intent=True`` and lists
+    the thin tools to fall back to in ``suggested_tools`` — never an
+    exception (FR-4.2).
+    """
+
+    intent: str = Field(..., description="The intent echoed back from the request.")
+    address_profile: AddressProfile | None = Field(
+        default=None, description="Populated for the 'address_lookup' intent."
+    )
+    zone_profile: ZoneProfile | None = Field(
+        default=None,
+        description="Populated for zone-scoped intents (zone_feasibility, use_check, dimensional_check).",
+    )
+    conformance_check: ConformanceCheck | None = Field(
+        default=None, description="Populated for the 'dimensional_check' intent."
+    )
+    citations: list[CitationRef] = Field(
+        default_factory=list,
+        description="Aggregated citations backing the composed answer (mirrors the source profile's).",
+    )
+    unrecognized_intent: bool = Field(
+        default=False,
+        description="True when 'intent' is outside the BylawIntent vocabulary; fall back to suggested_tools.",
+    )
+    suggested_tools: list[str] = Field(
+        default_factory=list,
+        description="Thin tools to fall back to when the intent is unrecognised (FR-4.2).",
+    )

@@ -424,6 +424,46 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             response = evaluator.evaluate(request)
             return response.to_json()
 
+    @mcp.tool()
+    def bylaw_query(
+        intent: str,
+        address: str | None = None,
+        zone: str | None = None,
+        proposed: dict[str, Any] | None = None,
+    ) -> dict:
+        """Use this when the user has stated both a location AND a specific intent (feasibility, use permission, dimensional check).
+
+        Saves multiple round-trips by composing the full answer
+        server-side. For exploratory questions where you don't yet know the
+        intent, use the thin tools.
+
+        ``intent`` is one of ``zone_feasibility``, ``address_lookup``,
+        ``use_check``, ``dimensional_check``:
+
+        * ``zone_feasibility`` (pass ``zone``) — full ``ZoneProfile``
+          (dimensions + uses + parking) in one call.
+        * ``address_lookup`` (pass ``address``) — the ``AddressProfile``
+          (zone + overlays + citations).
+        * ``use_check`` (pass ``zone``) — the zone's permitted /
+          not-permitted use lists.
+        * ``dimensional_check`` (pass ``zone`` and ``proposed`` such as
+          ``{"height_m": 80}``) — the dimensions plus a ``ConformanceCheck``
+          flagging each proposed value pass / fail / inconclusive.
+
+        Internally dispatches to ``get_zone_profile`` / ``get_address_profile``
+        (no duplicated retrieval logic). An ``intent`` outside the list
+        returns ``unrecognized_intent: true`` with a ``suggested_tools``
+        list rather than an error.
+        """
+        with session_scope(db_url) as session:
+            service = _service(session)
+            return service.bylaw_query(
+                intent=intent,
+                address=address,
+                zone=zone,
+                proposed=proposed,
+            ).model_dump(mode="json")
+
     @mcp.resource("bylaw://documents")
     def documents_resource() -> str:
         with session_scope(db_url) as session:

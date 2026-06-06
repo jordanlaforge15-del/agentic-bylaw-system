@@ -27,7 +27,7 @@ import jsonschema
 import pytest
 
 from advisor.chat.tools import build_bylaw_tools
-from bylaw_retrieval.retrieval import RetrievalService, ZoneProfile
+from bylaw_retrieval.retrieval import BylawQueryResponse, RetrievalService, ZoneProfile
 from bylaw_retrieval.retrieval.schemas import CitationLookupRequest
 from layer1.db.session import session_scope
 from test_get_zone_profile import _seed_regional_centre
@@ -197,3 +197,109 @@ def test_fastmcp_server_registers_get_zone_profile():
     schema = by_name["get_zone_profile"].inputSchema
     assert "zone" in schema["properties"]
     assert "include" in schema["properties"]
+
+
+# ---------------------------------------------------------------------------
+# bylaw_query — Phase 4 intent-routed mega-tool schema + callability (AC-4.7)
+# ---------------------------------------------------------------------------
+
+
+def _bylaw_query_tool_def():
+    defs, _handlers = build_bylaw_tools(lambda: None)
+    by_name = {d.name: d for d in defs}
+    assert "bylaw_query" in by_name, sorted(by_name)
+    return by_name["bylaw_query"]
+
+
+def test_bylaw_query_tool_schema_is_wellformed():
+    """The tool's input schema validates as a JSON-Schema object with the
+    intent/address/zone/proposed shape (AC-4.7, schema-validates half).
+    """
+    tool = _bylaw_query_tool_def()
+    schema = tool.input_schema
+
+    jsonschema.Draft7Validator.check_schema(schema)
+    assert schema["type"] == "object"
+    assert schema.get("additionalProperties") is False
+    assert schema["required"] == ["intent"]
+
+    props = schema["properties"]
+    for field in ("intent", "address", "zone", "proposed"):
+        assert field in props, f"bylaw_query schema missing '{field}'"
+
+    # The description must surface the canonical intent vocabulary and steer
+    # ambiguous questions toward the thin tools (FR-4.5).
+    for intent in ("zone_feasibility", "address_lookup", "use_check", "dimensional_check"):
+        assert intent in tool.description
+    assert "thin tools" in tool.description
+
+
+def test_bylaw_query_response_pydantic_schema_emits_cleanly():
+    """BylawQueryResponse.model_json_schema() must build and carry the
+    documented top-level fields (AC-4.1 / AC-4.7).
+    """
+    schema = BylawQueryResponse.model_json_schema()
+    props = schema["properties"]
+    for field in (
+        "intent",
+        "address_profile",
+        "zone_profile",
+        "conformance_check",
+        "citations",
+        "unrecognized_intent",
+        "suggested_tools",
+    ):
+        assert field in props, f"BylawQueryResponse schema missing '{field}'"
+
+
+def test_bylaw_query_tool_is_callable_end_to_end(tmp_path: Path):
+    """The registered handler runs against a seeded DB and returns a
+    structurally valid composed projection (AC-4.7, callable half).
+    """
+    db_url = f"sqlite:///{tmp_path / 'bylaw_query.db'}"
+    _seed_regional_centre(db_url)
+
+    with session_scope(db_url) as session:
+        service = RetrievalService(session)
+        _defs, handlers = build_bylaw_tools(service)
+        loop = asyncio.new_event_loop()
+        raw_feasibility = loop.run_until_complete(
+            handlers["bylaw_query"]({"intent": "zone_feasibility", "zone": "HR-2"})
+        )
+        raw_dimensional = loop.run_until_complete(
+            handlers["bylaw_query"](
+                {"intent": "dimensional_check", "zone": "HR-2", "proposed": {"height_m": 80}}
+            )
+        )
+        raw_unknown = loop.run_until_complete(
+            handlers["bylaw_query"]({"intent": "quantum_zoning"})
+        )
+
+    feasibility = json.loads(raw_feasibility)
+    assert feasibility["intent"] == "zone_feasibility"
+    assert feasibility["zone_profile"]["dimensions"]["max_height_m"] == 25.0
+    assert "multi-unit dwelling" in feasibility["zone_profile"]["uses"]["permitted"]
+
+    dimensional = json.loads(raw_dimensional)
+    assert dimensional["conformance_check"]["overall"] == "fail"
+
+    unknown = json.loads(raw_unknown)
+    assert unknown["unrecognized_intent"] is True
+    assert "search_bylaw_evidence" in unknown["suggested_tools"]
+
+
+def test_fastmcp_server_registers_bylaw_query():
+    """When the MCP SDK is installed, the FastMCP server exposes bylaw_query
+    with an intent/address/zone/proposed input schema (AC-4.7).
+    """
+    pytest.importorskip("mcp.server.fastmcp")
+    from bylaw_retrieval.server import create_mcp_server
+
+    server = create_mcp_server()
+    tools = asyncio.new_event_loop().run_until_complete(server.list_tools())
+    by_name = {t.name: t for t in tools}
+    assert "bylaw_query" in by_name, sorted(by_name)
+
+    schema = by_name["bylaw_query"].inputSchema
+    for field in ("intent", "address", "zone", "proposed"):
+        assert field in schema["properties"]

@@ -62,7 +62,8 @@ def test_build_bylaw_tools_returns_full_tool_set(seeded_service):
     # this set being complete because mismatched name <-> handler
     # pairs would silently break tool dispatch. ``request_tier_upgrade``
     # is the Layer-3 self-monitoring tool added with the case-credit
-    # billing model.
+    # billing model. ``bylaw_query`` is the Phase 4 intent-routed
+    # mega-tool (ABS-274) that composes over the thick tools.
     assert set(names) == {
         "list_documents",
         "get_document_outline",
@@ -71,6 +72,7 @@ def test_build_bylaw_tools_returns_full_tool_set(seeded_service):
         "get_address_profile",
         "get_zone_profile",
         "evaluate_submission_against_bylaws",
+        "bylaw_query",
         "request_tier_upgrade",
     }
     assert set(handlers.keys()) == set(names)
