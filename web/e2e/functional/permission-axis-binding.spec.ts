@@ -7,6 +7,7 @@
 // returns the resulting table_semantic_profile + table_axis_binding rows plus an
 // optional (use, zone) -> cell resolution.
 
+import type { APIRequestContext } from "@playwright/test";
 import { execSync } from "node:child_process";
 import * as path from "node:path";
 
@@ -57,7 +58,7 @@ test.beforeAll(() => {
 });
 
 
-async function profile(request: import("@playwright/test").APIRequestContext, data: object) {
+async function profile(request: APIRequestContext, data: object) {
   const response = await request.post(
     `${E2E_API_URL}/v1/_test/profile-permission-tables`,
     { headers: { "Content-Type": "application/json" }, data },
