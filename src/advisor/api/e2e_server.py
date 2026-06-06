@@ -1158,10 +1158,61 @@ def _mount_zone_profile_endpoint(app: FastAPI) -> None:
             }
 
 
+class _SpatialCandidateTextBody(BaseModel):
+    canonical_attributes: dict[str, Any]
+    citation_label: str = "(4.5)"
+
+
+def _mount_spatial_candidate_text_endpoint(app: FastAPI) -> None:
+    """ABS-276: expose _feature_to_candidate rendering over HTTP for e2e coverage.
+
+    Accepts a ``canonical_attributes`` dict and returns the ``text`` field that
+    ``_feature_to_candidate`` would produce, exercising the generic attribute
+    loop (which replaced the hardcoded height-only rendering) over the real
+    FastAPI stack without requiring a seeded ExternalDataset row.
+    """
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    from layer2.models.enums import RetrievalChannel, SourceType  # noqa: PLC0415
+    from layer2.models.schemas import CandidateFragment as _CandidateFragment  # noqa: PLC0415
+    from layer2.retrieval.spatial import FeatureMatch, _feature_to_candidate  # noqa: PLC0415
+    from layer2.retrieval.spatial import ResolvedLocation  # noqa: PLC0415
+
+    @app.post("/v1/_test/spatial-candidate-text")
+    async def spatial_candidate_text(body: _SpatialCandidateTextBody) -> dict[str, str]:
+        feature = MagicMock()
+        feature.canonical_attributes_json = body.canonical_attributes
+        feature.id = 9001
+        feature.feature_key = "e2e-test-feature"
+        feature.geometry_bbox_json = None
+        feature.external_dataset_id = 9001
+
+        match = FeatureMatch(feature=feature, overlap_area=500.0, contains_input=True)
+
+        parent = _CandidateFragment(
+            source_type=SourceType.DATASET.value,
+            retrieval_channel=RetrievalChannel.SPATIAL.value,
+            base_score=0.6,
+            text="(dataset parent)",
+            citation_label=body.citation_label,
+        )
+
+        location = ResolvedLocation(
+            kind="point",
+            geometry={"type": "Point", "coordinates": [-63.58, 44.64]},
+            source="e2e",
+            reference_text="e2e test point",
+        )
+
+        candidate = _feature_to_candidate(match, None, parent, location)
+        return {"text": candidate.text}
+
+
 app = build_e2e_app()
 _mount_seed_session_endpoint(app)
 _mount_search_evidence_endpoint(app)
 _mount_zone_profile_endpoint(app)
+_mount_spatial_candidate_text_endpoint(app)
 
 
 if __name__ == "__main__":  # pragma: no cover

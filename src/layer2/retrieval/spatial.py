@@ -233,6 +233,9 @@ def expand_spatial(
     return expanded
 
 
+_DISPLAY_KEYS: frozenset[str] = frozenset({"display_label", "source_case"})
+
+
 def _feature_to_candidate(
     match: FeatureMatch,
     dataset: ExternalDataset | None,
@@ -244,14 +247,11 @@ def _feature_to_candidate(
     label = canonical.get("display_label")
     if label:
         parts.append(label)
-    height_m = canonical.get("max_height_m")
-    height_storeys = canonical.get("max_height_storeys")
-    if height_m is not None:
-        parts.append(f"max_height_m={height_m:g}")
-    if height_storeys is not None:
-        parts.append(f"max_height_storeys={height_storeys}")
-    if height_m is None and height_storeys is None:
-        parts.append("no maximum height specified")
+    for key in sorted(canonical):
+        if key in _DISPLAY_KEYS:
+            continue
+        value = canonical[key]
+        parts.append(f"{key}={value:g}" if isinstance(value, float) else f"{key}={value}")
     case = canonical.get("source_case")
     if case:
         parts.append(f"source_case={case}")
