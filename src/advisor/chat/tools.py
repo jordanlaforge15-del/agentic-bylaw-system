@@ -172,8 +172,13 @@ _SCHEMA_LOOKUP_CITATION: dict[str, Any] = {
     "description": (
         "Provide exactly one of 'citation_path' or 'structured'. "
         "Use 'citation_path' when you already know the exact path string. "
-        "Use 'structured' (zone_attribute or schedule_row) to resolve by "
-        "zone + attribute or schedule + row without guessing the path format."
+        "Use 'structured' (zone_attribute, schedule_row, or permitted_use) to "
+        "resolve by zone + attribute, schedule + row, or a single use × zone "
+        "permission-matrix cell — without guessing the path format. "
+        "Prefer the 'permitted_use' kind when the question is 'is <use> "
+        "permitted in <zone>?': it returns a typed permission (permitted / "
+        "conditional / not_permitted) plus any footnote condition, instead of "
+        "leaving you to infer it from table prose."
     ),
     "properties": {
         "citation_path": {
@@ -187,7 +192,7 @@ _SCHEMA_LOOKUP_CITATION: dict[str, Any] = {
         "structured": {
             "description": (
                 "Structured query variant. Mutually exclusive with 'citation_path'. "
-                "Set 'kind' to 'zone_attribute' or 'schedule_row'."
+                "Set 'kind' to 'zone_attribute', 'schedule_row', or 'permitted_use'."
             ),
             "oneOf": [
                 {
@@ -219,6 +224,22 @@ _SCHEMA_LOOKUP_CITATION: dict[str, Any] = {
                         "row": {
                             "type": "string",
                             "description": "Row identifier within the schedule, e.g. 'HR-2'.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["kind", "use", "zone"],
+                    "properties": {
+                        "kind": {"type": "string", "const": "permitted_use"},
+                        "use": {
+                            "type": "string",
+                            "description": "Use name, e.g. 'Restaurant use'.",
+                        },
+                        "zone": {
+                            "type": "string",
+                            "description": "Zone code, e.g. 'HR-2'.",
                         },
                     },
                     "additionalProperties": False,

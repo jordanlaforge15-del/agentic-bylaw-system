@@ -25,6 +25,8 @@ from bylaw_retrieval.retrieval.schemas import (
     LinkedDataset,
     LocationSlot,
     OverlayRef,
+    PermittedUseQuery,
+    PermittedUseResult,
     RetrievalMatch,
     RetrievalRequest,
     RetrievalResponse,
@@ -42,10 +44,20 @@ from layer1.db.base import (
     Document,
     ExternalDataset,
     ExternalDatasetFeature,
+    SemanticEntity,
     SourceFragment,
     SourceImage,
     SourceTable,
     SourceTableCell,
+    TableAxisBinding,
+)
+from layer1.models.enums import FragmentType
+from layer1.semantic.enrichment import resolve_permission_cell
+from layer1.semantic.extractors import normalize_use, normalize_zone
+from layer1.semantic.permission_markers import (
+    PERMISSION_MATRIX_CAPTION_LIKE,
+    classify_permission_marker,
+    ordinal_to_circled,
 )
 from layer2.retrieval.datasets import _summarize_dataset
 from layer2.retrieval.geocode import resolve_location_with_detail
@@ -339,12 +351,23 @@ class RetrievalService:
           an extra round-trip.
         - ``ScheduleRowQuery(schedule, row)`` → canonical path
           ``"{schedule} > {row}"``.
+        - ``PermittedUseQuery(use, zone)`` → a structured permission-matrix
+          cell resolution (ABS-279). This one does NOT delegate to the
+          path-string lookup: it addresses the cell directly via the Phase-2
+          axis bindings and returns its result in ``permitted_use``.
 
         The constructed path is fed back into the existing path-string lookup,
         so misses surface suggestions via the same rapidfuzz ranking as
         free-text misses (ABS-261 contract preserved).
         """
         structured = request.structured
+        if isinstance(structured, PermittedUseQuery):
+            result = self.lookup_permitted_use(
+                use=structured.use,
+                zone=structured.zone,
+                document_id=request.document_id,
+            )
+            return CitationLookupResponse(permitted_use=result)
         if isinstance(structured, ZoneAttributeQuery):
             if structured.attribute not in ATTRIBUTE_VOCABULARY:
                 raise ValueError(
@@ -367,6 +390,250 @@ class RetrievalService:
             include_tables=request.include_tables,
         )
         return self.lookup_citation(path_request)
+
+    # ------------------------------------------------------------------
+    # ABS-279 — structured permitted-use retrieval (use × zone → cell)
+    # ------------------------------------------------------------------
+
+    def lookup_permitted_use(
+        self,
+        *,
+        use: str,
+        zone: str,
+        document_id: int | None = None,
+    ) -> PermittedUseResult:
+        """Resolve the Table 1A permission-matrix cell for a ``(use, zone)`` pair.
+
+        Phase 3 (ABS-279). Phases 1–2 made a matrix cell addressable as
+        *(use entity, zone entity) → marker (+footnote)*; this reads the cell
+        directly instead of leaving the model to infer permission from
+        flattened table prose (the cause of the hedging on permitted-use
+        questions).
+
+        Pipeline:
+
+        1. Find the permission-matrix table(s) within the active-document
+           scope (FR4 — the default resolver pins scope; an explicit
+           ``document_id`` narrows it further, never crosses bylaws).
+        2. For each, resolve the cell via the Phase-2 axis bindings
+           (:func:`resolve_permission_cell`): the use selects a row binding,
+           the zone a column binding, their indices address the cell.
+        3. Classify the cell's marker into ``permitted`` / ``conditional`` /
+           ``not_permitted``. A ``conditional`` cell additionally carries the
+           footnote ordinal and its joined condition text.
+        4. Every partial-match case (unknown use, unknown zone, no matrix in
+           scope, or an unbound cell) returns a *typed* indeterminate result
+           with a reason — never a silent empty success (FR3).
+        """
+        tables = self._permission_matrix_tables(document_id=document_id)
+        if not tables:
+            return PermittedUseResult(
+                use=use,
+                zone=zone,
+                indeterminate=True,
+                reason_code="no_permission_matrix",
+                reason=(
+                    "No permitted-use matrix (Table 1A-style) is present in the "
+                    "active bylaw scope, so this use/zone cannot be resolved."
+                ),
+            )
+
+        for table in tables:
+            resolved = resolve_permission_cell(
+                self.session,
+                table_id=table.id,
+                use_name=use,
+                zone=zone,
+            )
+            if resolved is not None:
+                return self._build_permitted_use_result(use, zone, table, resolved)
+
+        # No matrix addressed the cell — diagnose which axis failed so the
+        # caller gets an actionable reason rather than a bare "not found".
+        return self._indeterminate_permitted_use(use, zone, tables)
+
+    def _permission_matrix_tables(
+        self, *, document_id: int | None
+    ) -> list[SourceTable]:
+        """Permission-matrix tables visible under the active-document scope.
+
+        Mirrors the ``lookup_citation`` scoping contract: the default
+        document resolver ALWAYS pins the set; an explicit ``document_id``
+        ANDs with it. A request for a doc outside the pinned scope therefore
+        returns nothing rather than crossing into another bylaw (FR4).
+        """
+        stmt = (
+            select(SourceTable)
+            .where(SourceTable.caption.ilike(PERMISSION_MATRIX_CAPTION_LIKE))
+            .order_by(SourceTable.page_start, SourceTable.id)
+        )
+        default_ids = self._resolve_default_document_ids()
+        if default_ids is not None:
+            stmt = stmt.where(SourceTable.document_id.in_(default_ids))
+        if document_id is not None:
+            stmt = stmt.where(SourceTable.document_id == document_id)
+        return list(self.session.execute(stmt).scalars().all())
+
+    def _build_permitted_use_result(
+        self,
+        use: str,
+        zone: str,
+        table: SourceTable,
+        resolved: dict,
+    ) -> PermittedUseResult:
+        """Project a resolved cell dict into a :class:`PermittedUseResult`."""
+        marker = resolved.get("permission_marker")
+        footnote = resolved.get("footnote")
+        # Fall back to on-the-fly classification when the cell wasn't
+        # annotated at ingest (Phase-1 metadata absent) — keeps the resolver
+        # correct for matrices that only carry the raw glyph in cell.text,
+        # and makes a genuinely blank cell read as not_permitted (AC3).
+        if marker is None:
+            classified = classify_permission_marker(resolved.get("cell_text"))
+            marker = classified["permission_marker"]
+            footnote = classified.get("footnote")
+
+        footnote_ordinal: int | None = None
+        condition_text: str | None = None
+        if marker == "conditional":
+            footnote_ordinal = footnote
+            condition_text = self._footnote_condition_text(
+                document_id=table.document_id, ordinal=footnote
+            )
+
+        return PermittedUseResult(
+            use=use,
+            zone=zone,
+            indeterminate=False,
+            permission=marker,
+            footnote_ordinal=footnote_ordinal,
+            condition_text=condition_text,
+            citation=self._table_citation(table),
+            document_id=table.document_id,
+            table_id=table.id,
+        )
+
+    def _footnote_condition_text(
+        self, *, document_id: int, ordinal: int | None
+    ) -> str | None:
+        """Join the condition text for a conditional cell's footnote ordinal.
+
+        Reconstructs the circled-number glyph (``3 -> ③``) and returns the
+        first FOOTNOTE fragment in the same document whose text carries it.
+        Document-scoped (no hard-coded page band) so it follows the table
+        wherever the matrix lives.
+        """
+        if ordinal is None:
+            return None
+        glyph = ordinal_to_circled(ordinal)
+        if glyph is None:
+            return None
+        stmt = (
+            select(SourceFragment)
+            .where(SourceFragment.document_id == document_id)
+            .where(SourceFragment.fragment_type == FragmentType.FOOTNOTE)
+            .where(SourceFragment.text.ilike(f"%{glyph}%"))
+            .order_by(SourceFragment.page_start, SourceFragment.id)
+        )
+        fragment = self.session.execute(stmt).scalars().first()
+        return fragment.text if fragment is not None else None
+
+    def _table_citation(self, table: SourceTable) -> CitationRef:
+        """Build a grounding citation back to a source table."""
+        document = self.session.get(Document, table.document_id)
+        citation_path: str | None = None
+        citation_label: str | None = table.caption
+        if table.parent_fragment_id is not None:
+            parent = self.session.get(SourceFragment, table.parent_fragment_id)
+            if parent is not None:
+                citation_path = parent.citation_path
+                citation_label = parent.citation_label or table.caption
+        return CitationRef(
+            citation_path=citation_path,
+            citation_label=citation_label,
+            document_id=table.document_id,
+            municipality=document.municipality if document else None,
+            bylaw_name=document.bylaw_name if document else None,
+            page_start=table.page_start,
+            page_end=table.page_end,
+            backs=["permitted_use"],
+        )
+
+    def _indeterminate_permitted_use(
+        self,
+        use: str,
+        zone: str,
+        tables: list[SourceTable],
+    ) -> PermittedUseResult:
+        """Classify *why* a ``(use, zone)`` pair didn't resolve to a cell.
+
+        Distinguishes unknown-use, unknown-zone, both-unknown, and
+        both-present-but-unbound by probing the axis bindings of the scoped
+        matrices. Always returns a typed indeterminate result (FR3).
+        """
+        table_ids = [table.id for table in tables]
+        use_norm = normalize_use(use)
+        zone_norm = normalize_zone(zone)
+        use_bound = self._axis_entity_exists(
+            table_ids, axis="row", entity_type="use", canonical_name=use_norm
+        )
+        zone_bound = self._axis_entity_exists(
+            table_ids, axis="column", entity_type="zone", canonical_name=zone_norm
+        )
+        if not use_bound and not zone_bound:
+            code = "unknown_use_and_zone"
+            reason = (
+                f"Neither use {use!r} nor zone {zone!r} is bound in the "
+                "permitted-use matrix for this bylaw."
+            )
+        elif not use_bound:
+            code = "unknown_use"
+            reason = (
+                f"Use {use!r} is not bound to any row of the permitted-use "
+                "matrix for this bylaw."
+            )
+        elif not zone_bound:
+            code = "unknown_zone"
+            reason = (
+                f"Zone {zone!r} is not bound to any column of the "
+                "permitted-use matrix for this bylaw."
+            )
+        else:
+            code = "unbound_cell"
+            reason = (
+                f"Use {use!r} and zone {zone!r} are each present, but no single "
+                "matrix binds both axes to an addressable cell (low-confidence "
+                "or cross-table binding)."
+            )
+        return PermittedUseResult(
+            use=use,
+            zone=zone,
+            indeterminate=True,
+            reason_code=code,
+            reason=reason,
+        )
+
+    def _axis_entity_exists(
+        self,
+        table_ids: list[int],
+        *,
+        axis: str,
+        entity_type: str,
+        canonical_name: str,
+    ) -> bool:
+        """True when some scoped matrix binds ``canonical_name`` on ``axis``."""
+        if not table_ids:
+            return False
+        stmt = (
+            select(TableAxisBinding.id)
+            .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+            .where(TableAxisBinding.table_id.in_(table_ids))
+            .where(TableAxisBinding.axis == axis)
+            .where(SemanticEntity.entity_type == entity_type)
+            .where(SemanticEntity.canonical_name == canonical_name)
+            .limit(1)
+        )
+        return self.session.execute(stmt).first() is not None
 
     # ------------------------------------------------------------------
     # ABS-272 — get_zone_profile thick tool

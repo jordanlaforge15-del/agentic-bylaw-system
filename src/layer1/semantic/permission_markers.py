@@ -79,6 +79,26 @@ def _build_circled_numbers() -> dict[int, int]:
 
 CIRCLED_NUMBERS: dict[int, int] = _build_circled_numbers()
 
+# Reverse map: footnote ordinal (1..35) -> circled-number codepoint. Lets a
+# caller that knows the ordinal (e.g. a resolved conditional cell carrying
+# ``footnote=3``) reconstruct the ① glyph to find the matching footnote
+# fragment text. Built from the same source as CIRCLED_NUMBERS so the two
+# never drift.
+ORDINAL_TO_CODEPOINT: dict[int, int] = {
+    ordinal: codepoint for codepoint, ordinal in CIRCLED_NUMBERS.items()
+}
+
+
+def ordinal_to_circled(ordinal: int) -> str | None:
+    """Return the circled-number glyph for a footnote ordinal, or ``None``.
+
+    Inverse of the classification in :func:`classify_permission_marker`:
+    ``3 -> "③"``. Out-of-range ordinals (outside 1..35) return ``None`` so a
+    caller can fall back to a plain-number search rather than crashing.
+    """
+    codepoint = ORDINAL_TO_CODEPOINT.get(ordinal)
+    return chr(codepoint) if codepoint is not None else None
+
 
 # SQL ``ILIKE`` pattern that matches a Table 1x permission-matrix caption.
 # Kept in lockstep with :func:`is_permission_matrix_caption` and the retrieval
