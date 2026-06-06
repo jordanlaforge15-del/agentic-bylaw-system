@@ -506,6 +506,36 @@ def _mount_test_router(app: FastAPI) -> None:
                 .all()
             )
 
+            # ABS-277: surface the recovered permission_marker on each cell so
+            # the Playwright spec can assert the symbol-font ● (U+F098) was
+            # normalized to "permitted", circled numbers to "conditional", etc.
+            cells_out: list[dict[str, object]] = []
+            for table in tables:
+                table_cells = (
+                    db.execute(
+                        sa_select(SourceTableCell)
+                        .where(SourceTableCell.table_id == table.id)
+                        .order_by(
+                            SourceTableCell.row_index, SourceTableCell.col_index
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                for cell in table_cells:
+                    meta = cell.metadata_json or {}
+                    cells_out.append(
+                        {
+                            "table_id": table.id,
+                            "row_index": cell.row_index,
+                            "col_index": cell.col_index,
+                            "row_header_path": cell.row_header_path,
+                            "col_header_path": cell.col_header_path,
+                            "permission_marker": meta.get("permission_marker"),
+                            "footnote": meta.get("footnote"),
+                        }
+                    )
+
             return {
                 "document_id": doc.id,
                 "table_count": len(tables),
@@ -515,6 +545,7 @@ def _mount_test_router(app: FastAPI) -> None:
                     {"text": c.text, "score": c.base_score, "citation_label": c.citation_label}
                     for c in candidates
                 ],
+                "cells": cells_out,
             }
 
     @app.post("/v1/_test/manifest-ingest")

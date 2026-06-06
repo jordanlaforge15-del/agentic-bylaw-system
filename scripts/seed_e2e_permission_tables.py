@@ -15,6 +15,15 @@ from sqlalchemy import select
 from layer1.db.base import Document, SourceTable, SourceTableCell, utcnow
 from layer1.db.session import session_scope
 from layer1.models.enums import ParseStatus
+from layer1.semantic.permission_markers import annotate_permission_matrix_table
+
+# ABS-277: the authoritative "permitted" dot in the real bylaw is the embedded
+# symbol-font ●, stored as a Private Use Area codepoint (U+F098) that reads as
+# blank downstream. Seed it verbatim (plus a U+F020 symbol-space padding
+# example and a circled-number conditional) so the e2e exercises the recovery
+# into metadata_json.permission_marker.
+PUA_DOT = ""  # symbol-font ● "permitted as-of-right"
+PUA_SPACE = ""  # symbol-font space (padding)
 
 
 DOCUMENT_FILE_HASH = "e2e-permission-tables-1"
@@ -44,6 +53,13 @@ TABLE_1A_CELLS = [
     (3, 1, "○", "Restaurant use", "DD"),
     (3, 2, "●", "Restaurant use", "DH"),
     (3, 3, "○", "Restaurant use", "ER-3"),
+    # ABS-277: row whose markers come from the symbol font. DD = U+F098 dot
+    # (permitted), DH = circled-three conditional (footnote 3), ER-3 = empty
+    # (not permitted). These are the cells the recovery pass must classify.
+    (4, 0, "Home occupation use", "Home occupation use", None),
+    (4, 1, PUA_SPACE + PUA_DOT + PUA_SPACE, "Home occupation use", "DD"),
+    (4, 2, "③", "Home occupation use", "DH"),
+    (4, 3, "", "Home occupation use", "ER-3"),
 ]
 
 TABLE_1B_CELLS = [
@@ -67,6 +83,14 @@ def seed(session) -> dict[str, int]:
     document = _get_or_create_document(session)
     table_1a = _ensure_table(session, document.id, TABLE_1A_CAPTION, 42, 43, TABLE_1A_CELLS)
     table_1b = _ensure_table(session, document.id, TABLE_1B_CAPTION, 44, 45, TABLE_1B_CELLS)
+    session.flush()
+    # ABS-277: recover permission markers into metadata_json.permission_marker.
+    # Idempotent, so this runs every seed (including when the tables already
+    # exist on a persisted layer1_test DB). Expire the cells relationship first
+    # so it reloads every row (cells are added via session.add, not append).
+    for table in (table_1a, table_1b):
+        session.expire(table, ["cells"])
+        annotate_permission_matrix_table(table)
     session.flush()
     return {"document_id": document.id, "table_1a_id": table_1a.id, "table_1b_id": table_1b.id}
 
@@ -109,6 +133,11 @@ def _ensure_table(
         .first()
     )
     if existing is not None:
+        # Table already seeded (layer1_test persists across runs); make sure
+        # any newly added cell specs (e.g. the ABS-277 symbol-font row) are
+        # present without duplicating existing ones.
+        _ensure_cells(session, existing, cell_specs)
+        session.flush()
         return existing
     table = SourceTable(
         document_id=document_id,
@@ -120,7 +149,26 @@ def _ensure_table(
     )
     session.add(table)
     session.flush()
+    _ensure_cells(session, table, cell_specs)
+    session.flush()
+    return table
+
+
+def _ensure_cells(
+    session, table: SourceTable,
+    cell_specs: list[tuple[int, int, str, str | None, str | None]],
+) -> None:
+    existing_positions = {
+        (cell.row_index, cell.col_index)
+        for cell in session.execute(
+            select(SourceTableCell.row_index, SourceTableCell.col_index).where(
+                SourceTableCell.table_id == table.id
+            )
+        ).all()
+    }
     for row_idx, col_idx, text, row_header, col_header in cell_specs:
+        if (row_idx, col_idx) in existing_positions:
+            continue
         session.add(
             SourceTableCell(
                 table_id=table.id,
@@ -131,8 +179,6 @@ def _ensure_table(
                 text=text,
             )
         )
-    session.flush()
-    return table
 
 
 def main() -> int:
