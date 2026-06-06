@@ -1311,6 +1311,57 @@ def _mount_zone_profile_endpoint(app: FastAPI) -> None:
             }
 
 
+class _BylawQueryBody(BaseModel):
+    intent: str
+    address: str | None = None
+    zone: str | None = None
+    proposed: dict[str, Any] | None = None
+    # Scope zone-intent compositions to the spec's own seeded document so the
+    # shared e2e corpus (which stages the same zone codes) doesn't bleed in —
+    # mirrors the document_id scoping on /v1/_test/zone-profile.
+    document_id: int | None = None
+
+
+def _mount_bylaw_query_endpoint(app: FastAPI) -> None:
+    """ABS-274: expose the intent-routed bylaw_query mega-tool over HTTP.
+
+    Calls ``RetrievalService.bylaw_query`` and returns the compact
+    projection plus the ``unrecognized_intent`` flag and a conformance
+    summary so Playwright can assert the composer routes each intent to the
+    right Phase 2/3 composition over the real FastAPI ↔ Postgres boundary,
+    and degrades gracefully (no 500) on an unknown intent.
+    """
+    from advisor.chat.compact import compact_bylaw_query  # noqa: PLC0415
+    from bylaw_retrieval.retrieval import RetrievalService  # noqa: PLC0415
+
+    @app.post("/v1/_test/bylaw-query")
+    async def bylaw_query(body: _BylawQueryBody) -> dict[str, object]:
+        with session_scope() as session:
+            resolver = (
+                (lambda _session, _id=body.document_id: _id)
+                if body.document_id is not None
+                else None
+            )
+            service = RetrievalService(session, default_document_id_resolver=resolver)
+            response = service.bylaw_query(
+                intent=body.intent,
+                address=body.address,
+                zone=body.zone,
+                proposed=body.proposed,
+            )
+            return {
+                "intent": response.intent,
+                "unrecognized_intent": response.unrecognized_intent,
+                "suggested_tools": list(response.suggested_tools),
+                "conformance_overall": (
+                    response.conformance_check.overall
+                    if response.conformance_check is not None
+                    else None
+                ),
+                "compact": compact_bylaw_query(response),
+            }
+
+
 class _SpatialCandidateTextBody(BaseModel):
     canonical_attributes: dict[str, Any]
     citation_label: str = "(4.5)"
@@ -1365,6 +1416,7 @@ app = build_e2e_app()
 _mount_seed_session_endpoint(app)
 _mount_search_evidence_endpoint(app)
 _mount_zone_profile_endpoint(app)
+_mount_bylaw_query_endpoint(app)
 _mount_spatial_candidate_text_endpoint(app)
 
 
