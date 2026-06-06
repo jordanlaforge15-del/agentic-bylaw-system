@@ -24,6 +24,7 @@ from layer1.parsers.factory import parse_source
 from layer1.pipeline.crossrefs import detect_cross_references
 from layer1.pipeline.hierarchy import reconstruct_hierarchy
 from layer1.profiles import ParsingProfile, get_parsing_profile
+from layer1.semantic.permission_markers import annotate_permission_matrix_table
 from layer1.utils.files import detect_mime_type, sha256_file
 from layer1.validators.structural import validate_document_objects
 
@@ -189,6 +190,11 @@ def _persist_tables(session: Session, document_id: int, tables_data, fragments: 
                     metadata_json=cell_data.metadata,
                 )
             )
+        # ABS-277: recover permission-matrix markers (e.g. the symbol-font ●
+        # stored as a PUA codepoint) into metadata_json.permission_marker so
+        # newly ingested bylaws don't need the backfill. No-op for non-matrix
+        # tables.
+        annotate_permission_matrix_table(db_table)
         tables.append(db_table)
     session.flush()
     return tables
