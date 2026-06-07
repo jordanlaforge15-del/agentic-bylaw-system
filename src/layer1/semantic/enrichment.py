@@ -1401,6 +1401,17 @@ def resolve_permission_cell(
     """
     use_norm = normalize_use(use_name)
     zone_norm = normalize_zone(zone)
+    # ABS-282: bound use entities carry whatever ``normalize_use`` produced for
+    # the raw row label — e.g. "Home occupation use" -> "home occupation use" —
+    # but a query may arrive bare ("home occupation"). ``normalize_use`` only
+    # appends "use" for aliased single-word uses, so a bare multi-word query
+    # misses the binding. Match the canonical name against both the given form
+    # and its "<...> use" / de-suffixed counterpart so either phrasing resolves.
+    use_candidates = {use_norm}
+    if use_norm.endswith(" use"):
+        use_candidates.add(use_norm[: -len(" use")])
+    else:
+        use_candidates.add(f"{use_norm} use")
     row_binding = (
         session.query(TableAxisBinding)
         .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
@@ -1408,7 +1419,7 @@ def resolve_permission_cell(
             TableAxisBinding.table_id == table_id,
             TableAxisBinding.axis == "row",
             SemanticEntity.entity_type == "use",
-            SemanticEntity.canonical_name == use_norm,
+            SemanticEntity.canonical_name.in_(use_candidates),
         )
         .order_by(TableAxisBinding.confidence.desc())
         .first()
