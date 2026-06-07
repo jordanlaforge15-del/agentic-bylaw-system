@@ -260,6 +260,31 @@ def test_ac5_resolve_use_zone_pair_addresses_the_correct_cell(axis_db):
         )
 
 
+def test_abs282_bare_use_form_resolves_same_cell_as_suffixed(axis_db):
+    """ABS-282: a query missing the trailing ' use' still resolves.
+
+    The bound use entity is "office use" (from the row label "Office use"), but
+    ``normalize_use("office")`` -> "office" (no alias appends " use"). Before the
+    fix that bare form missed the row binding entirely. Both phrasings must now
+    address the same (Office use, DH) cell.
+    """
+    with session_scope(axis_db["db_url"]) as session:
+        enrich_document_semantics(session, document_id=axis_db["document_id"])
+        suffixed = resolve_permission_cell(
+            session, table_id=axis_db["clean_table_id"], use_name="Office use", zone="DH"
+        )
+        bare = resolve_permission_cell(
+            session, table_id=axis_db["clean_table_id"], use_name="office", zone="DH"
+        )
+        assert suffixed is not None
+        assert bare is not None
+        assert (bare["row_index"], bare["col_index"]) == (
+            suffixed["row_index"],
+            suffixed["col_index"],
+        )
+        assert (bare["row_index"], bare["col_index"]) == (2, 2)
+
+
 def test_ac4_backfill_creates_missing_permission_matrix_profile(tmp_path: Path):
     """AC4: after backfill, a permission table that had no profile gets one
     (parity with an already-profiled identical table)."""
