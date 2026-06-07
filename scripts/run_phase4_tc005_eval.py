@@ -24,11 +24,18 @@ Run against the e2e stack (port 8006):
 Prerequisites
 -------------
 * Advisor running with Phases 1-3 code and an ANTHROPIC_API_KEY.
-* Production layer1 database with Table 1A enriched:
-    - SourceTable.caption ILIKE 'Table 1%Permitted uses by zone%'
-    - TableAxisBinding rows linking HR-2 column and home-occupation row
+* layer1 database with Regional Centre Table 1A enriched:
+    - A SourceTable carrying a ``permission_matrix`` semantic profile (ABS-281;
+      detection is by profile, not caption — the real corpus has no captions).
+    - TableAxisBinding rows linking the HR-2 column and the home-occupation row.
     - SourceTableCell.metadata_json containing permission_marker values
-      (run scripts/backfill_permission_markers.py if missing)
+      (run scripts/backfill_permission_markers.py if missing).
+
+Ground truth (verified against doc 4 table 1056, cell row=Home occupation use,
+col=HR-2): home occupation in HR-2 is **conditional** — the cell carries footnote
+⑮ ("Use is permitted, except within the Halifax Grain Elevator Special Area...").
+The committed answer is therefore "permitted, subject to condition 15", NOT
+"not permitted" (an earlier draft of this runner scored the wrong verdict).
 """
 from __future__ import annotations
 
@@ -49,10 +56,12 @@ RUNS_ROOT = REPO_ROOT / "evals" / "runs"
 # Pre-Phase-3 baseline: T5 hedged entirely (no tool calls).
 BASELINE_RUN = "20260603T100000Z-haiku-baseline"
 
-# Hedge phrases that must be ABSENT from the post-Phase-3 T5 answer.
+# Hedge phrases that must be ABSENT from the post-Phase-3 T5 answer. These are
+# the "I couldn't read the matrix" tells, NOT the genuine conditionality the
+# correct answer expresses ("subject to condition 15") — so a committed
+# conditional verdict does not trip these.
 HEDGE_PHRASES = [
     "a symbol appears to indicate",
-    "may be conditional",
     "I could not retrieve",
     "I did not retrieve",
     "I cannot confirm",
@@ -62,12 +71,34 @@ HEDGE_PHRASES = [
     "I would need to",
 ]
 
-# Committed-verdict phrases that must be PRESENT in the T5 answer.
+# AC1 — committed-verdict phrases. The correct TC-005 T5 answer is a committed
+# CONDITIONAL ("permitted, subject to condition ⑮"). Accept any committed verdict
+# phrasing (permitted / conditional / not-permitted); the hedge filter above is
+# what distinguishes a commitment from a dodge.
 COMMITTED_PHRASES = [
+    "conditional",
+    "subject to",
+    "permitted, except",
+    "permitted except",
+    "is permitted",
+    "permitted use",
+    "footnote 15",
+    "condition 15",
+    "⑮",
+    # negative committed verdicts, kept so the scorer still recognises a
+    # committed (if wrong) not-permitted answer rather than scoring it as a hedge
     "not permitted",
-    "not_permitted",
-    "is not a permitted use",
-    "home occupation is not",
+    "not a permitted use",
+]
+
+# AC2 — when the cell is conditional, the answer must cite the footnote
+# condition text. Footnote ⑮'s distinctive content is the Halifax Grain
+# Elevator carve-out (Schedule 3F).
+CONDITION_TEXT_MARKERS = [
+    "halifax grain elevator",
+    "grain elevator",
+    "hge",
+    "schedule 3f",
 ]
 
 
@@ -247,11 +278,22 @@ def analyse_t5(turn: dict[str, Any]) -> dict[str, Any]:
     committed_found = next(
         (p for p in COMMITTED_PHRASES if p.lower() in text), None
     )
+    # AC2: the conditional answer must cite the footnote condition text.
+    condition_found = next(
+        (m for m in CONDITION_TEXT_MARKERS if m.lower() in text), None
+    )
+    # The committed verdict for TC-005 T5 is specifically conditional.
+    conditional_verdict = any(
+        p in text for p in ("conditional", "subject to", "permitted, except")
+    )
 
     return {
         "ac1_committed_verdict": committed_found is not None and hedge_found is None,
         "ac1_hedge_phrase_found": hedge_found,
         "ac1_committed_phrase_found": committed_found,
+        "ac1_conditional_verdict": conditional_verdict,
+        "ac2_condition_text_cited": condition_found is not None,
+        "ac2_condition_marker_found": condition_found,
         "ac3_has_permitted_use_tool_call": has_permitted_use_call,
         "ac3_lookup_citation_calls": lookup_citation_calls,
         "total_tool_calls": len(tool_calls),
@@ -373,6 +415,11 @@ def main() -> None:
         "total_tokens": {"input": total_input, "output": total_output},
         "baseline_run": BASELINE_RUN,
         "baseline_t5_verdict": "hedge — no tool calls, no committed answer",
+        "expected_verdict": (
+            "conditional — home occupation in HR-2 carries footnote ⑮ (Halifax "
+            "Grain Elevator carve-out); committed answer is 'permitted, subject "
+            "to condition 15'"
+        ),
     }
     with (run_dir / "SUMMARY.json").open("w") as f:
         json.dump(summary, f, indent=2)
@@ -385,6 +432,13 @@ def main() -> None:
             print(f"  HEDGE phrase found: {quality['ac1_hedge_phrase_found']!r}", file=sys.stderr)
         if quality.get("ac1_committed_phrase_found"):
             print(f"  committed phrase found: {quality['ac1_committed_phrase_found']!r}", file=sys.stderr)
+        print(f"  conditional verdict: {quality.get('ac1_conditional_verdict')}", file=sys.stderr)
+        print(
+            f"T5 condition text cited (AC2): {quality.get('ac2_condition_text_cited')}",
+            file=sys.stderr,
+        )
+        if quality.get("ac2_condition_marker_found"):
+            print(f"  condition marker found: {quality['ac2_condition_marker_found']!r}", file=sys.stderr)
         print(
             f"T5 lookup_citation call (AC3): {quality.get('ac3_has_permitted_use_tool_call')}",
             file=sys.stderr,

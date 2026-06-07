@@ -4,7 +4,18 @@ import re
 from collections import defaultdict
 from typing import Callable
 
-from sqlalchemy import Select, String, Text, bindparam, cast, desc, or_, select
+from sqlalchemy import (
+    Select,
+    String,
+    Text,
+    and_,
+    bindparam,
+    case,
+    cast,
+    desc,
+    or_,
+    select,
+)
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, JSONB
 from sqlalchemy.orm import Session
 
@@ -532,21 +543,48 @@ class RetrievalService:
         """Join the condition text for a conditional cell's footnote ordinal.
 
         Reconstructs the circled-number glyph (``3 -> ③``) and returns the
-        first FOOTNOTE fragment in the same document whose text carries it.
+        footnote-legend fragment in the same document whose text carries it.
         Document-scoped (no hard-coded page band) so it follows the table
         wherever the matrix lives.
+
+        A footnote legend is the line that *defines* the condition — it begins
+        with the circled glyph, e.g. "⑮ Use is permitted, except within the
+        Halifax Grain Elevator Special Area...". Ingest usually types these as
+        FOOTNOTE, but the Regional Centre LUB legend rows under Table 1A were
+        classified as PROSE, which left ``condition_text`` null and blocked the
+        advisor from citing the condition (ABS-280). Match the legend by its
+        *leading* glyph regardless of ``fragment_type`` (a leading glyph is the
+        definition; a mid-text glyph is an inline reference), and still accept a
+        true FOOTNOTE that merely contains the glyph. Prefer a FOOTNOTE-typed
+        fragment when both exist. The deeper "ingest should type these as
+        FOOTNOTE" fix is tracked in ABS-284.
         """
         if ordinal is None:
             return None
         glyph = ordinal_to_circled(ordinal)
         if glyph is None:
             return None
+        # FOOTNOTE-typed fragments sort first so a correctly-typed legend wins
+        # over a PROSE legend carrying the same glyph.
+        footnote_first = case(
+            (SourceFragment.fragment_type == FragmentType.FOOTNOTE, 0),
+            else_=1,
+        )
         stmt = (
             select(SourceFragment)
             .where(SourceFragment.document_id == document_id)
-            .where(SourceFragment.fragment_type == FragmentType.FOOTNOTE)
-            .where(SourceFragment.text.ilike(f"%{glyph}%"))
-            .order_by(SourceFragment.page_start, SourceFragment.id)
+            .where(
+                or_(
+                    # Legend line of any type: begins with the circled glyph.
+                    SourceFragment.text.ilike(f"{glyph}%"),
+                    # Correctly-typed footnote that merely contains the glyph.
+                    and_(
+                        SourceFragment.fragment_type == FragmentType.FOOTNOTE,
+                        SourceFragment.text.ilike(f"%{glyph}%"),
+                    ),
+                )
+            )
+            .order_by(footnote_first, SourceFragment.page_start, SourceFragment.id)
         )
         fragment = self.session.execute(stmt).scalars().first()
         return fragment.text if fragment is not None else None

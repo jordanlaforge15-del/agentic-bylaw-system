@@ -5,9 +5,12 @@
 // silently regress.
 //
 // The TC-005 T5 question is "Is home occupation permitted in HR-2?" The correct
-// answer per Table 1A of the Regional Centre LUB is **not_permitted** (blank
-// cell). Pre-Phase-3 the advisor hedged because it couldn't read the matrix.
+// answer per Table 1A of the Regional Centre LUB is **conditional** — the HR-2
+// cell carries footnote ⑮ ("Use is permitted, except within the Halifax Grain
+// Elevator Special Area..."), not a blank. Pre-Phase-3 the advisor hedged
+// because it couldn't read the matrix at all.
 //
+// AC2: a conditional cell must surface its footnote condition text.
 // Grounding contract (AC3): every non-indeterminate result must carry a citation
 // that identifies the source table, so the answer is independently verifiable
 // via SQL against source_table_cell.metadata_json → permission_marker.
@@ -87,10 +90,10 @@ test.beforeAll(async ({ request }) => {
 });
 
 // ---------------------------------------------------------------------------
-// AC4 + AC1/AC3: TC-005 T5 — home occupation NOT permitted in HR-2
+// AC4 + AC1/AC2/AC3: TC-005 T5 — home occupation CONDITIONAL in HR-2 (⑮)
 // ---------------------------------------------------------------------------
 
-test("TC-005 T5: home occupation is not_permitted in HR-2 (Table 1A blank cell)", async ({
+test("TC-005 T5: home occupation is conditional in HR-2 (Table 1A footnote ⑮)", async ({
   request,
 }) => {
   const result = await lookupPermittedUse(
@@ -100,10 +103,29 @@ test("TC-005 T5: home occupation is not_permitted in HR-2 (Table 1A blank cell)"
     "HR-2",
   );
   expect(result.indeterminate).toBeFalsy();
-  expect(result.permission).toBe("not_permitted");
+  expect(result.permission).toBe("conditional");
+  // AC2: the footnote ordinal AND its condition text must be present.
+  expect(result.footnote_ordinal).toBe(15);
+  expect(result.condition_text, "conditional cell must cite footnote text").toBeTruthy();
+  expect(result.condition_text).toContain("Halifax Grain Elevator");
   // AC3: grounded in a Table 1A citation.
   expect(result.citation).toBeTruthy();
   expect(result.citation.bylaw_name).toBe(BYLAW_NAME);
+});
+
+test("TC-005 T5: bare use form ('home occupation') resolves the same conditional cell", async ({
+  request,
+}) => {
+  // ABS-282 use-form tolerance — no trailing "use".
+  const result = await lookupPermittedUse(
+    request,
+    documentId,
+    "home occupation",
+    "HR-2",
+  );
+  expect(result.indeterminate).toBeFalsy();
+  expect(result.permission).toBe("conditional");
+  expect(result.footnote_ordinal).toBe(15);
 });
 
 // ---------------------------------------------------------------------------
@@ -130,7 +152,7 @@ test("TC-005 T3: multi-unit dwelling is permitted in HR-2 (Table 1A ● cell)", 
 // Zone-specificity: home occupation permitted in DD — resolver is zone-aware
 // ---------------------------------------------------------------------------
 
-test("zone contrast: home occupation is permitted in DD but not_permitted in HR-2", async ({
+test("zone contrast: home occupation is permitted in DD but conditional in HR-2", async ({
   request,
 }) => {
   const dd = await lookupPermittedUse(
@@ -140,6 +162,8 @@ test("zone contrast: home occupation is permitted in DD but not_permitted in HR-
     "DD",
   );
   expect(dd.permission).toBe("permitted");
+  // The bare ● cell carries no footnote.
+  expect(dd.footnote_ordinal ?? null).toBeNull();
 
   const hr2 = await lookupPermittedUse(
     request,
@@ -147,9 +171,9 @@ test("zone contrast: home occupation is permitted in DD but not_permitted in HR-
     "home occupation use",
     "HR-2",
   );
-  expect(hr2.permission).toBe("not_permitted");
+  expect(hr2.permission).toBe("conditional");
 
-  // The two results must differ — if both return not_permitted, the resolver
+  // The two results must differ — if both return the same verdict, the resolver
   // is ignoring the zone argument and both AC4 and zone-awareness are broken.
   expect(dd.permission).not.toBe(hr2.permission);
 });
