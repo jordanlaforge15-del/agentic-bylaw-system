@@ -148,6 +148,15 @@ class SourceTable(Base):
 
     document: Mapped[Document] = relationship(back_populates="tables")
     cells: Mapped[list["SourceTableCell"]] = relationship(back_populates="table", cascade="all, delete-orphan")
+    # Read-side access to the semantic classification(s) attached by enrichment.
+    # Permission-matrix detection keys off this (profile_type='permission_matrix'),
+    # NOT the caption — captions are empty across the real corpus (ABS-281).
+    semantic_profiles: Mapped[list["TableSemanticProfile"]] = relationship(
+        "TableSemanticProfile",
+        primaryjoin="SourceTable.id == TableSemanticProfile.table_id",
+        foreign_keys="TableSemanticProfile.table_id",
+        viewonly=True,
+    )
 
 
 class SourceTableCell(Base):

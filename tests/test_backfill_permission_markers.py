@@ -18,7 +18,13 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from layer1.db.base import Document, SourceTable, SourceTableCell, utcnow
+from layer1.db.base import (
+    Document,
+    SourceTable,
+    SourceTableCell,
+    TableSemanticProfile,
+    utcnow,
+)
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
 from layer1.models.enums import ParseStatus
@@ -41,7 +47,9 @@ backfill = _backfill_mod.backfill
 DOT = ""  # symbol-font ● "permitted as-of-right"
 PAD = ""  # symbol-font space (padding)
 
-CAPTION = "Table 1A: Permitted uses by zone — Residential"
+# Mirror the real corpus: permission-matrix tables carry NO caption. Detection
+# (and therefore the backfill scope) keys off the semantic profile (ABS-281).
+CAPTION = None
 
 # (row, col, text) — header row 0 + row-label col 0, value grid otherwise.
 # Mirrors table 1057: dots stored as U+F098, padded with U+F020, a couple of
@@ -95,6 +103,21 @@ def _seed(db_url: str) -> int:
             metadata_json={"parser": "docling"},
         )
         session.add(table)
+        session.flush()
+        # ABS-281: the backfill scopes by the permission_matrix profile, not the
+        # caption. Seed the profile the structural classifier would have written.
+        session.add(
+            TableSemanticProfile(
+                table_id=table.id,
+                profile_type="permission_matrix",
+                row_axis_type="use",
+                column_axis_type="zone",
+                value_type="permission_marker",
+                confidence=0.9,
+                review_status="auto_accepted",
+                metadata_json={},
+            )
+        )
         session.flush()
         for row_idx, col_idx, text in CELL_SPECS:
             session.add(

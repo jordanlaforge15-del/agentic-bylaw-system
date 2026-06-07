@@ -9,13 +9,21 @@ means — that binding is what this backfill creates.
 
 What it does
 ------------
-Finds every document that owns at least one permission-matrix-captioned table
-(``Table 1%Permitted uses by zone%``) but is missing a profile on one or more of
-those tables, then runs full semantic enrichment for each such document.
-Enrichment is idempotent — it clears and rebuilds the document's semantic layer —
-so it both creates the missing profile/bindings and refreshes any stale ones
-(including the ABS-278 header-bleed correction). Documents whose permission
-tables are already profiled are skipped unless ``--force`` is given.
+Finds every document that owns at least one table with **no**
+``table_semantic_profile`` (i.e. enrichment never ran on it), then runs full
+semantic enrichment for each such document. Enrichment is idempotent — it clears
+and rebuilds the document's semantic layer — so it both creates the missing
+profiles/bindings (including any ``permission_matrix`` the structural classifier
+detects) and refreshes stale ones (including the ABS-278 header-bleed
+correction). Documents whose tables are all profiled are skipped unless
+``--force`` is given.
+
+ABS-281: candidate detection keys off profile *coverage*, not table captions.
+The earlier version searched for permission-matrix tables by the caption
+pattern ``Table 1%Permitted uses by zone%`` — but the real corpus stores no
+captions, so it found zero candidates and the coverage gap (doc 4, doc 2 with
+0 profiles) never closed. Detecting "this table has no profile yet" is both
+caption-independent and the actual condition we want to repair.
 
 Usage
 -----
@@ -42,7 +50,6 @@ from sqlalchemy.orm import Session
 from layer1.db.base import SourceTable, TableSemanticProfile
 from layer1.db.session import session_scope
 from layer1.semantic.enrichment import enrich_document_semantics
-from layer1.semantic.permission_markers import PERMISSION_MATRIX_CAPTION_LIKE
 
 logger = logging.getLogger("backfill_table_profiles")
 
@@ -64,16 +71,15 @@ class BackfillStats:
 
 
 def _documents_needing_profiles(session: Session, *, force: bool) -> list[int]:
-    """Document ids that own a permission-matrix table missing a profile.
+    """Document ids that own at least one table lacking a semantic profile.
 
-    With ``force`` every document owning a permission matrix is returned,
-    profiled or not.
+    With ``force`` every document that owns any table is returned, profiled or
+    not. Detection is caption-independent (ABS-281): a table is "needs
+    profiling" iff no ``table_semantic_profile`` row references it.
     """
     tables = (
         session.execute(
-            select(SourceTable.id, SourceTable.document_id).where(
-                SourceTable.caption.ilike(PERMISSION_MATRIX_CAPTION_LIKE)
-            )
+            select(SourceTable.id, SourceTable.document_id)
         )
         .all()
     )
@@ -87,8 +93,8 @@ def _documents_needing_profiles(session: Session, *, force: bool) -> list[int]:
         if document_id in seen:
             continue
         if force or table_id not in profiled_table_ids:
-            # A single unprofiled permission table is enough to re-enrich the
-            # whole document (enrichment is document-scoped and idempotent).
+            # A single unprofiled table is enough to re-enrich the whole
+            # document (enrichment is document-scoped and idempotent).
             needing.append(document_id)
             seen.add(document_id)
     return needing

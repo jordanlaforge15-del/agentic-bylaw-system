@@ -490,7 +490,8 @@ def _mount_test_router(app: FastAPI) -> None:
         """
         from sqlalchemy import select as sa_select
 
-        from layer1.db.base import SourceTable, SourceTableCell
+        from layer1.db.base import SourceTable, SourceTableCell, TableSemanticProfile
+        from layer1.semantic.permission_markers import PERMISSION_MATRIX_PROFILE
         from layer2.retrieval.api import _structured_permission_table_candidates
 
         with session_scope() as db:
@@ -510,8 +511,14 @@ def _mount_test_router(app: FastAPI) -> None:
             tables = (
                 db.execute(
                     sa_select(SourceTable)
+                    .join(
+                        TableSemanticProfile,
+                        TableSemanticProfile.table_id == SourceTable.id,
+                    )
                     .where(SourceTable.document_id == doc.id)
-                    .where(SourceTable.caption.ilike("Table 1%Permitted uses by zone%"))
+                    .where(
+                        TableSemanticProfile.profile_type == PERMISSION_MATRIX_PROFILE
+                    )
                 )
                 .scalars()
                 .all()
@@ -581,6 +588,7 @@ def _mount_test_router(app: FastAPI) -> None:
             enrich_document_semantics,
             resolve_permission_cell,
         )
+        from layer1.semantic.permission_markers import PERMISSION_MATRIX_PROFILE
 
         with session_scope() as db:
             doc = db.execute(
@@ -596,8 +604,14 @@ def _mount_test_router(app: FastAPI) -> None:
             tables = (
                 db.execute(
                     sa_select(SourceTable)
+                    .join(
+                        TableSemanticProfile,
+                        TableSemanticProfile.table_id == SourceTable.id,
+                    )
                     .where(SourceTable.document_id == doc.id)
-                    .where(SourceTable.caption.ilike("Table 1%Permitted uses by zone%"))
+                    .where(
+                        TableSemanticProfile.profile_type == PERMISSION_MATRIX_PROFILE
+                    )
                     .order_by(SourceTable.page_start, SourceTable.id)
                 )
                 .scalars()

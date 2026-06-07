@@ -12,10 +12,19 @@ import sys
 
 from sqlalchemy import select
 
-from layer1.db.base import Document, SourceTable, SourceTableCell, utcnow
+from layer1.db.base import (
+    Document,
+    SourceTable,
+    SourceTableCell,
+    TableSemanticProfile,
+    utcnow,
+)
 from layer1.db.session import session_scope
 from layer1.models.enums import ParseStatus
-from layer1.semantic.permission_markers import annotate_permission_matrix_table
+from layer1.semantic.permission_markers import (
+    PERMISSION_MATRIX_PROFILE,
+    annotate_permission_matrix_table,
+)
 
 # ABS-277: the authoritative "permitted" dot in the real bylaw is the embedded
 # symbol-font ●, stored as a Private Use Area codepoint (U+F098) that reads as
@@ -84,15 +93,48 @@ def seed(session) -> dict[str, int]:
     table_1a = _ensure_table(session, document.id, TABLE_1A_CAPTION, 42, 43, TABLE_1A_CELLS)
     table_1b = _ensure_table(session, document.id, TABLE_1B_CAPTION, 44, 45, TABLE_1B_CELLS)
     session.flush()
-    # ABS-277: recover permission markers into metadata_json.permission_marker.
-    # Idempotent, so this runs every seed (including when the tables already
-    # exist on a persisted layer1_test DB). Expire the cells relationship first
-    # so it reloads every row (cells are added via session.add, not append).
+    # ABS-281: detection keys off the permission_matrix semantic profile, not the
+    # caption. Ensure each seeded table carries the profile the structural
+    # classifier would have written, then recover markers.
+    # ABS-277: marker recovery into metadata_json.permission_marker. Idempotent,
+    # so this runs every seed (including when the tables already exist on a
+    # persisted layer1_test DB). Expire the cells relationship first so it
+    # reloads every row (cells are added via session.add, not append).
     for table in (table_1a, table_1b):
-        session.expire(table, ["cells"])
+        _ensure_permission_matrix_profile(session, table)
+        session.expire(table, ["cells", "semantic_profiles"])
         annotate_permission_matrix_table(table)
     session.flush()
     return {"document_id": document.id, "table_1a_id": table_1a.id, "table_1b_id": table_1b.id}
+
+
+def _ensure_permission_matrix_profile(session, table: SourceTable) -> None:
+    """Attach a ``permission_matrix`` profile to ``table`` if absent (idempotent)."""
+    existing = (
+        session.execute(
+            select(TableSemanticProfile.id).where(
+                TableSemanticProfile.table_id == table.id,
+                TableSemanticProfile.profile_type == PERMISSION_MATRIX_PROFILE,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if existing is not None:
+        return
+    session.add(
+        TableSemanticProfile(
+            table_id=table.id,
+            profile_type=PERMISSION_MATRIX_PROFILE,
+            row_axis_type="use",
+            column_axis_type="zone",
+            value_type="permission_marker",
+            confidence=0.9,
+            review_status="auto_accepted",
+            metadata_json={"seed": "e2e-permission-tables"},
+        )
+    )
+    session.flush()
 
 
 def _get_or_create_document(session) -> Document:

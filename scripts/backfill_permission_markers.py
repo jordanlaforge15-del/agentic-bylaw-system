@@ -9,12 +9,13 @@ for conditional uses) without touching the raw ``text``.
 
 Scope
 -----
-Only cells belonging to tables whose caption matches the permission-matrix
-pattern (``Table 1%Permitted uses by zone%``) are touched. Header cells
-(row 0 / column 0) are skipped — only the value grid carries marker
-semantics. The normalization logic lives in
-``layer1.semantic.permission_markers`` and is shared with the ingest-time
-step, so a re-ingest and a backfill produce identical results.
+Only cells belonging to tables that carry a ``permission_matrix`` semantic
+profile (``table_semantic_profile.profile_type``, written by enrichment's
+structural classifier) are touched — NOT a caption match, because real-corpus
+captions are empty (ABS-281). Header cells (row 0 / column 0) are skipped —
+only the value grid carries marker semantics. The normalization logic lives in
+``layer1.semantic.permission_markers`` and is shared with the enrichment-time
+step, so a re-enrich and a backfill produce identical results.
 
 Idempotent
 ----------
@@ -42,10 +43,10 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from layer1.db.base import SourceTable, SourceTableCell
+from layer1.db.base import SourceTable, SourceTableCell, TableSemanticProfile
 from layer1.db.session import session_scope
 from layer1.semantic.permission_markers import (
-    PERMISSION_MATRIX_CAPTION_LIKE,
+    PERMISSION_MATRIX_PROFILE,
     annotate_cell,
     classify_permission_marker,
 )
@@ -86,9 +87,12 @@ def backfill(session: Session, *, dry_run: bool = False) -> BackfillStats:
 
     tables = (
         session.execute(
-            select(SourceTable).where(
-                SourceTable.caption.ilike(PERMISSION_MATRIX_CAPTION_LIKE)
+            select(SourceTable)
+            .join(
+                TableSemanticProfile,
+                TableSemanticProfile.table_id == SourceTable.id,
             )
+            .where(TableSemanticProfile.profile_type == PERMISSION_MATRIX_PROFILE)
         )
         .scalars()
         .all()

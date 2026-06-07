@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from layer1.db.base import Document, SourceFragment, SourceTable, SourceTableCell
+from layer1.db.base import (
+    Document,
+    SourceFragment,
+    SourceTable,
+    SourceTableCell,
+    TableSemanticProfile,
+)
 from layer1.db.session import session_scope
 from layer1.models.enums import FragmentType, ParseStatus
 from layer2.config import Layer2Settings
@@ -41,6 +47,20 @@ def table_1a_document(tmp_path: Path) -> dict:
             metadata_json={"source": "Image #1"},
         )
         session.add(table)
+        session.flush()
+        # ABS-281: detection keys off the semantic profile, not the caption.
+        session.add(
+            TableSemanticProfile(
+                table_id=table.id,
+                profile_type="permission_matrix",
+                row_axis_type="use",
+                column_axis_type="zone",
+                value_type="permission_marker",
+                confidence=0.9,
+                review_status="auto_accepted",
+                metadata_json={},
+            )
+        )
         session.flush()
         rows = [
             ["Residential", "DD", "DH", "CEN-2", "CEN-1", "COR", "HR-2", "HR-1"],
