@@ -1,0 +1,306 @@
+{
+  "id": "TC-005",
+  "title": "Developer feasibility for residential tower in HR-2",
+  "zone": "HR-2",
+  "persona": {
+    "type": "real_estate_developer",
+    "subtype": null,
+    "description": "Mid-size developer running a quick feasibility pass before purchasing a site"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "100 Robie Street, Halifax, NS",
+  "session_id": "1d39e83c-400a-406a-b505-098a88d87fb9",
+  "model": "claude-opus-4-5-20251101",
+  "turns": [
+    {
+      "turn": 5,
+      "user_message": "Can we add a home occupation component — say a property management office — for the building manager in one of the ground-floor units? Is home occupation permitted in HR-2?",
+      "assistant_text": "Excellent news — I found the full home occupation requirements. Here's what applies:\n\n---\n\n## Home Occupation Use in HR-2: **Permitted** (conditionally)\n\n**Office use** is explicitly listed as a permitted home occupation type (Section 51(2)(f)), so a property management office qualifies.\n\n### Key Requirements (Section 51):\n\n| Requirement | Standard |\n|-------------|----------|\n| **Maximum floor area** | 35% of the dwelling unit's floor area, to a maximum of **50.0 m²** |\n| **Location** | Must be wholly contained within a dwelling unit or accessory structure |\n| **Employees** | Maximum **1 non-resident employee** permitted |\n| **Operator residency** | The principal operator must reside on the lot |\n| **External appearance** | The use shall not be apparent from outside, except for permitted signage |\n| **Accessory retail** | Retailing of products accessory to the home occupation is permitted |\n\n### Ground-Floor Exception:\n\nSection 51(1) begins: *\"Excluding a home occupation use contained within a grade-related dwelling unit use...\"* — this suggests that home occupations in **grade-related dwelling units** (i.e., ground-floor units with direct exterior access) may have different or relaxed requirements. This is actually favorable for your scenario of a building manager's unit on the ground floor.\n\n### Signage:\n\nPer Section 469, home occupation signs are limited to **0.6 m²** maximum area.\n\n---\n\n## Practical Implications for Your Building:\n\n1. **Yes, you can include a property management office** as a home occupation in a ground-floor unit where the building manager lives.\n\n2. **The manager must live there** — this isn't a standalone office; it's a live/work arrangement.\n\n3. **One additional employee** (beyond the resident operator) is permitted — so the manager could have an assistant work from the unit.\n\n4. **50 m² cap** on the office portion — adequate for a small property management operation but not a large commercial office.\n\n5. **No external signage beyond 0.6 m²** — the use shouldn't be apparent from outside except for a small sign.\n\nThis is a clean as-of-right path for the building manager scenario you described — no variance needed.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 19259,
+        "output_tokens": 527,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "wall_time_s": 46.74,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 10,
+        "terminated_reason": "iteration_cap",
+        "total_usage": {
+          "input_tokens": 42109,
+          "output_tokens": 1800,
+          "cache_creation_input_tokens": 15263,
+          "cache_read_input_tokens": 97663
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 359,
+              "output_tokens": 112,
+              "cache_creation_input_tokens": 8550,
+              "cache_read_input_tokens": 0
+            },
+            "latency_ms": 3361,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 642,
+              "output_tokens": 222,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 8550
+            },
+            "latency_ms": 5046,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 3,
+            "usage": {
+              "input_tokens": 1870,
+              "output_tokens": 104,
+              "cache_creation_input_tokens": 356,
+              "cache_read_input_tokens": 8550
+            },
+            "latency_ms": 2526,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 4,
+            "usage": {
+              "input_tokens": 1803,
+              "output_tokens": 97,
+              "cache_creation_input_tokens": 170,
+              "cache_read_input_tokens": 9021
+            },
+            "latency_ms": 2429,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 5,
+            "usage": {
+              "input_tokens": 483,
+              "output_tokens": 135,
+              "cache_creation_input_tokens": 1361,
+              "cache_read_input_tokens": 9414
+            },
+            "latency_ms": 2660,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 6,
+            "usage": {
+              "input_tokens": 2249,
+              "output_tokens": 130,
+              "cache_creation_input_tokens": 113,
+              "cache_read_input_tokens": 10880
+            },
+            "latency_ms": 4461,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 7,
+            "usage": {
+              "input_tokens": 4370,
+              "output_tokens": 101,
+              "cache_creation_input_tokens": 264,
+              "cache_read_input_tokens": 10993
+            },
+            "latency_ms": 2082,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 8,
+            "usage": {
+              "input_tokens": 2597,
+              "output_tokens": 95,
+              "cache_creation_input_tokens": 1984,
+              "cache_read_input_tokens": 11257
+            },
+            "latency_ms": 1854,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 9,
+            "usage": {
+              "input_tokens": 3118,
+              "output_tokens": 125,
+              "cache_creation_input_tokens": 2254,
+              "cache_read_input_tokens": 13372
+            },
+            "latency_ms": 3932,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 10,
+            "usage": {
+              "input_tokens": 5359,
+              "output_tokens": 152,
+              "cache_creation_input_tokens": 211,
+              "cache_read_input_tokens": 15626
+            },
+            "latency_ms": 2836,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 11,
+            "usage": {
+              "input_tokens": 19259,
+              "output_tokens": 527,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0
+            },
+            "latency_ms": 14160,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 173
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 305
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 29
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 12
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 79
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 315
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 18
+          },
+          {
+            "name": "get_document_outline",
+            "is_error": false,
+            "latency_ms": 9
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 332
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 103
+          }
+        ]
+      }
+    }
+  ],
+  "spec": {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "persona": {
+      "type": "real_estate_developer",
+      "subtype": null,
+      "description": "Mid-size developer running a quick feasibility pass before purchasing a site"
+    },
+    "address": "100 Robie Street, Halifax, NS",
+    "zone": "HR-2",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "new_construction",
+      "residential",
+      "multi_unit",
+      "high_rise",
+      "feasibility",
+      "redevelopment"
+    ],
+    "bylaw_features": [
+      "height",
+      "FAR",
+      "setbacks",
+      "lot_coverage",
+      "parking",
+      "permitted_use"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "We’re looking at a site on Robie Street zoned HR-2 for a high-rise residential development — likely 60–80 units. What are the base zoning standards: height, lot coverage, setbacks?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Is there a floor area ratio (FAR) limit in HR-2, or does the bylaw rely only on height and lot coverage to control density?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "The site is 2,200 m². At 65% lot coverage and 25 metres of height, roughly how many floors could we fit? And is multi-unit dwelling confirmed as a permitted use in HR-2?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "For 70 units, what’s the parking obligation? Does the no-parking exemption that applies in some downtown zones apply here in HR-2?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "Can we add a home occupation component — say a property management office — for the building manager in one of the ground-floor units? Is home occupation permitted in HR-2?"
+      },
+      {
+        "turn": 6,
+        "role": "user",
+        "message": "Pull it all together for me: for an HR-2 site at 2,200 m², what is the realistic maximum buildable program in terms of units, height, and GFA, and what are the major bylaw constraints to flag for our architect?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Table 3",
+      "Table 5",
+      "Section 120(a)",
+      "Section 120(b)"
+    ],
+    "expected_answer_keywords": [
+      "HR-2",
+      "permitted",
+      "multi-unit dwelling",
+      "dwelling unit",
+      "home occupation"
+    ],
+    "expected_topics": [
+      "height",
+      "lot_coverage",
+      "setbacks",
+      "FAR",
+      "use_permission",
+      "parking"
+    ],
+    "notes": "Six-turn developer feasibility session. Tests that agent correctly identifies home occupation is NOT permitted in HR-2 (Table 1A). High liability: 60-80 unit building."
+  },
+  "run_label": "table1A-permission-fixed",
+  "t5_only": true
+}

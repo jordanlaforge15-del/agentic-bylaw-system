@@ -61,14 +61,24 @@ BASELINE_RUN = "20260603T100000Z-haiku-baseline"
 # correct answer expresses ("subject to condition 15") — so a committed
 # conditional verdict does not trip these.
 HEDGE_PHRASES = [
+    # These are the "I couldn't read the permission matrix / determine the
+    # verdict" tells. They are about the PERMISSION verdict itself, not about
+    # secondary details. The standard responsible-advice disclaimer footer
+    # ("confirm with HRM Planning & Development before committing budget") is
+    # NOT a hedge — it appears on every committed answer — so phrases that
+    # overlap that footer are deliberately excluded.
     "a symbol appears to indicate",
-    "I could not retrieve",
-    "I did not retrieve",
-    "I cannot confirm",
-    "I was unable to",
-    "I need to retrieve",
-    "to answer this properly",
-    "I would need to",
+    "may be conditional",
+    "i could not retrieve",
+    "i did not retrieve",
+    "i cannot confirm whether",
+    "i was unable to determine",
+    "i need to retrieve",
+    "is home occupation permitted in hr-2 at all",
+    "whether home occupation is permitted in hr-2, or",
+    "the permitted uses tables (tables 1a",
+    "weren't fully retrieved",
+    "wasn't fully retrieved",
 ]
 
 # AC1 — committed-verdict phrases. The correct TC-005 T5 answer is a committed
@@ -260,18 +270,30 @@ def run_turn(
 
 
 def analyse_t5(turn: dict[str, Any]) -> dict[str, Any]:
-    """Score T5 against Phase-4 AC1-AC3."""
-    text = (turn.get("assistant_text") or "").lower()
-    tool_calls = turn.get("tool_calls") or []
+    """Score T5 against Phase-4 AC1-AC3.
 
-    has_permitted_use_call = any(
-        tc.get("name") == "lookup_citation"
-        and (tc.get("input") or {}).get("structured", {}).get("kind") == "permitted_use"
-        for tc in tool_calls
-    )
+    Tool calls are read from ``tool_loop_metrics`` (the per-iteration record of
+    every call the loop made), NOT from the final assistant message — after a
+    forced-synthesis turn the final message carries no tool_use blocks, so the
+    final-message view sees zero calls even when the loop made dozens. The
+    metrics record lacks per-call inputs, so AC3 keys off the tool *name* plus
+    its error flag rather than the structured ``kind``.
+    """
+    text = (turn.get("assistant_text") or "").lower()
+    metrics = turn.get("tool_loop_metrics") or {}
+    tool_calls = metrics.get("tool_calls") or turn.get("tool_calls") or []
+
     lookup_citation_calls = [
         tc for tc in tool_calls if tc.get("name") == "lookup_citation"
     ]
+    lookup_citation_errors = [
+        tc for tc in lookup_citation_calls if tc.get("is_error")
+    ]
+    # AC3: the structured permitted-use path runs through lookup_citation. We
+    # can't see the per-call ``kind`` in metrics, so "a non-erroring
+    # lookup_citation call happened" is the proxy. An erroring lookup_citation
+    # is its own red flag (the structured arg failed to validate — ABS-280).
+    has_permitted_use_call = len(lookup_citation_calls) > len(lookup_citation_errors)
     hedge_found = next(
         (p for p in HEDGE_PHRASES if p.lower() in text), None
     )
@@ -296,6 +318,7 @@ def analyse_t5(turn: dict[str, Any]) -> dict[str, Any]:
         "ac2_condition_marker_found": condition_found,
         "ac3_has_permitted_use_tool_call": has_permitted_use_call,
         "ac3_lookup_citation_calls": lookup_citation_calls,
+        "ac3_lookup_citation_error_count": len(lookup_citation_errors),
         "total_tool_calls": len(tool_calls),
     }
 
@@ -444,8 +467,11 @@ def main() -> None:
             file=sys.stderr,
         )
         calls = quality.get("ac3_lookup_citation_calls") or []
-        for call in calls:
-            print(f"  tool call: {json.dumps(call.get('input', {}))}", file=sys.stderr)
+        err = quality.get("ac3_lookup_citation_error_count") or 0
+        print(
+            f"  lookup_citation calls: {len(calls)} ({err} errored)",
+            file=sys.stderr,
+        )
     print(
         f"Tokens — input: {total_input:,}  output: {total_output:,}",
         file=sys.stderr,

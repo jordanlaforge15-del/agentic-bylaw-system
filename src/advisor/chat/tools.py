@@ -62,6 +62,31 @@ from layer2.compliance.evaluator import (
 )
 
 
+def _coerce_stringified_object_arg(
+    payload: dict[str, Any], key: str
+) -> dict[str, Any]:
+    """Return ``payload`` with ``payload[key]`` parsed from a JSON string.
+
+    LLMs sometimes serialize a nested object tool argument as a JSON *string*
+    instead of a nested object — e.g. ``{"structured": "{\\"kind\\": ...}"}``
+    rather than ``{"structured": {"kind": ...}}``. Pydantic then rejects the
+    string with ``model_attributes_type``. When ``payload[key]`` is a string
+    that parses to a dict, substitute the parsed dict so validation succeeds;
+    otherwise leave ``payload`` untouched and let normal validation run. Does
+    not mutate the input dict.
+    """
+    value = payload.get(key)
+    if not isinstance(value, str):
+        return payload
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, ValueError):
+        return payload
+    if not isinstance(parsed, dict):
+        return payload
+    return {**payload, key: parsed}
+
+
 # Description copied verbatim from ``mcp/bylaw_retrieval/openai_tools.py``
 # (list_documents). Kept here rather than importing because the MCP
 # module's specs are OpenAI-shape, not Anthropic-shape.
@@ -701,6 +726,15 @@ def build_bylaw_tools(
             return json.dumps(compact_outline(outline))
 
     async def lookup_citation_handler(payload: dict[str, Any]) -> str:
+        # Some models serialize the nested ``structured`` argument as a JSON
+        # *string* (e.g. '{"kind": "permitted_use", "use": ..., "zone": ...}')
+        # instead of a nested object. model_validate then rejects it with
+        # "Input should be a valid dictionary" and the structured permitted-use
+        # path never reaches the resolver — the model thrashes re-issuing the
+        # call until it hits the iteration cap and falls back to ungrounded
+        # prose (ABS-280, observed with Opus on TC-005 T5). Coerce a stringified
+        # nested object back to a dict before validation.
+        payload = _coerce_stringified_object_arg(payload, "structured")
         # model_validate will raise ValidationError on missing required
         # fields; the tool loop catches that and surfaces it to the LLM
         # as a tool_result error so it can self-correct.

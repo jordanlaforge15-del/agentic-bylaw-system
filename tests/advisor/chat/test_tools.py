@@ -484,3 +484,97 @@ def test_compact_search_response_keeps_notes_and_drops_request():
     assert out["total_matches"] == 0
     assert out["shown_matches"] == 0
     assert "truncation_note" not in out
+
+
+def test_coerce_stringified_object_arg():
+    """ABS-280: a nested object arg serialized as a JSON string is parsed back
+    to a dict; everything else passes through untouched so normal validation
+    still runs."""
+    from advisor.chat.tools import _coerce_stringified_object_arg
+
+    inner = {"kind": "permitted_use", "use": "home occupation use", "zone": "HR-2"}
+    # stringified nested object -> parsed dict
+    assert _coerce_stringified_object_arg(
+        {"structured": json.dumps(inner), "document_id": 4}, "structured"
+    ) == {"structured": inner, "document_id": 4}
+    # already a dict -> unchanged
+    assert _coerce_stringified_object_arg(
+        {"structured": inner}, "structured"
+    ) == {"structured": inner}
+    # key absent -> unchanged
+    assert _coerce_stringified_object_arg(
+        {"citation_path": "4.2"}, "structured"
+    ) == {"citation_path": "4.2"}
+    # non-JSON string -> unchanged (let normal validation reject it)
+    assert _coerce_stringified_object_arg(
+        {"structured": "not json"}, "structured"
+    ) == {"structured": "not json"}
+    # JSON that isn't an object -> unchanged
+    assert _coerce_stringified_object_arg(
+        {"structured": "[1, 2]"}, "structured"
+    ) == {"structured": "[1, 2]"}
+
+
+def test_compact_permitted_use_conditional_carries_instruction():
+    """ABS-280 AC2: a conditional permitted_use result must carry an inline
+    instruction telling the writer to quote the footnote condition_text, so the
+    Table 1A carve-out isn't dropped in favour of the use's operating standards.
+    """
+    from advisor.chat.compact import compact_permitted_use
+    from bylaw_retrieval.retrieval.schemas import PermittedUseResult
+
+    conditional = PermittedUseResult(
+        use="home occupation use",
+        zone="HR-2",
+        indeterminate=False,
+        permission="conditional",
+        footnote_ordinal=15,
+        condition_text="⑮ Use is permitted, except within the Halifax Grain Elevator.",
+    )
+    out = compact_permitted_use(conditional)
+    assert out["permission"] == "conditional"
+    assert out["condition_text"].startswith("⑮")
+    assert "instruction" in out
+    assert "condition_text" in out["instruction"]
+    assert "15" in out["instruction"]
+
+    # A plain permitted result carries NO such instruction.
+    permitted = PermittedUseResult(
+        use="home occupation use",
+        zone="DD",
+        indeterminate=False,
+        permission="permitted",
+    )
+    assert "instruction" not in compact_permitted_use(permitted)
+
+
+@pytest.mark.asyncio
+async def test_lookup_citation_handler_tolerates_stringified_structured(
+    seeded_service,
+):
+    """ABS-280: Opus serialized the nested ``structured`` permitted_use arg as a
+    JSON string, which made CitationLookupRequest.model_validate raise and
+    stranded the structured permitted-use path (the model thrashed to the
+    iteration cap and fell back to ungrounded prose). The handler must parse a
+    stringified ``structured`` so the string form behaves like the dict form.
+    """
+    service, document_id = seeded_service
+    _, handlers = build_bylaw_tools(service)
+
+    structured = {
+        "kind": "permitted_use",
+        "use": "home occupation use",
+        "zone": "HR-2",
+    }
+    dict_form = json.loads(
+        await handlers["lookup_citation"](
+            {"structured": structured, "document_id": document_id}
+        )
+    )
+    # The stringified form must NOT raise and must produce identical output.
+    string_form = json.loads(
+        await handlers["lookup_citation"](
+            {"structured": json.dumps(structured), "document_id": document_id}
+        )
+    )
+    assert string_form == dict_form
