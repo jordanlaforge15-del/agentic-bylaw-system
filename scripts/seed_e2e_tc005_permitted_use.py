@@ -1,12 +1,18 @@
 """Seed TC-005 permission-matrix fixture for ABS-280 e2e regression.
 
 Creates a dedicated Document ("TC-005 ABS-280 Permitted Use By-law") with a
-Table 1A–captioned permission matrix whose cells cover the two TC-005 use-zone
+Table 1A–captioned permission matrix whose cells cover the TC-005 use-zone
 pairs:
 
-* (multi-unit dwelling use, HR-2)  → ``●``  permitted   (TC-005 T3)
-* (home occupation use,    HR-2)  → ``""`` blank        → not_permitted (TC-005 T5)
-* (home occupation use,    DD)    → ``●``  permitted    (zone-specificity contrast)
+* (multi-unit dwelling use, HR-2)  → ``●``  permitted    (TC-005 T3)
+* (home occupation use,    HR-2)  → ``⑮`` conditional    (TC-005 T5; footnote 15)
+* (home occupation use,    DD)    → ``●``  permitted     (zone-specificity contrast)
+
+Ground truth: per doc 4 Table 1A, home occupation in HR-2 is **conditional** —
+the cell carries footnote ⑮ ("Use is permitted, except within the Halifax Grain
+Elevator Special Area..."), not a blank. The footnote legend is seeded as a
+PROSE fragment (mirroring the real, mis-typed ingest) so the resolver's
+type-agnostic legend match populates ``condition_text`` (AC2).
 
 A separate document from the ABS-279 seed so running enrichment on it can't
 disturb the existing Phase-3 fixtures.
@@ -19,15 +25,34 @@ import sys
 
 from sqlalchemy import select
 
-from layer1.db.base import Document, SourceTable, SourceTableCell, utcnow
+from layer1.db.base import (
+    Document,
+    SourceFragment,
+    SourceTable,
+    SourceTableCell,
+    utcnow,
+)
 from layer1.db.session import session_scope
-from layer1.models.enums import ParseStatus
+from layer1.models.enums import FragmentType, ParseStatus
 
 DOCUMENT_FILE_HASH = "e2e-tc005-abs280-permitted-use"
 DOCUMENT_MUNICIPALITY = "HRM"
 DOCUMENT_BYLAW_NAME = "TC-005 ABS-280 Permitted Use By-law"
 
 TABLE_CAPTION = "Table 1A: Permitted uses by zone — Residential"
+
+# ● = permitted marker; ⑮ = circled-15 conditional footnote (U+246E).
+PERMITTED = "●"
+COND15 = "⑮"
+
+# Footnote-15 legend; PROSE-typed to mirror the real Regional Centre ingest, so
+# the resolver's leading-glyph legend match (not a FOOTNOTE-type filter) is what
+# surfaces the condition text. Carries the Halifax Grain Elevator carve-out (AC2).
+FOOTNOTE_LEGEND = (
+    f"{COND15} Use is permitted, except within the Halifax Grain Elevator (HGE) "
+    "Special Area, as shown on Schedule 3F."
+)
+FOOTNOTE_PAGE = 14
 
 # (row, col, text, row_header_path, col_header_path)
 TABLE_CELLS = [
@@ -36,12 +61,12 @@ TABLE_CELLS = [
     (0, 2, "DD", None, "DD"),
     # multi-unit dwelling — permitted in both zones
     (1, 0, "multi-unit dwelling use", "multi-unit dwelling use", None),
-    (1, 1, "●", "multi-unit dwelling use", "HR-2"),
-    (1, 2, "●", "multi-unit dwelling use", "DD"),
-    # home occupation — NOT permitted in HR-2 (TC-005 T5); permitted in DD
+    (1, 1, PERMITTED, "multi-unit dwelling use", "HR-2"),
+    (1, 2, PERMITTED, "multi-unit dwelling use", "DD"),
+    # home occupation — CONDITIONAL in HR-2 (TC-005 T5, footnote ⑮); permitted in DD
     (2, 0, "home occupation use", "home occupation use", None),
-    (2, 1, "", "home occupation use", "HR-2"),   # blank → not_permitted
-    (2, 2, "●", "home occupation use", "DD"),    # permitted (zone contrast)
+    (2, 1, COND15, "home occupation use", "HR-2"),   # ⑮ → conditional
+    (2, 2, PERMITTED, "home occupation use", "DD"),  # permitted (zone contrast)
 ]
 
 
@@ -55,8 +80,35 @@ def seed(session) -> dict[str, int]:
 
     document = _get_or_create_document(session)
     table = _ensure_table(session, document.id)
+    _ensure_footnote_legend(session, document.id)
     session.flush()
     return {"document_id": document.id, "table_id": table.id}
+
+
+def _ensure_footnote_legend(session, document_id: int) -> None:
+    """Seed the footnote ⑮ legend as a PROSE fragment (idempotent)."""
+    existing = (
+        session.execute(
+            select(SourceFragment.id).where(
+                SourceFragment.document_id == document_id,
+                SourceFragment.text == FOOTNOTE_LEGEND,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if existing is not None:
+        return
+    session.add(
+        SourceFragment(
+            document_id=document_id,
+            fragment_type=FragmentType.PROSE,
+            page_start=FOOTNOTE_PAGE,
+            page_end=FOOTNOTE_PAGE,
+            text=FOOTNOTE_LEGEND,
+            parse_status=ParseStatus.PARSED,
+        )
+    )
 
 
 def _get_or_create_document(session) -> Document:

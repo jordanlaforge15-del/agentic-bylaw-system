@@ -279,6 +279,25 @@ def compact_permitted_use(result: PermittedUseResult) -> dict[str, Any]:
         out["footnote_ordinal"] = result.footnote_ordinal
     if result.condition_text is not None:
         out["condition_text"] = result.condition_text
+    # A conditional cell's verdict hinges on the Table 1A footnote, not on the
+    # use's general operating standards. Without this nudge the writer commits
+    # to "conditional" but paraphrases unrelated operating requirements and
+    # drops the footnote carve-out (observed on TC-005 T5 — ABS-280 AC2). The
+    # inline instruction is the same writer-steering pattern ABS-261 uses for
+    # citation-lookup misses.
+    if result.permission == "conditional":
+        footnote_ref = (
+            f" (footnote {result.footnote_ordinal})"
+            if result.footnote_ordinal is not None
+            else ""
+        )
+        out["instruction"] = (
+            "This use is CONDITIONALLY permitted in this zone. State the verdict "
+            "as conditional — not a plain 'permitted' — and quote the "
+            f"'condition_text' footnote verbatim{footnote_ref} as the governing "
+            "condition on permission. Do not substitute the use's general "
+            "operating standards for this footnote condition."
+        )
     if result.citation is not None:
         citation: dict[str, Any] = {}
         if result.citation.citation_path is not None:

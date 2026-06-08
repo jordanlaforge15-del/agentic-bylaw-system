@@ -1,0 +1,43 @@
+{
+  "run_dir": "/Users/christopherrafuse/dev/agentic-bylaw-system/.claude/worktrees/abs-280/evals/runs/20260608T001059Z-table1A-permission-ac2",
+  "ts": "20260608T001059Z",
+  "model": "claude-opus-4-5-20251101",
+  "t5_only": true,
+  "turns_completed": 1,
+  "t5_quality": {
+    "ac1_committed_verdict": true,
+    "ac1_hedge_phrase_found": null,
+    "ac1_committed_phrase_found": "conditional",
+    "ac1_conditional_verdict": true,
+    "ac2_condition_text_cited": true,
+    "ac2_condition_marker_found": "halifax grain elevator",
+    "ac3_has_permitted_use_tool_call": true,
+    "ac3_lookup_citation_calls": [
+      {
+        "name": "lookup_citation",
+        "is_error": false,
+        "latency_ms": 177
+      },
+      {
+        "name": "lookup_citation",
+        "is_error": false,
+        "latency_ms": 17
+      },
+      {
+        "name": "lookup_citation",
+        "is_error": false,
+        "latency_ms": 22
+      }
+    ],
+    "ac3_lookup_citation_error_count": 0,
+    "total_tool_calls": 10
+  },
+  "total_tokens": {
+    "input": 21135,
+    "output": 586
+  },
+  "baseline_run": "20260603T100000Z-haiku-baseline",
+  "baseline_t5_verdict": "hedge \u2014 no tool calls, no committed answer",
+  "expected_verdict": "conditional \u2014 home occupation in HR-2 carries footnote \u246e (Halifax Grain Elevator carve-out); committed answer is 'permitted, subject to condition 15'",
+  "rescored_note": "Re-scored locally with corrected HEDGE_PHRASES (disclaimer footer is not a verdict hedge); no new API call."
+}

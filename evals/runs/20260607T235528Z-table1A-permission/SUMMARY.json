@@ -1,0 +1,25 @@
+{
+  "run_dir": "/Users/christopherrafuse/dev/agentic-bylaw-system/.claude/worktrees/abs-280/evals/runs/20260607T235528Z-table1A-permission",
+  "ts": "20260607T235528Z",
+  "model": "claude-opus-4-5-20251101",
+  "t5_only": true,
+  "turns_completed": 1,
+  "t5_quality": {
+    "ac1_committed_verdict": true,
+    "ac1_hedge_phrase_found": null,
+    "ac1_committed_phrase_found": "is permitted",
+    "ac1_conditional_verdict": false,
+    "ac2_condition_text_cited": false,
+    "ac2_condition_marker_found": null,
+    "ac3_has_permitted_use_tool_call": false,
+    "ac3_lookup_citation_calls": [],
+    "total_tool_calls": 0
+  },
+  "total_tokens": {
+    "input": 15693,
+    "output": 483
+  },
+  "baseline_run": "20260603T100000Z-haiku-baseline",
+  "baseline_t5_verdict": "hedge \u2014 no tool calls, no committed answer",
+  "expected_verdict": "conditional \u2014 home occupation in HR-2 carries footnote \u246e (Halifax Grain Elevator carve-out); committed answer is 'permitted, subject to condition 15'"
+}
