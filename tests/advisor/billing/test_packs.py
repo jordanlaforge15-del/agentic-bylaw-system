@@ -87,3 +87,23 @@ def test_pack_for_stripe_price_id_returns_none_for_unknown() -> None:
     settings = AdvisorBillingSettings()
     assert pack_for_stripe_price_id("price_missing", settings) is None
     assert pack_for_stripe_price_id("", settings) is None
+
+
+def test_tier_max_iterations_match_advertised_ranges() -> None:
+    """Each tier's max_iterations must exceed its advertised upper bound
+    so the iteration cap never fires before the cost-circuit breaker on
+    a normal turn. The values are (quick=8, standard=20, complex=55)."""
+    quick = TIERS[TIER_QUICK]
+    standard = TIERS[TIER_STANDARD]
+    complex_ = TIERS[TIER_COMPLEX]
+
+    # Quick: advertised 4-6 steps — cap must be above 6
+    assert quick.max_iterations > 6
+    # Standard: advertised 12-18 steps — cap must be above 18
+    assert standard.max_iterations > 18
+    # Complex: advertised 35-50 steps — cap must be above 50
+    assert complex_.max_iterations > 50
+
+    # Tier ordering: each tier's cap strictly exceeds the tier below it.
+    assert quick.max_iterations < standard.max_iterations
+    assert standard.max_iterations < complex_.max_iterations

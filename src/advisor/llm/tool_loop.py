@@ -185,15 +185,17 @@ async def run_tool_loop(
     an error to the LLM (``is_error=True`` tool_result) so it can
     recover or apologise.
 
-    ``max_iterations`` is a safety cap. Most chats settle in 1–3
-    rounds; anything higher than 5 in practice usually means a
-    handler is misbehaving. When the cap is hit we don't raise —
-    instead we make one more model call with tools stripped, forcing
-    a text-only synthesis from whatever evidence was already
-    retrieved. That converts a hard error ("agent gave up") into a
-    real answer ("the LUB doesn't cover this; see the Subdivision
-    By-law"), and keeps the partial conversation persistable so the
-    audit trail isn't lost.
+    ``max_iterations`` is a per-tier safety cap. ``ChatSession``
+    derives it from the active ``Tier.max_iterations`` (Quick=8,
+    Standard=20, Complex=55) so the cap matches each tier's advertised
+    reasoning-step range. The default of 10 is only a fallback for
+    non-tier sessions (tests, legacy paths). When the cap is hit we
+    don't raise — instead we make one more model call with tools
+    stripped, forcing a text-only synthesis from whatever evidence was
+    already retrieved. That converts a hard error ("agent gave up")
+    into a real answer ("the LUB doesn't cover this; see the
+    Subdivision By-law"), and keeps the partial conversation
+    persistable so the audit trail isn't lost.
 
     ``token_budget`` is the cost-circuit ceiling on input tokens for
     the whole turn. Each iteration's request is estimated (cheap
