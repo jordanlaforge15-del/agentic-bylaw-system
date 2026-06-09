@@ -220,6 +220,91 @@ def test_ac5_permitted_use_payload_validates_against_tool_schema():
     jsonschema.validate(payload, _SCHEMA_LOOKUP_CITATION)
 
 
+# --------------------------------------------------------------------------
+# ABS-283 — Mainland section-prose permitted-use path (no symbol-dot matrix)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def mainland_db(tmp_path: Path) -> dict:
+    """A Mainland LUB doc whose permitted uses live in prose section text, not a
+    Table-1A symbol-dot matrix."""
+    db_url = f"sqlite:///{tmp_path / 'mainland_lookup.db'}"
+    create_all(db_url)
+    with session_scope(db_url) as session:
+        document = Document(
+            municipality="Halifax",
+            bylaw_name="Halifax Mainland Land Use By-law",
+            source_path="mainland.pdf",
+            file_hash="abs283-mainland-lookup",
+            mime_type="application/pdf",
+            ingestion_timestamp=datetime.now(timezone.utc),
+            parser_version="test",
+        )
+        session.add(document)
+        session.flush()
+        session.add(
+            SourceFragment(
+                document_id=document.id,
+                fragment_type=FragmentType.PROSE,
+                citation_path="Section 62EA(1)",
+                citation_label="62EA(1)",
+                page_start=133,
+                page_end=133,
+                text=(
+                    "62EA(1) The following uses shall be permitted in any ICH "
+                    "Zone:\n(1) Single Unit Dwellings\n(2) Open Space Uses\n"
+                    "62EA(2) No person shall in any ICH Zone carry out any "
+                    "development for any purpose other than one or more of the "
+                    "uses set out in subsection (1)."
+                ),
+                parse_status=ParseStatus.PARSED,
+                confidence=0.9,
+            )
+        )
+        session.flush()
+        enrich_document_semantics(session, document_id=document.id)
+        document_id = document.id
+    return {"db_url": db_url, "document_id": document_id}
+
+
+def test_abs283_mainland_permitted_use_resolves_through_service(mainland_db):
+    """AC2: lookup_permitted_use resolves a Mainland (use, zone) query via the
+    section-prose path even though no permission matrix exists in scope."""
+    with session_scope(mainland_db["db_url"]) as session:
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(use="Single Unit Dwelling", zone="ICH")
+
+    assert result.indeterminate is False
+    assert result.permission == "permitted"
+    # Grounded back to the source section fragment.
+    assert result.citation is not None
+    assert result.citation.bylaw_name == "Halifax Mainland Land Use By-law"
+    assert result.citation.page_start == 133
+
+
+def test_abs283_mainland_absent_use_is_grounded_not_permitted(mainland_db):
+    """A use absent from the closed Mainland list resolves to not_permitted, not
+    a 'no_permission_matrix' indeterminate."""
+    with session_scope(mainland_db["db_url"]) as session:
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(use="Restaurant use", zone="ICH")
+
+    assert result.indeterminate is False
+    assert result.permission == "not_permitted"
+
+
+def test_abs283_mainland_zone_without_list_is_indeterminate(mainland_db):
+    """A zone with no Mainland permitted-use list (and no matrix) still returns a
+    typed indeterminate, never a silent empty."""
+    with session_scope(mainland_db["db_url"]) as session:
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(use="Single Unit Dwelling", zone="R-1")
+
+    assert result.indeterminate is True
+    assert result.reason_code == "no_permission_matrix"
+
+
 @pytest.mark.asyncio
 async def test_ac5_tool_dispatch_resolves_permitted_use_end_to_end(matrix_db):
     """Invoke lookup_citation through the advisor handler registry with a
