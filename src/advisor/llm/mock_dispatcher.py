@@ -51,6 +51,16 @@ Scenario keywords in the user message override the default rules:
   Use this keyword to test UI that depends on the right-pane being
   non-empty.
 
+* ``"MOCK_DEEP_SEARCH"`` — instead of answering after one search, the
+  dispatcher fans the turn out into ``_DEEP_SEARCH_ROUNDS`` (5) serial
+  ``search_bylaw_evidence`` rounds before the final answer. This is the
+  only path that drives more in-turn tool rounds than the WI-4 (ABS-290)
+  in-loop compaction window, so the older rounds' tool_results get
+  rewritten to one-line summaries inside the live loop. The e2e guard
+  then confirms the deep loop still completes and answers — i.e. that
+  rewriting bytes mid-loop didn't break the tool_use ↔ tool_result
+  pairing the Messages API requires.
+
 All responses are deterministic, so identical sessions produce
 identical SSE traces — a hard requirement for screenshot-stable UI
 tests.
@@ -74,6 +84,11 @@ _CLASSIFIER_PERSONA_SIGNAL = "anchor_label"
 _DEFAULT_CITATION = (
     "RC-LUB §15.4(a) sets a minimum front yard setback of 3.0 m."
 )
+# Serial search rounds a ``MOCK_DEEP_SEARCH`` turn fans out into before
+# answering. Chosen above the WI-4 in-loop compaction window (default 3)
+# so the oldest rounds are summarised inside the live loop, and below the
+# tool-loop ``max_iterations`` cap (10) so the turn answers organically.
+_DEEP_SEARCH_ROUNDS = 5
 
 
 def build_dispatcher() -> Callable[[CompletionRequest], CompletionResponse]:
@@ -92,6 +107,21 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
 
     if "MOCK_EMPTY_TURN" in user_text:
         return text_response("")
+
+    if "MOCK_DEEP_SEARCH" in user_text:
+        # Keep issuing search rounds until we've done _DEEP_SEARCH_ROUNDS,
+        # then answer. Drives a single turn past the WI-4 compaction
+        # window so the older tool_results are summarised in-loop.
+        rounds_done = _count_search_rounds(request)
+        if rounds_done < _DEEP_SEARCH_ROUNDS:
+            return tool_use_response(
+                tool_id=f"t-deep-{rounds_done + 1}",
+                tool_name="search_bylaw_evidence",
+                tool_input={"query": f"{user_text[:80]} (round {rounds_done + 1})"},
+                preamble=f"Searching the bylaw (round {rounds_done + 1}).",
+                usage=TokenUsage(input_tokens=80, output_tokens=24),
+            )
+        return _final_answer_response(user_text)
 
     if has_prior_tool_use:
         return _final_answer_response(user_text)
@@ -229,3 +259,24 @@ def _has_assistant_tool_use(request: CompletionRequest) -> bool:
             if isinstance(block, ToolUseBlock):
                 return True
     return False
+
+
+def _count_search_rounds(request: CompletionRequest) -> int:
+    """Count assistant ``search_bylaw_evidence`` tool_use blocks already
+    in the conversation — i.e. how many search rounds the loop has run
+    so far this turn. Used by the ``MOCK_DEEP_SEARCH`` fan-out to decide
+    whether to issue another round or finally answer."""
+    count = 0
+    for message in request.messages:
+        if message.role.value != "assistant":
+            continue
+        content = message.content
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, ToolUseBlock)
+                and block.name == "search_bylaw_evidence"
+            ):
+                count += 1
+    return count

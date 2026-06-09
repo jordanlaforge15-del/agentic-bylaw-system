@@ -57,6 +57,17 @@ from advisor.llm.base import (
 _KEEP_RECENT_ENV = "ADVISOR_CHAT_COMPACT_KEEP_RECENT"
 _DEFAULT_KEEP_RECENT = 2
 
+# In-flight tool-loop compaction (WI-4, ABS-290). The submission-path
+# policy above only fires across user-prompt boundaries — it never
+# touches the tool_results stacking up inside a single deep question's
+# tool loop, which is where the bytes actually pile up. The loop-path
+# policy keeps the most recent K *tool_result turns* full and summarises
+# the older ones in the in-flight request. K counts tool_result turns,
+# not user prompts, because a single user question fans out into many
+# tool rounds with no intervening user message.
+_TOOL_LOOP_KEEP_RECENT_ENV = "ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT"
+_DEFAULT_TOOL_LOOP_KEEP_RECENT = 3
+
 # Citation paths are listed in match (score-ranked) order. Cap so a
 # very wide search doesn't expand the summary unboundedly.
 _MAX_CITATIONS_LISTED = 8
@@ -85,6 +96,28 @@ def resolve_keep_recent(field_value: int | None) -> int:
     return _DEFAULT_KEEP_RECENT
 
 
+def resolve_tool_loop_keep_recent(field_value: int | None) -> int:
+    """Resolve the in-flight tool-loop ``keep_recent`` with the
+    precedence: explicit field > env var > module default.
+
+    A resolved value ``<= 0`` is returned verbatim and signals the
+    caller to disable in-loop compaction entirely (an ops kill-switch
+    for ``ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT=0``). Positive values
+    clamp to at least 1 — the most recent tool_result is the one the
+    model is actively reasoning over and must stay full.
+    """
+    if field_value is not None:
+        return field_value if field_value <= 0 else max(1, int(field_value))
+    raw = os.environ.get(_TOOL_LOOP_KEEP_RECENT_ENV)
+    if raw is not None:
+        try:
+            parsed = int(raw)
+        except ValueError:
+            return _DEFAULT_TOOL_LOOP_KEEP_RECENT
+        return parsed if parsed <= 0 else max(1, parsed)
+    return _DEFAULT_TOOL_LOOP_KEEP_RECENT
+
+
 def compact_history_for_submission(
     messages: list[Message], *, keep_recent: int
 ) -> list[Message]:
@@ -107,6 +140,68 @@ def compact_history_for_submission(
         return list(messages)
 
     cutoff = boundaries[-keep_recent]
+    return _summarize_tool_results_before(messages, cutoff)
+
+
+def compact_tool_loop_history(
+    messages: list[Message], *, keep_recent_results: int
+) -> list[Message]:
+    """Return a new message list with older *tool_result turns* inside a
+    single in-flight tool loop summarised (WI-4, ABS-290). ``messages``
+    is left untouched.
+
+    Where ``compact_history_for_submission`` draws its cutoff at
+    user-prompt boundaries — and so never touches the tool_results
+    accumulating inside one deep question's loop — this draws the cutoff
+    at *tool_result turns*: the most recent ``keep_recent_results`` of
+    them stay full and everything before is replaced with the same
+    deterministic one-line summaries. A tool_result turn is a USER
+    message whose content list carries at least one ``ToolResultBlock``.
+
+    Cache safety (the load-bearing reason this is split out): the loop
+    rewrites the in-flight request every iteration. Because the
+    summaries are deterministic, an already-compacted turn produces
+    byte-identical bytes on every subsequent iteration, so the cached
+    prefix up to the newest-still-full turn stays stable. Only the one
+    turn that newly falls out of the keep-recent window changes per
+    iteration; the rolling cache breakpoint (ABS-285) rides the latest
+    (full) tool_result turn, strictly after the compacted region.
+
+    ``keep_recent_results <= 0`` disables compaction (returns a shallow
+    copy) — the ops kill-switch path. The function is otherwise a no-op
+    when there are not yet more tool_result turns than the keep window.
+    """
+    if keep_recent_results <= 0:
+        return list(messages)
+    result_turns = [
+        i
+        for i, m in enumerate(messages)
+        if m.role == LLMRole.USER
+        and isinstance(m.content, list)
+        and any(isinstance(b, ToolResultBlock) for b in m.content)
+    ]
+    if len(result_turns) <= keep_recent_results:
+        # Not enough completed tool rounds to compact anything yet.
+        return list(messages)
+
+    cutoff = result_turns[-keep_recent_results]
+    return _summarize_tool_results_before(messages, cutoff)
+
+
+def _summarize_tool_results_before(
+    messages: list[Message], cutoff: int
+) -> list[Message]:
+    """Replace every ``ToolResultBlock`` content in ``messages[:cutoff]``
+    with its deterministic one-line summary, passing everything at or
+    after ``cutoff`` through by reference.
+
+    Shared by both compaction policies; they differ only in how they
+    locate ``cutoff`` (user-prompt boundary vs tool_result-turn
+    boundary). Assistant text and tool_use blocks always pass through
+    verbatim — the summariser reads the tool_use input for calling
+    context, and the matching block stays so Anthropic's
+    every-tool_use-needs-a-tool_result invariant holds.
+    """
     tool_uses = _index_tool_uses(messages[:cutoff])
 
     out: list[Message] = []
