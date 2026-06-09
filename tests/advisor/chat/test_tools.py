@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from advisor.chat.tools import build_bylaw_tools
-from bylaw_retrieval.retrieval import RetrievalService
+from bylaw_retrieval.retrieval import RetrievalRequest, RetrievalResponse, RetrievalService
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
 from layer1.pipeline.ingest import ingest_file
@@ -576,3 +576,114 @@ async def test_lookup_citation_handler_tolerates_stringified_structured(
         )
     )
     assert string_form == dict_form
+
+
+# ---------------------------------------------------------------------------
+# ABS-297: WI-7 / WI-3 surface-asymmetry drift guard
+#
+# ABS-288 (WI-7) flipped the underlying ``RetrievalRequest.include_*`` defaults
+# to ``False`` at the MCP / external surface. The advisor production path
+# (``src/advisor/chat/tools.py:774-777``) deliberately keeps the LLM-visible
+# behaviour True-by-default via an explicit ``payload.get("include_*", True)``
+# fallback — this is what keeps WI-3 fan-out leads (``cross_references``,
+# ``ancestor_chain``, ``linked_datasets``) flowing to the model whenever it
+# omits the include_* flags (which the persona never tells it to set).
+#
+# The fragility this guards against: if a future refactor drops the explicit
+# ``payload.get(..., True)`` fallback and just passes ``payload.get("include_*")``
+# (or unpacks the payload directly into ``RetrievalRequest(**payload)``), the
+# handler will inherit the post-WI-7 ``False`` defaults and the model silently
+# stops seeing fan-out leads. No exception, no warning, just a quiet cost
+# regression and a quiet quality regression as the LLM thrashes to find
+# cross-references that aren't in the tool_result anymore.
+#
+# These tests pin the contract at the handler boundary so any such refactor
+# fails loudly here rather than silently in production. The corresponding
+# Playwright spec ``abs297-advisor-default-include-drift-guard.spec.ts`` pins
+# the same contract through the running FastAPI stack.
+# ---------------------------------------------------------------------------
+
+
+class _CapturingRetrievalService:
+    """Stub service that records every ``RetrievalRequest`` it receives.
+
+    Returning an empty ``RetrievalResponse`` is enough — the drift guard
+    asserts on the request's ``include_*`` flags, not on what came back.
+    Bypassing the real retrieval pipeline keeps this test pinned to the
+    handler's request-construction behaviour and independent of seed data.
+    """
+
+    def __init__(self) -> None:
+        self.last_request: RetrievalRequest | None = None
+
+    def search(self, request: RetrievalRequest) -> RetrievalResponse:
+        self.last_request = request
+        return RetrievalResponse(total_matches=0, matches=[], notes=[])
+
+
+@pytest.mark.asyncio
+async def test_search_bylaw_evidence_handler_defaults_include_flags_true_drift_guard():
+    """ABS-297: a default advisor-path payload (no ``include_*`` keys) must
+    produce a ``RetrievalRequest`` with all four ``include_*`` flags set to
+    ``True`` — the explicit fallback in the handler must override the
+    post-WI-7 ``False`` default on ``RetrievalRequest``.
+
+    If this test starts failing, the handler has drifted: WI-3 fan-out
+    leads will stop reaching the model in production. Look at
+    ``src/advisor/chat/tools.py`` ``search_bylaw_evidence_handler`` —
+    each ``payload.get("include_*", True)`` is load-bearing.
+    """
+    capturing = _CapturingRetrievalService()
+    _, handlers = build_bylaw_tools(capturing)
+
+    await handlers["search_bylaw_evidence"]({"query": "any question"})
+
+    req = capturing.last_request
+    assert req is not None, "handler did not call service.search"
+    assert req.include_context is True, (
+        "ABS-297 drift: include_context fell through to RetrievalRequest's "
+        "post-WI-7 False default. Restore payload.get('include_context', True)."
+    )
+    assert req.include_cross_references is True, (
+        "ABS-297 drift: include_cross_references fell through to "
+        "RetrievalRequest's post-WI-7 False default. WI-3 fan-out leads will "
+        "stop reaching the model. Restore payload.get('include_cross_references', True)."
+    )
+    assert req.include_tables is True, (
+        "ABS-297 drift: include_tables fell through to RetrievalRequest's "
+        "post-WI-7 False default. Restore payload.get('include_tables', True)."
+    )
+    assert req.include_datasets is True, (
+        "ABS-297 drift: include_datasets fell through to RetrievalRequest's "
+        "post-WI-7 False default. WI-3 linked-dataset fan-out will silently "
+        "die. Restore payload.get('include_datasets', True)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_bylaw_evidence_handler_respects_explicit_include_false():
+    """ABS-297 paired check: the True-by-default must NOT mask an explicit
+    ``False`` from the model. If a future implementation switches to e.g.
+    ``payload.get("include_*", True) or True`` to "be safe", a model that
+    deliberately opts out (say, for a narrow follow-up to a fan-out parent
+    turn) would stop being able to. Pin that contract too.
+    """
+    capturing = _CapturingRetrievalService()
+    _, handlers = build_bylaw_tools(capturing)
+
+    await handlers["search_bylaw_evidence"](
+        {
+            "query": "any question",
+            "include_context": False,
+            "include_cross_references": False,
+            "include_tables": False,
+            "include_datasets": False,
+        }
+    )
+
+    req = capturing.last_request
+    assert req is not None
+    assert req.include_context is False
+    assert req.include_cross_references is False
+    assert req.include_tables is False
+    assert req.include_datasets is False

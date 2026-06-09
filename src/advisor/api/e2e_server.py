@@ -1464,6 +1464,67 @@ def _mount_search_evidence_raw_endpoint(app: FastAPI) -> None:
             return response.model_dump(mode="json")
 
 
+def _mount_advisor_search_include_flags_endpoint(app: FastAPI) -> None:
+    """ABS-297: WI-7 / WI-3 drift guard.
+
+    Drives ``search_bylaw_evidence_handler`` (the actual advisor production
+    handler from ``advisor.chat.tools``) with a capturing stub service and
+    returns the ``include_*`` flags that the constructed ``RetrievalRequest``
+    carries. The Playwright spec POSTs a default payload (no ``include_*``)
+    and asserts all four come back ``True`` — that's the explicit
+    ``payload.get(..., True)`` fallback in ``chat/tools.py:774-777`` doing
+    its job, overriding the post-WI-7 ``False`` default on
+    ``RetrievalRequest``.
+
+    Why a capturing stub instead of the real ``RetrievalService``: the
+    drift is at request construction, not at search execution. Cutting the
+    DB out of the loop pins the assertion to the handler's flag-passing
+    contract and makes the guard independent of seed data (no e2e seed
+    currently populates ``linked_datasets``, so a "look at the response
+    shape" test would silently pass on an empty fixture).
+    """
+    from typing import Any  # noqa: PLC0415
+
+    from fastapi import Body  # noqa: PLC0415
+
+    from advisor.chat.tools import build_bylaw_tools  # noqa: PLC0415
+    from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+        RetrievalRequest,
+        RetrievalResponse,
+    )
+
+    class _CapturingRetrievalService:
+        def __init__(self) -> None:
+            self.last_request: RetrievalRequest | None = None
+
+        def search(self, request: RetrievalRequest) -> RetrievalResponse:
+            self.last_request = request
+            return RetrievalResponse(total_matches=0, matches=[], notes=[])
+
+    @app.post("/v1/_test/advisor-search-include-flags")
+    async def advisor_search_include_flags(
+        body: dict[str, Any] = Body(...),
+    ) -> dict[str, bool | None]:
+        if "query" not in body or not isinstance(body.get("query"), str):
+            from fastapi import HTTPException  # noqa: PLC0415
+
+            raise HTTPException(status_code=422, detail="missing 'query' (string) in body")
+        capturing = _CapturingRetrievalService()
+        _, handlers = build_bylaw_tools(capturing)
+        await handlers["search_bylaw_evidence"](body)
+        req = capturing.last_request
+        if req is None:  # pragma: no cover — handler must have called search
+            from fastapi import HTTPException  # noqa: PLC0415
+
+            raise HTTPException(status_code=500, detail="handler did not call service.search")
+        return {
+            "include_context": req.include_context,
+            "include_cross_references": req.include_cross_references,
+            "include_tables": req.include_tables,
+            "include_datasets": req.include_datasets,
+        }
+
+
 app = build_e2e_app()
 _mount_seed_session_endpoint(app)
 _mount_search_evidence_endpoint(app)
@@ -1471,6 +1532,7 @@ _mount_search_evidence_raw_endpoint(app)
 _mount_zone_profile_endpoint(app)
 _mount_bylaw_query_endpoint(app)
 _mount_spatial_candidate_text_endpoint(app)
+_mount_advisor_search_include_flags_endpoint(app)
 
 
 if __name__ == "__main__":  # pragma: no cover
