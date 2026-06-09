@@ -3,6 +3,7 @@ zero or more tool round-trips before the assistant gives a final
 answer."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -665,3 +666,145 @@ async def test_rolling_cache_breakpoint_not_persisted_to_conversation():
             for block in msg.content:
                 if isinstance(block, ToolResultBlock):
                     assert block.cache is False
+
+
+# -- WI-4 (ABS-290): in-flight tool-result compaction ---------------------
+
+
+def _tool_result_contents(request: CompletionRequest) -> list[str]:
+    """Every ToolResultBlock's content string in a request, in order."""
+    out: list[str] = []
+    for msg in request.messages:
+        if isinstance(msg.content, list):
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock) and isinstance(
+                    block.content, str
+                ):
+                    out.append(block.content)
+    return out
+
+
+def _search_gateway(rounds: int) -> MockGateway:
+    """A gateway scripted to ask for ``rounds`` search rounds, then a
+    final text answer."""
+    scripted = [
+        tool_use_response(
+            tool_id=f"tu_{i}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"query": f"q{i}"},
+        )
+        for i in range(1, rounds + 1)
+    ]
+    scripted.append(text_response("final answer"))
+    return MockGateway(scripted=scripted)
+
+
+async def _search_handler(_payload: dict[str, Any]) -> str:
+    """Returns a JSON payload the summariser knows how to project."""
+    return json.dumps(
+        {"total_matches": 1, "matches": [{"citation_path": "4.2.1", "score": 0.9}]}
+    )
+
+
+@pytest.mark.asyncio
+async def test_in_loop_compaction_summarises_older_tool_results(monkeypatch):
+    """On a deep loop, the latest gateway call must carry the older
+    tool_results as one-line summaries and the most recent ``K`` full.
+    The rolling breakpoint must still ride the (full) latest one."""
+    monkeypatch.delenv("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT", raising=False)
+    gateway = _search_gateway(5)
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": _search_handler},
+        token_budget=10_000_000,
+        compact_keep_recent=3,
+    )
+
+    assert result.iterations == 6
+    # Final gateway call (iteration 6) sees 5 completed tool_result
+    # turns: keep_recent=3 → rounds 1-2 summarised, rounds 3-5 full.
+    contents = _tool_result_contents(gateway.calls[-1])
+    assert len(contents) == 5
+    assert contents[0].startswith("[retrieved:")
+    assert contents[1].startswith("[retrieved:")
+    assert all(c.startswith("{") for c in contents[2:])
+    # The rolling breakpoint rides the latest tool_result, which stayed
+    # full — the cached prefix ends after, not inside, the summaries.
+    flags = _result_block_cache_flags(gateway.calls[-1])
+    assert flags[-1] is True
+    assert sum(flags) == 1
+
+
+@pytest.mark.asyncio
+async def test_in_loop_compaction_is_view_only(monkeypatch):
+    """Compaction shrinks the per-iteration request only — the returned
+    conversation (spliced into the persisted transcript) keeps every
+    full payload so a later `lookup_citation` can recover it."""
+    monkeypatch.delenv("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT", raising=False)
+    gateway = _search_gateway(5)
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": _search_handler},
+        token_budget=10_000_000,
+        compact_keep_recent=3,
+    )
+
+    persisted = _tool_result_contents_from_conversation(result.conversation)
+    assert len(persisted) == 5
+    assert all(c.startswith("{") for c in persisted)
+
+
+def _tool_result_contents_from_conversation(messages: list[Message]) -> list[str]:
+    out: list[str] = []
+    for msg in messages:
+        if isinstance(msg.content, list):
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock) and isinstance(
+                    block.content, str
+                ):
+                    out.append(block.content)
+    return out
+
+
+@pytest.mark.asyncio
+async def test_in_loop_compaction_disabled_sends_full_payloads(monkeypatch):
+    """The kill-switch (keep_recent <= 0) sends every tool_result full,
+    exactly as before WI-4 landed."""
+    monkeypatch.delenv("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT", raising=False)
+    gateway = _search_gateway(5)
+
+    await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": _search_handler},
+        token_budget=10_000_000,
+        compact_keep_recent=0,
+    )
+
+    contents = _tool_result_contents(gateway.calls[-1])
+    assert len(contents) == 5
+    assert all(c.startswith("{") for c in contents)
+
+
+@pytest.mark.asyncio
+async def test_in_loop_compaction_keep_recent_resolves_from_env(monkeypatch):
+    """With no explicit arg, the window resolves from the env var."""
+    monkeypatch.setenv("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT", "1")
+    gateway = _search_gateway(5)
+
+    await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": _search_handler},
+        token_budget=10_000_000,
+    )
+
+    # keep_recent=1 → only the latest of 5 tool_result turns stays full.
+    contents = _tool_result_contents(gateway.calls[-1])
+    assert len(contents) == 5
+    assert all(c.startswith("[retrieved:") for c in contents[:-1])
+    assert contents[-1].startswith("{")

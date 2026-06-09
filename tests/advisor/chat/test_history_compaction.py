@@ -14,7 +14,9 @@ import pytest
 
 from advisor.chat.history_compaction import (
     compact_history_for_submission,
+    compact_tool_loop_history,
     resolve_keep_recent,
+    resolve_tool_loop_keep_recent,
 )
 from advisor.llm import (
     LLMRole,
@@ -461,3 +463,164 @@ def test_location_label_shapes(location_input, expected):
         {"total_matches": 0, "matches": []},
     )
     assert f"location {expected}" in summary
+
+
+# -- WI-4 (ABS-290): in-flight tool-loop compaction -----------------------
+
+
+def _search_round(idx: int, *, citation: str) -> list[Message]:
+    """One in-loop search round: assistant tool_use + the user-side
+    tool_result it produced. Mirrors the shape ``run_tool_loop`` builds
+    inside a single deep question (no intervening user prompt)."""
+    payload = json.dumps(
+        {
+            "total_matches": 1,
+            "matches": [{"citation_path": citation, "score": 0.9}],
+        }
+    )
+    return [
+        _assistant_tool_use(
+            tool_id=f"tu_{idx}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"query": f"q{idx}"},
+        ),
+        _tool_result(f"tu_{idx}", payload),
+    ]
+
+
+def _in_flight_loop(rounds: int) -> list[Message]:
+    """A conversation as the loop sees it at the top of an iteration:
+    one user question followed by ``rounds`` completed tool_result
+    turns, ending on the most recent tool_result."""
+    out: list[Message] = [_user_text("deep question")]
+    for i in range(1, rounds + 1):
+        out.extend(_search_round(i, citation=f"{i}.0"))
+    return out
+
+
+# -- resolve_tool_loop_keep_recent ----------------------------------------
+
+
+def test_resolve_tool_loop_keep_recent_explicit_field_wins(monkeypatch):
+    monkeypatch.setenv("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT", "9")
+    assert resolve_tool_loop_keep_recent(4) == 4
+
+
+def test_resolve_tool_loop_keep_recent_env_used_when_field_none(monkeypatch):
+    monkeypatch.setenv("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT", "5")
+    assert resolve_tool_loop_keep_recent(None) == 5
+
+
+def test_resolve_tool_loop_keep_recent_defaults_to_three(monkeypatch):
+    monkeypatch.delenv("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT", raising=False)
+    assert resolve_tool_loop_keep_recent(None) == 3
+
+
+def test_resolve_tool_loop_keep_recent_invalid_env_falls_back(monkeypatch):
+    monkeypatch.setenv("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT", "nope")
+    assert resolve_tool_loop_keep_recent(None) == 3
+
+
+def test_resolve_tool_loop_keep_recent_zero_is_disable_switch(monkeypatch):
+    """Unlike the submission-path resolver (which clamps to 1), a
+    non-positive value here is the explicit ops kill-switch — it
+    disables in-loop compaction rather than clamping."""
+    monkeypatch.setenv("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT", "0")
+    assert resolve_tool_loop_keep_recent(None) == 0
+    assert resolve_tool_loop_keep_recent(0) == 0
+    assert resolve_tool_loop_keep_recent(-2) == -2
+
+
+# -- compaction behaviour --------------------------------------------------
+
+
+def test_tool_loop_no_compaction_within_keep_window():
+    """Three completed rounds with keep_recent_results=3 leaves every
+    tool_result full — nothing has fallen out of the window yet."""
+    messages = _in_flight_loop(3)
+    out = compact_tool_loop_history(messages, keep_recent_results=3)
+    assert out == messages
+
+
+def test_tool_loop_compacts_oldest_round_when_window_exceeded():
+    """Four rounds, keep last 2: rounds 1-2 summarise, rounds 3-4 stay
+    full. The cutoff is the third tool_result turn."""
+    messages = _in_flight_loop(4)
+    out = compact_tool_loop_history(messages, keep_recent_results=2)
+
+    # Round 1 tool_result (index 2) and round 2 (index 4) summarised.
+    for tr_index, citation in ((2, "1.0"), (4, "2.0")):
+        block = out[tr_index].content[0]
+        assert isinstance(block, ToolResultBlock)
+        assert block.content.startswith("[retrieved: 1 match for 'q")
+        assert f"citations {citation}" in block.content
+
+    # Rounds 3-4 (indices 6, 8) stay byte-for-byte intact.
+    for tr_index in (6, 8):
+        assert out[tr_index] is messages[tr_index]
+
+    # tool_use blocks always pass through.
+    assert isinstance(out[1].content[-1], ToolUseBlock)
+
+
+def test_tool_loop_keeps_latest_round_full_for_breakpoint():
+    """The most recent tool_result turn must stay full so the rolling
+    cache breakpoint (ABS-285) rides an uncompacted turn."""
+    messages = _in_flight_loop(5)
+    out = compact_tool_loop_history(messages, keep_recent_results=1)
+    last_tr = out[-1].content[0]
+    assert isinstance(last_tr, ToolResultBlock)
+    # Full JSON payload, not a summary.
+    assert last_tr.content == messages[-1].content[0].content
+    assert last_tr.content.startswith("{")
+
+
+def test_tool_loop_disabled_when_keep_recent_non_positive():
+    messages = _in_flight_loop(5)
+    out = compact_tool_loop_history(messages, keep_recent_results=0)
+    assert out == messages
+    out_neg = compact_tool_loop_history(messages, keep_recent_results=-1)
+    assert out_neg == messages
+
+
+def test_tool_loop_compaction_does_not_mutate_input():
+    messages = _in_flight_loop(5)
+    snapshot = json.dumps(
+        [m.model_dump(mode="json") for m in messages], sort_keys=True
+    )
+    compact_tool_loop_history(messages, keep_recent_results=2)
+    after = json.dumps(
+        [m.model_dump(mode="json") for m in messages], sort_keys=True
+    )
+    assert snapshot == after
+
+
+def test_tool_loop_compaction_is_deterministic_and_prefix_stable():
+    """The load-bearing cache property: as the loop grows by one round,
+    every already-compacted turn keeps byte-identical bytes, so the
+    cached prefix up to the newest-still-full turn never shifts. Only
+    the one turn that newly falls out of the window changes."""
+    five = _in_flight_loop(5)
+    six = _in_flight_loop(6)
+
+    out5 = compact_tool_loop_history(five, keep_recent_results=2)
+    out6 = compact_tool_loop_history(six, keep_recent_results=2)
+
+    def _tr_bytes(msgs: list[Message]) -> list[str]:
+        return [
+            m.content[0].content
+            for m in msgs
+            if isinstance(m.content, list)
+            and isinstance(m.content[0], ToolResultBlock)
+        ]
+
+    five_tr = _tr_bytes(out5)
+    six_tr = _tr_bytes(out6)
+
+    # Iteration N=5 compacted rounds 1-3 (full: 4,5). Iteration N=6
+    # compacts rounds 1-4 (full: 5,6). Rounds 1-3 are identical across
+    # both iterations — the stable, already-cached prefix.
+    assert six_tr[:3] == five_tr[:3]
+    # Round 4 transitioned full -> summary at N=6 (the one churned turn).
+    assert five_tr[3].startswith("{")  # was full at N=5
+    assert six_tr[3].startswith("[retrieved:")  # summarised at N=6

@@ -47,6 +47,12 @@ from advisor.llm.budget import (
     estimate_request_input_tokens,
 )
 
+# NOTE: ``advisor.chat.history_compaction`` is imported lazily inside
+# ``run_tool_loop`` (not at module load) to break the import cycle —
+# ``advisor.chat`` re-exports ``ChatSession``, which imports
+# ``run_tool_loop`` from this module. By the time the loop actually
+# runs, both packages are fully initialised.
+
 logger = logging.getLogger(__name__)
 
 
@@ -168,6 +174,7 @@ async def run_tool_loop(
     handlers: dict[str, ToolHandler],
     max_iterations: int = 10,
     token_budget: int | None = None,
+    compact_keep_recent: int | None = None,
 ) -> ToolLoopResult:
     """Drive a Messages API conversation through any number of tool-use
     rounds and return when the LLM stops asking for tools.
@@ -196,8 +203,27 @@ async def run_tool_loop(
     different nudge. ``None`` reads the default from
     ``default_token_budget()`` (env-overridable). The breaker is
     always on; tests pin a small budget to exercise the trip.
+
+    ``compact_keep_recent`` is the WI-4 (ABS-290) in-flight tool-result
+    compaction window: the most recent K tool_result turns are sent
+    full and older ones are replaced with deterministic one-line
+    summaries in the per-iteration request, shrinking the cached tail
+    and the cache-write region on long loops. ``None`` resolves from
+    ``ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT`` (default 3); a resolved
+    value ``<= 0`` disables in-loop compaction. Compaction is applied
+    BEFORE the rolling cache breakpoint so the breakpoint always rides
+    the latest (full) tool_result, strictly after the compacted region;
+    and it is view-only — the returned ``conversation`` keeps full
+    payloads, so the model can still re-issue ``lookup_citation`` to
+    recover anything a summary dropped.
     """
+    from advisor.chat.history_compaction import (  # lazy: see module note
+        compact_tool_loop_history,
+        resolve_tool_loop_keep_recent,
+    )
+
     budget = token_budget if token_budget is not None else default_token_budget()
+    keep_recent = resolve_tool_loop_keep_recent(compact_keep_recent)
     conversation = list(request.messages)
     tool_calls: list[ToolInvocation] = []
     total_usage: TokenUsage | None = None
@@ -205,8 +231,16 @@ async def run_tool_loop(
     per_iteration: list[IterationMetric] = []
 
     for iteration in range(1, max_iterations + 1):
+        # WI-4: summarise older tool_result turns, THEN place the rolling
+        # breakpoint on the latest (still-full) one. Order matters — the
+        # breakpoint must ride a turn that compaction left untouched so
+        # the cached prefix ends after the compacted region, not inside
+        # it. The cost estimate below then sees the already-shrunk bytes.
+        compacted = compact_tool_loop_history(
+            conversation, keep_recent_results=keep_recent
+        )
         current_request = request.model_copy(
-            update={"messages": _mark_rolling_cache_breakpoint(conversation)}
+            update={"messages": _mark_rolling_cache_breakpoint(compacted)}
         )
 
         estimated = estimate_request_input_tokens(current_request)
