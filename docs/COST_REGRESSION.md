@@ -157,6 +157,95 @@ Cost: under $0.01 USD per run. Use it after any Anthropic-SDK
 upgrade or before a long cheap-model regression to catch the
 "Haiku tool-use silently broken" failure mode early.
 
+## Workflow C — Opus vs Sonnet A/B (model-swap evaluation)
+
+**When to use:** one-time evaluation of whether Sonnet can replace
+Opus in production. This is *measure-don't-switch*: run both models
+on the full 20-case suite, compare cost + quality, document the
+verdict. See ABS-286.
+
+**Cost per run:** ~$15–25 USD (Opus) + ~$3–5 USD (Sonnet) = ~$18–30
+total for the comparison pair. Run both from the **same** advisor
+stack build so WI-1 cache changes are held constant.
+
+### 1. Run the Opus baseline
+
+```bash
+export ANTHROPIC_API_KEY="..."
+unset ADVISOR_LLM_MAIN_MODEL  # Opus 4.5 is the default
+./scripts/dev-up.sh &
+sleep 5
+curl -s http://127.0.0.1:8000/healthz | jq '.llm.main_model'
+# expected: "claude-opus-4-5"
+
+TS_OPUS=$(date -u +%Y%m%dT%H%M%SZ)
+.venv/bin/python scripts/run_test_prompts.py \
+  --model claude-opus-4-5 \
+  --out-dir "evals/runs/${TS_OPUS}-opus-baseline"
+```
+
+### 2. Run the Sonnet candidate
+
+Stop the advisor process and restart with Sonnet:
+
+```bash
+# Kill the advisor uvicorn (leave Postgres running)
+kill $(lsof -ti :8000) 2>/dev/null || true
+sleep 2
+
+export ADVISOR_LLM_MAIN_MODEL="claude-sonnet-4-6"
+./scripts/dev-up.sh &
+sleep 5
+curl -s http://127.0.0.1:8000/healthz | jq '.llm.main_model'
+# expected: "claude-sonnet-4-6"
+
+TS_SONNET=$(date -u +%Y%m%dT%H%M%SZ)
+.venv/bin/python scripts/run_test_prompts.py \
+  --model claude-sonnet-4-6 \
+  --out-dir "evals/runs/${TS_SONNET}-sonnet-candidate"
+```
+
+### 3. Run the comparison
+
+```bash
+.venv/bin/python scripts/compare_ab_runs.py \
+  --baseline  "evals/runs/${TS_OPUS}-opus-baseline" \
+  --candidate "evals/runs/${TS_SONNET}-sonnet-candidate" \
+  --output-md "evals/runs/${TS_SONNET}-sonnet-candidate/AB_COMPARISON.md"
+```
+
+### 4. (Optional) Run quality verification on both
+
+Requires the dev DB to be up:
+
+```bash
+.venv/bin/python scripts/verify_test_prompts.py \
+  "evals/runs/${TS_OPUS}-opus-baseline"
+.venv/bin/python scripts/verify_test_prompts.py \
+  "evals/runs/${TS_SONNET}-sonnet-candidate"
+# Re-run compare to incorporate quality scores:
+.venv/bin/python scripts/compare_ab_runs.py \
+  --baseline  "evals/runs/${TS_OPUS}-opus-baseline" \
+  --candidate "evals/runs/${TS_SONNET}-sonnet-candidate" \
+  --output-md "evals/runs/${TS_SONNET}-sonnet-candidate/AB_COMPARISON.md"
+```
+
+### Interpreting the report
+
+`scripts/compare_ab_runs.py` prints a Markdown report with:
+
+- **Aggregate cost table** — total USD, cost per case, cost ratio
+- **Tool-loop metrics** — `terminated_reason` distribution, total
+  iterations (iteration-cap hits signal quality loss)
+- **Per-case breakdown** — cost + iterations per TC-NNN
+- **Quality comparison** — PASS/PARTIAL/FAIL verdicts + hallucination
+  count per case (if verification data present)
+- **Verdict recommendation** — SWITCH TO SONNET / KEEP OPUS / REVIEW
+
+Decision rule: switch to Sonnet **only** if hallucination count ≤
+Opus count AND PASS rate ≥ Opus PASS rate. A regression in either
+metric keeps Opus regardless of cost saving.
+
 ## What this workflow deliberately does NOT do
 
 - **Establish Haiku baselines for TC-001…TC-004 or TC-006…TC-020.**
@@ -164,9 +253,9 @@ upgrade or before a long cheap-model regression to catch the
   Opus full-suite (Workflow B) is the cross-case safety net.
 - **Automate cost regression in CI.** Manual runs only, until we
   have enough signal to justify the spend pattern of CI-on-PR.
-- **Replace Opus in production.** Haiku is the regression-testing
-  tool; production answer quality stays on Opus until separately
-  evaluated.
+- **Replace Opus in production before ABS-286 closes.** Haiku is the
+  regression-testing tool; production answer quality stays on Opus
+  until the A/B (Workflow C) documents the verdict.
 
 ## Related
 
