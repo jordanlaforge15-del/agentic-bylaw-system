@@ -35,6 +35,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from advisor.billing.packs import TIERS as _BILLING_TIERS
 from advisor.chat.hedging import apply_hedge
 from advisor.chat.history_compaction import (
     compact_history_for_submission,
@@ -226,11 +227,13 @@ class ChatSession:
             cache_system=True,
             cache_tools=True,
         )
+        _tier_def = _BILLING_TIERS.get(self.tier) if self.tier else None
         result = await run_tool_loop(
             gateway,
             request=request,
             handlers=self.tool_handlers,
             token_budget=self.token_budget,
+            max_iterations=_tier_def.max_iterations if _tier_def else 10,
         )
 
         # ABS-263: deterministic safety net for high-liability answers. If the

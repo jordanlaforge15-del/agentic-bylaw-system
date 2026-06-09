@@ -95,8 +95,14 @@ _DEFAULT_CITATION = (
 # Serial search rounds a ``MOCK_DEEP_SEARCH`` turn fans out into before
 # answering. Chosen above the WI-4 in-loop compaction window (default 3)
 # so the oldest rounds are summarised inside the live loop, and below the
-# tool-loop ``max_iterations`` cap (10) so the turn answers organically.
+# Standard-tier max_iterations cap (20) so the turn answers organically.
 _DEEP_SEARCH_ROUNDS = 5
+
+# Rounds used by ``MOCK_COMPLEX_DEEP``. Above the old hardcoded cap (10)
+# and below the Standard-tier cap (20) — exercises the Complex-tier path
+# where per-tier max_iterations (55) allows the turn to finish organically
+# rather than forcing an early synthesis at iteration 10.
+_COMPLEX_DEEP_ROUNDS = 12
 
 
 def build_dispatcher() -> Callable[[CompletionRequest], CompletionResponse]:
@@ -127,6 +133,26 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
                 tool_name="search_bylaw_evidence",
                 tool_input={"query": f"{user_text[:80]} (round {rounds_done + 1})"},
                 preamble=f"Searching the bylaw (round {rounds_done + 1}).",
+                usage=TokenUsage(input_tokens=80, output_tokens=24),
+            )
+        return _final_answer_response(user_text)
+
+    if "MOCK_COMPLEX_DEEP" in user_text:
+        # Run _COMPLEX_DEEP_ROUNDS (12) serial search rounds before
+        # answering. 12 > old hardcoded cap (10), so on a Standard- or
+        # Quick-tier session this turn would have been forced into early
+        # synthesis at iteration 10. On a Complex-tier session (cap=55)
+        # it runs to completion. Used by ABS-287 to guard that the
+        # per-tier max_iterations wiring is end-to-end correct.
+        rounds_done = _count_search_rounds(request)
+        if rounds_done < _COMPLEX_DEEP_ROUNDS:
+            return tool_use_response(
+                tool_id=f"t-cdeep-{rounds_done + 1}",
+                tool_name="search_bylaw_evidence",
+                tool_input={
+                    "query": f"{user_text[:80]} (complex round {rounds_done + 1})"
+                },
+                preamble=f"Deep complex research (round {rounds_done + 1}).",
                 usage=TokenUsage(input_tokens=80, output_tokens=24),
             )
         return _final_answer_response(user_text)

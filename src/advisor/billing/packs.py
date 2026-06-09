@@ -77,6 +77,13 @@ class Tier:
         unit_price_cents: List price for one credit at this tier in
             CAD cents. Pack discounts are applied on top.
         description: Short marketing blurb for the pricing page.
+        max_iterations: Hard ceiling on tool-loop rounds per turn for
+            sessions at this tier. Matches (with a small safety margin)
+            the advertised "reasoning steps" range so the iteration cap
+            never fires before the cost-circuit breaker on normal turns.
+            Passed to ``run_tool_loop`` via ``ChatSession``; tiered so
+            Quick can't accidentally spin 50 rounds and Complex isn't
+            silently capped at 10.
     """
 
     name: str
@@ -84,6 +91,7 @@ class Tier:
     token_budget: int
     unit_price_cents: int
     description: str
+    max_iterations: int
 
 
 @dataclass(frozen=True)
@@ -116,6 +124,7 @@ TIER_QUICK_DEF = Tier(
         "A single-property zoning or permitted-use lookup. ~4-6 reasoning "
         "steps. Best for fast yes/no answers on a known address."
     ),
+    max_iterations=8,  # safety cap above advertised 4–6 steps
 )
 TIER_STANDARD_DEF = Tier(
     name=TIER_STANDARD,
@@ -127,6 +136,7 @@ TIER_STANDARD_DEF = Tier(
         "development-standards lookups for a single property. ~12-18 "
         "reasoning steps."
     ),
+    max_iterations=20,  # safety cap above advertised 12–18 steps
 )
 TIER_COMPLEX_DEF = Tier(
     name=TIER_COMPLEX,
@@ -138,6 +148,7 @@ TIER_COMPLEX_DEF = Tier(
         "files. ~35-50 reasoning steps. Use when you need a thorough "
         "research file rather than a quick answer."
     ),
+    max_iterations=55,  # safety cap above advertised 35–50 steps
 )
 
 TIERS: dict[str, Tier] = {

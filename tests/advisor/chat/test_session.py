@@ -763,6 +763,74 @@ async def test_streaming_yields_tool_loop_metrics_event_after_message_stop():
 
 
 @pytest.mark.asyncio
+async def test_no_tier_session_uses_default_max_iterations():
+    """ABS-287: a session without a tier (legacy / test path) defaults
+    to max_iterations=10 inside run_tool_loop. The loop should still
+    settle organically when the gateway answers before the cap."""
+    session = _empty_session()  # no tier set
+    gateway = MockGateway(scripted=[text_response("quick answer")])
+
+    await session.send_user_message_blocking(gateway, "anything")
+
+    # One gateway call (no tool use), terminated organically.
+    metrics = session.last_tool_loop_metrics
+    assert metrics is not None
+    assert metrics.iterations == 1
+    assert metrics.terminated_reason == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_complex_tier_session_does_not_cap_at_ten_iterations():
+    """ABS-287: a Complex-tier session must be able to exceed 10
+    tool-loop iterations without hitting the iteration cap.
+
+    The MockGateway is scripted to demand 11 tool rounds before
+    answering. A hardcoded max_iterations=10 would force-synthesise
+    at round 10 (terminated_reason='iteration_cap'). With the per-tier
+    cap (Complex=55) the loop runs all 11 and ends organically."""
+    session = _empty_session()
+    session.tier = "complex"
+    session.tool_defs = [
+        ToolDefinition(
+            name="search_bylaw_evidence",
+            description="search",
+            input_schema={"type": "object"},
+        )
+    ]
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return "found something"
+
+    session.tool_handlers = {"search_bylaw_evidence": handler}
+
+    # Script: 11 tool_use requests followed by a final text answer.
+    gateway = MockGateway(
+        scripted=[
+            *[
+                tool_use_response(
+                    tool_id=f"tu_{i}",
+                    tool_name="search_bylaw_evidence",
+                    tool_input={"query": f"round {i}"},
+                )
+                for i in range(1, 12)
+            ],
+            text_response("Here is the complex analysis."),
+        ]
+    )
+
+    await session.send_user_message_blocking(gateway, "Do a deep complex search")
+
+    metrics = session.last_tool_loop_metrics
+    assert metrics is not None
+    assert metrics.iterations == 12  # 11 tool rounds + 1 final text round
+    assert metrics.terminated_reason == "end_turn", (
+        f"Expected end_turn but got {metrics.terminated_reason!r} — "
+        "Complex-tier sessions are being capped at 10 iterations "
+        "(the old non-tier default) instead of using the per-tier cap (55)."
+    )
+
+
+@pytest.mark.asyncio
 async def test_streaming_metrics_event_reports_tool_errors():
     """A handler that raises shows up in the metrics event as a
     tool_call with ``is_error=True``. That's the signal a runner uses
