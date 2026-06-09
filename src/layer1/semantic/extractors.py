@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, Mapping
 
+from layer1.semantic.conventions import DEFAULT_CONVENTIONS, EnrichmentConventions
 from layer1.semantic.taxonomy import standard_terms, use_aliases
 
 
@@ -18,11 +19,17 @@ class ProfileOverlay:
     completion. Each extractor below falls back to the legacy module-level
     constants when no overlay is active, so the historical code paths keep
     behaving exactly as before.
+
+    ABS-284: ``enrichment`` carries the active bylaw's
+    :class:`~layer1.semantic.conventions.EnrichmentConventions` (permission
+    encoding + per-bylaw marker codepoints), so enrichment *classification*
+    becomes profile-driven the same way parsing already is.
     """
 
     zone_pattern: re.Pattern[str] | None = None
     known_zone_codes: Iterable[str] | None = None
     use_class_map: Mapping[str, str] | None = None
+    enrichment: EnrichmentConventions | None = None
 
 
 _active_overlay: contextvars.ContextVar[ProfileOverlay | None] = contextvars.ContextVar(
@@ -44,6 +51,20 @@ def reset_profile_overlay(token: contextvars.Token) -> None:
 
 def _current_overlay() -> ProfileOverlay | None:
     return _active_overlay.get()
+
+
+def current_enrichment_conventions() -> EnrichmentConventions:
+    """Resolve the active bylaw's enrichment conventions (ABS-284).
+
+    Returns the overlay's ``enrichment`` conventions when an overlay carrying
+    them is active, otherwise the Regional-Centre
+    :data:`~layer1.semantic.conventions.DEFAULT_CONVENTIONS` — so the no-profile
+    path reproduces today's behavior exactly.
+    """
+    overlay = _current_overlay()
+    if overlay is not None and overlay.enrichment is not None:
+        return overlay.enrichment
+    return DEFAULT_CONVENTIONS
 
 KNOWN_ZONE_CODES = {
     "CEN-2",

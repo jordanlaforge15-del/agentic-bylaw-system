@@ -34,6 +34,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from layer1.semantic.conventions import (
+    DEFAULT_CONVENTIONS,
+    DEFAULT_IGNORED_CODEPOINTS,
+    DEFAULT_PERMITTED_CODEPOINTS,
+    EnrichmentConventions,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,22 +48,18 @@ logger = logging.getLogger(__name__)
 # Data-driven codepoint maps
 # ---------------------------------------------------------------------------
 
-# Codepoints that mean "permitted as-of-right". ``U+F098`` is the embedded
-# symbol-font ● from the Regional Centre LUB (verified positionally against
-# the rendered PDF). The visible filled glyphs are included so tables whose
-# dots survived as real Unicode classify identically.
-PERMITTED_CODEPOINTS: set[int] = {
-    0xF098,  # PUA — solid ● "permitted as-of-right" (symbol font)
-    0x25CF,  # ● BLACK CIRCLE
-    0x2022,  # • BULLET
-    0x25A0,  # ■ BLACK SQUARE
-}
+# Module-level defaults, retained for backward compatibility with any caller
+# that imports these names directly. The canonical, per-bylaw codepoint sets now
+# live on :class:`~layer1.semantic.conventions.EnrichmentConventions`; these
+# mirror the Regional-Centre default so the no-profile path is unchanged
+# (ABS-284). ``U+F098`` is the embedded symbol-font ● from the Regional Centre
+# LUB; the visible filled glyphs are included so tables whose dots survived as
+# real Unicode classify identically.
+PERMITTED_CODEPOINTS: set[int] = set(DEFAULT_PERMITTED_CODEPOINTS)
 
 # Codepoints to strip before classifying. ``U+F020`` is the symbol font's
 # space glyph (padding) — semantically empty.
-IGNORED_CODEPOINTS: set[int] = {
-    0xF020,  # PUA — symbol-font space (padding)
-}
+IGNORED_CODEPOINTS: set[int] = set(DEFAULT_IGNORED_CODEPOINTS)
 
 
 def _build_circled_numbers() -> dict[int, int]:
@@ -124,7 +127,10 @@ def _is_private_use(codepoint: int) -> bool:
     )
 
 
-def classify_permission_marker(text: str | None) -> dict[str, Any]:
+def classify_permission_marker(
+    text: str | None,
+    conventions: EnrichmentConventions | None = None,
+) -> dict[str, Any]:
     """Classify a permission-matrix cell's raw text into a canonical marker.
 
     Returns one of:
@@ -137,15 +143,25 @@ def classify_permission_marker(text: str | None) -> dict[str, Any]:
     the same cell; the footnote ordinal is the first circled number found.
     Unmapped PUA codepoints are logged and treated as empty so the pass never
     crashes on a new symbol font.
+
+    ABS-284: the permitted / ignored glyph sets come from ``conventions`` (the
+    active bylaw's :class:`~layer1.semantic.conventions.EnrichmentConventions`).
+    Passing ``None`` selects the Regional-Centre defaults, so existing call
+    sites are unchanged. A bylaw declaring a different permitted glyph (e.g. a
+    plain ``"X"``) classifies that glyph as ``permitted`` without any change to
+    this shared module.
     """
+    conventions = conventions or DEFAULT_CONVENTIONS
+    permitted_codepoints = conventions.permitted_codepoints
+    ignored_codepoints = conventions.ignored_codepoints
     permitted = False
     footnote: int | None = None
 
     for char in text or "":
         codepoint = ord(char)
-        if codepoint in IGNORED_CODEPOINTS or char.isspace():
+        if codepoint in ignored_codepoints or char.isspace():
             continue
-        if codepoint in PERMITTED_CODEPOINTS:
+        if codepoint in permitted_codepoints:
             permitted = True
             continue
         ordinal = CIRCLED_NUMBERS.get(codepoint)
@@ -192,15 +208,22 @@ def is_permission_matrix_table(table: Any) -> bool:
     )
 
 
-def annotate_cell(cell: Any, *, apply: bool = True) -> bool:
+def annotate_cell(
+    cell: Any,
+    *,
+    apply: bool = True,
+    conventions: EnrichmentConventions | None = None,
+) -> bool:
     """Set ``metadata_json.permission_marker`` on a SourceTableCell-like object.
 
     Idempotent: computes the desired metadata and only writes when it differs
     from what's already stored, so re-running yields identical values with no
     drift. Returns ``True`` when the cell would change (and did, unless
     ``apply=False`` for dry-run accounting). Leaves the raw ``text`` untouched.
+    ``conventions`` selects the per-bylaw glyph set (ABS-284); ``None`` keeps the
+    Regional-Centre defaults.
     """
-    result = classify_permission_marker(getattr(cell, "text", None))
+    result = classify_permission_marker(getattr(cell, "text", None), conventions)
     existing = dict(getattr(cell, "metadata_json", None) or {})
     desired = dict(existing)
     desired["permission_marker"] = result["permission_marker"]
@@ -218,7 +241,12 @@ def annotate_cell(cell: Any, *, apply: bool = True) -> bool:
     return True
 
 
-def annotate_value_cells(cells: Any, *, apply: bool = True) -> int:
+def annotate_value_cells(
+    cells: Any,
+    *,
+    apply: bool = True,
+    conventions: EnrichmentConventions | None = None,
+) -> int:
     """Annotate the value grid of an already-known permission matrix.
 
     Header cells (row 0 and the row-label column 0) carry no marker semantics
@@ -226,24 +254,30 @@ def annotate_value_cells(cells: Any, *, apply: bool = True) -> int:
     already established the table is a permission matrix (e.g. the enrichment
     classifier, which only invokes this in its ``permission_matrix`` branch)
     use this directly; :func:`annotate_permission_matrix_table` is the
-    predicate-gated wrapper for callers that haven't.
+    predicate-gated wrapper for callers that haven't. ``conventions`` selects the
+    per-bylaw glyph set (ABS-284); ``None`` keeps the Regional-Centre defaults.
     """
     changed = 0
     for cell in cells:
         if cell.row_index == 0 or cell.col_index == 0:
             continue
-        if annotate_cell(cell, apply=apply):
+        if annotate_cell(cell, apply=apply, conventions=conventions):
             changed += 1
     return changed
 
 
-def annotate_permission_matrix_table(table: Any, *, apply: bool = True) -> int:
+def annotate_permission_matrix_table(
+    table: Any,
+    *,
+    apply: bool = True,
+    conventions: EnrichmentConventions | None = None,
+) -> int:
     """Annotate every value cell of a permission-matrix table.
 
     No-op for tables that do not carry a ``permission_matrix`` semantic profile
     (see :func:`is_permission_matrix_table`). Returns the number of cells
-    changed.
+    changed. ``conventions`` selects the per-bylaw glyph set (ABS-284).
     """
     if not is_permission_matrix_table(table):
         return 0
-    return annotate_value_cells(table.cells, apply=apply)
+    return annotate_value_cells(table.cells, apply=apply, conventions=conventions)

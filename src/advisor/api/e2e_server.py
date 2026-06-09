@@ -233,6 +233,11 @@ class _ProfilePermissionTablesBody(BaseModel):
     bylaw_name: str = Field(min_length=1, max_length=256)
     use_name: str | None = Field(default=None, max_length=256)
     zone: str | None = Field(default=None, max_length=64)
+    # ABS-284: drive enrichment classification from a profile convention. When
+    # set (e.g. "section_indexed"), the bylaw's permission encoding is supplied
+    # to enrichment so its table classification is profile-driven rather than
+    # the hardcoded Regional-Centre default.
+    permission_encoding: str | None = Field(default=None, max_length=64)
 
 
 # ABS-75: test-only Discovery Agent endpoint. Exercises the classifier →
@@ -599,7 +604,18 @@ def _mount_test_router(app: FastAPI) -> None:
                     status_code=404, detail=f"No document named '{body.bylaw_name}'"
                 )
 
-            enrich_document_semantics(db, document_id=doc.id)
+            # ABS-284: build a minimal profile carrying the requested permission
+            # encoding so enrichment classification is profile-driven. None keeps
+            # the historical Regional-Centre default behavior.
+            profile = None
+            if body.permission_encoding:
+                from layer1.profiles import ParsingProfile
+
+                profile = ParsingProfile(
+                    name=f"e2e:{body.permission_encoding}",
+                    permission_encoding=body.permission_encoding,
+                )
+            enrich_document_semantics(db, document_id=doc.id, profile=profile)
 
             tables = (
                 db.execute(
