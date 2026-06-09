@@ -61,6 +61,14 @@ Scenario keywords in the user message override the default rules:
   rewriting bytes mid-loop didn't break the tool_use ↔ tool_result
   pairing the Messages API requires.
 
+* ``"MOCK_FAN_OUT"`` — the first-turn response contains TWO
+  ``search_bylaw_evidence`` ``tool_use`` blocks in a single assistant
+  message (parallel fan-out). The tool loop executes both in parallel
+  and returns both results as one ``tool_result`` turn, then the
+  dispatcher answers on the follow-up call. Used by ABS-289 / WI-3 to
+  guard the parallel-execution path that the persona's fan-out
+  instruction now relies on.
+
 All responses are deterministic, so identical sessions produce
 identical SSE traces — a hard requirement for screenshot-stable UI
 tests.
@@ -122,6 +130,32 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
                 usage=TokenUsage(input_tokens=80, output_tokens=24),
             )
         return _final_answer_response(user_text)
+
+    if "MOCK_FAN_OUT" in user_text:
+        if has_prior_tool_use:
+            return _final_answer_response(user_text)
+        # Emit two tool_use blocks in a single response (ABS-289 / WI-3).
+        # The tool loop executes both in parallel, returns both results as
+        # one tool_result turn, then the gateway is called once more and
+        # answers. Guards the parallel-execution path the persona now relies on.
+        return CompletionResponse(
+            model="",
+            content=[
+                TextBlock(text="I'll look up height and FAR in parallel."),
+                ToolUseBlock(
+                    id="t-fanout-1",
+                    name="search_bylaw_evidence",
+                    input={"query": "maximum building height"},
+                ),
+                ToolUseBlock(
+                    id="t-fanout-2",
+                    name="search_bylaw_evidence",
+                    input={"query": "maximum floor area ratio"},
+                ),
+            ],
+            stop_reason="tool_use",
+            usage=TokenUsage(input_tokens=80, output_tokens=40),
+        )
 
     if has_prior_tool_use:
         return _final_answer_response(user_text)
