@@ -180,10 +180,10 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         page_end: int | None = None,
         location: dict[str, Any] | None = None,
         attribute_tag_filter: list[str] | None = None,
-        include_context: bool = True,
-        include_cross_references: bool = True,
-        include_tables: bool = True,
-        include_datasets: bool = True,
+        include_context: bool = False,
+        include_cross_references: bool = False,
+        include_tables: bool = False,
+        include_datasets: bool = False,
         limit: int = 8,
     ) -> dict:
         """Search for citation-grounded bylaw evidence.

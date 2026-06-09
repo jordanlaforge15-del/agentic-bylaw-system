@@ -1426,9 +1426,32 @@ def _mount_spatial_candidate_text_endpoint(app: FastAPI) -> None:
         return {"text": candidate.text}
 
 
+def _mount_search_evidence_raw_endpoint(app: FastAPI) -> None:
+    """ABS-288: expose the raw RetrievalResponse envelope for e2e shape assertions.
+
+    Returns model_dump(mode="json") of the full response so Playwright can
+    verify that the request echo is absent and empty fields are omitted.
+    """
+    from bylaw_retrieval.retrieval import RetrievalRequest, RetrievalService  # noqa: PLC0415
+
+    @app.post("/v1/_test/search-evidence-raw")
+    async def search_evidence_raw(body: _SearchEvidenceBody) -> dict[str, object]:
+        with session_scope() as session:
+            service = RetrievalService(session)
+            request = RetrievalRequest(
+                query=body.query,
+                bylaw_name=body.bylaw_name,
+                municipality=body.municipality,
+                limit=body.limit,
+            )
+            response = service.search(request)
+            return response.model_dump(mode="json")
+
+
 app = build_e2e_app()
 _mount_seed_session_endpoint(app)
 _mount_search_evidence_endpoint(app)
+_mount_search_evidence_raw_endpoint(app)
 _mount_zone_profile_endpoint(app)
 _mount_bylaw_query_endpoint(app)
 _mount_spatial_candidate_text_endpoint(app)

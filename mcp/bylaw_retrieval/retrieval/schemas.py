@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_serializer, model_validator
 
 
 class DocumentSummary(BaseModel):
@@ -132,6 +132,11 @@ class RetrievalMatch(BaseModel):
     linked_datasets: list[LinkedDataset] = Field(default_factory=list)
     metadata_json: dict[str, Any] = Field(default_factory=dict)
 
+    @model_serializer(mode="wrap")
+    def _omit_empty(self, handler: Any, info: Any) -> dict[str, Any]:
+        d = handler(self)
+        return {k: v for k, v in d.items() if v is not None and v != [] and v != {}}
+
 
 class LocationSlot(BaseModel):
     """Structured location parameter on retrieval requests.
@@ -208,19 +213,19 @@ class RetrievalRequest(BaseModel):
         ),
     )
     include_context: bool = Field(
-        default=True,
+        default=False,
         description="Include ancestor chain and related context for each match.",
     )
     include_cross_references: bool = Field(
-        default=True,
+        default=False,
         description="Include cross-references attached to matching fragments.",
     )
     include_tables: bool = Field(
-        default=True,
+        default=False,
         description="Include nearby or attached tables when present.",
     )
     include_datasets: bool = Field(
-        default=True,
+        default=False,
         description="Include any external geo datasets linked to matching fragments.",
     )
     limit: int = Field(
@@ -236,7 +241,6 @@ class RetrievalRequest(BaseModel):
 
 
 class RetrievalResponse(BaseModel):
-    request: RetrievalRequest
     total_matches: int
     matches: list[RetrievalMatch] = Field(default_factory=list)
     notes: list[str] = Field(
@@ -343,9 +347,9 @@ class CitationLookupRequest(BaseModel):
         ),
     )
     document_id: int | None = Field(default=None, description="Optional document scope.")
-    include_context: bool = Field(default=True)
-    include_cross_references: bool = Field(default=True)
-    include_tables: bool = Field(default=True)
+    include_context: bool = Field(default=False)
+    include_cross_references: bool = Field(default=False)
+    include_tables: bool = Field(default=False)
 
     @model_validator(mode="after")
     def _require_exactly_one(self) -> "CitationLookupRequest":
