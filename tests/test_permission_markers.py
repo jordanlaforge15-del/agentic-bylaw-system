@@ -16,6 +16,12 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+from layer1.semantic.conventions import (
+    DEFAULT_CONVENTIONS,
+    SECTION_INDEXED,
+    SYMBOL_MATRIX,
+    EnrichmentConventions,
+)
 from layer1.semantic.permission_markers import (
     PERMISSION_MATRIX_PROFILE,
     annotate_cell,
@@ -85,6 +91,69 @@ def test_visible_filled_glyphs_are_permitted():
 
 def test_hollow_circle_is_not_permitted():
     assert classify_permission_marker("○") == {"permission_marker": "not_permitted"}
+
+
+# --------------------------------------------------------------------------- #
+# ABS-284: profile-driven codepoint sets
+# --------------------------------------------------------------------------- #
+
+
+def test_abs284_profile_codepoints_classify_custom_glyph_as_permitted():
+    """AC2: a bylaw declaring a different permitted glyph (a plain ``X``)
+    classifies that glyph as ``permitted`` — without any change to the shared
+    module's hardcoded constants."""
+    conventions = EnrichmentConventions(
+        permission_encoding=SYMBOL_MATRIX,
+        permitted_codepoints=frozenset({ord("X")}),
+    )
+    assert classify_permission_marker("X", conventions) == {
+        "permission_marker": "permitted"
+    }
+    # And the Regional-Centre dot is NOT permitted under that bylaw's set.
+    assert classify_permission_marker(DOT, conventions) == {
+        "permission_marker": "not_permitted"
+    }
+
+
+def test_abs284_default_conventions_reproduce_module_behavior():
+    """FR3: passing the default conventions matches passing nothing."""
+    for text in (DOT, "③", "", SYMBOL_SPACE, "●"):
+        assert classify_permission_marker(
+            text, DEFAULT_CONVENTIONS
+        ) == classify_permission_marker(text)
+
+
+def test_abs284_profile_ignored_codepoints_are_stripped():
+    """A bylaw can declare its own padding glyph to ignore."""
+    pad = chr(0xF0FF)
+    conventions = EnrichmentConventions(
+        permitted_codepoints=frozenset({ord("X")}),
+        ignored_codepoints=frozenset({0xF0FF}),
+    )
+    assert classify_permission_marker(pad + "X" + pad, conventions) == {
+        "permission_marker": "permitted"
+    }
+
+
+def test_abs284_annotate_value_cells_threads_conventions():
+    """The annotate path honors the bylaw's glyph set end-to-end."""
+    conventions = EnrichmentConventions(permitted_codepoints=frozenset({ord("X")}))
+    cells = [
+        SimpleNamespace(row_index=0, col_index=0, text="Use", metadata_json={}),
+        SimpleNamespace(row_index=0, col_index=1, text="DD", metadata_json={}),
+        SimpleNamespace(row_index=1, col_index=0, text="Dwelling", metadata_json={}),
+        SimpleNamespace(row_index=1, col_index=1, text="X", metadata_json={}),
+    ]
+    changed = annotate_value_cells(cells, conventions=conventions)
+    assert changed == 1
+    assert cells[3].metadata_json == {"permission_marker": "permitted"}
+
+
+def test_abs284_section_indexed_conventions_disable_symbol_matrix_detection():
+    """A ``section_indexed`` bylaw doesn't detect symbol matrices."""
+    assert EnrichmentConventions(permission_encoding=SECTION_INDEXED).detects_symbol_matrix is False
+    assert EnrichmentConventions(permission_encoding=SYMBOL_MATRIX).detects_symbol_matrix is True
+    assert DEFAULT_CONVENTIONS.detects_symbol_matrix is True
 
 
 # --------------------------------------------------------------------------- #

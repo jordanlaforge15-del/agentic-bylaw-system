@@ -41,6 +41,7 @@ def _minimal_payload(
     pipeline_ready: bool = True,
     parser_config: dict | None = None,
     taxonomy: dict | None = None,
+    enrichment: dict | None = None,
 ) -> dict:
     return {
         "municipality": {
@@ -59,6 +60,7 @@ def _minimal_payload(
         ],
         "parser_config": parser_config,
         "taxonomy": taxonomy,
+        "enrichment": enrichment,
         "manifest_version": "0.1.0",
         "status": "draft" if not pipeline_ready else "active",
         "pipeline_ready": pipeline_ready,
@@ -167,6 +169,45 @@ def test_invalid_regex_in_manifest_surfaces_clearly(tmp_path: Path) -> None:
         _write_manifest(tmp_path, _minimal_payload(parser_config=parser_config))
     )
     with pytest.raises(ValueError, match="not a valid regex"):
+        profile_from_manifest(manifest)
+
+
+# --------------------------------------------------------------------- ABS-284
+# Enrichment-classification conventions flow from the manifest's optional
+# ``enrichment`` block onto the ParsingProfile, the same way zone/use vocab does.
+
+
+def test_abs284_enrichment_block_maps_onto_profile(tmp_path: Path) -> None:
+    enrichment = {
+        "permission_encoding": "section_indexed",
+        "permitted_marker_codepoints": ["U+F0B7", "0x25CF"],
+        "ignored_marker_codepoints": ["U+F020"],
+    }
+    manifest = load_manifest(
+        _write_manifest(tmp_path, _minimal_payload(enrichment=enrichment))
+    )
+    profile = profile_from_manifest(manifest)
+    assert profile.permission_encoding == "section_indexed"
+    assert profile.permitted_marker_codepoints == frozenset({0xF0B7, 0x25CF})
+    assert profile.ignored_marker_codepoints == frozenset({0xF020})
+
+
+def test_abs284_absent_enrichment_block_leaves_profile_defaults_none(tmp_path: Path) -> None:
+    """FR3: no enrichment block → profile carries no enrichment overrides, so
+    enrichment falls back to the Regional-Centre default."""
+    manifest = load_manifest(_write_manifest(tmp_path, _minimal_payload()))
+    profile = profile_from_manifest(manifest)
+    assert profile.permission_encoding is None
+    assert profile.permitted_marker_codepoints is None
+    assert profile.ignored_marker_codepoints is None
+
+
+def test_abs284_invalid_codepoint_surfaces_clearly(tmp_path: Path) -> None:
+    enrichment = {"permitted_marker_codepoints": ["not-a-codepoint"]}
+    manifest = load_manifest(
+        _write_manifest(tmp_path, _minimal_payload(enrichment=enrichment))
+    )
+    with pytest.raises(ValueError, match="not a valid hex codepoint"):
         profile_from_manifest(manifest)
 
 
