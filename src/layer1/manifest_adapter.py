@@ -80,6 +80,23 @@ class _TaxonomyMap(BaseModel):
     flags: list[str] = Field(default_factory=list)
 
 
+class _EnrichmentConfig(BaseModel):
+    """Optional manifest block driving enrichment *classification* (ABS-284).
+
+    Mirrors the knobs on
+    :class:`layer1.semantic.conventions.EnrichmentConventions`. Codepoints may be
+    given as integers or ``"U+F098"`` / ``"0xF098"`` hex strings so a
+    human-authored manifest can name the glyph. Omitting the block (or any field)
+    leaves the Regional-Centre default in force.
+    """
+
+    permission_encoding: Optional[str] = None
+    permitted_marker_codepoints: list[str | int] = Field(default_factory=list)
+    ignored_marker_codepoints: list[str | int] = Field(default_factory=list)
+
+    model_config = {"extra": "ignore"}
+
+
 class _Municipality(BaseModel):
     name: str
     jurisdiction_code: str
@@ -103,6 +120,7 @@ class _ManifestEnvelope(BaseModel):
     sources: list[_SourceDocument]
     parser_config: Optional[_ParserConfig] = None
     taxonomy: Optional[_TaxonomyMap] = None
+    enrichment: Optional[_EnrichmentConfig] = None
     manifest_version: str
     status: Literal["draft", "approved", "active", "deprecated"]
     pipeline_ready: bool
@@ -179,6 +197,9 @@ def profile_from_manifest(
     citation_levels = _compile_citation_levels(manifest.parser_config)
     zone_codes, zone_pattern = _compile_zone_overlay(manifest.taxonomy)
     use_class_map = _compile_use_class_map(manifest.taxonomy)
+    permission_encoding, permitted_codepoints, ignored_codepoints = (
+        _compile_enrichment(manifest.enrichment)
+    )
 
     profile_name = name or f"manifest:{manifest.municipality.jurisdiction_code.lower()}"
 
@@ -206,6 +227,9 @@ def profile_from_manifest(
         known_zone_codes=zone_codes,
         zone_pattern=zone_pattern,
         use_class_map=use_class_map,
+        permission_encoding=permission_encoding,
+        permitted_marker_codepoints=permitted_codepoints,
+        ignored_marker_codepoints=ignored_codepoints,
     )
 
 
@@ -319,6 +343,49 @@ def _compile_zone_overlay(
     sorted_codes = sorted(codes, key=lambda code: (-len(code), code))
     pattern_source = r"\b(?:" + "|".join(re.escape(code) for code in sorted_codes) + r")\b"
     return codes, re.compile(pattern_source, re.IGNORECASE)
+
+
+def _parse_codepoint(value: str | int) -> int:
+    """Parse a codepoint given as an int or a ``"U+F098"`` / ``"0xF098"`` string."""
+    if isinstance(value, int):
+        return value
+    token = value.strip()
+    if token.upper().startswith("U+"):
+        token = token[2:]
+    elif token.lower().startswith("0x"):
+        token = token[2:]
+    try:
+        return int(token, 16)
+    except ValueError as exc:
+        raise ValueError(
+            f"Manifest enrichment codepoint {value!r} is not a valid hex "
+            f"codepoint (expected an int or a 'U+XXXX' string)."
+        ) from exc
+
+
+def _compile_enrichment(
+    enrichment: _EnrichmentConfig | None,
+) -> tuple[str | None, frozenset[int] | None, frozenset[int] | None]:
+    """Map the manifest's enrichment block to ``ParsingProfile`` fields (ABS-284).
+
+    Returns ``(permission_encoding, permitted_codepoints, ignored_codepoints)``
+    with ``None`` for any field the manifest doesn't declare, so the profile
+    falls back to the Regional-Centre default for that field.
+    """
+    if enrichment is None:
+        return None, None, None
+    permitted = (
+        frozenset(_parse_codepoint(cp) for cp in enrichment.permitted_marker_codepoints)
+        if enrichment.permitted_marker_codepoints
+        else None
+    )
+    ignored = (
+        frozenset(_parse_codepoint(cp) for cp in enrichment.ignored_marker_codepoints)
+        if enrichment.ignored_marker_codepoints
+        else None
+    )
+    encoding = enrichment.permission_encoding or None
+    return encoding, permitted, ignored
 
 
 def _compile_use_class_map(

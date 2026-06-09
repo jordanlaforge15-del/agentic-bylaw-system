@@ -22,8 +22,15 @@ from layer1.db.base import (
     TableSemanticProfile,
 )
 from layer1.profiles import ParsingProfile
+from layer1.semantic.conventions import (
+    DEFAULT_IGNORED_CODEPOINTS,
+    DEFAULT_PERMITTED_CODEPOINTS,
+    SYMBOL_MATRIX,
+    EnrichmentConventions,
+)
 from layer1.semantic.extractors import (
     ProfileOverlay,
+    current_enrichment_conventions,
     extract_condition_refs,
     extract_development_contexts,
     extract_numeric_values,
@@ -138,16 +145,51 @@ def enrich_document_semantics(
 def _overlay_from_profile(profile: ParsingProfile | None) -> ProfileOverlay | None:
     if profile is None:
         return None
+    conventions = _conventions_from_profile(profile)
     if (
         profile.zone_pattern is None
         and profile.known_zone_codes is None
         and profile.use_class_map is None
+        and conventions is None
     ):
         return None
     return ProfileOverlay(
         zone_pattern=profile.zone_pattern,
         known_zone_codes=profile.known_zone_codes,
         use_class_map=profile.use_class_map,
+        enrichment=conventions,
+    )
+
+
+def _conventions_from_profile(
+    profile: ParsingProfile | None,
+) -> EnrichmentConventions | None:
+    """Build per-bylaw :class:`EnrichmentConventions` from a parsing profile.
+
+    Returns ``None`` when the profile declares no enrichment fields, so the
+    overlay stays minimal and enrichment classification falls back to the
+    Regional-Centre default (ABS-284 FR3).
+    """
+    if profile is None:
+        return None
+    if (
+        profile.permission_encoding is None
+        and profile.permitted_marker_codepoints is None
+        and profile.ignored_marker_codepoints is None
+    ):
+        return None
+    return EnrichmentConventions(
+        permission_encoding=profile.permission_encoding or SYMBOL_MATRIX,
+        permitted_codepoints=(
+            profile.permitted_marker_codepoints
+            if profile.permitted_marker_codepoints is not None
+            else DEFAULT_PERMITTED_CODEPOINTS
+        ),
+        ignored_codepoints=(
+            profile.ignored_marker_codepoints
+            if profile.ignored_marker_codepoints is not None
+            else DEFAULT_IGNORED_CODEPOINTS
+        ),
     )
 
 
@@ -532,7 +574,10 @@ def _enrich_table(
     if not cells:
         return
     rows = _rows_by_index(cells)
-    profile_type, row_axis_type, column_axis_type, value_type, confidence = _classify_table(table, rows)
+    conventions = current_enrichment_conventions()
+    profile_type, row_axis_type, column_axis_type, value_type, confidence = _classify_table(
+        table, rows, conventions
+    )
     profile = TableSemanticProfile(
         table_id=table.id,
         profile_type=profile_type,
@@ -563,7 +608,7 @@ def _enrich_table(
         # permission matrix. This is the single annotation trigger — the old
         # ingest-time hook (which ran before this profile existed and gated on
         # captions that the corpus doesn't carry) is removed.
-        annotate_value_cells(cells, apply=True)
+        annotate_value_cells(cells, apply=True, conventions=conventions)
         _extract_permission_table_facts(session, report, cache, table, rows)
     elif profile_type == "parking_matrix":
         _extract_parking_table_facts(session, report, cache, table, rows)
@@ -656,7 +701,15 @@ def _extract_definition_fact(
 def _classify_table(
     table: SourceTable,
     rows: dict[int, list[SourceTableCell]],
+    conventions: EnrichmentConventions | None = None,
 ) -> tuple[str, str | None, str | None, str | None, float]:
+    # ABS-284: permission-matrix detection is now profile-driven. ``conventions``
+    # carries the active bylaw's encoding (``symbol_matrix`` vs
+    # ``section_indexed``) and its amendment-table disqualifier; ``None`` selects
+    # the Regional-Centre default so the no-profile path is byte-for-byte
+    # unchanged.
+    if conventions is None:
+        conventions = current_enrichment_conventions()
     caption = (table.caption or "").lower()
     row_labels = [_row_label(cells) for idx, cells in rows.items() if idx > 0]
     headers = [_cell_text(cell) for cell in rows.get(_header_row_index(rows), [])]
@@ -689,15 +742,29 @@ def _classify_table(
         len(headers) + len(row_labels), 1
     )
     parking_signal = "parking" in caption or any("parking" in text.lower() for text in headers + row_labels)
+    # ABS-284: a bylaw that doesn't encode permissions in a symbol-dot matrix
+    # (``section_indexed`` — e.g. Halifax Mainland LUB, whose permissions live in
+    # section prose) must never classify a table as a permission matrix. Under
+    # that encoding the section×zone-shaped tables are amendment/section-history
+    # grids, and the prose extractor supplies the permitted uses instead. The
+    # amendment-table disqualifier is likewise profile-configurable (default on).
+    amendment_disqualifies = (
+        conventions.disqualify_amendment_tables and amendment_signal
+    )
     if (
-        "permitted uses by zone" in caption
-        or (zone_density >= 0.4 and use_density >= 0.35)
-        or (
-            zone_density >= 0.3
-            and section_label_density >= 0.5
-            and zone_header_count >= 2
+        conventions.detects_symbol_matrix
+        and (
+            "permitted uses by zone" in caption
+            or (zone_density >= 0.4 and use_density >= 0.35)
+            or (
+                zone_density >= 0.3
+                and section_label_density >= 0.5
+                and zone_header_count >= 2
+            )
         )
-    ) and not parking_signal and not amendment_signal:
+        and not parking_signal
+        and not amendment_disqualifies
+    ):
         return "permission_matrix", "use", "zone", "permission_marker", 0.9
     if parking_signal and (zone_density >= 0.2 or standard_density >= 0.2):
         return "parking_matrix", "use", "standard", "requirement", 0.75
