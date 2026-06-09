@@ -983,7 +983,7 @@ class RetrievalService:
         candidate_fragment_ids = [fid for _, fid, _ in merged[: request.limit]]
         if not candidate_fragment_ids:
             return RetrievalResponse(
-                request=request, total_matches=0, matches=[], notes=notes
+                total_matches=0, matches=[], notes=notes
             )
 
         fragments_by_id = {
@@ -1013,7 +1013,6 @@ class RetrievalService:
             matches.append(match)
 
         return RetrievalResponse(
-            request=request,
             total_matches=total_matches,
             matches=matches,
             notes=notes,

@@ -329,7 +329,7 @@ def compact_search_response(
     location slot and ``include_*`` toggles) on every tool turn was
     pure cache bloat.
     """
-    cap = max_matches if max_matches is not None else min(response.request.limit, _compact_ceiling())
+    cap = max_matches if max_matches is not None else _compact_ceiling()
     matches = response.matches[:cap]
     out: dict[str, Any] = {
         "total_matches": response.total_matches,

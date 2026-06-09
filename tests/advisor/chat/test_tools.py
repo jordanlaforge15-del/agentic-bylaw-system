@@ -467,11 +467,9 @@ def test_compact_search_response_keeps_notes_and_drops_request():
     it sent and that field is pure cache bloat.
     """
     from advisor.chat.compact import compact_search_response
-    from bylaw_retrieval.retrieval import RetrievalRequest, RetrievalResponse
+    from bylaw_retrieval.retrieval import RetrievalResponse
 
-    req = RetrievalRequest(query="anything", limit=5)
     response = RetrievalResponse(
-        request=req,
         total_matches=0,
         matches=[],
         notes=["The query contains a civic address but no location field"],
