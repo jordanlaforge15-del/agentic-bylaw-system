@@ -293,11 +293,16 @@ async def test_session_requests_enable_prompt_cache_for_system_and_tools():
 
 
 @pytest.mark.asyncio
-async def test_session_marks_first_assistant_turns_as_cache_milestones():
-    """First-assistant turns are byte-stable across the rest of the
-    session; marking the LAST block of up to two of them gives turn 3+
-    a long stable prefix to read from cache. Without this, the only
-    cached prefix on later turns is system + tools."""
+async def test_session_marks_first_assistant_turn_as_cache_milestone():
+    """The first-assistant turn is byte-stable across the rest of the
+    session; marking the LAST block of it gives turn 2+ a stable prefix
+    to read from cache. Without this, the only cached prefix on later
+    turns is system + tools.
+
+    ABS-285: only ONE milestone is marked now — the fourth Anthropic
+    cache breakpoint is reserved for the tool loop's rolling intra-loop
+    breakpoint, so the second assistant turn is intentionally left
+    unmarked."""
     session = _empty_session()
     gateway = MockGateway(
         scripted=[
@@ -316,8 +321,9 @@ async def test_session_marks_first_assistant_turns_as_cache_milestones():
     asst2 = third.messages[3]
     assert isinstance(asst1.content, list)
     assert isinstance(asst2.content, list)
+    # Exactly one milestone breakpoint: the first assistant turn.
     assert asst1.content[-1].cache is True
-    assert asst2.content[-1].cache is True
+    assert asst2.content[-1].cache is False
     # Plain user-string messages stay untouched — wrapping them would
     # change the shape the rest of the chat layer observes.
     assert third.messages[0].content == "q1"

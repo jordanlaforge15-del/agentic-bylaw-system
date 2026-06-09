@@ -60,12 +60,21 @@ from advisor.llm.tool_loop import ToolHandler, run_tool_loop
 
 # Anthropic supports up to 4 cache breakpoints per request. The chat
 # session spends two on the request-level shared prefix (system,
-# tools) and reserves the remaining two for stable conversation
-# milestones — the first one or two assistant turns. Those turns are
-# byte-stable for every subsequent turn in the session, so caching
-# them turns multi-turn conversations into long prompt-cache reads
-# instead of full-cost replays.
-_MAX_CONVERSATION_CACHE_MILESTONES = 2
+# tools) and ONE on a stable conversation milestone — the first
+# assistant turn, which is byte-stable for every subsequent turn in
+# the session, so caching it turns multi-turn conversations into long
+# prompt-cache reads instead of full-cost replays.
+#
+# ABS-285: the fourth breakpoint is reallocated away from a second
+# session milestone to the rolling intra-loop breakpoint that
+# ``advisor.llm.tool_loop`` places on the latest tool_result turn.
+# Intra-loop growth (10–20 retrieval rounds for a single deep
+# question) dwarfs cross-turn growth (a handful of session
+# milestones), so the rolling breakpoint is the higher-value use of
+# the slot. Keep this at 1 to leave that fourth slot free for the
+# tool loop — bumping it back to 2 would push deep-question requests
+# to five breakpoints and Anthropic would reject the call.
+_MAX_CONVERSATION_CACHE_MILESTONES = 1
 
 
 @dataclass

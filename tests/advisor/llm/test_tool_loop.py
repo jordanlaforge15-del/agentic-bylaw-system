@@ -565,3 +565,103 @@ async def test_tool_invocation_records_latency_on_handler_error():
     assert result.tool_calls[0].error is not None
     assert "boom" in result.tool_calls[0].error
     assert result.tool_calls[0].latency_ms >= 0
+
+
+def _result_block_cache_flags(request: CompletionRequest) -> list[bool]:
+    """Cache flags on every ToolResultBlock in a request, in order."""
+    flags: list[bool] = []
+    for msg in request.messages:
+        if isinstance(msg.content, list):
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock):
+                    flags.append(block.cache)
+    return flags
+
+
+@pytest.mark.asyncio
+async def test_rolling_cache_breakpoint_marks_latest_tool_result():
+    """ABS-285: every gateway call made AFTER the first tool_result
+    lands must carry a cache breakpoint on the most recent tool_result
+    block, so iteration N reads iterations 1…N-1 from Anthropic's
+    prompt cache instead of re-billing them at full rate.
+
+    The first call (the user's question, no tool_result yet) carries
+    none — there is nothing intra-loop to cache until a tool runs."""
+    # max_iterations is large enough that the three scripted tool rounds
+    # never hit the cap; the cost circuit is disabled with a huge budget.
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1", tool_name="search_bylaw_evidence", tool_input={"q": "1"}
+            ),
+            tool_use_response(
+                tool_id="tu_2", tool_name="search_bylaw_evidence", tool_input={"q": "2"}
+            ),
+            tool_use_response(
+                tool_id="tu_3", tool_name="search_bylaw_evidence", tool_input={"q": "3"}
+            ),
+            text_response("final answer"),
+        ]
+    )
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return "evidence"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+        token_budget=10_000_000,
+    )
+
+    assert result.iterations == 4
+    calls = gateway.calls
+
+    # Call 1: only the user question — no tool_result, no breakpoint.
+    assert _result_block_cache_flags(calls[0]) == []
+
+    # Calls 2..4: each carries exactly ONE cached tool_result, and it
+    # is always the LAST one (the rolling marker moves forward and no
+    # stale earlier breakpoint lingers — that would blow Anthropic's
+    # 4-breakpoint budget).
+    for call in calls[1:]:
+        flags = _result_block_cache_flags(call)
+        assert flags, "expected at least one tool_result in the request"
+        assert sum(flags) == 1
+        assert flags[-1] is True
+        assert all(f is False for f in flags[:-1])
+
+
+@pytest.mark.asyncio
+async def test_rolling_cache_breakpoint_not_persisted_to_conversation():
+    """The rolling flag lives only on the per-iteration request copy.
+    The returned conversation (which the chat layer splices into the
+    persisted transcript) must stay unmarked, so a tool_result from
+    this turn does not leak a stale breakpoint into the next user
+    turn's request and push it over the 4-breakpoint limit."""
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1", tool_name="search_bylaw_evidence", tool_input={"q": "1"}
+            ),
+            text_response("final answer"),
+        ]
+    )
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return "evidence"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+    )
+
+    # The gateway saw the breakpoint...
+    assert any(_result_block_cache_flags(c) for c in gateway.calls)
+    # ...but the persisted conversation carries none.
+    for msg in result.conversation:
+        if isinstance(msg.content, list):
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock):
+                    assert block.cache is False

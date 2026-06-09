@@ -206,7 +206,7 @@ async def run_tool_loop(
 
     for iteration in range(1, max_iterations + 1):
         current_request = request.model_copy(
-            update={"messages": list(conversation)}
+            update={"messages": _mark_rolling_cache_breakpoint(conversation)}
         )
 
         estimated = estimate_request_input_tokens(current_request)
@@ -307,6 +307,56 @@ async def run_tool_loop(
         terminated_reason="iteration_cap",
         circuit_trip=None,
     )
+
+
+def _mark_rolling_cache_breakpoint(
+    conversation: list[Message],
+) -> list[Message]:
+    """Place a single rolling cache breakpoint on the most recent
+    tool_result turn (ABS-285).
+
+    A deep question fires 10–20 retrieval iterations; without an
+    intra-loop breakpoint, iterations 3…N re-send every prior
+    tool_result full-size and uncached every round — the triangular
+    N(N+1)/2 input term at the full Opus rate. By marking the LAST
+    tool_result block of the latest tool_result turn, Anthropic caches
+    the prefix up to and including it. The next iteration's prefix is
+    byte-identical up to that point, so it reads iterations 1…N-1 from
+    cache at ~10% of the input rate (incremental-caching pattern) and
+    writes the freshly-extended prefix for the iteration after.
+
+    Only ONE breakpoint is placed, and it always rides the latest
+    tool_result turn — Anthropic allows 4 breakpoints total and the
+    session already spends three (system + tools + one session-start
+    milestone, see ``advisor.chat.session``). Marking every iteration's
+    turn would blow that budget; a single rolling marker stays within
+    it while still caching the whole intra-loop prefix.
+
+    Returns a fresh list. The latest tool_result turn is copied with
+    its last block flagged; every other message is reused by reference,
+    and the source ``conversation`` is never mutated — the flag lives
+    only on the per-iteration request, so the persisted transcript
+    never accumulates stale breakpoints across user turns.
+
+    A no-op (returns ``list(conversation)``) when the conversation does
+    not yet end in a tool_result turn — e.g. iteration 1, whose tail is
+    the user's question, or any tail that isn't a tool_result user
+    turn. There is nothing intra-loop to cache until the first
+    tool_result lands.
+    """
+    if not conversation:
+        return list(conversation)
+    last = conversation[-1]
+    if last.role != LLMRole.USER or not isinstance(last.content, list):
+        return list(conversation)
+    if not last.content or not isinstance(last.content[-1], ToolResultBlock):
+        return list(conversation)
+
+    blocks: list[ContentBlock] = list(last.content)
+    blocks[-1] = blocks[-1].model_copy(update={"cache": True})
+    out = list(conversation)
+    out[-1] = last.model_copy(update={"content": blocks})
+    return out
 
 
 async def _force_synthesis(
