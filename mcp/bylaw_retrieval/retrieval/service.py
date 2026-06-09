@@ -69,7 +69,10 @@ from layer1.db.base import (
     TableSemanticProfile,
 )
 from layer1.models.enums import FragmentType
-from layer1.semantic.enrichment import resolve_permission_cell
+from layer1.semantic.enrichment import (
+    resolve_mainland_permitted_use,
+    resolve_permission_cell,
+)
 from layer1.semantic.extractors import normalize_use, normalize_zone
 from layer1.semantic.permission_markers import (
     PERMISSION_MATRIX_PROFILE,
@@ -443,6 +446,24 @@ class RetrievalService:
            with a reason — never a silent empty success (FR3).
         """
         tables = self._permission_matrix_tables(document_id=document_id)
+        for table in tables:
+            resolved = resolve_permission_cell(
+                self.session,
+                table_id=table.id,
+                use_name=use,
+                zone=zone,
+            )
+            if resolved is not None:
+                return self._build_permitted_use_result(use, zone, table, resolved)
+
+        # ABS-283: the Mainland LUB encodes permitted uses as prose section
+        # lists, not a symbol-dot matrix. When no matrix addressed the cell, fall
+        # back to the Mainland section-prose resolver before declaring the query
+        # indeterminate.
+        mainland = self._resolve_mainland_permitted_use(use, zone, document_id)
+        if mainland is not None:
+            return mainland
+
         if not tables:
             return PermittedUseResult(
                 use=use,
@@ -455,19 +476,84 @@ class RetrievalService:
                 ),
             )
 
-        for table in tables:
-            resolved = resolve_permission_cell(
-                self.session,
-                table_id=table.id,
-                use_name=use,
-                zone=zone,
-            )
-            if resolved is not None:
-                return self._build_permitted_use_result(use, zone, table, resolved)
-
         # No matrix addressed the cell — diagnose which axis failed so the
         # caller gets an actionable reason rather than a bare "not found".
         return self._indeterminate_permitted_use(use, zone, tables)
+
+    def _resolve_mainland_permitted_use(
+        self, use: str, zone: str, document_id: int | None
+    ) -> PermittedUseResult | None:
+        """Resolve a ``(use, zone)`` pair via Mainland section-prose use lists.
+
+        Mirrors the matrix scoping contract (FR4): the default-document
+        resolver pins the search; an explicit ``document_id`` ANDs with it and
+        never crosses bylaws. Returns ``None`` when no Mainland permitted-use
+        list covers the zone in scope, so the caller can fall through.
+        """
+        scope = self._mainland_scope_ids(document_id)
+        if scope == []:  # explicit doc outside the pinned scope
+            return None
+        for scoped_id in scope if scope is not None else [None]:
+            resolved = resolve_mainland_permitted_use(
+                self.session,
+                use_name=use,
+                zone=zone,
+                document_id=scoped_id,
+            )
+            if resolved is not None:
+                return self._build_mainland_permitted_use_result(use, zone, resolved)
+        return None
+
+    def _mainland_scope_ids(self, document_id: int | None) -> list[int] | None:
+        """Document ids the Mainland resolver may search, honoring FR4 scoping.
+
+        Returns ``None`` to mean "unscoped — search every document" (no default
+        resolver pinned the scope), ``[]`` when an explicit ``document_id`` falls
+        outside the pinned scope, or the concrete id list otherwise.
+        """
+        default_ids = self._resolve_default_document_ids()
+        if document_id is not None:
+            if default_ids is not None and document_id not in default_ids:
+                return []
+            return [document_id]
+        return default_ids
+
+    def _build_mainland_permitted_use_result(
+        self, use: str, zone: str, resolved: dict
+    ) -> PermittedUseResult:
+        """Project a resolved Mainland use list into a :class:`PermittedUseResult`."""
+        document_id = resolved.get("document_id")
+        return PermittedUseResult(
+            use=use,
+            zone=zone,
+            indeterminate=False,
+            permission=resolved["permission"],
+            citation=self._fragment_citation(
+                document_id, resolved.get("source_fragment_ids") or []
+            ),
+            document_id=document_id,
+        )
+
+    def _fragment_citation(
+        self, document_id: int | None, fragment_ids: list[int]
+    ) -> CitationRef | None:
+        """Build a grounding citation back to a Mainland source fragment."""
+        if not document_id or not fragment_ids:
+            return None
+        fragment = self.session.get(SourceFragment, fragment_ids[0])
+        if fragment is None:
+            return None
+        document = self.session.get(Document, document_id)
+        return CitationRef(
+            citation_path=fragment.citation_path,
+            citation_label=fragment.citation_label,
+            document_id=document_id,
+            municipality=document.municipality if document else None,
+            bylaw_name=document.bylaw_name if document else None,
+            page_start=fragment.page_start,
+            page_end=fragment.page_end,
+            backs=["permitted_use"],
+        )
 
     def _permission_matrix_tables(
         self, *, document_id: int | None
