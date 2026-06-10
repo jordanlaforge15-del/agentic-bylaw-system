@@ -1,0 +1,95 @@
+{
+  "config": "baseline",
+  "rounds": 8,
+  "gateway_calls": 9,
+  "per_iteration": [
+    {
+      "iteration": 1,
+      "msgs_cached_chars": 0,
+      "msgs_uncached_chars": 49,
+      "system_chars": 34,
+      "tools_chars": 138,
+      "cache_system": true,
+      "cache_tools": true
+    },
+    {
+      "iteration": 2,
+      "msgs_cached_chars": 0,
+      "msgs_uncached_chars": 1015,
+      "system_chars": 34,
+      "tools_chars": 138,
+      "cache_system": true,
+      "cache_tools": true
+    },
+    {
+      "iteration": 3,
+      "msgs_cached_chars": 0,
+      "msgs_uncached_chars": 1971,
+      "system_chars": 34,
+      "tools_chars": 138,
+      "cache_system": true,
+      "cache_tools": true
+    },
+    {
+      "iteration": 4,
+      "msgs_cached_chars": 0,
+      "msgs_uncached_chars": 2955,
+      "system_chars": 34,
+      "tools_chars": 138,
+      "cache_system": true,
+      "cache_tools": true
+    },
+    {
+      "iteration": 5,
+      "msgs_cached_chars": 0,
+      "msgs_uncached_chars": 3939,
+      "system_chars": 34,
+      "tools_chars": 138,
+      "cache_system": true,
+      "cache_tools": true
+    },
+    {
+      "iteration": 6,
+      "msgs_cached_chars": 0,
+      "msgs_uncached_chars": 4939,
+      "system_chars": 34,
+      "tools_chars": 138,
+      "cache_system": true,
+      "cache_tools": true
+    },
+    {
+      "iteration": 7,
+      "msgs_cached_chars": 0,
+      "msgs_uncached_chars": 5901,
+      "system_chars": 34,
+      "tools_chars": 138,
+      "cache_system": true,
+      "cache_tools": true
+    },
+    {
+      "iteration": 8,
+      "msgs_cached_chars": 0,
+      "msgs_uncached_chars": 6883,
+      "system_chars": 34,
+      "tools_chars": 138,
+      "cache_system": true,
+      "cache_tools": true
+    },
+    {
+      "iteration": 9,
+      "msgs_cached_chars": 0,
+      "msgs_uncached_chars": 7865,
+      "system_chars": 34,
+      "tools_chars": 138,
+      "cache_system": true,
+      "cache_tools": true
+    }
+  ],
+  "totals": {
+    "msgs_cached_chars": 0,
+    "msgs_uncached_chars": 35517,
+    "msgs_cached_tok_approx": 0,
+    "msgs_uncached_tok_approx": 8879
+  },
+  "projected_input_cost_usd": 0.1332
+}
