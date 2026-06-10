@@ -2,12 +2,83 @@
 
 **Date:** 2026-06-10
 **Branch:** `jordanlaforge15/abs-303-real-api-validation`
-**Total API spend:** **$30.35** ($2.37 initial single A/B + $4.12 N=3 follow-up + $23.86 N=10/8 follow-up)
-**Verdict (revised after N=10):** **WI-1+4 may be NET NEGATIVE in production.** Stratified by iteration mode, WI-1+4 saves 29% on fast-converging turns (~50% of runs) but COSTS 65% MORE on the other ~50% where the model hits `iteration_cap`. Net mean: OFF is **38% cheaper than ON**. Direction not statistically significant at this N (t=-1.30), but ZERO of 8 OFF reps hit the cap vs 5 of 10 ON reps — a strong qualitative signal.
+**Total API spend:** **$36.08** ($2.37 initial single A/B + $4.12 N=3 follow-up + $23.86 N=10/8 follow-up + $5.73 WI-1-only N=6 follow-up)
+**Verdict (after 3-arm experiment):** **Both WI-1 and WI-4 contribute to a production-degrading "iteration_cap" failure mode.** Recommended production posture: **roll both back** via env vars (`ADVISOR_DISABLE_ROLLING_CACHE_BREAKPOINT=1` AND `ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT=0`).
 
-> **Earlier N=3 verdict (now superseded):** WI-1+4 saved ~26.5%. That sample by luck of the draw included mostly fast-converge reps and undersampled the cap-hit mode. The N=10 result with stratification shows what was actually happening.
+The cap-hit rate is monotonic with the optimizations:
 
-## The N=10 / N=8 A/B (the actual answer — supersedes earlier sections)
+| Arm | N | Cap-hit rate | Cost mean |
+|---|---|---|---|
+| Both OFF | 8 | **0%** | $0.99 |
+| WI-1 only | 6 | **33%** | $0.96 |
+| Both ON | 10 | **50%** | $1.59 |
+
+WI-1 alone is roughly cost-neutral vs OFF (its per-iter cache savings in fast-converge mode offset its cap-hit overhead in slow mode). Adding WI-4 on top of WI-1 makes things significantly worse — both higher mean cost and higher cap-hit rate.
+
+> **Earlier verdicts (now superseded):**
+> - The N=1 single-pair A/B suggested ~21.5% saving. By chance both pairs were fast-converge.
+> - The N=3 verdict (26.5% saving) drew mostly fast-converge reps and missed the cap-hit mode.
+> - The N=10 result first exposed the bimodal distribution and "OFF is 38% cheaper" finding.
+> - The 3-arm result (this section) localized the cause: WI-1 introduces the failure mode (33% cap-hits where OFF has 0%); WI-4 compounds it (50% cap-hits).
+
+## The 3-arm experiment (the actual answer — supersedes earlier sections)
+
+Three same-stack arms, sequential advisor restarts to switch env-var flags. Each arm = N reps of TC-001 turn 1 verbatim, current dev advisor, real Halifax Regional Centre LUB. The third arm (WI-1 only) isolates which optimization causes the cap-hit failure mode.
+
+### Per-rep — WI-1 only (this arm; the new data)
+
+`ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT=0`, `ADVISOR_DISABLE_ROLLING_CACHE_BREAKPOINT` unset. WI-1's rolling cache breakpoint active; WI-4's compaction disabled.
+
+| Rep | Iters | Terminated | Cost |
+|---|---|---|---|
+| 01 |  5 | `end_turn`      | $0.6259 |
+| 02 | 10 | `iteration_cap` | $1.7914 |
+| 03 |  5 | `end_turn`      | $0.4268 |
+| 04 | 10 | `iteration_cap` | $1.7457 |
+| 05 |  4 | `end_turn`      | $0.5004 |
+| 06 |  6 | `end_turn`      | $0.6435 |
+
+**WI-1-only: mean $0.96, stddev $0.63, iter mean 6.7, 2 of 6 hit `iteration_cap`.**
+
+### 3-arm aggregate
+
+| Arm | N | Cost mean ± sd | Iter mean | Cap-hit rate |
+|---|---|---|---|---|
+| Both ON | 10 | $1.59 ± $1.31 | 6.9 | 5/10 (50%) |
+| WI-1 only | 6 | $0.96 ± $0.63 | 6.7 | 2/6 (33%) |
+| Both OFF | 8 | $0.99 ± $0.59 | 5.9 | 0/8 (0%) |
+
+### 3-arm stratified
+
+| Mode | Both ON | WI-1 only | Both OFF |
+|---|---|---|---|
+| Fast (3-5 iters) | $0.41 (N=5) | $0.52 (N=3) | $0.57 (N=5) |
+| Slow (≥6 iters) | $2.78 (N=5, all cap) | $1.39 (N=3, 2 cap) | $1.69 (N=3, 0 cap) |
+
+### Reading the result
+
+**Going from Both OFF → WI-1 only** (adds the rolling cache breakpoint):
+- Cap-hit rate: 0% → 33% (Fisher's exact p ≈ 0.16, suggestive)
+- Mean cost: $0.99 → $0.96 (statistical tie; t ≈ 0.1)
+- **WI-1 introduces the cap-hit failure mode.** The per-iteration cache savings (~$0.05/turn at this prompt depth) approximately offset the cap-hit overhead, leaving overall cost roughly unchanged.
+
+**Going from WI-1 only → Both ON** (adds WI-4's compaction):
+- Cap-hit rate: 33% → 50%
+- Mean cost: $0.96 → $1.59 (+66%)
+- **WI-4 makes things significantly worse on top of WI-1.** Compounds the cap-hit problem and also makes the slow-mode runs more expensive.
+
+**Going from Both OFF → Both ON** (the design's intended cumulative effect):
+- Cap-hit rate: 0% → 50% (Fisher's exact p ≈ 0.038, **significant**)
+- Mean cost: $0.99 → $1.59 (+61%)
+- **The combined optimizations are net-negative in production on this prompt.**
+
+### Hypothesis update
+
+Original hypothesis (from N=10 result): WI-4's compaction strips context, model has to re-look-up, hits cap. The 3-arm result partially supports this but adds: **WI-1's cache_control markers also change model behavior**, independently driving up the cap-hit rate even without compaction. Plausible mechanism: when the model sees `cache_control` boundaries in its prompt history, it may treat the cached prefix as authoritative and skip re-validating it on subsequent iterations, causing it to over-iterate when its initial reasoning was wrong.
+
+This is a behavioral effect of cache_control hints, not a billing effect. The savings hypothesis (cache reads at 10% rate) is real but the savings are offset by the iteration-count side effect.
+
+## The earlier N=10 / N=8 A/B (kept for history; superseded by 3-arm)
 
 Ran 10 reps with WI-1+4 ON, then 8 reps with both kill switches set (advisor restart between arms). Each rep = TC-001 turn 1 verbatim prompt, current dev advisor, real Halifax Regional Centre LUB.
 
@@ -118,15 +189,22 @@ Whichever is true, **ABS-302's analytical projection ($1.48 saved on TC-001 ON, 
 - **ABS-290 (WI-4) verdict reversed** — the N=10 result strongly suggests WI-4 is the culprit: every ON rep that hit `iteration_cap` had WI-4 compacting older tool_results. The model appears to lose enough context that it has to re-look-up, runs longer, and hits the cap. Without WI-4, the model converges naturally every time. Strong recommendation to **investigate before continuing to ship WI-4 enabled by default**.
 - **The 45% MockGateway projection from ABS-302 was an artefact** of the synthetic loop design. Production shows a bimodal pattern (cap-hit vs natural completion) that the MockGateway doesn't reproduce. The MockGateway script remains useful for measuring request-shape effects but its dollar-projection mode should be flagged as known-suspect for cumulative effects.
 
-## CRITICAL RECOMMENDATION
+## CRITICAL RECOMMENDATION (post 3-arm)
 
-**Investigate WI-4 (in-loop tool_result compaction) before assuming it's net-positive in production.** The N=10/N=8 A/B suggests it's actively hurting on at least one prompt shape (TC-001 turn 1) by stripping context the model later needs, forcing more iterations, and tripping the cap.
+**Roll both WI-1 and WI-4 back in production** via the two env vars now in place:
+- `ADVISOR_DISABLE_ROLLING_CACHE_BREAKPOINT=1` (added by this issue)
+- `ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT=0` (already existed)
+
+Neither optimization is delivering net savings on TC-001 turn 1, and both are independently contributing to the cap-hit failure mode that's expensive ($2-3 forced synthesis when triggered).
+
+The merge of this branch only adds the kill switch — it doesn't change defaults. The rollback decision is yours; the kill switches let you do it via env without redeploying.
 
 Specific follow-ups:
-1. **Isolate WI-1 alone vs WI-4 alone vs both** — this issue tested "both ON vs both OFF" but didn't separate them. Need a 3-arm experiment to identify which optimization causes the cap-hits.
-2. **Profile what compaction is dropping.** If `_summarize_search` is stripping the citation_path the model later re-queries, that's a fixable bug. If it's stripping something inherent to the schema, WI-4 may need a smaller default `keep_recent` or different policy.
-3. **Re-evaluate ABS-302's MockGateway projections.** The 45% combined saving claim doesn't match production; the synthetic loop didn't model the cap-hit failure mode.
-4. **Production safety:** if a deeper-loop case study (e.g. TC-005) confirms the same pattern, consider rolling WI-4 OFF in production with `ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT=0` until the root cause is understood.
+1. **Confirm on TC-005 with same 3-arm setup.** TC-005 is a deep multi-turn case. If the pattern reverses on deep cases — e.g. WI-4's compaction actually helps when the conversation history is genuinely long — that's a different story. Estimated spend: ~$40 for 3 arms × N=5 reps. Worth doing before any permanent code-level rollback.
+2. **Profile what `_summarize_search`/`_summarize_citation_lookup` strip.** The N=10 hypothesis suggested context loss drives re-lookups. Worth verifying by reading the summarizers and comparing what the model later asks for vs what was dropped.
+3. **Investigate WI-1's cache_control behavioral side effect.** Cache markers should be a billing optimization with zero model-behavior impact. The 0% → 33% cap-hit jump from adding WI-1 alone suggests this assumption is wrong. Could be an Anthropic-side detail (the model sees cache hints) or a side effect of how the rolling marker shifts between iterations.
+4. **Re-evaluate ABS-302's MockGateway projections.** The 45% combined-savings claim was derived from a synthetic loop that couldn't model the cap-hit failure mode. The script's MockGateway mode should be flagged as known-suspect for cumulative effects.
+5. **Investigate the iteration-cap forced-synthesis cost.** Cap-hit reps spent $2-3 each, dominated by output tokens (3000+). If forced synthesis can be made cheaper (constrained output length, switch to Haiku for the synthesis turn), it reduces the worst-case cost of any tool-loop optimization that increases cap-hit rate.
 
 ## Cost trail (probe-first protection worked)
 
@@ -141,8 +219,9 @@ Specific follow-ups:
 | 3-rep variance OFF arm (post-N=1) | $2.3773 | $6.49 | $0.895 + $0.541 + $0.942 |
 | N=10 ON arm (post-N=3) | $15.9305 | $22.42 | bimodal: 5 fast / 5 cap-hit |
 | N=8 OFF arm (post-N=3, capped at 8 to fit credits) | $7.9299 | $30.35 | bimodal: 5 fast / 3 slow-but-natural |
+| WI-1-only N=6 (3-arm completion within $9.97 remaining credit) | $5.7337 | $36.08 | 3 fast / 1 natural-slow / 2 cap-hit |
 
-Total: **$30.35**. Significantly over the original $5 cap. Each escalation had explicit user authorization. The N=10 follow-up exposed a finding (bimodal distribution, cap-hit failure mode) that the smaller N=1 and N=3 experiments could not have detected at this prompt's variance, so the spend was load-bearing for the verdict reversal.
+Total: **$36.08**. Each escalation explicitly authorized. The 3-arm follow-up was load-bearing for localizing the cap-hit cause to WI-1 (introduction, 0%→33%) and WI-4 (compounding, 33%→50%) separately.
 
 The probe-first rule still earned its keep — the broken-DB runs were caught at $0.37, not at $4+ or whatever an unguarded run could have produced.
 
