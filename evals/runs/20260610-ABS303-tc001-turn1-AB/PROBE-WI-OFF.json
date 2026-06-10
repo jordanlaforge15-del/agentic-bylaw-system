@@ -1,0 +1,249 @@
+{
+  "id": "ABS303-probe",
+  "title": "Probe: one-shot height query in HR-2",
+  "zone": "HR-2",
+  "persona": {
+    "type": "homeowner",
+    "subtype": null,
+    "description": "probe"
+  },
+  "complexity": "simple",
+  "liability": "low",
+  "address": "1000 Main Street, Halifax",
+  "session_id": "eb2a5bea-ccf5-4133-b57f-925df10f4783",
+  "model": "claude-opus-4-5-20251101",
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "What is the maximum building height permitted in the HR-2 zone?",
+      "assistant_text": "Based on my research, **the HR-2 zone does not have a single fixed maximum building height**. Instead, maximum building height in the HR-2 zone is determined by the **height precinct** that applies to the specific property, as mapped on **Schedule 15: Maximum Building Height Precincts**.\n\n## How Height Works in HR-2\n\nThe Regional Centre Land Use By-law uses a precinct-based system rather than zone-based height limits. Schedule 15 divides the Regional Centre into height precincts with varying maximum heights (examples from the bylaw include 8-metre, 11-metre, and taller precincts). The maximum height permitted on any HR-2 lot depends on which precinct that lot falls within.\n\n**Key provisions found:**\n- **Part V, Chapter 7** governs \"Built Form and Siting Requirements within the HR-2 and HR-1 Zones\"\n- **Section 200** addresses maximum streetwall heights in HR-2/HR-1, with provisions for buildings up to 6 storeys (streetwall equals building height) and taller than 6 storeys (streetwall capped at 6 storeys)\n- **Schedule 15** is the authoritative source for maximum building heights by precinct\n\n## To Get a Specific Answer\n\nYou need to identify the **height precinct** for your specific property. This requires either:\n1. Consulting Schedule 15 maps directly, or\n2. Providing a civic address so I can retrieve the applicable height precinct from the spatial dataset\n\nIf you have a specific property in mind, give me the address and I can tell you the exact maximum height permitted there along with the other envelope constraints (FAR, setbacks, streetwall).",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 16717,
+        "output_tokens": 388,
+        "cache_creation_input_tokens": 4214,
+        "cache_read_input_tokens": 0
+      },
+      "wall_time_s": 47.2,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 10,
+        "terminated_reason": "iteration_cap",
+        "total_usage": {
+          "input_tokens": 38811,
+          "output_tokens": 1499,
+          "cache_creation_input_tokens": 9828,
+          "cache_read_input_tokens": 114774
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 338,
+              "output_tokens": 76,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 3444,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 233,
+              "output_tokens": 101,
+              "cache_creation_input_tokens": 80,
+              "cache_read_input_tokens": 9429
+            },
+            "latency_ms": 2811,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 3,
+            "usage": {
+              "input_tokens": 1719,
+              "output_tokens": 138,
+              "cache_creation_input_tokens": 80,
+              "cache_read_input_tokens": 9429
+            },
+            "latency_ms": 3973,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 4,
+            "usage": {
+              "input_tokens": 2822,
+              "output_tokens": 123,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 9779
+            },
+            "latency_ms": 3322,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 5,
+            "usage": {
+              "input_tokens": 1589,
+              "output_tokens": 137,
+              "cache_creation_input_tokens": 1384,
+              "cache_read_input_tokens": 9843
+            },
+            "latency_ms": 3445,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 6,
+            "usage": {
+              "input_tokens": 1746,
+              "output_tokens": 148,
+              "cache_creation_input_tokens": 1234,
+              "cache_read_input_tokens": 11366
+            },
+            "latency_ms": 3777,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 7,
+            "usage": {
+              "input_tokens": 2849,
+              "output_tokens": 78,
+              "cache_creation_input_tokens": 91,
+              "cache_read_input_tokens": 12724
+            },
+            "latency_ms": 2532,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 8,
+            "usage": {
+              "input_tokens": 1503,
+              "output_tokens": 88,
+              "cache_creation_input_tokens": 1392,
+              "cache_read_input_tokens": 12953
+            },
+            "latency_ms": 2522,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 9,
+            "usage": {
+              "input_tokens": 1473,
+              "output_tokens": 94,
+              "cache_creation_input_tokens": 1169,
+              "cache_read_input_tokens": 14494
+            },
+            "latency_ms": 2661,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 10,
+            "usage": {
+              "input_tokens": 7822,
+              "output_tokens": 128,
+              "cache_creation_input_tokens": 184,
+              "cache_read_input_tokens": 15663
+            },
+            "latency_ms": 4424,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 11,
+            "usage": {
+              "input_tokens": 16717,
+              "output_tokens": 388,
+              "cache_creation_input_tokens": 4214,
+              "cache_read_input_tokens": 0
+            },
+            "latency_ms": 11038,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 171
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 355
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 344
+          },
+          {
+            "name": "get_zone_profile",
+            "is_error": false,
+            "latency_ms": 1385
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 244
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 231
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 26
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 235
+          },
+          {
+            "name": "get_document_outline",
+            "is_error": false,
+            "latency_ms": 22
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 217
+          }
+        ]
+      }
+    }
+  ],
+  "spec": {
+    "id": "ABS303-probe",
+    "title": "Probe: one-shot height query in HR-2",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "probe"
+    },
+    "address": "1000 Main Street, Halifax",
+    "zone": "HR-2",
+    "complexity": "simple",
+    "liability": "low",
+    "tags": [
+      "probe"
+    ],
+    "bylaw_features": [],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "What is the maximum building height permitted in the HR-2 zone?"
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [],
+    "expected_topics": [],
+    "notes": "ABS-303 probe: cheapest possible call to estimate per-iteration cost with WI-1+4 OFF before committing to TC-001 turn 1."
+  },
+  "case_wall_time_s": 47.2
+}

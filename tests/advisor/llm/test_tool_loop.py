@@ -580,6 +580,62 @@ def _result_block_cache_flags(request: CompletionRequest) -> list[bool]:
 
 
 @pytest.mark.asyncio
+async def test_advisor_disable_rolling_cache_breakpoint_env_var_short_circuits_marker(
+    monkeypatch,
+):
+    """ABS-303: the env-var kill-switch for WI-1 must produce gateway calls
+    with ZERO cache=True markers on any block, while leaving the rest of
+    the loop's behaviour intact (iteration count, conversation persistence,
+    final answer all unchanged).
+
+    This is the load-bearing test for ABS-303's real-API validation: if
+    setting ADVISOR_DISABLE_ROLLING_CACHE_BREAKPOINT=1 still leaves cache
+    markers on the request, the validation's "OFF" arm isn't actually off
+    and the measured cost delta would be meaningless.
+    """
+    monkeypatch.setenv("ADVISOR_DISABLE_ROLLING_CACHE_BREAKPOINT", "1")
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1", tool_name="search_bylaw_evidence", tool_input={"q": "1"}
+            ),
+            tool_use_response(
+                tool_id="tu_2", tool_name="search_bylaw_evidence", tool_input={"q": "2"}
+            ),
+            tool_use_response(
+                tool_id="tu_3", tool_name="search_bylaw_evidence", tool_input={"q": "3"}
+            ),
+            text_response("final answer"),
+        ]
+    )
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return "evidence"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+        token_budget=10_000_000,
+    )
+
+    assert result.iterations == 4
+    # Every gateway call must have ALL tool_result blocks unmarked.
+    # With the kill-switch active, the rolling breakpoint never lands,
+    # which is the WI-1-OFF state the validation needs.
+    for call in gateway.calls:
+        for msg in call.messages:
+            if isinstance(msg.content, list):
+                for block in msg.content:
+                    assert getattr(block, "cache", False) is False, (
+                        "ADVISOR_DISABLE_ROLLING_CACHE_BREAKPOINT=1 should "
+                        "produce gateway calls with no cache=True markers, "
+                        "but found one on a "
+                        f"{type(block).__name__}: {block!r}"
+                    )
+
+
+@pytest.mark.asyncio
 async def test_rolling_cache_breakpoint_marks_latest_tool_result():
     """ABS-285: every gateway call made AFTER the first tool_result
     lands must carry a cache breakpoint on the most recent tool_result
