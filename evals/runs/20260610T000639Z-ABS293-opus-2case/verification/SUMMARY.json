@@ -1,0 +1,32 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "zone": "ER-1",
+    "complexity": "simple",
+    "liability": "low",
+    "verdict": "PARTIAL",
+    "kw_rate": 0.5833333333333334,
+    "citation_found": 7,
+    "citation_total": 7,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate 58% below 80% bar for simple cases"
+    ]
+  },
+  {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "zone": "HR-2",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "PARTIAL",
+    "kw_rate": 0.5333333333333333,
+    "citation_found": 55,
+    "citation_total": 55,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate 53% below 60% bar for complex"
+    ]
+  }
+]

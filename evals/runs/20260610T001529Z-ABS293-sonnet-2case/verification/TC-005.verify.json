@@ -1,0 +1,1343 @@
+{
+  "id": "TC-005",
+  "title": "Developer feasibility for residential tower in HR-2",
+  "zone": "HR-2",
+  "complexity": "complex",
+  "liability": "high",
+  "model": "claude-sonnet-4-6",
+  "grade": {
+    "verdict": "PARTIAL",
+    "reasons": [
+      "missing hedging on high-liability turn",
+      "keyword rate 53% below 60% bar for complex"
+    ],
+    "citation_total": 66,
+    "citation_found": 66,
+    "citation_hallucinated": 0,
+    "keyword_expected": 30,
+    "keyword_hit": 16,
+    "keyword_rate": 0.5333333333333333,
+    "hedging_failed": true
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "wall_time_s": 116.73,
+      "stop_reason": "end_turn",
+      "citation_total": 22,
+      "citation_found": 22,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "15",
+          "raw": "Schedule 15",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "17",
+          "raw": "Schedule 17",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "18",
+          "raw": "Schedule 18",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "51",
+          "raw": "Schedule 51",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "appendix",
+          "value": "2",
+          "raw": "Appendix 2",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "appendix",
+          "value": "1",
+          "raw": "Appendix 1",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "V",
+          "raw": "Part V",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 100,
+              "text_excerpt": "Part V: Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": null,
+              "page": 101,
+              "text_excerpt": "Part V, Chapter 1: General Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": "Part V > 88",
+              "page": 101,
+              "text_excerpt": "88 All regulations contained within this Part do not apply to buildings within heritage conservation districts, unless otherwise stated in Part VI."
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "I",
+          "raw": "Part I",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 7,
+              "text_excerpt": "Part I: Administration"
+            },
+            {
+              "citation_path": null,
+              "page": 8,
+              "text_excerpt": "Part I, Chapter 1: General Administration"
+            },
+            {
+              "citation_path": "Part I > 1",
+              "page": 8,
+              "text_excerpt": "1 This By-law enables:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "200",
+          "raw": "\u00a7200",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 200",
+              "page": 173,
+              "text_excerpt": "200 (1) Any main building's maximum required streetwall height shall be: (RC- May 23/24;E-June 13/24)"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "29",
+          "raw": "\u00a729",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 29",
+              "page": 27,
+              "text_excerpt": "29 (1) The following schedules form part of this By-law:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "111",
+          "raw": "\u00a7111",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 111",
+              "page": 116,
+              "text_excerpt": "111 (1) Subject to Section 112 and Subsection 111(2), any portion of a main building, either above or below grade, shall have a minimum required front or flanking setback as specified on Schedule 18. "
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "112",
+          "raw": "\u00a7112",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 112",
+              "page": 116,
+              "text_excerpt": "112 Underground motor vehicle parking structures are exempt from the minimum required front or flanking setback requirements, but shall not protrude more than 0.25 metre above any streetline grade whe"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "127",
+          "raw": "\u00a7127",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 127",
+              "page": 127,
+              "text_excerpt": "127 (1) The tower portion of any high-rise building shall not exceed the following maximum building dimension requirements of:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "231",
+          "raw": "\u00a7231",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 231",
+              "page": 191,
+              "text_excerpt": "231 (1) Subject to Subsections 231(2) and 231(3), and Section 234, the maximum required lot coverage shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "115",
+          "raw": "\u00a7115",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 115",
+              "page": 118,
+              "text_excerpt": "115 (1) Subject to Subsections 115(2) and 115(3), and Section 427, the minimum required side setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "249",
+          "raw": "\u00a7249",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 249",
+              "page": 197,
+              "text_excerpt": "249 (1) Subject to Subsection 249(2) and Section 427, the minimum required side setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "116",
+          "raw": "\u00a7116",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 116",
+              "page": 118,
+              "text_excerpt": "116 (1) Subject to Subsections 116(2), 116(3), and 116(5), and Section 427, the minimum required rear setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "125",
+          "raw": "\u00a7125",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 125",
+              "page": 125,
+              "text_excerpt": "125 (1) Subject to Subsection 125(3), where a lot abuts another lot, any portion of which, is zoned ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK zone, the wall of any main building facing the lot with su"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "126",
+          "raw": "\u00a7126",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 126",
+              "page": 126,
+              "text_excerpt": "126 (1) Excluding pedways or tunnels, where more than one main building is permitted on a lot in Subsection 89(3), a minimum required separation distance of 4.0 metres shall be provided between main b"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "393",
+          "raw": "\u00a7393",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 393",
+              "page": 289,
+              "text_excerpt": "393 (1) The requirements of Subsections 174(1), 193(1), or 210(1) may be varied by site plan approval to exceed a building width or building depth. (RC- May23/24;E-Jun 13/24)"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "10",
+          "raw": "\u00a710",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 10",
+              "page": 12,
+              "text_excerpt": "10 A development permit application shall include documents and plans, drawn to scale, that include the following, where applicable:"
+            },
+            {
+              "citation_path": "Appendix 2 > 10",
+              "page": 447,
+              "text_excerpt": "10 The written analysis shall:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "196",
+          "raw": "\u00a7196",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 196",
+              "page": 171,
+              "text_excerpt": "196 Subject to Sections 103 and 104, and Part X, any main building shall not exceed the maximum required building height specified on Schedule 15."
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 5,
+        "hit": 1,
+        "rate": 0.2,
+        "misses": [
+          "permitted",
+          "multi-unit dwelling",
+          "dwelling unit",
+          "home occupation"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm",
+          "before proceeding",
+          "this is general"
+        ]
+      },
+      "hedging_required": true,
+      "hedging_ok": true
+    },
+    {
+      "turn": 2,
+      "wall_time_s": 41.44,
+      "stop_reason": "end_turn",
+      "citation_total": 3,
+      "citation_found": 3,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "17",
+          "raw": "Schedule 17",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "15",
+          "raw": "Schedule 15",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "127",
+          "raw": "\u00a7127",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 127",
+              "page": 127,
+              "text_excerpt": "127 (1) The tower portion of any high-rise building shall not exceed the following maximum building dimension requirements of:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 5,
+        "hit": 1,
+        "rate": 0.2,
+        "misses": [
+          "permitted",
+          "multi-unit dwelling",
+          "dwelling unit",
+          "home occupation"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm"
+        ]
+      },
+      "hedging_required": true,
+      "hedging_ok": true
+    },
+    {
+      "turn": 3,
+      "wall_time_s": 37.97,
+      "stop_reason": "end_turn",
+      "citation_total": 8,
+      "citation_found": 8,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "3F",
+          "raw": "Schedule 3F",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "7",
+          "raw": "Schedule 7",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "17",
+          "raw": "Schedule 17",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "I",
+          "raw": "Part I",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 7,
+              "text_excerpt": "Part I: Administration"
+            },
+            {
+              "citation_path": null,
+              "page": 8,
+              "text_excerpt": "Part I, Chapter 1: General Administration"
+            },
+            {
+              "citation_path": "Part I > 1",
+              "page": 8,
+              "text_excerpt": "1 This By-law enables:"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "V",
+          "raw": "Part V",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 100,
+              "text_excerpt": "Part V: Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": null,
+              "page": 101,
+              "text_excerpt": "Part V, Chapter 1: General Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": "Part V > 88",
+              "page": 101,
+              "text_excerpt": "88 All regulations contained within this Part do not apply to buildings within heritage conservation districts, unless otherwise stated in Part VI."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "497",
+          "raw": "Section 497",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 497",
+              "page": 376,
+              "text_excerpt": "497 (1) Within the Halifax Grain Elevator (HGE) Special Area, as shown on Schedule 3F, new or expanded residential uses shall only be permitted by development agreement, in accordance with Policy ED-6"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "69",
+          "raw": "\u00a769",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 69",
+              "page": 77,
+              "text_excerpt": "69 In any DD, DH, CEN-2, CEN-1, COR, HR-2, or HR-1 zone, where a lot:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "127",
+          "raw": "\u00a7127",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 127",
+              "page": 127,
+              "text_excerpt": "127 (1) The tower portion of any high-rise building shall not exceed the following maximum building dimension requirements of:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 5,
+        "hit": 3,
+        "rate": 0.6,
+        "misses": [
+          "dwelling unit",
+          "home occupation"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm",
+          "this is general",
+          "site-specific"
+        ]
+      },
+      "hedging_required": true,
+      "hedging_ok": true
+    },
+    {
+      "turn": 4,
+      "wall_time_s": 67.19,
+      "stop_reason": "end_turn",
+      "citation_total": 6,
+      "citation_found": 6,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "table",
+          "value": "15",
+          "raw": "Table 15",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "X",
+          "raw": "Part X",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 445 > [Pedestrian Walks Through Accessory Parking Lots] > (c)",
+              "page": 340,
+              "text_excerpt": "(c) stone pavers; or"
+            },
+            {
+              "citation_path": null,
+              "page": 297,
+              "text_excerpt": "Part X: View Planes, Halifax Citadel Rampart Sight Lines, and Waterfront View Corridors"
+            },
+            {
+              "citation_path": null,
+              "page": 298,
+              "text_excerpt": "Part X, Chapter 1: General Requirements for View Planes, Halifax Citadel Rampart Sight Lines, and Waterfront View Corridors"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "434",
+          "raw": "\u00a7434",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 434",
+              "page": 334,
+              "text_excerpt": "434 Where the calculation for motor vehicle parking results in a fraction of a motor vehicle parking space, the required number of motor vehicle parking spaces shall be rounded down to the nearest who"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "431",
+          "raw": "\u00a7431",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 431",
+              "page": 329,
+              "text_excerpt": "431 (1) All accessory parking lots and parking spaces shall be located on the same lot as the main use."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "453",
+          "raw": "\u00a7453",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 453",
+              "page": 346,
+              "text_excerpt": "453 (1) Bicycle parking racks are prohibited within 2.5 metres of any main building entrance (Diagram 26)."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "442",
+          "raw": "\u00a7442",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 442",
+              "page": 336,
+              "text_excerpt": "442 (1) Accessory parking lots are permitted in any DD, CEN-2, CEN-1, or COR zone."
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 5,
+        "hit": 4,
+        "rate": 0.8,
+        "misses": [
+          "home occupation"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "confirm with",
+          "hrm",
+          "this is general"
+        ]
+      },
+      "hedging_required": true,
+      "hedging_ok": true
+    },
+    {
+      "turn": 5,
+      "wall_time_s": 49.55,
+      "stop_reason": "end_turn",
+      "citation_total": 5,
+      "citation_found": 5,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "part",
+          "value": "I",
+          "raw": "Part I",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 7,
+              "text_excerpt": "Part I: Administration"
+            },
+            {
+              "citation_path": null,
+              "page": 8,
+              "text_excerpt": "Part I, Chapter 1: General Administration"
+            },
+            {
+              "citation_path": "Part I > 1",
+              "page": 8,
+              "text_excerpt": "1 This By-law enables:"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "X",
+          "raw": "Part X",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 445 > [Pedestrian Walks Through Accessory Parking Lots] > (c)",
+              "page": 340,
+              "text_excerpt": "(c) stone pavers; or"
+            },
+            {
+              "citation_path": null,
+              "page": 297,
+              "text_excerpt": "Part X: View Planes, Halifax Citadel Rampart Sight Lines, and Waterfront View Corridors"
+            },
+            {
+              "citation_path": null,
+              "page": 298,
+              "text_excerpt": "Part X, Chapter 1: General Requirements for View Planes, Halifax Citadel Rampart Sight Lines, and Waterfront View Corridors"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "51",
+          "raw": "\u00a751",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 51",
+              "page": 63,
+              "text_excerpt": "51 (1) Excluding a home occupation use contained within a graderelated dwelling unit use, a home occupation use shall:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "466",
+          "raw": "\u00a7466",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 466",
+              "page": 358,
+              "text_excerpt": "466 In any DD, DH, CEN-2, CEN-1, COR, HR-2, HR-1, or CDD-1 zone, one non-illuminated fascia sign, not exceeding 3.0 square metres in area, is permitted for:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "69",
+          "raw": "\u00a769",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 69",
+              "page": 77,
+              "text_excerpt": "69 In any DD, DH, CEN-2, CEN-1, COR, HR-2, or HR-1 zone, where a lot:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 5,
+        "hit": 4,
+        "rate": 0.8,
+        "misses": [
+          "multi-unit dwelling"
+        ]
+      },
+      "hedging": {
+        "hedged": false,
+        "markers": []
+      },
+      "hedging_required": true,
+      "hedging_ok": false
+    },
+    {
+      "turn": 6,
+      "wall_time_s": 93.57,
+      "stop_reason": "end_turn",
+      "citation_total": 22,
+      "citation_found": 22,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "15",
+          "raw": "Schedule 15",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "17",
+          "raw": "Schedule 17",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "18",
+          "raw": "Schedule 18",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "51",
+          "raw": "Schedule 51",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "25",
+          "raw": "Schedule 25",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "table",
+          "value": "15",
+          "raw": "Table 15",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "appendix",
+          "value": "2",
+          "raw": "Appendix 2",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "V",
+          "raw": "Part V",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 100,
+              "text_excerpt": "Part V: Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": null,
+              "page": 101,
+              "text_excerpt": "Part V, Chapter 1: General Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": "Part V > 88",
+              "page": 101,
+              "text_excerpt": "88 All regulations contained within this Part do not apply to buildings within heritage conservation districts, unless otherwise stated in Part VI."
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "I",
+          "raw": "Part I",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 7,
+              "text_excerpt": "Part I: Administration"
+            },
+            {
+              "citation_path": null,
+              "page": 8,
+              "text_excerpt": "Part I, Chapter 1: General Administration"
+            },
+            {
+              "citation_path": "Part I > 1",
+              "page": 8,
+              "text_excerpt": "1 This By-law enables:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "196",
+          "raw": "\u00a7196",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 196",
+              "page": 171,
+              "text_excerpt": "196 Subject to Sections 103 and 104, and Part X, any main building shall not exceed the maximum required building height specified on Schedule 15."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "231",
+          "raw": "\u00a7231",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 231",
+              "page": 191,
+              "text_excerpt": "231 (1) Subject to Subsections 231(2) and 231(3), and Section 234, the maximum required lot coverage shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "199",
+          "raw": "\u00a7199",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 199",
+              "page": 173,
+              "text_excerpt": "199 (1) Subject to Subsections 199(2), 199(3), and 199(4), the minimum required rear setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "125",
+          "raw": "\u00a7125",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 125",
+              "page": 125,
+              "text_excerpt": "125 (1) Subject to Subsection 125(3), where a lot abuts another lot, any portion of which, is zoned ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK zone, the wall of any main building facing the lot with su"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "111",
+          "raw": "\u00a7111",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 111",
+              "page": 116,
+              "text_excerpt": "111 (1) Subject to Section 112 and Subsection 111(2), any portion of a main building, either above or below grade, shall have a minimum required front or flanking setback as specified on Schedule 18. "
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "200",
+          "raw": "\u00a7200",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 200",
+              "page": 173,
+              "text_excerpt": "200 (1) Any main building's maximum required streetwall height shall be: (RC- May 23/24;E-June 13/24)"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "127",
+          "raw": "\u00a7127",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 127",
+              "page": 127,
+              "text_excerpt": "127 (1) The tower portion of any high-rise building shall not exceed the following maximum building dimension requirements of:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "126",
+          "raw": "\u00a7126",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Schedule 17 > 126",
+              "page": 126,
+              "text_excerpt": "126 (1) Excluding pedways or tunnels, where more than one main building is permitted on a lot in Subsection 89(3), a minimum required separation distance of 4.0 metres shall be provided between main b"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "393",
+          "raw": "\u00a7393",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 393",
+              "page": 289,
+              "text_excerpt": "393 (1) The requirements of Subsections 174(1), 193(1), or 210(1) may be varied by site plan approval to exceed a building width or building depth. (RC- May23/24;E-Jun 13/24)"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "434",
+          "raw": "\u00a7434",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 434",
+              "page": 334,
+              "text_excerpt": "434 Where the calculation for motor vehicle parking results in a fraction of a motor vehicle parking space, the required number of motor vehicle parking spaces shall be rounded down to the nearest who"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "15",
+          "raw": "\u00a715",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 15",
+              "page": 17,
+              "text_excerpt": "15 (1) Within the DD, DH, CEN-2, CEN-1, COR, HR-2, HR-1, CLI, INS, UC-2, UC-1, PCF, or RPK zone, any development requesting a variation listed under Subsection 15(2), shall be subject to site plan app"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "10",
+          "raw": "\u00a710",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 10",
+              "page": 12,
+              "text_excerpt": "10 A development permit application shall include documents and plans, drawn to scale, that include the following, where applicable:"
+            },
+            {
+              "citation_path": "Appendix 2 > 10",
+              "page": 447,
+              "text_excerpt": "10 The written analysis shall:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "20",
+          "raw": "\u00a720",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 20",
+              "page": 21,
+              "text_excerpt": "20 Where any site plan approval is granted, the Development Officer shall notify, in writing, every assessed property owner within 30 metres of the subject property."
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 5,
+        "hit": 3,
+        "rate": 0.6,
+        "misses": [
+          "dwelling unit",
+          "home occupation"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "planner",
+          "hrm",
+          "this is general",
+          "site-specific"
+        ]
+      },
+      "hedging_required": true,
+      "hedging_ok": true
+    }
+  ]
+}
