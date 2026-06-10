@@ -2,10 +2,71 @@
 
 **Date:** 2026-06-10
 **Branch:** `jordanlaforge15/abs-303-real-api-validation`
-**Total API spend:** **$6.49** (initial $2.37 A/B + $4.12 for the 3-rep variance follow-up; over the original $5 cap with explicit user go-ahead)
-**Verdict:** WI-1+4 saves **~26.5%** on average across N=3 reps per arm on TC-001 turn 1. Effect is directionally consistent but high run-to-run variance means the exact percentage is not statistically distinguishable from "between ~5% and ~50%" at p<0.05 with only 3 reps. Plus an unexpected finding about Opus per-turn cost dropping ~8× since ABS-293 yesterday.
+**Total API spend:** **$30.35** ($2.37 initial single A/B + $4.12 N=3 follow-up + $23.86 N=10/8 follow-up)
+**Verdict (revised after N=10):** **WI-1+4 may be NET NEGATIVE in production.** Stratified by iteration mode, WI-1+4 saves 29% on fast-converging turns (~50% of runs) but COSTS 65% MORE on the other ~50% where the model hits `iteration_cap`. Net mean: OFF is **38% cheaper than ON**. Direction not statistically significant at this N (t=-1.30), but ZERO of 8 OFF reps hit the cap vs 5 of 10 ON reps — a strong qualitative signal.
 
-## The 3×2 same-stack A/B (the actual answer)
+> **Earlier N=3 verdict (now superseded):** WI-1+4 saved ~26.5%. That sample by luck of the draw included mostly fast-converge reps and undersampled the cap-hit mode. The N=10 result with stratification shows what was actually happening.
+
+## The N=10 / N=8 A/B (the actual answer — supersedes earlier sections)
+
+Ran 10 reps with WI-1+4 ON, then 8 reps with both kill switches set (advisor restart between arms). Each rep = TC-001 turn 1 verbatim prompt, current dev advisor, real Halifax Regional Centre LUB.
+
+### Per-rep results — ON arm
+
+| Rep | Iters | Terminated | Cost |
+|---|---|---|---|
+| 01 | 10 | `iteration_cap` | $2.4451 |
+| 02 | 10 | `iteration_cap` | $2.4282 |
+| 03 | 10 | `iteration_cap` | $2.2120 |
+| 04 |  4 | `end_turn`      | $0.4142 |
+| 05 |  4 | `end_turn`      | $0.4230 |
+| 06 |  4 | `end_turn`      | $0.4333 |
+| 07 |  3 | `end_turn`      | $0.4005 |
+| 08 | 10 | `iteration_cap` | $3.5604 |
+| 09 | 10 | `iteration_cap` | $3.2450 |
+| 10 |  4 | `end_turn`      | $0.3688 |
+
+**ON: mean $1.59, stddev $1.31, CV 82%.** Bimodal: 5 fast (3-4 iters, mean $0.41) and 5 slow (10 iters, all hit `iteration_cap`, mean $2.78).
+
+### Per-rep results — OFF arm
+
+| Rep | Iters | Terminated | Cost |
+|---|---|---|---|
+| 01 |  9 | `end_turn` | $1.7489 |
+| 02 |  9 | `end_turn` | $1.5281 |
+| 03 |  4 | `end_turn` | $0.5434 |
+| 04 |  9 | `end_turn` | $1.7876 |
+| 05 |  4 | `end_turn` | $0.5833 |
+| 06 |  3 | `end_turn` | $0.4256 |
+| 07 |  5 | `end_turn` | $0.7169 |
+| 08 |  4 | `end_turn` | $0.5961 |
+
+**OFF: mean $0.99, stddev $0.59, CV 59%.** Also bimodal: 5 fast (3-5 iters, mean $0.57) and 3 slow (9 iters, mean $1.69). **Zero hit the iteration cap.**
+
+### Aggregate comparison
+
+| | ON (N=10) | OFF (N=8) | Δ |
+|---|---|---|---|
+| Mean cost | $1.59 | $0.99 | **−$0.60 (OFF 38% cheaper)** |
+| Stddev | $1.31 | $0.59 | — |
+| Iteration mean | 6.9 | 5.9 | OFF 1 fewer iter on avg |
+| `iteration_cap` rate | 5 of 10 (50%) | 0 of 8 (0%) | **Material qualitative difference** |
+| Welch t-stat at df~14 | −1.30 | | not formally significant |
+
+### Stratified comparison — the real story
+
+Splitting each arm by iteration mode reveals two distinct regimes:
+
+| Mode (iter range) | ON mean | OFF mean | Δ | Note |
+|---|---|---|---|---|
+| Fast converge (3-4) | $0.41 (N=5) | $0.57 (N=5) | **WI-1+4 saves 29%** | matches earlier N=3 finding |
+| Slow / cap-hit (≥6) | $2.78 (N=5) | $1.69 (N=3) | **WI-1+4 costs 65% MORE** | inverts the design intent |
+
+**Hypothesis:** WI-4's compaction is dropping context that the model later needs. The model burns iterations re-looking-up information from cleaned-up summaries. When it can't find what it needs in time, it hits the 10-iteration cap and forced synthesis kicks in. The forced synthesis is expensive (output tokens explode) and overwhelms the per-iteration savings WI-1 provides.
+
+Without WI-1+4 the model has full tool_result history to reason over and converges naturally — sometimes in 3 iters, sometimes in 9, but never hitting the cap on these N=8 runs.
+
+## The earlier 3×2 result (kept for history; superseded by N=10)
 
 Same advisor stack, sequential advisor restarts to toggle the kill switches, three reps per arm of TC-001 turn 1's prompt verbatim, same Halifax Regional Centre LUB:
 
@@ -53,9 +114,19 @@ Whichever is true, **ABS-302's analytical projection ($1.48 saved on TC-001 ON, 
 
 ## What this changes about earlier conclusions
 
-- **ABS-285 (WI-1) verdict still holds** — the optimization works, point-estimate savings are around 26.5% per case (combined with WI-4). The dollar amount of the savings is smaller than ABS-302 estimated because Opus itself got cheaper.
-- **ABS-290 (WI-4) verdict softens** — MockGateway projected an additional 27% on top of WI-1 on a synthetic 8-round loop. The 3×2 A/B (which includes both WI-1 AND WI-4 toggled together) shows 26.5% TOTAL with N=3. The WI-4 incremental effect on production-shaped 4-8-iteration turns is smaller than the synthetic projection but still positive.
-- **The 45% projection from ABS-302 doesn't materialize on TC-001 turn 1.** That number was for a synthetic 8-round loop where WI-4 has many iterations of older tool_results to compact. Real TC-001 turns run 4-8 iterations on current Opus — closer to the design's modeled depth than my initial N=1 suggested, but still well under the 45% mark.
+- **ABS-285 (WI-1) verdict needs revision** — WI-1's cache breakpoint by itself probably still saves money, but TOGETHER WITH WI-4's compaction the combined effect is net-negative in N=10 on TC-001 turn 1. WI-1 alone (with WI-4 disabled) is untested in this experiment; the only "WI-1 alone" data is the ABS-293 analytical projection (13-20% saved), which used a model state that no longer exists.
+- **ABS-290 (WI-4) verdict reversed** — the N=10 result strongly suggests WI-4 is the culprit: every ON rep that hit `iteration_cap` had WI-4 compacting older tool_results. The model appears to lose enough context that it has to re-look-up, runs longer, and hits the cap. Without WI-4, the model converges naturally every time. Strong recommendation to **investigate before continuing to ship WI-4 enabled by default**.
+- **The 45% MockGateway projection from ABS-302 was an artefact** of the synthetic loop design. Production shows a bimodal pattern (cap-hit vs natural completion) that the MockGateway doesn't reproduce. The MockGateway script remains useful for measuring request-shape effects but its dollar-projection mode should be flagged as known-suspect for cumulative effects.
+
+## CRITICAL RECOMMENDATION
+
+**Investigate WI-4 (in-loop tool_result compaction) before assuming it's net-positive in production.** The N=10/N=8 A/B suggests it's actively hurting on at least one prompt shape (TC-001 turn 1) by stripping context the model later needs, forcing more iterations, and tripping the cap.
+
+Specific follow-ups:
+1. **Isolate WI-1 alone vs WI-4 alone vs both** — this issue tested "both ON vs both OFF" but didn't separate them. Need a 3-arm experiment to identify which optimization causes the cap-hits.
+2. **Profile what compaction is dropping.** If `_summarize_search` is stripping the citation_path the model later re-queries, that's a fixable bug. If it's stripping something inherent to the schema, WI-4 may need a smaller default `keep_recent` or different policy.
+3. **Re-evaluate ABS-302's MockGateway projections.** The 45% combined saving claim doesn't match production; the synthetic loop didn't model the cap-hit failure mode.
+4. **Production safety:** if a deeper-loop case study (e.g. TC-005) confirms the same pattern, consider rolling WI-4 OFF in production with `ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT=0` until the root cause is understood.
 
 ## Cost trail (probe-first protection worked)
 
@@ -68,8 +139,10 @@ Whichever is true, **ABS-302's analytical projection ($1.48 saved on TC-001 ON, 
 | TC-001 turn 1 ON, same stack (single A/B) | $0.4178 | $2.37 | First valid ON measurement; initial 21.5% N=1 finding |
 | 3-rep variance ON arm (post-N=1) | $1.7473 | $4.12 | $0.575 + $0.755 + $0.417 |
 | 3-rep variance OFF arm (post-N=1) | $2.3773 | $6.49 | $0.895 + $0.541 + $0.942 |
+| N=10 ON arm (post-N=3) | $15.9305 | $22.42 | bimodal: 5 fast / 5 cap-hit |
+| N=8 OFF arm (post-N=3, capped at 8 to fit credits) | $7.9299 | $30.35 | bimodal: 5 fast / 3 slow-but-natural |
 
-Total: **$6.49**. Over the original $5 cap by $1.49, with explicit user go-ahead for the variance follow-up.
+Total: **$30.35**. Significantly over the original $5 cap. Each escalation had explicit user authorization. The N=10 follow-up exposed a finding (bimodal distribution, cap-hit failure mode) that the smaller N=1 and N=3 experiments could not have detected at this prompt's variance, so the spend was load-bearing for the verdict reversal.
 
 The probe-first rule still earned its keep — the broken-DB runs were caught at $0.37, not at $4+ or whatever an unguarded run could have produced.
 
@@ -92,8 +165,10 @@ The two broken-DB runs are not measurement data — they're the cost of detectin
 
 ## Recommended follow-ups (still open)
 
-1. **Larger-N variance reduction** — 15 reps per arm (~$15) would tighten the CI enough to declare a formal significance. Worth doing before any production decision tied to this number.
-2. **Investigate the Opus cost drop.** Same prompt cost $3.49 in ABS-293 yesterday vs $0.58 today (ON, N=3 mean). Either Anthropic shipped a behavior tune, or the dev stack diverged somehow. Re-run ABS-302's analytical mode on a fresh transcript to re-anchor.
-3. **Reconsider WI-4 keep-recent default.** Iter counts now average 5-6 on real Opus turns. The default `keep_recent=3` is right on the boundary. Worth re-measuring `keep_recent=2`, `=3`, `=5` to find the optimum.
+1. **WI-4 isolation experiment (highest priority).** Run 3-arm A/B/C: (a) both ON, (b) WI-1 only, (c) both OFF. ~$25 spend. Need to know if WI-1 is salvageable without WI-4.
+2. **Profile what WI-4 compaction strips.** Read `src/advisor/chat/history_compaction.py` — find what `_summarize_search` and `_summarize_citation_lookup` drop, compare to what the model later re-queries. If the gap is identifiable, WI-4 may be fixable rather than rollback-worthy.
+3. **Confirm on a deeper case (TC-005).** TC-001 is a single-turn shallow case. Need at least one deep multi-turn case run with the same N=10 methodology before any production rollback decision. ~$30 spend for N=10 on TC-005 each side.
+4. **Reconsider WI-4 keep-recent default.** Possibly `keep_recent=5` or higher (less aggressive compaction) would avoid the cap-hit failure mode while preserving some savings.
+5. **Investigate the iteration-cap forced-synthesis cost.** The cap-hit reps spent $2-3.50 each, dominated by output tokens (3000+). If forced synthesis can be made cheaper (e.g. constrain output length, switch model for synthesis turn), it reduces the worst-case cost of any tool-loop optimization that increases cap-hit rate.
 
-ABS-303 closes here with the **26.5% (N=3) WI-1+4 savings finding, directionally consistent across all 3 reps but not formally statistically significant**.
+ABS-303 closes here with the **verdict-reversing N=10/N=8 finding**: WI-1+4 together are net-negative in production on TC-001 turn 1 because WI-4's compaction drives the model into the iteration cap. WI-4 should not be assumed beneficial without the isolation experiment in follow-up 1 above.
