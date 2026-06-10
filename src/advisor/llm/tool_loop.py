@@ -23,6 +23,7 @@ and recover, rather than the whole conversation aborting.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -241,8 +242,18 @@ async def run_tool_loop(
         compacted = compact_tool_loop_history(
             conversation, keep_recent_results=keep_recent
         )
+        # ABS-303: env-var kill-switch for WI-1's rolling cache breakpoint,
+        # used by the real-API validation that compares billed cost with
+        # vs without the optimization. Default behaviour is unchanged
+        # (marker is placed); only an explicit ``=1`` short-circuits it.
+        # Documented in docs/COST_REGRESSION.md and referenced from the
+        # ABS-303 measurement run.
+        if os.environ.get("ADVISOR_DISABLE_ROLLING_CACHE_BREAKPOINT") == "1":
+            messages_for_request = compacted
+        else:
+            messages_for_request = _mark_rolling_cache_breakpoint(compacted)
         current_request = request.model_copy(
-            update={"messages": _mark_rolling_cache_breakpoint(compacted)}
+            update={"messages": messages_for_request}
         )
 
         estimated = estimate_request_input_tokens(current_request)
