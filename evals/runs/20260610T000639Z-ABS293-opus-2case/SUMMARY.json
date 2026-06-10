@@ -1,0 +1,22 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "complexity": "simple",
+    "turns_completed": 2,
+    "turns_expected": 2,
+    "tool_calls": 0,
+    "wall_s": 120.7,
+    "error": null
+  },
+  {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "complexity": "complex",
+    "turns_completed": 6,
+    "turns_expected": 6,
+    "tool_calls": 0,
+    "wall_s": 375.67,
+    "error": null
+  }
+]
