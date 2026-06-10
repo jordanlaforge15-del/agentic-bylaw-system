@@ -203,3 +203,156 @@ Every item must go through the existing cost-regression workflow
 (`docs/COST_REGRESSION.md`): cheap-model TC-005 loop for iteration, Opus 20-case
 full-suite as the merge gate. Per-item savings claims should cite
 `tool_loop_metrics` deltas, not estimates.
+
+---
+
+## Post-implementation: WI-7 ↔ WI-3 surface-asymmetry resolution
+
+**Date:** 2026-06-09 · **Issues:** ABS-288 (WI-7), ABS-289 (WI-3) · **Status:** resolved
+
+A review flagged a default-flag divergence between ABS-288 and ABS-289. Determination
+after reading the shipped code: **intentional-compatible, not functional drift —
+fan-out is not broken — but the divergence was accidental-by-omission and the headline
+metric was measured on the wrong surface.**
+
+### What is true
+
+There are two independent retrieval tool surfaces with **opposite `include_*`
+defaults**, and that is correct:
+
+| Surface | `include_*` default | Rationale |
+|---|---|---|
+| External MCP / OpenAI tool schema + `RetrievalRequest` | `False` (opt-in) | Lean default for external/MCP callers (ABS-288). |
+| **Advisor production path** (`src/advisor/chat/tools.py`) | **`True`** | Feeds ABS-289 fan-out: the model must see `cross_references` / `ancestor_chain` / `linked_datasets` to follow leads. |
+
+The advisor keeps `include_*=True` in two places — the model-facing JSON schema
+(`chat/tools.py:277-279`, `322-325`) and the handler
+(`search_bylaw_evidence_handler`, `:774-777`, `payload.get(..., True)`). ABS-288 never
+modified `chat/tools.py`, so fan-out leads survive on the live path. The empty-field
+serializer added by ABS-288 only omits fields when empty, so populated cross-refs are
+unaffected.
+
+### What was wrong
+
+1. **Undocumented + accidental.** The asymmetry was not designed; ABS-288 simply didn't
+   touch the advisor surface, and the advisor's pre-existing explicit `True` shielded
+   it. Recorded here as an intended asymmetry going forward.
+2. **The "47% reduction" does not describe production.** It was measured on the
+   test-only endpoint `POST /v1/_test/search-evidence-raw` with all `include_*=False`
+   (the lean external surface). The advisor path runs `include_*=True`, so it captures
+   only **echo removal + empty-field omission** — a much smaller delta. The 47% is the
+   external-surface number; the advisor-path saving must be re-measured.
+
+### Follow-up actions (do NOT align defaults — that would break fan-out)
+
+- **ABS-288 (amend/comment):** label 47% as the external-surface figure; add the
+  advisor-path re-measurement (echo + empty-omission only, `include_*=True`).
+- **New guard test (drift hazard):** the advisor relies on the *explicit*
+  `payload.get(..., True)`. If a future refactor drops it and falls through to the now-
+  `False` `RetrievalRequest` default, fan-out dies silently with no error. Neither
+  existing spec catches this — `abs288-…-raw` hits the test endpoint;
+  `abs289-persona-fan-out` only asserts the loop handles two `tool_use` blocks, not
+  that cross-refs are present by default. Add an advisor-path assertion that a default
+  `search_bylaw_evidence` call returns populated `cross_references` / `linked_datasets`.
+- **Persona:** no correctness change — the advisor schema already advertises
+  `default: True`, so it is self-consistent. A one-line developer note on the surface
+  split is sufficient; the model needs no awareness of the external surface.
+
+---
+
+## Post-mortem: WI-1 and WI-4 reverted (ABS-304, 2026-06-10)
+
+The two largest projected wins in this doc — WI-1 (rolling cache breakpoint) and
+WI-4 (in-flight tool_result compaction) — were **reverted in production** after
+ABS-303's real-API measurement showed they are net-negative.
+
+### What was measured
+
+ABS-303 ran a 3-arm experiment on real Opus 4.5, TC-001 turn 1 prompt verbatim,
+same-stack restarts to swap env-var configurations:
+
+| Arm | N | Cap-hit rate | Mean cost |
+|---|---|---|---|
+| Both ON (WI-1 + WI-4, the design target) | 10 | **50%** | $1.59 |
+| WI-1 only | 6 | 33% | $0.96 |
+| Both OFF | 8 | **0%** | $0.99 |
+
+- Both OFF → Both ON: cap-hit rate goes 0% → 50%, mean cost +61%
+  (Fisher exact on the cap-hit difference p ≈ 0.038, formally significant).
+- WI-1 alone introduces the cap-hit failure mode (0% → 33%) — contrary to the
+  design assumption that `cache_control` markers are a billing-only effect with
+  no model-behaviour impact.
+- WI-4 compounds on top of WI-1: cap-hit 33% → 50%, mean cost $0.96 → $1.59.
+
+Full rollup: `evals/token_savings/20260610-ABS303-real-api-validation/ROLLUP.md`.
+Raw data: `evals/runs/20260610-ABS303-tc001-turn1-AB-N10/`.
+
+### Why the design's projections didn't hold
+
+The "Core insight" section above modeled WI-1 saving the dominant input term by
+~10× (≈$2.5 → ≈$0.25 per deep case). Two assumptions broke:
+
+1. **Cache_write premium swamps cache_read savings on real loops.** Each new
+   tool_result enters the cache once at the 1.25× write rate; the break-even
+   reads-per-write ratio is ~0.278. Production transcripts run at 0.56–0.75,
+   well above break-even — but the savings are modest, not 10×. ABS-302's
+   analytical mode on existing ABS-293 transcripts showed only 13–20% saved.
+
+2. **`cache_control` hints change model behaviour, not just billing.** The 0%
+   → 33% cap-hit jump from adding WI-1 alone (vs Both OFF) suggests the model
+   treats cache-marked prefixes differently — possibly as "already validated"
+   — and over-iterates when its early reasoning was wrong. WI-4's compaction
+   then strips context the model later needs, forcing re-lookups and pushing
+   the run into the iteration cap. The cap-hit synthesis turns cost $2–3 each
+   (dominated by output tokens), which dwarfs whatever per-iteration savings
+   the optimizations deliver.
+
+### Expected-value math against keeping the code
+
+For WI-4 to be net-positive even if it helps on deep multi-turn cases:
+
+- TC-001-like penalty (measured): ~$0.60 per shallow case.
+- TC-005-like savings (unverified; ABS-302 MockGateway projected ~27%):
+  ~$5.40 per deep case at the original $20 baseline.
+- Break-even shallow:deep traffic ratio at 27% deep savings: ~9:1.
+- Realistic production case mix is probably more shallow than that.
+
+Verifying the deep-case upside would cost ~$300 (N=10 per arm × 3 arms × ~$10/
+case on TC-005). Not worth keeping code with that expected value.
+
+### What was reverted in ABS-304
+
+- ABS-285's `_mark_rolling_cache_breakpoint` and its call site in `run_tool_loop`.
+- ABS-290's `compact_tool_loop_history`, `resolve_tool_loop_keep_recent`, and
+  the compaction call site in `run_tool_loop`.
+- The `ADVISOR_DISABLE_ROLLING_CACHE_BREAKPOINT` env-var kill switch from
+  ABS-303 (redundant once the underlying code was gone).
+- `MOCK_DEEP_SEARCH` from `mock_dispatcher.py` and the WI-4 e2e spec that used it.
+- ABS-285 e2e spec.
+- Unit tests for all of the above.
+- MockGateway mode in `scripts/measure_wi_token_savings.py` (and its tests),
+  which depended on the WI-1/WI-4 functions being toggleable.
+
+### What was kept
+
+- `_MAX_CONVERSATION_CACHE_MILESTONES = 1` (the milestone reallocation from
+  ABS-285). Conservative on cache markers given the observed behavioural side
+  effect; cost of reverting to 2 is real cache writes for unclear gain.
+- **WI-5** (ABS-291 cache-aware estimator). No behavioural side effect; pure win.
+- **WI-7** (ABS-288 envelope trim on retrieval responses). Smaller payloads, no
+  model behaviour change.
+- **WI-6** (ABS-287 per-tier `max_iterations`). Unrelated to the cache machinery.
+- The analytical mode of `scripts/measure_wi_token_savings.py` for reading
+  historical transcripts.
+
+### Lessons recorded
+
+- The MockGateway-based projection in ABS-302 modeled bytes accurately but
+  could not model the model's behavioural reaction to cache markers. Synthetic
+  loop benchmarks should be flagged as known-suspect for any optimization
+  whose intervention is visible to the model.
+- Single-turn shallow prompts are the worst test case for WI-4; deep multi-turn
+  prompts would have shown different results. But the data we have is what we
+  acted on, and acting on it was the right call given the expected-value math.
+- The probe-first cost protection (from the earlier ABS-293 overshoot) prevented
+  worse damage during the ABS-303 measurement runs.

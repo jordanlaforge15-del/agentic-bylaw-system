@@ -1,22 +1,15 @@
-"""Tests for ABS-302's scripts/measure_wi_token_savings.py.
+"""Tests for ABS-302's scripts/measure_wi_token_savings.py (post-ABS-304).
 
-The script has two measurement modes. The tests here cover:
+Covers the analytical mode — the cost math (``_cost_actual``,
+``_cost_projected_no_wi1``) exactly matches Anthropic's published Opus
+rates against hand-computed expectations. This is the load-bearing claim:
+real WI-1 savings = projected minus actual.
 
-* Analytical mode — the cost math (``_cost_actual``, ``_cost_projected_no_wi1``)
-  exactly matches Anthropic's published Opus rates against hand-computed
-  expectations. This is the load-bearing claim: real WI-1 savings = projected
-  minus actual.
-
-* MockGateway mode — the WI-1 monkey-patch and WI-4 env-var toggle actually
-  do what they claim. ``baseline`` produces zero cache-flagged bytes;
-  ``wi1`` produces non-zero; ``wi1+4`` produces non-zero AND a strictly
-  smaller uncached growing region than ``wi1`` alone.
-
-If these tests pass, the script's numbers are trustworthy.
+The MockGateway mode and its tests were removed in ABS-304 alongside the
+reverted WI-1 / WI-4 production code.
 """
 from __future__ import annotations
 
-import asyncio
 import importlib.util
 import sys
 from pathlib import Path
@@ -156,87 +149,7 @@ def test_analyse_transcript_handles_missing_tool_loop_metrics():
     assert result["wi1_savings_usd"] == pytest.approx(0.02513, abs=1e-4)
 
 
-# -- MOCKGATEWAY MODE ---------------------------------------------------------
-
-
-def _totals(result):
-    return result["totals"]
-
-
-def test_mock_baseline_produces_zero_cached_bytes():
-    """With WI-1 OFF (the baseline config), the gateway must see ZERO
-    cache-flagged blocks. If anything other than 0 shows up, either the
-    monkey-patch didn't apply or there's another path placing cache flags.
-    """
-    result = asyncio.run(measure_wi.run_mock_config("baseline", num_rounds=5))
-    assert _totals(result)["msgs_cached_chars"] == 0
-
-
-def test_mock_wi1_marks_a_rolling_breakpoint_each_iteration_after_first():
-    """WI-1 ON: every gateway call AFTER the first must carry a cache
-    breakpoint. The first call (initial user message, no tool_result yet)
-    has nothing to cache.
-    """
-    result = asyncio.run(measure_wi.run_mock_config("wi1", num_rounds=5))
-    per_iter = result["per_iteration"]
-    assert per_iter[0]["msgs_cached_chars"] == 0, "first call should have no cached blocks"
-    # Every subsequent call should have a non-zero cached partition.
-    for m in per_iter[1:]:
-        assert m["msgs_cached_chars"] > 0, (
-            f"iter {m['iteration']}: WI-1 should have placed a cache marker; got 0 cached chars"
-        )
-
-
-def test_mock_wi4_shrinks_uncached_region_vs_wi1_alone():
-    """WI-4 (in-loop compaction) on top of WI-1 must produce a strictly
-    smaller uncached growing region. If wi1+4 doesn't shrink uncached
-    bytes vs wi1, the compaction is silently a no-op — which would
-    invalidate ABS-290's claimed savings.
-
-    Use enough rounds (>3) that compaction has older tool_results to
-    summarise.
-    """
-    wi1 = asyncio.run(measure_wi.run_mock_config("wi1", num_rounds=6))
-    wi14 = asyncio.run(measure_wi.run_mock_config("wi1+4", num_rounds=6))
-
-    assert (
-        _totals(wi14)["msgs_uncached_chars"] < _totals(wi1)["msgs_uncached_chars"]
-    ), (
-        f"WI-4 did not shrink the uncached region: "
-        f"wi1={_totals(wi1)['msgs_uncached_chars']}, "
-        f"wi1+4={_totals(wi14)['msgs_uncached_chars']}"
-    )
-
-
-def test_mock_configs_are_independent_clean_up_after_themselves():
-    """Running multiple configs back-to-back must not bleed state across
-    them. After a baseline run (which monkey-patches the marker), a
-    follow-up wi1 run must see WI-1 working correctly.
-    """
-    # Run baseline first to apply (and clean up) the monkey-patch.
-    asyncio.run(measure_wi.run_mock_config("baseline", num_rounds=4))
-    # Then wi1 must still produce cached bytes.
-    wi1 = asyncio.run(measure_wi.run_mock_config("wi1", num_rounds=4))
-    assert _totals(wi1)["msgs_cached_chars"] > 0, (
-        "baseline run leaked its monkey-patch — WI-1 produces zero cached bytes"
-    )
-
-
-def test_mock_keep_recent_env_var_restored_after_wi4_off_run():
-    """The WI-4 toggle uses ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT. Make sure a
-    baseline run (which sets the var to 0 to disable compaction) restores
-    the prior value when it finishes, so subsequent runs aren't
-    contaminated.
-    """
-    import os
-    prior = os.environ.get("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT")
-    try:
-        # Force a known prior value
-        os.environ["ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT"] = "7"
-        asyncio.run(measure_wi.run_mock_config("baseline", num_rounds=3))
-        assert os.environ.get("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT") == "7"
-    finally:
-        if prior is None:
-            os.environ.pop("ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT", None)
-        else:
-            os.environ["ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT"] = prior
+# ABS-304: MockGateway-mode tests removed alongside the reverted WI-1 / WI-4
+# production code and the script's `run_mock_config` helper. The analytical
+# mode tests above still cover the historical cost math used to read existing
+# transcripts.
