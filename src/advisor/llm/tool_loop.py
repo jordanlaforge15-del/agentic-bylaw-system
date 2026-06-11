@@ -23,7 +23,6 @@ and recover, rather than the whole conversation aborting.
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -175,7 +174,6 @@ async def run_tool_loop(
     handlers: dict[str, ToolHandler],
     max_iterations: int = 10,
     token_budget: int | None = None,
-    compact_keep_recent: int | None = None,
 ) -> ToolLoopResult:
     """Drive a Messages API conversation through any number of tool-use
     rounds and return when the LLM stops asking for tools.
@@ -207,26 +205,16 @@ async def run_tool_loop(
     ``default_token_budget()`` (env-overridable). The breaker is
     always on; tests pin a small budget to exercise the trip.
 
-    ``compact_keep_recent`` is the WI-4 (ABS-290) in-flight tool-result
-    compaction window: the most recent K tool_result turns are sent
-    full and older ones are replaced with deterministic one-line
-    summaries in the per-iteration request, shrinking the cached tail
-    and the cache-write region on long loops. ``None`` resolves from
-    ``ADVISOR_TOOL_LOOP_COMPACT_KEEP_RECENT`` (default 3); a resolved
-    value ``<= 0`` disables in-loop compaction. Compaction is applied
-    BEFORE the rolling cache breakpoint so the breakpoint always rides
-    the latest (full) tool_result, strictly after the compacted region;
-    and it is view-only — the returned ``conversation`` keeps full
-    payloads, so the model can still re-issue ``lookup_citation`` to
-    recover anything a summary dropped.
+    NOTE: WI-1 (rolling cache breakpoint placement) and WI-4 (in-flight
+    tool_result compaction) were reverted in ABS-304 after ABS-303
+    showed they were net-negative in production. The function no longer
+    places ``cache_control`` markers on tool_result blocks nor compacts
+    older tool_result turns inside the loop. See
+    ``evals/token_savings/20260610-ABS303-real-api-validation/ROLLUP.md``
+    and the post-mortem in ``docs/TOKEN_COST_REDUCTION_FINDINGS.md``
+    for the evidence.
     """
-    from advisor.chat.history_compaction import (  # lazy: see module note
-        compact_tool_loop_history,
-        resolve_tool_loop_keep_recent,
-    )
-
     budget = token_budget if token_budget is not None else default_token_budget()
-    keep_recent = resolve_tool_loop_keep_recent(compact_keep_recent)
     conversation = list(request.messages)
     tool_calls: list[ToolInvocation] = []
     total_usage: TokenUsage | None = None
@@ -234,27 +222,10 @@ async def run_tool_loop(
     per_iteration: list[IterationMetric] = []
 
     for iteration in range(1, max_iterations + 1):
-        # WI-4: summarise older tool_result turns, THEN place the rolling
-        # breakpoint on the latest (still-full) one. Order matters — the
-        # breakpoint must ride a turn that compaction left untouched so
-        # the cached prefix ends after the compacted region, not inside
-        # it. The cost estimate below then sees the already-shrunk bytes.
-        compacted = compact_tool_loop_history(
-            conversation, keep_recent_results=keep_recent
-        )
-        # ABS-303: env-var kill-switch for WI-1's rolling cache breakpoint,
-        # used by the real-API validation that compares billed cost with
-        # vs without the optimization. Default behaviour is unchanged
-        # (marker is placed); only an explicit ``=1`` short-circuits it.
-        # Documented in docs/COST_REGRESSION.md and referenced from the
-        # ABS-303 measurement run.
-        if os.environ.get("ADVISOR_DISABLE_ROLLING_CACHE_BREAKPOINT") == "1":
-            messages_for_request = compacted
-        else:
-            messages_for_request = _mark_rolling_cache_breakpoint(compacted)
-        current_request = request.model_copy(
-            update={"messages": messages_for_request}
-        )
+        # Snapshot the live conversation into the per-iteration request so
+        # later appends (the assistant turn from this round, the next
+        # tool_result turn) don't retroactively mutate the sent payload.
+        current_request = request.model_copy(update={"messages": list(conversation)})
 
         estimated = estimate_request_input_tokens(current_request)
         if estimated > budget:
@@ -354,56 +325,6 @@ async def run_tool_loop(
         terminated_reason="iteration_cap",
         circuit_trip=None,
     )
-
-
-def _mark_rolling_cache_breakpoint(
-    conversation: list[Message],
-) -> list[Message]:
-    """Place a single rolling cache breakpoint on the most recent
-    tool_result turn (ABS-285).
-
-    A deep question fires 10–20 retrieval iterations; without an
-    intra-loop breakpoint, iterations 3…N re-send every prior
-    tool_result full-size and uncached every round — the triangular
-    N(N+1)/2 input term at the full Opus rate. By marking the LAST
-    tool_result block of the latest tool_result turn, Anthropic caches
-    the prefix up to and including it. The next iteration's prefix is
-    byte-identical up to that point, so it reads iterations 1…N-1 from
-    cache at ~10% of the input rate (incremental-caching pattern) and
-    writes the freshly-extended prefix for the iteration after.
-
-    Only ONE breakpoint is placed, and it always rides the latest
-    tool_result turn — Anthropic allows 4 breakpoints total and the
-    session already spends three (system + tools + one session-start
-    milestone, see ``advisor.chat.session``). Marking every iteration's
-    turn would blow that budget; a single rolling marker stays within
-    it while still caching the whole intra-loop prefix.
-
-    Returns a fresh list. The latest tool_result turn is copied with
-    its last block flagged; every other message is reused by reference,
-    and the source ``conversation`` is never mutated — the flag lives
-    only on the per-iteration request, so the persisted transcript
-    never accumulates stale breakpoints across user turns.
-
-    A no-op (returns ``list(conversation)``) when the conversation does
-    not yet end in a tool_result turn — e.g. iteration 1, whose tail is
-    the user's question, or any tail that isn't a tool_result user
-    turn. There is nothing intra-loop to cache until the first
-    tool_result lands.
-    """
-    if not conversation:
-        return list(conversation)
-    last = conversation[-1]
-    if last.role != LLMRole.USER or not isinstance(last.content, list):
-        return list(conversation)
-    if not last.content or not isinstance(last.content[-1], ToolResultBlock):
-        return list(conversation)
-
-    blocks: list[ContentBlock] = list(last.content)
-    blocks[-1] = blocks[-1].model_copy(update={"cache": True})
-    out = list(conversation)
-    out[-1] = last.model_copy(update={"content": blocks})
-    return out
 
 
 async def _force_synthesis(
