@@ -22,8 +22,12 @@ Three case tiers, ordered by token budget and price:
   rezoning, deep overlay-zone analysis. ~35-50 reasoning steps.
 
 Token budgets are CUMULATIVE (input + output) across all sessions in
-the case within the 30-day window. Margin against API cost is 98%+ at
-all tiers — pricing captures value delivered, not cost incurred.
+the case within the 30-day window. Measured expected-case margin
+against API cost is ~85-93% at list price on Opus 4.5 — not the 98%+
+the original pricing brief claimed; that figure assumed Sonnet rates.
+See ``docs/COST_MODEL.md`` for the measured per-turn economics, the
+budget-token vs billed-token distinction, and tail risks. Pricing
+captures value delivered, not cost incurred.
 
 Pack SKUs
 ---------
