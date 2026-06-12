@@ -15,15 +15,16 @@ consumption. We are already selling turns — illegibly.
 ## Proposal
 
 **One sellable unit: the turn** (one user question → one bounded tool-loop
-run → one grounded answer). One catalog row replaces three tiers; the four
-existing pack SKUs and their discount machinery carry over unchanged.
+run → one grounded answer), **list-priced at $10 CAD per turn**. One catalog
+row replaces three tiers; the four existing pack SKUs are just volume
+discounts off the $10 unit price and carry over unchanged.
 
-| SKU | Turns | Discount | Price (CAD) |
-|---|---|---|---|
-| PAYG | 1 | — | **$10** |
-| Starter | 5 | 5% | $47.50 |
-| Pro | 20 | 15% | $170 |
-| Enterprise | 100 | 25% | $750 |
+| SKU | Turns | Discount | Pack price (CAD) | Effective $/turn |
+|---|---|---|---|---|
+| PAYG | 1 | — | **$10** | $10.00 |
+| Starter | 5 | 5% | $47.50 | $9.50 |
+| Pro | 20 | 15% | $170 | $8.50 |
+| Enterprise | 100 | 25% | $750 | $7.50 |
 
 Entry price *drops* ($10 vs $12.50 Quick); effective per-turn price stays
 inside today's realized $12.50–$32 band. Trial: **3 free turns** (~$3 USD
