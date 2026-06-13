@@ -175,8 +175,12 @@ stamped studies. Different buyer, different motion, highest value.
   (artifacts/transactions) → B2B (accelerator/consultants).**
 
 ## Open decisions
-1. Turn→artifact credit mechanic: full credit, partial, or "artifact includes N
-   follow-up turns"? (Affects how the two SKUs net out.)
+1. ~~Turn→artifact credit mechanic: full credit, partial, or "artifact includes N
+   follow-up turns"?~~ **Deferred (decided 2026-06-12).** Left open deliberately
+   until Phase 2 is in view — the choice changes how the two SKUs net out
+   financially and should be made against real turn-revenue and artifact-pricing
+   data, not pre-committed. Nothing in Phase 0/1 depends on it. The credit bridge
+   remains the intended *mechanism*; only its rate/form is unfixed.
 2. Does the readiness report (Phase 1) get built standalone, or does ABS-307/308
    (turn billing) ship first and the platform come immediately after? (Sequencing
    of the same team.)
