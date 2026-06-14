@@ -78,9 +78,9 @@ e2e-down:
 	./scripts/e2e-down.sh
 
 e2e-smoke: e2e-up
-	cd web && npx playwright test e2e/smoke
+	cd web && NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true npx playwright test e2e/smoke
 	./scripts/e2e-down.sh
 
 e2e: e2e-up
-	cd web && npx playwright test
+	cd web && NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true npx playwright test
 	./scripts/e2e-down.sh

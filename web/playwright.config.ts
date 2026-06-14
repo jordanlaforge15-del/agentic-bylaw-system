@@ -22,6 +22,14 @@
 
 import { defineConfig, devices } from "@playwright/test";
 
+// Default the general-feedback gate flag to "true" in the e2e stack.
+// The Next.js server gets it via e2e-up.sh; this sets it for the Playwright
+// runner process so specs that branch on this env var behave consistently
+// regardless of whether they're invoked via `make e2e` or directly.
+if (!process.env.NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED) {
+  process.env.NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED = "true";
+}
+
 const BASE_URL = process.env.E2E_BASE_URL || "http://localhost:3001";
 
 const isCI = !!process.env.CI;

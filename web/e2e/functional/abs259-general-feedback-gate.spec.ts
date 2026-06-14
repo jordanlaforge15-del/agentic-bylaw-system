@@ -5,13 +5,15 @@
 //   - absent  → GeneralFeedback.tsx returns null immediately; no button is
 //               rendered regardless of route.
 //
-// In the standard e2e environment the flag is "true" (set in
-// .env.local.example), so this spec verifies the gate-open path.
-// The gate-closed path relies on the component's early return being the only
-// render path — a trivial React guard with no framework primitives that need
-// independent browser-level verification.
+// In the standard e2e environment the flag is always "true":
+//   - scripts/e2e-up.sh passes it inline to `next dev` (ABS-301 fix).
+//   - web/playwright.config.ts defaults it to "true" in the Playwright
+//     runner process so specs that branch on it behave consistently
+//     regardless of whether .env.local is present (ABS-301 fix).
 //
 // What we verify:
+//   0. The Playwright runner process has the flag set to "true" (validates
+//      the playwright.config.ts default and the ABS-301 infrastructure fix).
 //   1. When the gate is open, the Feedback trigger button is present on /app.
 //   2. Clicking the trigger opens the feedback form dialog.
 //   3. Cancelling the form hides it and restores the trigger button.
@@ -22,6 +24,15 @@ const GENERAL_FEEDBACK_ENABLED =
   process.env.NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED === "true";
 
 test.describe("abs259 general feedback gate", () => {
+  // Validates ABS-301: playwright.config.ts must default the flag to "true"
+  // in the runner process so gate specs never silently skip in e2e runs.
+  test("runner env has NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true", () => {
+    expect(
+      process.env.NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED,
+      "playwright.config.ts must default NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED to 'true'",
+    ).toBe("true");
+  });
+
   test.describe("gate-open path (NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true)", () => {
     test.skip(
       !GENERAL_FEEDBACK_ENABLED,
