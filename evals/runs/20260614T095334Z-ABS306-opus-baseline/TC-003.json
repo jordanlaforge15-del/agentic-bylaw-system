@@ -1,0 +1,616 @@
+{
+  "id": "TC-003",
+  "title": "Homeowner converting single-unit to multi-unit in ER-3",
+  "zone": "ER-3",
+  "persona": {
+    "type": "homeowner",
+    "subtype": null,
+    "description": "Property owner looking to convert a larger home into a duplex or triplex"
+  },
+  "complexity": "medium",
+  "liability": "medium",
+  "address": "89 Jubilee Road, Halifax, NS",
+  "session_id": "ee1cb264-308b-4761-8a76-2fefc146a67e",
+  "model": "claude-opus-4-5-20251101",
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I have a large older home on Jubilee Road in the ER-3 zone in Halifax. I\u2019m thinking of converting it into a three-unit building \u2014 two upper units and a ground floor unit. Is a multi-unit dwelling permitted in ER-3?",
+      "assistant_text": "**Yes \u2014 a multi-unit dwelling is permitted in the ER-3 zone**, with one geographic exception.\n\n| Zone | Use | Permission | Condition |\n|------|-----|------------|-----------|\n| ER-3 | Multi-unit dwelling | **Conditional** | Permitted everywhere in the zone *except* within the Halifax Grain Elevator (HGE) Special Area (Schedule 3F). Within the HGE Special Area, new or expanded residential uses require a development agreement per Section 497. |\n\n**For your Jubilee Road property:** Jubilee Road is in the south end of Halifax Peninsula, well outside the Halifax Grain Elevator Special Area (which is near the waterfront at Pier 9). So the condition doesn't affect you \u2014 **a three-unit conversion is permitted as-of-right** from a use standpoint.\n\n### What you'll still need to confirm\n\nWhile the *use* is permitted, converting an existing home to three units will need to satisfy:\n\n1. **Parking requirements** \u2014 multi-unit dwellings have minimum parking standards (typically 1 space per unit, though reductions may apply in the Regional Centre depending on location and transit proximity).\n\n2. **Building Code compliance** \u2014 three units triggers different occupancy classifications and may require upgrades (fire separations, egress, etc.).\n\n3. **Any dimensional standards** \u2014 lot area per unit, lot coverage, setbacks. ER-3 has specific built-form requirements that apply to multi-unit buildings.\n\nWould you like me to look up the ER-3 dimensional standards (lot area per unit, setbacks, parking) to confirm your property can accommodate the conversion? If you can share the civic number, I can pull the lot-specific overlays as well.\n\n---\n\n**Before you act on these numbers:** this is general bylaw information, not legal advice or a site-specific compliance determination. Precinct boundaries, overlays, and on-the-ground site conditions can change what actually applies to a given parcel. Confirm the figures for your exact site with HRM Planning & Development or a qualified planner before proceeding \u2014 especially before you commit budget or design work.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 363,
+        "output_tokens": 392,
+        "cache_creation_input_tokens": 377,
+        "cache_read_input_tokens": 9094
+      },
+      "wall_time_s": 13.19,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 2,
+        "terminated_reason": "end_turn",
+        "total_usage": {
+          "input_tokens": 743,
+          "output_tokens": 500,
+          "cache_creation_input_tokens": 377,
+          "cache_read_input_tokens": 18188
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 380,
+              "output_tokens": 108,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 2693,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 363,
+              "output_tokens": 392,
+              "cache_creation_input_tokens": 377,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 10442,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 39
+          }
+        ]
+      }
+    },
+    {
+      "turn": 2,
+      "user_message": "Good to know. My lot is 650 square metres and the existing building footprint is about 200 square metres. Am I within the lot coverage limit for ER-3, and what are the setback requirements I\u2019ll need to work within?",
+      "assistant_text": "Good \u2014 I now have the key information. Schedule 18 is a mapped schedule (the front/flanking setback values are location-specific on the schedule maps). Let me provide you with a comprehensive answer based on what I've retrieved.\n\n---\n\n## ER-3 Lot Coverage & Setbacks \u2014 Summary for Your Property\n\n### Lot Coverage\n\nBased on Section 231 of the Regional Centre Land Use By-law (Part V, Chapter 9):\n\n| Your Situation | Maximum Lot Coverage |\n|----------------|---------------------|\n| Multi-unit dwelling (not single-unit) on a lot **larger than 325 m\u00b2** | **50%** |\n\n**Your numbers:**\n- Lot area: **650 m\u00b2**\n- Existing footprint: **~200 m\u00b2**\n- Current coverage: **~30.8%**\n\n\u2705 **You're well within the 50% limit.** You could theoretically expand the footprint to 325 m\u00b2 and still comply \u2014 though the setbacks and any additions would need to meet the other dimensional standards.\n\n*Note: If your property falls within one of the Established Residential Special Areas (Schedule 3C), different lot coverage limits may apply (e.g. Young Avenue and Grant Street are capped at 35%). Jubilee Road is generally not in a Special Area, but confirm via HRM's mapping tools.*\n\n---\n\n### Setback Requirements (ER-3 Zone)\n\n| Setback | Requirement | Source |\n|---------|-------------|--------|\n| **Front / Flanking** | As specified on **Schedule 18** (mapped) | Section 228 |\n| **Side** | **1.25 m** (general); special rules for townhouses, semis, and Special Areas | Section 229(1)(c) |\n| **Rear** | **6.0 m** | Section 230 |\n\n**Front/Flanking detail:** Schedule 18 is a mapped schedule \u2014 the exact setback depends on your lot's location on the schedule map. For typical ER-3 lots in the south end, front setbacks are often in the 3\u20136 m range, but you'll need to check the map or HRM's online zoning viewer for the precise value at your address.\n\n**Side setback detail:** The 1.25 m minimum applies to most uses. Special rules apply if you have a:\n- Townhouse: minimum varies by Special Area (Section 229(1)(a))\n- Semi-detached or duplex: 0.0 m along the common wall (Section 229(1)(b))\n- Property in a Special Area (e.g. Young Avenue, Armview, Grant Street): different minimums per the table in Section 229(2)\n\n---\n\n### What This Means for Your Conversion\n\nFor a **conversion of an existing building** (no expansion of the footprint):\n\n1. **Lot coverage** \u2014 not an issue; you're at ~31% against a 50% cap.\n2. **Setbacks** \u2014 the existing building's location is grandfathered as a legal non-conforming structure if it predates the bylaw. You don't need to move the building. However, any **additions or extensions** must comply with the current setback requirements.\n3. **Rear setback (6.0 m)** \u2014 if you're planning any rear additions (e.g. a rear deck, enclosed porch, or building extension), this is the key constraint.\n\n---\n\n### Next Steps\n\nIf you share the **civic number**, I can pull:\n- The exact front/flanking setback from Schedule 18\n- Whether you're in an Established Residential Special Area (which would change the side setback and lot coverage rules)\n- Any heritage or overlay considerations\n\n---\n\n**Caveat:** These are general bylaw standards from the RCLUB. Setback values on Schedule 18 are location-specific and require checking the mapped schedule or HRM's zoning viewer. Confirm the exact figures for your property with HRM Planning & Development before committing to any design work.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 3265,
+        "output_tokens": 928,
+        "cache_creation_input_tokens": 5280,
+        "cache_read_input_tokens": 21225
+      },
+      "wall_time_s": 52.91,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 7,
+        "terminated_reason": "end_turn",
+        "total_usage": {
+          "input_tokens": 37500,
+          "output_tokens": 2314,
+          "cache_creation_input_tokens": 16735,
+          "cache_read_input_tokens": 89680
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 537,
+              "output_tokens": 152,
+              "cache_creation_input_tokens": 251,
+              "cache_read_input_tokens": 9582
+            },
+            "latency_ms": 3086,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 2026,
+              "output_tokens": 201,
+              "cache_creation_input_tokens": 251,
+              "cache_read_input_tokens": 9582
+            },
+            "latency_ms": 7769,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 3,
+            "usage": {
+              "input_tokens": 6537,
+              "output_tokens": 237,
+              "cache_creation_input_tokens": 534,
+              "cache_read_input_tokens": 9833
+            },
+            "latency_ms": 4380,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 4,
+            "usage": {
+              "input_tokens": 9259,
+              "output_tokens": 310,
+              "cache_creation_input_tokens": 1395,
+              "cache_read_input_tokens": 10463
+            },
+            "latency_ms": 5052,
+            "tool_call_count": 3
+          },
+          {
+            "iteration": 5,
+            "usage": {
+              "input_tokens": 9603,
+              "output_tokens": 281,
+              "cache_creation_input_tokens": 4935,
+              "cache_read_input_tokens": 11968
+            },
+            "latency_ms": 4299,
+            "tool_call_count": 4
+          },
+          {
+            "iteration": 6,
+            "usage": {
+              "input_tokens": 6273,
+              "output_tokens": 205,
+              "cache_creation_input_tokens": 4089,
+              "cache_read_input_tokens": 17027
+            },
+            "latency_ms": 3664,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 7,
+            "usage": {
+              "input_tokens": 3265,
+              "output_tokens": 928,
+              "cache_creation_input_tokens": 5280,
+              "cache_read_input_tokens": 21225
+            },
+            "latency_ms": 22527,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 56
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 344
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 397
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 305
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 33
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 254
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 17
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 237
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 177
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 20
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 15
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 11
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 13
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 6
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 232
+          }
+        ]
+      }
+    },
+    {
+      "turn": 3,
+      "user_message": "The building is currently about 9 metres tall. If I add a small dormer to create one of the upper units, is there a height limit I need to stay under in ER-3?",
+      "assistant_text": "Now I have a clear picture. Let me provide you with a comprehensive answer.\n\n---\n\n## Height Limit in ER-3 \u2014 Summary\n\n### The Rule\n\nPer **Section 227** (Part V, Chapter 9), any main building in the ER-3, ER-2, or ER-1 zones must not exceed the **maximum building height specified on Schedule 15**.\n\nSchedule 15 is a **mapped schedule** \u2014 the height limit depends on which height precinct your lot falls within. For most established residential areas in the south end of Halifax (including Jubilee Road), the typical height precincts are:\n\n| Precinct | Typical Context |\n|----------|-----------------|\n| **11 metres** | Common in ER-3 areas \u2014 allows 2\u00bd to 3 storeys |\n| **8 metres** | More restrictive areas \u2014 roughly 2 storeys |\n\n**Without your civic number, I can't confirm which precinct applies to your lot.** You can check via HRM's online zoning viewer or I can look it up if you share the address.\n\n---\n\n### Your Situation: Adding a Dormer\n\nYour building is currently **~9 metres tall**.\n\n- **If you're in an 11-metre precinct:** You have **~2 metres of headroom** above your current ridge. A dormer that stays within the existing roof envelope (i.e., doesn't raise the ridge) would be fine. Even a dormer that adds a bit of height could work, as long as the highest point of the building (including the dormer) stays at or below 11 metres.\n\n- **If you're in an 8-metre precinct:** Your building is already **over the limit** (9 m > 8 m). It's legal as a pre-existing structure, but you **cannot add any height**. A dormer would need to stay entirely within the existing roof profile \u2014 no raising the ridge or adding height above the current peak.\n\n---\n\n### Important: No Sloped Roof Exemption for ER-3\n\nThe RCLUB provides a **sloped roof height exemption** (Section 104) that allows uninhabitable roof space to exceed the Schedule 15 height by up to 4.5 metres \u2014 but this exemption **only applies to certain zones** (DD, DH, CEN-2, CEN-1, COR, HR-2, HR-1, INS, UC-2, UC-1).\n\n**ER-3 is not on that list.** In ER-3, the height limit on Schedule 15 is a hard cap \u2014 the highest point of the building (including dormers, roof peaks, etc.) must stay at or below the precinct limit.\n\n---\n\n### What About Rooftop Features?\n\nCertain rooftop features are **exempt from the height limit** per Section 345:\n- Chimneys and stovepipes\n- Antennas\n- Flag poles\n- Lightning rods\n- Solar collectors\n- Vents\n\n**Dormers are not on this list** \u2014 they count toward building height.\n\n---\n\n### Bottom Line\n\n| Scenario | Can You Add a Dormer? |\n|----------|----------------------|\n| **11 m precinct**, dormer stays \u2264 11 m total | \u2705 Yes |\n| **11 m precinct**, dormer would push building > 11 m | \u274c No (unless variance) |\n| **8 m precinct**, building already 9 m | \u274c No additional height permitted |\n\n---\n\n### Next Step\n\nIf you share your **civic number**, I can confirm:\n1. Your exact height precinct from Schedule 15\n2. Whether any overlays (heritage, view planes) affect your property\n3. The precise front/flanking setback from Schedule 18\n\nThat would give you a complete picture of what's as-of-right for your conversion project.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 3808,
+        "output_tokens": 896,
+        "cache_creation_input_tokens": 2124,
+        "cache_read_input_tokens": 40035
+      },
+      "wall_time_s": 46.82,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 7,
+        "terminated_reason": "end_turn",
+        "total_usage": {
+          "input_tokens": 49550,
+          "output_tokens": 2037,
+          "cache_creation_input_tokens": 52936,
+          "cache_read_input_tokens": 168316
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 20929,
+              "output_tokens": 152,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 9582
+            },
+            "latency_ms": 4623,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 2395,
+              "output_tokens": 223,
+              "cache_creation_input_tokens": 20926,
+              "cache_read_input_tokens": 9582
+            },
+            "latency_ms": 4321,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 3,
+            "usage": {
+              "input_tokens": 5180,
+              "output_tokens": 250,
+              "cache_creation_input_tokens": 20926,
+              "cache_read_input_tokens": 9582
+            },
+            "latency_ms": 4835,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 4,
+            "usage": {
+              "input_tokens": 7005,
+              "output_tokens": 128,
+              "cache_creation_input_tokens": 2239,
+              "cache_read_input_tokens": 30663
+            },
+            "latency_ms": 3232,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 5,
+            "usage": {
+              "input_tokens": 6473,
+              "output_tokens": 179,
+              "cache_creation_input_tokens": 2662,
+              "cache_read_input_tokens": 33025
+            },
+            "latency_ms": 3448,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 6,
+            "usage": {
+              "input_tokens": 3760,
+              "output_tokens": 209,
+              "cache_creation_input_tokens": 4059,
+              "cache_read_input_tokens": 35847
+            },
+            "latency_ms": 4374,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 7,
+            "usage": {
+              "input_tokens": 3808,
+              "output_tokens": 896,
+              "cache_creation_input_tokens": 2124,
+              "cache_read_input_tokens": 40035
+            },
+            "latency_ms": 20314,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 256
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 12
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 260
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 246
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 174
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 210
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 252
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 3
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 238
+          }
+        ]
+      }
+    },
+    {
+      "turn": 4,
+      "user_message": "Would I need a development permit for this kind of interior conversion and dormer addition?",
+      "assistant_text": "I now have the key information. Let me provide you with a clear answer.\n\n---\n\n## Development Permit Requirements \u2014 Your Conversion + Dormer\n\n**Short answer: Yes, you will need a development permit for both components of your project.**\n\n### Why a Permit Is Required\n\nUnder the RCLUB, **\"development\"** is defined broadly (Definitions section):\n\n> *\"Development means the erection, construction, alteration, placement, location, replacement, or relocation of, or addition to, a structure and a change or alteration in the use made of land or structures.\"*\n\nYour project involves:\n1. **A change of use** \u2014 converting from a single-unit dwelling to a multi-unit dwelling (3 units)\n2. **An addition/alteration** \u2014 the dormer addition\n\nBoth trigger the definition of \"development\" and require a permit unless specifically exempted.\n\n---\n\n### Exemptions That Don't Apply to You\n\nThe RCLUB lists specific exemptions from development permits in **Section 9**. Here's what's relevant:\n\n| Exemption | Applies to You? |\n|-----------|-----------------|\n| **(r)** Internal conversion of a **commercial** building in **DD or DH zone** to multi-unit dwelling | \u274c No \u2014 you're in ER-3 with a residential building |\n| **(q)** Rental of 3 or fewer bedrooms in a dwelling unit | \u274c No \u2014 this is for renting rooms, not creating separate units |\n| Painting, fences, home office, temporary uses | \u274c Not applicable |\n\n**There is no exemption for converting a single-unit dwelling to a multi-unit dwelling in the ER-3 zone, nor for adding a dormer.**\n\n---\n\n### What You'll Need to Submit\n\nPer **Section 10** (Development Permit Applications), your application will need to include:\n\n- Site plan showing lot dimensions, setbacks, building footprint\n- Building elevations (showing the dormer)\n- Parking layout (demonstrating compliance with parking requirements)\n- For ER-3, you're **exempt from shadow studies** (Section 10(k) excludes ER-3 zone)\n\n---\n\n### The Good News\n\nYour project is **as-of-right** from a zoning standpoint (assuming you meet the dimensional standards we discussed). This means:\n\n- **No variance required** (if you comply with height, setbacks, lot coverage, parking)\n- **No site plan approval** (that's a discretionary process for larger projects in other zones)\n- **No rezoning** needed\n\nThe Development Officer reviews your application for compliance with the bylaw. If it complies, they **must** issue the permit \u2014 it's not discretionary.\n\n---\n\n### Permits Beyond the RCLUB\n\nIn addition to the **development permit** (zoning compliance), you'll also need:\n\n| Permit | Issued By | Triggered By |\n|--------|-----------|--------------|\n| **Building permit** | HRM Building Services | Any structural work (dormer), change of occupancy classification |\n| **Plumbing/electrical permits** | HRM / NS authorities | New kitchens, bathrooms, electrical panels for separate units |\n\nThe Building Code requirements for a 3-unit building are more stringent than for a single dwelling \u2014 fire separations, egress, smoke alarms, etc. Your architect or contractor will need to address those.\n\n---\n\n### Summary\n\n| Component | Development Permit Required? |\n|-----------|------------------------------|\n| Interior conversion to 3 units | \u2705 Yes |\n| Dormer addition | \u2705 Yes |\n| Combined application | \u2705 Yes \u2014 submit as one project |\n\nThe permit process for a project like this in ER-3 is relatively straightforward \u2014 it's a compliance check, not a discretionary approval. Typical turnaround for a complete application is a few weeks, though HRM's current processing times vary.\n\nWould you like me to look up the parking requirements for a 3-unit dwelling in ER-3? That's often the constraint that catches people by surprise in conversions.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 3550,
+        "output_tokens": 933,
+        "cache_creation_input_tokens": 447,
+        "cache_read_input_tokens": 35333
+      },
+      "wall_time_s": 40.51,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 5,
+        "terminated_reason": "end_turn",
+        "total_usage": {
+          "input_tokens": 36359,
+          "output_tokens": 1776,
+          "cache_creation_input_tokens": 47451,
+          "cache_read_input_tokens": 95256
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 21483,
+              "output_tokens": 205,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 9582
+            },
+            "latency_ms": 5055,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 4160,
+              "output_tokens": 200,
+              "cache_creation_input_tokens": 21480,
+              "cache_read_input_tokens": 9582
+            },
+            "latency_ms": 4149,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 3,
+            "usage": {
+              "input_tokens": 4719,
+              "output_tokens": 188,
+              "cache_creation_input_tokens": 21480,
+              "cache_read_input_tokens": 9582
+            },
+            "latency_ms": 3347,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 4,
+            "usage": {
+              "input_tokens": 2447,
+              "output_tokens": 250,
+              "cache_creation_input_tokens": 4044,
+              "cache_read_input_tokens": 31177
+            },
+            "latency_ms": 3621,
+            "tool_call_count": 3
+          },
+          {
+            "iteration": 5,
+            "usage": {
+              "input_tokens": 3550,
+              "output_tokens": 933,
+              "cache_creation_input_tokens": 447,
+              "cache_read_input_tokens": 35333
+            },
+            "latency_ms": 23398,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 239
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 176
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 17
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 13
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 232
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 6
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 200
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 33
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 9
+          }
+        ]
+      }
+    }
+  ],
+  "spec": {
+    "id": "TC-003",
+    "title": "Homeowner converting single-unit to multi-unit in ER-3",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Property owner looking to convert a larger home into a duplex or triplex"
+    },
+    "address": "89 Jubilee Road, Halifax, NS",
+    "zone": "ER-3",
+    "complexity": "medium",
+    "liability": "medium",
+    "tags": [
+      "renovation",
+      "residential",
+      "multi_unit",
+      "permitted_use",
+      "lot_coverage",
+      "conversion"
+    ],
+    "bylaw_features": [
+      "use_permission",
+      "setbacks",
+      "lot_coverage",
+      "height"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I have a large older home on Jubilee Road in the ER-3 zone in Halifax. I\u2019m thinking of converting it into a three-unit building \u2014 two upper units and a ground floor unit. Is a multi-unit dwelling permitted in ER-3?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Good to know. My lot is 650 square metres and the existing building footprint is about 200 square metres. Am I within the lot coverage limit for ER-3, and what are the setback requirements I\u2019ll need to work within?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "The building is currently about 9 metres tall. If I add a small dormer to create one of the upper units, is there a height limit I need to stay under in ER-3?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "Would I need a development permit for this kind of interior conversion and dormer addition?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Table 3",
+      "Table 5",
+      "Section 9"
+    ],
+    "expected_answer_keywords": [
+      "ER-3",
+      "permitted",
+      "Section 63",
+      "conversion"
+    ],
+    "expected_topics": [
+      "use_permission",
+      "setbacks",
+      "lot_coverage",
+      "height",
+      "development_permit"
+    ],
+    "notes": "Medium complexity: four distinct parameters across four turns. Construction risk is moderate (structural conversion + dormer)."
+  },
+  "case_wall_time_s": 153.43
+}

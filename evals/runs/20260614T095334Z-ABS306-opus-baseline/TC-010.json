@@ -1,0 +1,172 @@
+{
+  "id": "TC-010",
+  "title": "Planner scoping a corridor mixed-use development in COR",
+  "zone": "COR",
+  "persona": {
+    "type": "architectural_consultant",
+    "subtype": "planner",
+    "description": "Urban planner consulting on a medium-density mixed-use development along a corridor"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "1959 Gottingen Street, Halifax, NS",
+  "session_id": "26b06cec-c1aa-44ea-a5e3-2d62c8e80e0e",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I\u2019m an urban planner working on a mixed-use development on Gottingen Street in the COR zone. The client wants a building with ground-floor commercial and multi-unit residential above. What are the use permissions in COR \u2014 is multi-unit dwelling permitted, and what about commercial/retail uses?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.31,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "What are the setback requirements in COR? I\u2019m particularly interested in whether we can build right to the front street edge or need to step back.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 1.01,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "Is the height in COR governed by a fixed table limit or by Schedule 15? And does the same Schedule 17 FAR overlay apply in COR as it does in the other centre zones?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "What is the maximum lot coverage in COR, and how does that compare to the adjacent CEN-1 zone?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.24,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 5,
+      "user_message": "For a 30-unit residential component of the building, what\u2019s the parking requirement? Does COR benefit from the no-parking exemption, or is a parking structure required?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.18,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-010",
+    "title": "Planner scoping a corridor mixed-use development in COR",
+    "persona": {
+      "type": "architectural_consultant",
+      "subtype": "planner",
+      "description": "Urban planner consulting on a medium-density mixed-use development along a corridor"
+    },
+    "address": "1959 Gottingen Street, Halifax, NS",
+    "zone": "COR",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "new_construction",
+      "mixed_use",
+      "corridor",
+      "redevelopment",
+      "residential",
+      "commercial",
+      "setbacks",
+      "height"
+    ],
+    "bylaw_features": [
+      "setbacks",
+      "FAR_overlay",
+      "height_overlay",
+      "parking",
+      "permitted_use",
+      "lot_coverage"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I\u2019m an urban planner working on a mixed-use development on Gottingen Street in the COR zone. The client wants a building with ground-floor commercial and multi-unit residential above. What are the use permissions in COR \u2014 is multi-unit dwelling permitted, and what about commercial/retail uses?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "What are the setback requirements in COR? I\u2019m particularly interested in whether we can build right to the front street edge or need to step back."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "Is the height in COR governed by a fixed table limit or by Schedule 15? And does the same Schedule 17 FAR overlay apply in COR as it does in the other centre zones?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "What is the maximum lot coverage in COR, and how does that compare to the adjacent CEN-1 zone?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "For a 30-unit residential component of the building, what\u2019s the parking requirement? Does COR benefit from the no-parking exemption, or is a parking structure required?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1B",
+      "Table 4",
+      "Table 5",
+      "Section 111",
+      "Section 112",
+      "Section 120(a)",
+      "Schedule 15",
+      "Schedule 17"
+    ],
+    "expected_answer_keywords": [
+      "COR",
+      "permitted",
+      "multi-unit dwelling",
+      "Schedule 15",
+      "Schedule 17",
+      "floor area ratio",
+      "3.0 m",
+      "front setback",
+      "0.0 m",
+      "70%"
+    ],
+    "expected_topics": [
+      "use_permission",
+      "setbacks",
+      "height_overlay",
+      "FAR_overlay",
+      "lot_coverage",
+      "parking"
+    ],
+    "notes": "Five-turn planner scenario. Tests COR front setback (3 m, unlike CEN-1/CEN-2 at 0 m) and that COR does NOT get the no-parking exemption (Section 120(b) lists only CEN-1, CEN-2, DH, DD). High liability: full mixed-use building program."
+  },
+  "case_wall_time_s": 1.91
+}

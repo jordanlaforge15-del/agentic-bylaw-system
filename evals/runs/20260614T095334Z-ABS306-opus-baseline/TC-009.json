@@ -1,0 +1,143 @@
+{
+  "id": "TC-009",
+  "title": "Real estate lawyer vetting a DD site for a mixed-use purchase",
+  "zone": "DD",
+  "persona": {
+    "type": "real_estate_law_professional",
+    "subtype": null,
+    "description": "Real estate lawyer conducting zoning due diligence for a client acquiring a downtown Dartmouth commercial property"
+  },
+  "complexity": "medium",
+  "liability": "medium",
+  "address": "100 Wyse Road, Dartmouth, NS",
+  "session_id": "77bb2b08-d042-49a1-b769-79ccee4787d7",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I\u2019m a real estate lawyer conducting zoning due diligence on a property at 100 Wyse Road in Dartmouth \u2014 it\u2019s in the DD zone. My client is acquiring it to redevelop as a mixed-use building with ground-floor retail and apartments above. Confirm: is multi-unit residential permitted in the DD zone?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.51,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "The vendor is claiming there\u2019s no minimum parking requirement for the site. Is that correct for a DD zone residential development, and if so, what\u2019s the provision that supports that?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "What are the setback and lot coverage standards in DD? I want to know what the development envelope looks like.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "My client\u2019s proposed use is converting part of the ground floor to a daycare for the neighbourhood. Is daycare a permitted use in the DD zone?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-009",
+    "title": "Real estate lawyer vetting a DD site for a mixed-use purchase",
+    "persona": {
+      "type": "real_estate_law_professional",
+      "subtype": null,
+      "description": "Real estate lawyer conducting zoning due diligence for a client acquiring a downtown Dartmouth commercial property"
+    },
+    "address": "100 Wyse Road, Dartmouth, NS",
+    "zone": "DD",
+    "complexity": "medium",
+    "liability": "medium",
+    "tags": [
+      "due_diligence",
+      "commercial",
+      "multi_unit",
+      "downtown_dartmouth",
+      "parking",
+      "uses"
+    ],
+    "bylaw_features": [
+      "permitted_use",
+      "parking",
+      "setbacks",
+      "lot_coverage",
+      "FAR"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I\u2019m a real estate lawyer conducting zoning due diligence on a property at 100 Wyse Road in Dartmouth \u2014 it\u2019s in the DD zone. My client is acquiring it to redevelop as a mixed-use building with ground-floor retail and apartments above. Confirm: is multi-unit residential permitted in the DD zone?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "The vendor is claiming there\u2019s no minimum parking requirement for the site. Is that correct for a DD zone residential development, and if so, what\u2019s the provision that supports that?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "What are the setback and lot coverage standards in DD? I want to know what the development envelope looks like."
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "My client\u2019s proposed use is converting part of the ground floor to a daycare for the neighbourhood. Is daycare a permitted use in the DD zone?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1B",
+      "Table 4",
+      "Table 5",
+      "Section 120(b)"
+    ],
+    "expected_answer_keywords": [
+      "DD",
+      "permitted",
+      "multi-unit dwelling",
+      "not required",
+      "0.0 m",
+      "3.0 m",
+      "80%",
+      "daycare"
+    ],
+    "expected_topics": [
+      "use_permission",
+      "parking",
+      "setbacks",
+      "lot_coverage"
+    ],
+    "notes": "Four-turn legal due diligence. Tests no-parking exemption scope (Section 120(b) lists DD explicitly). Daycare permitted in DD via Table 1B. Medium liability: advisory professional role."
+  },
+  "case_wall_time_s": 1.02
+}

@@ -1,0 +1,162 @@
+{
+  "id": "TC-018",
+  "title": "Developer scoping a transit-oriented infill on a COR corridor site",
+  "zone": "COR",
+  "persona": {
+    "type": "real_estate_developer",
+    "subtype": null,
+    "description": "Developer evaluating a 5\u20137 storey mixed-use building near a major bus terminal"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "6960 Mumford Road, Halifax, NS",
+  "session_id": "f9a11eae-d04e-401e-9da5-1e00cbb75637",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "Hey, I'm scoping a mixed-use infill project at 6960 Mumford Road in Halifax \u2014 it's zoned COR under the Regional Centre Land Use By-Law. Before I go too deep into design, can you confirm what the maximum FAR and building height limits are for this site? I need to understand the envelope before I talk to my architect.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.16,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Got it on the envelope. Now, Mumford Road is a major transit corridor so I'm planning ground-floor retail or service commercial with residential above. What are the ground floor use requirements in the COR zone \u2014 is active commercial frontage mandatory, or just permitted? I want to know if I'm locked into it or if I have flexibility.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.21,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "Good to know. What about the streetwall requirements along the Mumford Road frontage? I'm thinking of a podium-and-tower form \u2014 is there a minimum streetwall height or a build-to-line that would affect how close I need to push the building face to the street? And what are the front and side setback standards for COR specifically?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "This is a transit-oriented site, so I'm trying to minimize surface parking. What are the minimum parking requirements for a mixed-use residential-over-commercial development in the COR zone? Is there any parking reduction available given the transit proximity, and does structured or underground parking count the same way toward satisfying the requirement?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.16,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 5,
+      "user_message": "One more critical piece \u2014 the parking layout and access will need site plan approval based on section 15(a) of the by-law. What else on this project would trigger site plan approval, and is there any discretionary approval or variance process I should be aware of if my proposed FAR or height pushes above the as-of-right limits? I need to map out the full approval timeline for my investors.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.18,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-018",
+    "title": "Developer scoping a transit-oriented infill on a COR corridor site",
+    "persona": {
+      "type": "real_estate_developer",
+      "subtype": null,
+      "description": "Developer evaluating a 5\u20137 storey mixed-use building near a major bus terminal"
+    },
+    "address": "6960 Mumford Road, Halifax, NS",
+    "zone": "COR",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "mixed_use",
+      "transit_oriented",
+      "FAR",
+      "height",
+      "ground_floor_use",
+      "parking"
+    ],
+    "bylaw_features": [
+      "FAR",
+      "height",
+      "ground_floor_use",
+      "parking",
+      "streetwall",
+      "setbacks"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "Hey, I'm scoping a mixed-use infill project at 6960 Mumford Road in Halifax \u2014 it's zoned COR under the Regional Centre Land Use By-Law. Before I go too deep into design, can you confirm what the maximum FAR and building height limits are for this site? I need to understand the envelope before I talk to my architect."
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Got it on the envelope. Now, Mumford Road is a major transit corridor so I'm planning ground-floor retail or service commercial with residential above. What are the ground floor use requirements in the COR zone \u2014 is active commercial frontage mandatory, or just permitted? I want to know if I'm locked into it or if I have flexibility."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "Good to know. What about the streetwall requirements along the Mumford Road frontage? I'm thinking of a podium-and-tower form \u2014 is there a minimum streetwall height or a build-to-line that would affect how close I need to push the building face to the street? And what are the front and side setback standards for COR specifically?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "This is a transit-oriented site, so I'm trying to minimize surface parking. What are the minimum parking requirements for a mixed-use residential-over-commercial development in the COR zone? Is there any parking reduction available given the transit proximity, and does structured or underground parking count the same way toward satisfying the requirement?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "One more critical piece \u2014 the parking layout and access will need site plan approval based on section 15(a) of the by-law. What else on this project would trigger site plan approval, and is there any discretionary approval or variance process I should be aware of if my proposed FAR or height pushes above the as-of-right limits? I need to map out the full approval timeline for my investors."
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [
+      "COR",
+      "permitted",
+      "Schedule 15",
+      "Schedule 17",
+      "floor area ratio",
+      "height precinct",
+      "Section 196",
+      "ground floor",
+      "active use",
+      "Section 433",
+      "Table 15",
+      "not required",
+      "streetwall",
+      "Section 200",
+      "front setback",
+      "3.0 m",
+      "side setback",
+      "0.0 m"
+    ],
+    "expected_topics": [],
+    "notes": "Tests COR corridor standards: height precincts along corridors, ground-floor use, parking reductions near transit. Adversarial \u2014 user asks about reducing parking based on transit proximity."
+  },
+  "case_wall_time_s": 0.88
+}

@@ -1,0 +1,154 @@
+{
+  "id": "TC-020",
+  "title": "Planner reviewing site plan approval for HR-1 mid-rise near a viewplane",
+  "zone": "HR-1",
+  "persona": {
+    "type": "city_agent",
+    "subtype": "planner",
+    "description": "Senior planner triaging an application that may impinge on a protected viewplane"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "1577 Brunswick Street, Halifax, NS",
+  "session_id": "ba559f89-9962-4dd1-b251-734034d3f4f4",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I'm reviewing a site plan approval application for 1577 Brunswick Street \u2014 it's zoned HR-1. The proposal is for a new mid-rise multi-unit residential building. Can you confirm what matters are subject to site plan approval under the Regional Centre Land Use By-Law, and whether this type of development would trigger the full SPA process?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 3.24,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Thanks. Brunswick Street is within a viewplane protection corridor in Halifax. What specific height restrictions apply to HR-1 developments that fall within a designated viewplane, and how does the by-law handle conflicts between the base HR-1 height permissions and viewplane overlay controls?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "The applicant is proposing a streetwall height of approximately 4 storeys before stepping back the upper floors. What are the streetwall requirements under HR-1, and does the by-law prescribe a maximum or minimum streetwall height along a street like Brunswick to maintain the pedestrian scale?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "We need to assess shadow impact as part of the SPA review. The building is adjacent to a public park to the north. Does the Regional Centre Land Use By-Law include any specific shadow study requirements or performance criteria for HR-1 developments, or is shadow impact handled through general design standards and discretionary review?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.18,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 5,
+      "user_message": "Pulling this all together for the staff report \u2014 if the proposed building exceeds the viewplane height limit even though it meets the base HR-1 zone standard, what's the regulatory pathway? Is there a variance or relaxation mechanism available, or does the viewplane restriction function as an absolute ceiling that can't be varied through the SPA process? I need to be precise about this for the report given the liability implications of recommending approval.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-020",
+    "title": "Planner reviewing site plan approval for HR-1 mid-rise near a viewplane",
+    "persona": {
+      "type": "city_agent",
+      "subtype": "planner",
+      "description": "Senior planner triaging an application that may impinge on a protected viewplane"
+    },
+    "address": "1577 Brunswick Street, Halifax, NS",
+    "zone": "HR-1",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "site_plan_approval",
+      "viewplanes",
+      "height",
+      "streetwall",
+      "shadow"
+    ],
+    "bylaw_features": [
+      "site_plan_approval",
+      "viewplanes",
+      "height",
+      "streetwall",
+      "shadow_impact"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I'm reviewing a site plan approval application for 1577 Brunswick Street \u2014 it's zoned HR-1. The proposal is for a new mid-rise multi-unit residential building. Can you confirm what matters are subject to site plan approval under the Regional Centre Land Use By-Law, and whether this type of development would trigger the full SPA process?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Thanks. Brunswick Street is within a viewplane protection corridor in Halifax. What specific height restrictions apply to HR-1 developments that fall within a designated viewplane, and how does the by-law handle conflicts between the base HR-1 height permissions and viewplane overlay controls?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "The applicant is proposing a streetwall height of approximately 4 storeys before stepping back the upper floors. What are the streetwall requirements under HR-1, and does the by-law prescribe a maximum or minimum streetwall height along a street like Brunswick to maintain the pedestrian scale?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "We need to assess shadow impact as part of the SPA review. The building is adjacent to a public park to the north. Does the Regional Centre Land Use By-Law include any specific shadow study requirements or performance criteria for HR-1 developments, or is shadow impact handled through general design standards and discretionary review?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "Pulling this all together for the staff report \u2014 if the proposed building exceeds the viewplane height limit even though it meets the base HR-1 zone standard, what's the regulatory pathway? Is there a variance or relaxation mechanism available, or does the viewplane restriction function as an absolute ceiling that can't be varied through the SPA process? I need to be precise about this for the report given the liability implications of recommending approval."
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [
+      "HR-1",
+      "permitted",
+      "Schedule 15",
+      "Schedule 17",
+      "site plan approval",
+      "Section 15",
+      "viewplane",
+      "Schedule 50",
+      "height precinct",
+      "Section 196",
+      "streetwall",
+      "Section 200"
+    ],
+    "expected_topics": [],
+    "notes": "Tests viewplane mapping, height limits derived from viewplanes (not just zone), site-plan-approval triggers, shadow impact. High liability \u2014 easy to miss the viewplane constraint."
+  },
+  "case_wall_time_s": 3.93
+}

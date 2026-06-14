@@ -1,0 +1,117 @@
+{
+  "id": "TC-019",
+  "title": "Homeowner planning a backyard suite in ER-3",
+  "zone": "ER-3",
+  "persona": {
+    "type": "homeowner",
+    "subtype": null,
+    "description": "Owner of a single-unit lot adding a detached backyard suite over a garage"
+  },
+  "complexity": "medium",
+  "liability": "low",
+  "address": "2563 Maitland Street, Halifax, NS",
+  "session_id": "d6d28802-ec90-446f-a3e0-c50a2f53a731",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "Hey, I own a house at 2563 Maitland Street in Halifax \u2014 I believe it's zoned ER-3. I'm thinking about building a backyard suite, like a small standalone unit in my rear yard for a family member. Is that even allowed in ER-3, or do I need some kind of special approval?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Good to know it's permitted. So what are the setback rules I need to worry about for the backyard suite? Like how far does it need to sit from my rear property line and the side fences? My lot isn't huge so I'm trying to figure out where I can actually place it.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "Okay that helps a lot with placement. One more thing \u2014 my main house already takes up a decent chunk of the lot. Is there a lot coverage limit I need to stay under when I add the suite, and is there a maximum height for the backyard structure? I don't want to go through the whole design process only to find out I've exceeded some cap.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.16,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-019",
+    "title": "Homeowner planning a backyard suite in ER-3",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Owner of a single-unit lot adding a detached backyard suite over a garage"
+    },
+    "address": "2563 Maitland Street, Halifax, NS",
+    "zone": "ER-3",
+    "complexity": "medium",
+    "liability": "low",
+    "tags": [
+      "accessory_dwelling",
+      "backyard_suite",
+      "lot_coverage",
+      "setbacks"
+    ],
+    "bylaw_features": [
+      "backyard_suite",
+      "setbacks",
+      "lot_coverage",
+      "height"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "Hey, I own a house at 2563 Maitland Street in Halifax \u2014 I believe it's zoned ER-3. I'm thinking about building a backyard suite, like a small standalone unit in my rear yard for a family member. Is that even allowed in ER-3, or do I need some kind of special approval?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Good to know it's permitted. So what are the setback rules I need to worry about for the backyard suite? Like how far does it need to sit from my rear property line and the side fences? My lot isn't huge so I'm trying to figure out where I can actually place it."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "Okay that helps a lot with placement. One more thing \u2014 my main house already takes up a decent chunk of the lot. Is there a lot coverage limit I need to stay under when I add the suite, and is there a maximum height for the backyard structure? I don't want to go through the whole design process only to find out I've exceeded some cap."
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [
+      "ER-3",
+      "permitted",
+      "Section 63",
+      "Schedule 15",
+      "backyard suite",
+      "Section 344",
+      "Section 229",
+      "1.25 m",
+      "Section 230",
+      "6.0 m",
+      "Schedule 18",
+      "50%",
+      "Section 231"
+    ],
+    "expected_topics": [],
+    "notes": "Tests backyard suite provisions specifically \u2014 separate from secondary suite rules. Often confused. Confirms model distinguishes between the two."
+  },
+  "case_wall_time_s": 0.5
+}
