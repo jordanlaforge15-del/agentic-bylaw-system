@@ -212,6 +212,16 @@ function AgentMsg({ msg, idx, sessionId, feedbackMap }: { msg: AgentMessage; idx
             savedFeedback={feedbackMap?.[msg.messageDbId]}
           />
         )}
+
+        <div
+          data-testid="paid-answer-disclaimer"
+          role="note"
+          className="font-mono text-text-muted"
+          style={{ fontSize: 10, letterSpacing: "0.04em" }}
+        >
+          Bylaw-analysis output — not an official municipal determination.
+          Verify before relying.
+        </div>
       </div>
     </div>
   );
