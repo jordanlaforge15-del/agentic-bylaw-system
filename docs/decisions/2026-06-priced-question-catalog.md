@@ -48,12 +48,45 @@ reliance create it regardless of the label, and charging per answer arguably
 - **Failed-question rule:** if inputs are unworkable or the question can't be
   grounded, no charge / credit back. This is also the liability shield.
 
+## Checkout shape — pure per-question charge (decided 2026-06-12)
+
+**No balances, no packs, no token/credit currency.** The user pays for exactly
+the question they asked, one Stripe charge per question. The increased
+per-transaction fee is accepted deliberately — it buys simplicity and avoids
+holding customer money.
+
+Rationale (settled after evaluating wallet / packs / tokens):
+- **We never hold customer funds.** No deferred-revenue liability, no float to
+  manage, no segregated-account question, no stored-value/money-transmitter
+  optics. Every charge is fully earned at the moment we deliver the answer.
+- **Keeps the dollar anchor.** "$X for this answer vs a $1,500 consultant memo"
+  stays legible and invoice-friendly for professional buyers — the thing an
+  abstract token currency would have obscured.
+- **Forward-compatible.** When purchases formalize into reports, "one charge per
+  deliverable" already fits — packs/wallets would have been a detour.
+
+Mechanics:
+- **Catalog questions:** a Stripe Price per question (fixed amount).
+- **"Other" questions:** ad-hoc amount via a Stripe Checkout Session
+  (`price_data` with the quoted amount) — no pre-created Price object needed.
+- **Failed-question rule → authorize-then-capture.** Place a card authorization
+  at checkout, run the answer, **capture on success / void the hold on failure**
+  (ungroundable, unworkable inputs). Answers are near-immediate, so the auth
+  window is never a constraint. This delivers "pay only if we deliver" with no
+  refund hitting the customer's statement. (Charge-then-refund is the fallback if
+  auth/capture proves awkward with the checkout integration.)
+- **Free grants (trial) are an entitlement counter, not a balance** — "you have N
+  free questions," consumed before any charge. Granting free uses is not holding
+  customer money.
+
 ## Cost safety
 
 Per-question pricing is only safe if per-answer **cost is bounded**. The
 cumulative per-turn/per-answer breaker (ABS-305) is the load-bearing primitive:
-a $15-quoted question must not cost $50 to serve. The "Other" quote LLM call is
-**free** (we never charge to produce a price).
+a $15 question must not cost $50 to serve. Note the two ledgers are independent:
+the customer is charged the **price** (fixed); the breaker guards our **API
+cost**. The "Other" quote LLM call is **free** (we never charge to produce a
+price).
 
 ## Build plan
 
@@ -61,19 +94,24 @@ a $15-quoted question must not cost $50 to serve. The "Other" quote LLM call is
 1. **ABS-305 — cumulative per-answer cost breaker.** (Existing; foundational.)
    Bounds the cost of each paid answer; underpins all per-question pricing.
 2. **ABS-311 — question catalog + pricing model + Stripe.** A code catalog (like
-   the old `packs.py`): question types, each with price, prompt/handler binding,
-   and required-input schema. Stripe Prices per question (or a credit users spend
-   on questions — pick the simpler checkout). *(replaces ABS-307)*
+   the old `packs.py`): question types, each with a fixed price, prompt/handler
+   binding, and required-input schema. One Stripe Price per catalog question; no
+   pack SKUs, no credit ledger. *(replaces ABS-307)*
 3. **ABS-312 — buy-an-answer flow + failed-question rule.** Select question →
-   checkout → run the bounded answer through the existing engine → return raw
-   output. No charge / refund when ungroundable. *(replaces ABS-308)*
+   per-question checkout (authorize) → run the bounded answer through the existing
+   engine → **capture on success, void on ungroundable failure** → return raw
+   output. One charge per question; no balance. *(replaces ABS-308)*
 4. **ABS-313 — liability baseline.** ToS update + on-output disclaimer copy.
    Small, day one.
 5. **ABS-310 — question-menu page + e2e.** Pricing page becomes the question
    menu; new purchase-flow specs. *(rescoped)*
-6. **ABS-314 — existing-credit migration.** Convert legacy tier credits → account
-   credit / question credits; rework the signup trial grant. Needed before launch
-   only if real paying credits exist. *(replaces ABS-309)*
+6. **ABS-314 — retire legacy credits + trial rework.** No conversion target
+   exists (pure per-question has no balance), so **grandfather** any existing
+   legacy tier credits on the legacy path until their 30-day window expires, then
+   remove that path. Rework the signup trial grant from "3 standard credits" to a
+   free-question **entitlement counter** ("N free questions"). Likely small —
+   pre-launch there may be no real paid credits to grandfather at all.
+   *(replaces ABS-309)*
 
 ### Wave 2 — evolve (fast-follow)
 7. **ABS-315 — LLM intake detection.** Detect required inputs per question, ask
