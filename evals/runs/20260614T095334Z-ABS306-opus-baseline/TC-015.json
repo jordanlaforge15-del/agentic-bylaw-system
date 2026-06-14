@@ -1,0 +1,151 @@
+{
+  "id": "TC-015",
+  "title": "Developer pricing a DH heritage retention infill",
+  "zone": "DH",
+  "persona": {
+    "type": "real_estate_developer",
+    "subtype": null,
+    "description": "Developer pricing the cost of building behind a retained facade in DH"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "1547 Birmingham Street, Halifax, NS",
+  "session_id": "4f48481e-c80c-4145-8195-3e0e7ffd8458",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I'm pricing out a heritage retention infill project at 1547 Birmingham Street in Halifax. The property is in the DH zone and I understand there's a heritage overlay in play. Before I go too deep on numbers, can you confirm whether this site falls within a heritage conservation district and what that means for demolition control \u2014 specifically, can I demolish the existing structure outright or am I looking at mandatory facade retention?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.32,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Okay, so assuming facade retention is required, what are the streetwall height and continuity rules I'd be working with on Birmingham Street in the DH zone? I need to understand how much of the existing building envelope I have to preserve versus where I have flexibility to go taller with a new infill addition behind or above the retained facade.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.16,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "On height \u2014 what's the maximum allowable building height for a new infill component in the DH zone at this address, and is there a stepback requirement once you exceed the streetwall height? I'm trying to model whether I can get 8 to 10 storeys on the rear portion of the site while keeping the heritage facade intact at street level.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.23,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "Let's talk setbacks. The lot runs pretty deep off Birmingham Street. What are the front, side, and rear setback requirements for new construction in the DH zone, and does the heritage overlay modify any of those \u2014 particularly the front setback given that the retained facade essentially sets my build-to line? Also, does site plan approval under section 15 get triggered here for building design in a heritage conservation district, and if so, what does that process look like in terms of timeline and discretionary risk?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 5,
+      "user_message": "Last piece \u2014 I need to stress-test the demolition control risk on this deal. If the heritage designation means I can't get a demolition permit for the main structure, what's my exposure if the retained facade is structurally compromised during construction? Is there a heritage alteration permit pathway that would let me remove and reconstruct the facade in kind, or am I looking at a full Heritage Advisory Committee review that could blow my pro forma timeline? I need to understand the worst-case regulatory scenario before I commit to this acquisition.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.18,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-015",
+    "title": "Developer pricing a DH heritage retention infill",
+    "persona": {
+      "type": "real_estate_developer",
+      "subtype": null,
+      "description": "Developer pricing the cost of building behind a retained facade in DH"
+    },
+    "address": "1547 Birmingham Street, Halifax, NS",
+    "zone": "DH",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "heritage",
+      "infill",
+      "demolition",
+      "facade_retention",
+      "height"
+    ],
+    "bylaw_features": [
+      "heritage_overlay",
+      "demolition_control",
+      "height",
+      "streetwall",
+      "setbacks"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I'm pricing out a heritage retention infill project at 1547 Birmingham Street in Halifax. The property is in the DH zone and I understand there's a heritage overlay in play. Before I go too deep on numbers, can you confirm whether this site falls within a heritage conservation district and what that means for demolition control \u2014 specifically, can I demolish the existing structure outright or am I looking at mandatory facade retention?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Okay, so assuming facade retention is required, what are the streetwall height and continuity rules I'd be working with on Birmingham Street in the DH zone? I need to understand how much of the existing building envelope I have to preserve versus where I have flexibility to go taller with a new infill addition behind or above the retained facade."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "On height \u2014 what's the maximum allowable building height for a new infill component in the DH zone at this address, and is there a stepback requirement once you exceed the streetwall height? I'm trying to model whether I can get 8 to 10 storeys on the rear portion of the site while keeping the heritage facade intact at street level."
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "Let's talk setbacks. The lot runs pretty deep off Birmingham Street. What are the front, side, and rear setback requirements for new construction in the DH zone, and does the heritage overlay modify any of those \u2014 particularly the front setback given that the retained facade essentially sets my build-to line? Also, does site plan approval under section 15 get triggered here for building design in a heritage conservation district, and if so, what does that process look like in terms of timeline and discretionary risk?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "Last piece \u2014 I need to stress-test the demolition control risk on this deal. If the heritage designation means I can't get a demolition permit for the main structure, what's my exposure if the retained facade is structurally compromised during construction? Is there a heritage alteration permit pathway that would let me remove and reconstruct the facade in kind, or am I looking at a full Heritage Advisory Committee review that could blow my pro forma timeline? I need to understand the worst-case regulatory scenario before I commit to this acquisition."
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [
+      "DH",
+      "permitted",
+      "heritage",
+      "heritage conservation district",
+      "Schedule 22",
+      "demolition",
+      "Section 111",
+      "Schedule 15",
+      "streetwall"
+    ],
+    "expected_topics": [],
+    "notes": "Tests Downtown Halifax heritage demolition/retention rules, viewplanes, height precincts, and what triggers heritage review. Adversarial \u2014 user asks if they can demolish if facade is structurally unsound."
+  },
+  "case_wall_time_s": 1.07
+}

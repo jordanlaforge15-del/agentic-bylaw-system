@@ -1,0 +1,160 @@
+{
+  "id": "TC-013",
+  "title": "Architect scoping a mid-rise residential infill in HR-2",
+  "zone": "HR-2",
+  "persona": {
+    "type": "architectural_consultant",
+    "subtype": "architect",
+    "description": "Architect doing a feasibility study on a 6\u20138 storey residential infill"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "5455 Spring Garden Road, Halifax, NS",
+  "session_id": "c198fb1d-a4cd-472a-b1dd-f52169121b7a",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I'm scoping a mid-rise residential infill project at 5455 Spring Garden Road \u2014 it's in HR-2 under the Regional Centre Land Use By-law. Can you confirm that multi-unit dwelling is a permitted as-of-right use in HR-2, and are there any use conditions I should be aware of before I start massing?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Good. Now let's get into the envelope. What's the base FAR allowance for HR-2, and is there any height overlay that applies along Spring Garden Road specifically? I want to know if I'm working with a hard height cap or if there's a bonus or overlay that could push it higher.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "Understood on the height. What are the streetwall requirements for HR-2 along an arterial like Spring Garden? I need to know the minimum and maximum streetwall height, and whether there's a mandatory build-to line or a range for the front setback \u2014 I'm trying to lock in the podium before I model the stepback.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.16,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "Okay, so once I've hit the streetwall height, what does the stepback requirement look like above that? Is the stepback measured from the property line or from the streetwall face, and does it apply on all four sides or just the street-facing elevation? Also, are side and rear setbacks fixed regardless of building height, or do they increase as you go up?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.29,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 5,
+      "user_message": "Last piece for now \u2014 parking. For a multi-unit residential building in HR-2 at this address, what's the minimum parking ratio per unit, and is there any reduction available given the proximity to transit or the downtown core? Also, does the parking layout trigger site plan approval under section 15(a), and if so, what does that process typically require for a project of this scale?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-013",
+    "title": "Architect scoping a mid-rise residential infill in HR-2",
+    "persona": {
+      "type": "architectural_consultant",
+      "subtype": "architect",
+      "description": "Architect doing a feasibility study on a 6\u20138 storey residential infill"
+    },
+    "address": "5455 Spring Garden Road, Halifax, NS",
+    "zone": "HR-2",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "new_construction",
+      "residential",
+      "FAR",
+      "height_overlay",
+      "streetwall",
+      "parking"
+    ],
+    "bylaw_features": [
+      "FAR",
+      "height_overlay",
+      "streetwall",
+      "stepback",
+      "parking",
+      "setbacks"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I'm scoping a mid-rise residential infill project at 5455 Spring Garden Road \u2014 it's in HR-2 under the Regional Centre Land Use By-law. Can you confirm that multi-unit dwelling is a permitted as-of-right use in HR-2, and are there any use conditions I should be aware of before I start massing?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Good. Now let's get into the envelope. What's the base FAR allowance for HR-2, and is there any height overlay that applies along Spring Garden Road specifically? I want to know if I'm working with a hard height cap or if there's a bonus or overlay that could push it higher."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "Understood on the height. What are the streetwall requirements for HR-2 along an arterial like Spring Garden? I need to know the minimum and maximum streetwall height, and whether there's a mandatory build-to line or a range for the front setback \u2014 I'm trying to lock in the podium before I model the stepback."
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "Okay, so once I've hit the streetwall height, what does the stepback requirement look like above that? Is the stepback measured from the property line or from the streetwall face, and does it apply on all four sides or just the street-facing elevation? Also, are side and rear setbacks fixed regardless of building height, or do they increase as you go up?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "Last piece for now \u2014 parking. For a multi-unit residential building in HR-2 at this address, what's the minimum parking ratio per unit, and is there any reduction available given the proximity to transit or the downtown core? Also, does the parking layout trigger site plan approval under section 15(a), and if so, what does that process typically require for a project of this scale?"
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [
+      "HR-2",
+      "permitted",
+      "Schedule 15",
+      "Schedule 17",
+      "floor area ratio",
+      "height precinct",
+      "streetwall",
+      "Section 200",
+      "stepback",
+      "Section 208",
+      "Section 433",
+      "Table 15",
+      "not required",
+      "Section 198",
+      "Section 199",
+      "6.0 m"
+    ],
+    "expected_topics": [],
+    "notes": "Tests HR-2 FAR, height overlay map (precincts), streetwall + stepback requirements, and parking minimums. Spring Garden corridor is heavily overlaid."
+  },
+  "case_wall_time_s": 0.95
+}

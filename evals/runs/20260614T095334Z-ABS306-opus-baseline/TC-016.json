@@ -1,0 +1,115 @@
+{
+  "id": "TC-016",
+  "title": "Realtor due-diligence on a DD listing",
+  "zone": "DD",
+  "persona": {
+    "type": "realtor",
+    "subtype": null,
+    "description": "Realtor preparing a marketing package for a downtown Dartmouth property"
+  },
+  "complexity": "medium",
+  "liability": "medium",
+  "address": "100 Wyse Road, Dartmouth, NS",
+  "session_id": "82d6e0ed-9bc2-401f-958e-ecbde315411e",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "Hey, I'm doing due diligence on a listing at 100 Wyse Road in Dartmouth \u2014 it's in the DD zone. The current building has ground-floor retail with residential above. Can you confirm that mixed-use setup is actually permitted as-of-right in DD, and are there any restrictions on what types of commercial uses are allowed on the ground floor specifically?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Good to know on the use permissions. Now my buyer is asking about redevelopment potential \u2014 if someone wanted to build new or add floors to the existing structure, what's the maximum height allowed in the DD zone and are there any streetwall requirements they'd need to hit? I want to give them a realistic picture of the upside.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "One more thing \u2014 the current building has a vacant ground-floor commercial unit and the owner was thinking of converting it to residential before selling to boost the income profile. Is that kind of internal conversion from commercial to residential something that would need a full development permit in DD, or does it fall under one of the exemptions? I saw something about internal conversions in DD being potentially exempt but I want to make sure I'm reading that right.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.2,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-016",
+    "title": "Realtor due-diligence on a DD listing",
+    "persona": {
+      "type": "realtor",
+      "subtype": null,
+      "description": "Realtor preparing a marketing package for a downtown Dartmouth property"
+    },
+    "address": "100 Wyse Road, Dartmouth, NS",
+    "zone": "DD",
+    "complexity": "medium",
+    "liability": "medium",
+    "tags": [
+      "due_diligence",
+      "mixed_use",
+      "ground_floor_use",
+      "height"
+    ],
+    "bylaw_features": [
+      "use_permission",
+      "ground_floor_use",
+      "height",
+      "streetwall"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "Hey, I'm doing due diligence on a listing at 100 Wyse Road in Dartmouth \u2014 it's in the DD zone. The current building has ground-floor retail with residential above. Can you confirm that mixed-use setup is actually permitted as-of-right in DD, and are there any restrictions on what types of commercial uses are allowed on the ground floor specifically?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Good to know on the use permissions. Now my buyer is asking about redevelopment potential \u2014 if someone wanted to build new or add floors to the existing structure, what's the maximum height allowed in the DD zone and are there any streetwall requirements they'd need to hit? I want to give them a realistic picture of the upside."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "One more thing \u2014 the current building has a vacant ground-floor commercial unit and the owner was thinking of converting it to residential before selling to boost the income profile. Is that kind of internal conversion from commercial to residential something that would need a full development permit in DD, or does it fall under one of the exemptions? I saw something about internal conversions in DD being potentially exempt but I want to make sure I'm reading that right."
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [
+      "DD",
+      "permitted",
+      "Schedule 15",
+      "multi-unit dwelling",
+      "Table 1A",
+      "ground floor",
+      "active use",
+      "height precinct",
+      "Section 196",
+      "streetwall",
+      "Section 200"
+    ],
+    "expected_topics": [],
+    "notes": "Tests Downtown Dartmouth use permissions, ground-floor active-use requirements, and base height standards. Underrepresented use case."
+  },
+  "case_wall_time_s": 0.54
+}

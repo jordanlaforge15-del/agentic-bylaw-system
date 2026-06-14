@@ -1,0 +1,131 @@
+{
+  "id": "TC-017",
+  "title": "Homeowner expanding a legally non-conforming duplex in ER-1",
+  "zone": "ER-1",
+  "persona": {
+    "type": "homeowner",
+    "subtype": null,
+    "description": "Owner of a duplex predating current ER-1 zoning that only permits single-unit dwellings"
+  },
+  "complexity": "complex",
+  "liability": "medium",
+  "address": "2147 Maynard Street, Halifax, NS",
+  "session_id": "69870779-0cca-42eb-a785-618f533adf6d",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "Hey, I own a duplex at 2147 Maynard Street in Halifax \u2014 it's in the ER-1 zone. The duplex was already there when I bought it, and I know ER-1 only permits single-unit dwellings plus a secondary suite. So I'm guessing it's considered a legally non-conforming use? Just want to make sure I understand what that actually means for me before I start planning anything.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.16,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Okay so assuming it is legally non-conforming, I'm looking at adding a rear addition \u2014 probably around 30 square metres \u2014 to expand the lower unit. Does the bylaw allow me to expand a non-conforming duplex like this, or does doing any construction basically mean I lose my non-conforming status and have to comply with current ER-1 use permissions?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.24,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "Good to know. Now let's say I can proceed with the addition \u2014 what are the actual setback numbers I need to hit in ER-1? I'm most concerned about the rear setback since that's where the addition would go, and the side setback on the east side where the lot is pretty narrow. Also, what's the lot coverage limit I'd need to stay under? The lot is roughly 420 square metres and the existing building footprint is already around 140 square metres.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "So if my existing building is already sitting at about 33% lot coverage and the addition would push me to maybe 40%, does that create a separate non-conformity issue on top of the use issue? Like, am I dealing with two different non-conformity problems here \u2014 one for the duplex use and one potentially for lot coverage \u2014 and would those be treated differently under the bylaw? Do I need a development permit for this addition, or could it fall under any of the exemptions?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.18,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-017",
+    "title": "Homeowner expanding a legally non-conforming duplex in ER-1",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Owner of a duplex predating current ER-1 zoning that only permits single-unit dwellings"
+    },
+    "address": "2147 Maynard Street, Halifax, NS",
+    "zone": "ER-1",
+    "complexity": "complex",
+    "liability": "medium",
+    "tags": [
+      "non_conforming_use",
+      "expansion",
+      "renovation"
+    ],
+    "bylaw_features": [
+      "non_conforming",
+      "setbacks",
+      "lot_coverage"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "Hey, I own a duplex at 2147 Maynard Street in Halifax \u2014 it's in the ER-1 zone. The duplex was already there when I bought it, and I know ER-1 only permits single-unit dwellings plus a secondary suite. So I'm guessing it's considered a legally non-conforming use? Just want to make sure I understand what that actually means for me before I start planning anything."
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Okay so assuming it is legally non-conforming, I'm looking at adding a rear addition \u2014 probably around 30 square metres \u2014 to expand the lower unit. Does the bylaw allow me to expand a non-conforming duplex like this, or does doing any construction basically mean I lose my non-conforming status and have to comply with current ER-1 use permissions?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "Good to know. Now let's say I can proceed with the addition \u2014 what are the actual setback numbers I need to hit in ER-1? I'm most concerned about the rear setback since that's where the addition would go, and the side setback on the east side where the lot is pretty narrow. Also, what's the lot coverage limit I'd need to stay under? The lot is roughly 420 square metres and the existing building footprint is already around 140 square metres."
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "So if my existing building is already sitting at about 33% lot coverage and the addition would push me to maybe 40%, does that create a separate non-conformity issue on top of the use issue? Like, am I dealing with two different non-conformity problems here \u2014 one for the duplex use and one potentially for lot coverage \u2014 and would those be treated differently under the bylaw? Do I need a development permit for this addition, or could it fall under any of the exemptions?"
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [
+      "ER-1",
+      "permitted",
+      "Schedule 15",
+      "Schedule 18",
+      "non-conforming",
+      "lawful non-conforming",
+      "Section 229",
+      "Section 230",
+      "6.0 m",
+      "40%",
+      "Section 231"
+    ],
+    "expected_topics": [],
+    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here."
+  },
+  "case_wall_time_s": 0.75
+}

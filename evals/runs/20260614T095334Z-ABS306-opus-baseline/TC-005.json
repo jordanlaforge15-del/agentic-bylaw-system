@@ -1,0 +1,180 @@
+{
+  "id": "TC-005",
+  "title": "Developer feasibility for residential tower in HR-2",
+  "zone": "HR-2",
+  "persona": {
+    "type": "real_estate_developer",
+    "subtype": null,
+    "description": "Mid-size developer running a quick feasibility pass before purchasing a site"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "100 Robie Street, Halifax, NS",
+  "session_id": "75bc7700-5c64-47a8-a032-b1ac1ccb7fbf",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "We\u2019re looking at a site on Robie Street zoned HR-2 for a high-rise residential development \u2014 likely 60\u201380 units. What are the base zoning standards: height, lot coverage, setbacks?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.24,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Is there a floor area ratio (FAR) limit in HR-2, or does the bylaw rely only on height and lot coverage to control density?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.25,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "The site is 2,200 m\u00b2. At 65% lot coverage and 25 metres of height, roughly how many floors could we fit? And is multi-unit dwelling confirmed as a permitted use in HR-2?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.25,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "For 70 units, what\u2019s the parking obligation? Does the no-parking exemption that applies in some downtown zones apply here in HR-2?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.24,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 5,
+      "user_message": "Can we add a home occupation component \u2014 say a property management office \u2014 for the building manager in one of the ground-floor units? Is home occupation permitted in HR-2?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.23,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 6,
+      "user_message": "Pull it all together for me: for an HR-2 site at 2,200 m\u00b2, what is the realistic maximum buildable program in terms of units, height, and GFA, and what are the major bylaw constraints to flag for our architect?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.25,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "persona": {
+      "type": "real_estate_developer",
+      "subtype": null,
+      "description": "Mid-size developer running a quick feasibility pass before purchasing a site"
+    },
+    "address": "100 Robie Street, Halifax, NS",
+    "zone": "HR-2",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "new_construction",
+      "residential",
+      "multi_unit",
+      "high_rise",
+      "feasibility",
+      "redevelopment"
+    ],
+    "bylaw_features": [
+      "height",
+      "FAR",
+      "setbacks",
+      "lot_coverage",
+      "parking",
+      "permitted_use"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "We\u2019re looking at a site on Robie Street zoned HR-2 for a high-rise residential development \u2014 likely 60\u201380 units. What are the base zoning standards: height, lot coverage, setbacks?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Is there a floor area ratio (FAR) limit in HR-2, or does the bylaw rely only on height and lot coverage to control density?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "The site is 2,200 m\u00b2. At 65% lot coverage and 25 metres of height, roughly how many floors could we fit? And is multi-unit dwelling confirmed as a permitted use in HR-2?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "For 70 units, what\u2019s the parking obligation? Does the no-parking exemption that applies in some downtown zones apply here in HR-2?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "Can we add a home occupation component \u2014 say a property management office \u2014 for the building manager in one of the ground-floor units? Is home occupation permitted in HR-2?"
+      },
+      {
+        "turn": 6,
+        "role": "user",
+        "message": "Pull it all together for me: for an HR-2 site at 2,200 m\u00b2, what is the realistic maximum buildable program in terms of units, height, and GFA, and what are the major bylaw constraints to flag for our architect?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Table 3",
+      "Table 5",
+      "Section 120(a)",
+      "Section 120(b)"
+    ],
+    "expected_answer_keywords": [
+      "HR-2",
+      "permitted",
+      "multi-unit dwelling",
+      "dwelling unit",
+      "home occupation"
+    ],
+    "expected_topics": [
+      "height",
+      "lot_coverage",
+      "setbacks",
+      "FAR",
+      "use_permission",
+      "parking"
+    ],
+    "notes": "Six-turn developer feasibility session. Tests that agent correctly identifies home occupation is NOT permitted in HR-2 (Table 1A). High liability: 60-80 unit building."
+  },
+  "case_wall_time_s": 1.47
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "complexity": "simple",
+    "turns_completed": 2,
+    "turns_expected": 2,
+    "tool_calls": 0,
+    "wall_s": 88.68,
+    "error": null
+  }
+]

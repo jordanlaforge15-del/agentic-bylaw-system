@@ -1,0 +1,130 @@
+{
+  "id": "TC-011",
+  "title": "City planner reviewing university lab expansion in INS",
+  "zone": "INS",
+  "persona": {
+    "type": "city_agent",
+    "subtype": "planner",
+    "description": "Senior planner triaging a proposed lab/research building addition on an institutional campus"
+  },
+  "complexity": "medium",
+  "liability": "medium",
+  "address": "5980 University Avenue, Halifax, NS",
+  "session_id": "240be7d5-9f7e-4398-b65b-6ab4398104c2",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I'm reviewing a development application for 5980 University Avenue \u2014 that's in the INS zone. The applicant is proposing to expand an existing university research lab. Before I get into the standards, can you confirm that a university laboratory use is a permitted use as-of-right in the INS zone under the Regional Centre Land Use By-Law?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Okay, and assuming the lab expansion is permitted in INS, what are the applicable setback requirements for the zone? I need the front, side, and rear setback figures specifically \u2014 the application is showing a 4.5 m side setback on the east property line and I want to verify that's compliant.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "The proposed expansion would bring the building to roughly 18 metres at its highest point. What's the maximum building height permitted in the INS zone, and is there anything in the by-law about stepbacks or height transitions near adjacent residential zones that I'd need to flag for this site?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.51,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "Last piece \u2014 the expansion adds about 2,800 square metres of new floor area to an existing building on a lot that's approximately 1.2 hectares. What's the maximum lot coverage allowed in the INS zone, and does the by-law have any gross floor area or FAR cap I should be cross-referencing before I prepare my planner's report?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.16,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-011",
+    "title": "City planner reviewing university lab expansion in INS",
+    "persona": {
+      "type": "city_agent",
+      "subtype": "planner",
+      "description": "Senior planner triaging a proposed lab/research building addition on an institutional campus"
+    },
+    "address": "5980 University Avenue, Halifax, NS",
+    "zone": "INS",
+    "complexity": "medium",
+    "liability": "medium",
+    "tags": [
+      "institutional",
+      "expansion",
+      "permitted_use",
+      "setbacks",
+      "height"
+    ],
+    "bylaw_features": [
+      "use_permission",
+      "setbacks",
+      "height",
+      "lot_coverage"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I'm reviewing a development application for 5980 University Avenue \u2014 that's in the INS zone. The applicant is proposing to expand an existing university research lab. Before I get into the standards, can you confirm that a university laboratory use is a permitted use as-of-right in the INS zone under the Regional Centre Land Use By-Law?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Okay, and assuming the lab expansion is permitted in INS, what are the applicable setback requirements for the zone? I need the front, side, and rear setback figures specifically \u2014 the application is showing a 4.5 m side setback on the east property line and I want to verify that's compliant."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "The proposed expansion would bring the building to roughly 18 metres at its highest point. What's the maximum building height permitted in the INS zone, and is there anything in the by-law about stepbacks or height transitions near adjacent residential zones that I'd need to flag for this site?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "Last piece \u2014 the expansion adds about 2,800 square metres of new floor area to an existing building on a lot that's approximately 1.2 hectares. What's the maximum lot coverage allowed in the INS zone, and does the by-law have any gross floor area or FAR cap I should be cross-referencing before I prepare my planner's report?"
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [
+      "INS",
+      "permitted",
+      "Schedule 15",
+      "height precinct",
+      "setback",
+      "Section 196",
+      "lot coverage"
+    ],
+    "expected_topics": [],
+    "notes": "Tests INS use permissions for research/laboratory uses, dimensional standards in an institutional zone, and how the bylaw handles campus-style master sites. Underrepresented zone."
+  },
+  "case_wall_time_s": 1.0
+}

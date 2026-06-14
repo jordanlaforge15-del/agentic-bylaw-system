@@ -1,0 +1,642 @@
+{
+  "id": "TC-002",
+  "title": "Homeowner secondary suite legality in ER-2",
+  "zone": "ER-2",
+  "persona": {
+    "type": "homeowner",
+    "subtype": null,
+    "description": "Young couple exploring income suite to offset mortgage"
+  },
+  "complexity": "simple",
+  "liability": "low",
+  "address": "567 Windsor Street, Halifax, NS",
+  "session_id": "badaaebe-4b74-439d-befe-8b46bf972f09",
+  "model": "claude-opus-4-5-20251101",
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "We\u2019re on Windsor Street in Halifax in the ER-2 zone. We\u2019re thinking of converting our basement into a secondary suite to rent out. Is a secondary suite a permitted use in ER-2?",
+      "assistant_text": "## Secondary Suite in ER-2: Short Answer\n\n**Yes, converting your basement to a secondary suite (creating a two-unit dwelling) is permitted in the ER-2 zone**, but it's subject to specific conditions depending on your situation.\n\n---\n\n### How the Bylaw Treats This\n\nThe Regional Centre Land Use By-law doesn't use the term \"secondary suite\" \u2014 instead, it classifies dwellings by unit count. Converting a single-unit dwelling to include a basement rental unit would make it a **two-unit dwelling use**.\n\n**Two-unit dwelling use in ER-2**: Conditionally permitted (Table 1A, footnote \u2465)\n\nThe footnote condition states:\n> *\"Excluding heritage conservation districts, an existing building in the Young Avenue (YA) Special Area, as shown on Schedule 3C, may undergo an internal conversion for no more than a three-unit dwelling use in compliance with the requirements of Section 63.\"*\n\n---\n\n### What This Means for You on Windsor Street\n\n**If your property is NOT in a heritage conservation district:**\n- You can convert your existing building to a two-unit dwelling (or even up to a three-unit) under the **internal conversion** provisions of **Section 63**.\n\n**Section 63 requirements for internal conversion in ER-2:**\n1. The building must have existed on the coming-into-force date of the bylaw\n2. No increase in the **height or volume** of the building\n3. No new exterior staircase in the front yard (replacement of existing is okay)\n\n**If your property IS in a heritage conservation district:**\n- The footnote excludes heritage conservation districts from this internal conversion pathway, which may require additional review or restrict the conversion.\n\n---\n\n### Key Considerations\n\n- **Basement conversion fits well** with Section 63 because you're working within the existing building envelope \u2014 no height or volume increase\n- **No parking requirement** typically applies for internal conversions (though you should confirm this with HRM)\n- **Building Code** requirements (egress, ceiling height, fire separation) are separate from zoning and will apply\n\n---\n\n### Next Steps\n\nSince you mentioned Windsor Street but not a specific address, I cannot confirm whether your property falls within a heritage conservation district. I'd recommend:\n\n1. **Confirm your property's heritage status** via HRM's online mapping tools or by contacting HRM Planning & Development\n2. **Verify your building predates the bylaw's coming-into-force date**\n3. **Consult HRM Planning & Development** to confirm the internal conversion pathway applies to your specific situation before committing to design work\n\nThis is general bylaw information, not a site-specific compliance determination. For a definitive answer on your property, confirm with HRM Planning & Development.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 19329,
+        "output_tokens": 620,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 4214
+      },
+      "wall_time_s": 56.18,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 10,
+        "terminated_reason": "iteration_cap",
+        "total_usage": {
+          "input_tokens": 50637,
+          "output_tokens": 2458,
+          "cache_creation_input_tokens": 10122,
+          "cache_read_input_tokens": 114487
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 367,
+              "output_tokens": 99,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 2600,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 180,
+              "output_tokens": 139,
+              "cache_creation_input_tokens": 364,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 3040,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 3,
+            "usage": {
+              "input_tokens": 351,
+              "output_tokens": 77,
+              "cache_creation_input_tokens": 364,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 2342,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 4,
+            "usage": {
+              "input_tokens": 335,
+              "output_tokens": 108,
+              "cache_creation_input_tokens": 77,
+              "cache_read_input_tokens": 9560
+            },
+            "latency_ms": 2795,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 5,
+            "usage": {
+              "input_tokens": 2233,
+              "output_tokens": 213,
+              "cache_creation_input_tokens": 31,
+              "cache_read_input_tokens": 9777
+            },
+            "latency_ms": 3902,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 6,
+            "usage": {
+              "input_tokens": 4678,
+              "output_tokens": 235,
+              "cache_creation_input_tokens": 163,
+              "cache_read_input_tokens": 9808
+            },
+            "latency_ms": 4404,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 7,
+            "usage": {
+              "input_tokens": 4787,
+              "output_tokens": 209,
+              "cache_creation_input_tokens": 2069,
+              "cache_read_input_tokens": 9971
+            },
+            "latency_ms": 3759,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 8,
+            "usage": {
+              "input_tokens": 4808,
+              "output_tokens": 228,
+              "cache_creation_input_tokens": 2494,
+              "cache_read_input_tokens": 12154
+            },
+            "latency_ms": 3837,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 9,
+            "usage": {
+              "input_tokens": 6889,
+              "output_tokens": 292,
+              "cache_creation_input_tokens": 2042,
+              "cache_read_input_tokens": 14784
+            },
+            "latency_ms": 5418,
+            "tool_call_count": 3
+          },
+          {
+            "iteration": 10,
+            "usage": {
+              "input_tokens": 6680,
+              "output_tokens": 238,
+              "cache_creation_input_tokens": 2518,
+              "cache_read_input_tokens": 16937
+            },
+            "latency_ms": 4630,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 11,
+            "usage": {
+              "input_tokens": 19329,
+              "output_tokens": 620,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 4214
+            },
+            "latency_ms": 15910,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 101
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 15
+          },
+          {
+            "name": "get_zone_profile",
+            "is_error": false,
+            "latency_ms": 1377
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 247
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 16
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 235
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 33
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 234
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 18
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 240
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 249
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 172
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 63
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 43
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 234
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 17
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 228
+          }
+        ]
+      }
+    },
+    {
+      "turn": 2,
+      "user_message": "Perfect. Can we also run a small home-based tutoring business from the house at the same time as having the secondary suite, or does that create any issue under the bylaw?",
+      "assistant_text": "## Home-Based Tutoring Business in ER-2: Short Answer\n\n**Yes, you can run a home-based tutoring business alongside your secondary suite.** There's no bylaw conflict between the two uses.\n\n---\n\n### What the Bylaw Says\n\n**Home occupation use** is conditionally permitted in ER-2 (Table 1A, footnote \u246e). The footnote condition only excludes the Halifax Grain Elevator Special Area \u2014 which doesn't affect Windsor Street.\n\n**Tutoring is explicitly listed** as a permitted home occupation use under **Section 51(1)(l)**.\n\n---\n\n### No Conflict with the Secondary Suite\n\nThe bylaw treats these as separate, compatible uses:\n- The **two-unit dwelling use** (your basement suite) is the principal residential use\n- The **home occupation use** (tutoring) is an accessory commercial activity within your dwelling unit\n\nThere's nothing in the retrieved provisions that prohibits combining a home occupation with a two-unit dwelling. The home occupation operates within *your* dwelling unit (not the rental unit), so the two uses don't interfere with each other from a zoning perspective.\n\n---\n\n### Operating Requirements\n\nSection 51 sets out requirements for home occupation uses. The opening clause I retrieved states:\n\n> *\"Excluding a home occupation use contained within a grade-related dwelling unit use, a home occupation use shall...\"*\n\nThe full list of operating standards (floor area limits, employee restrictions, signage, etc.) appears in the remainder of Section 51, which I wasn't able to retrieve completely. These typically include requirements like:\n- The business must be secondary to the residential use\n- Limits on floor area devoted to the business\n- Restrictions on non-resident employees\n- No exterior storage or display of goods\n\n**I recommend confirming the specific operating standards in Section 51(1)** with HRM Planning & Development or by reviewing the full bylaw text, as my retrieval only captured the list of permitted home occupation types (clauses c\u2013l) but not the detailed operating requirements (likely in earlier subsections).\n\n---\n\n### Bottom Line\n\nRunning a small tutoring business from your home while renting out the basement suite is permitted under the bylaw \u2014 no conflict. Just ensure you comply with the home occupation operating standards in Section 51.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 35747,
+        "output_tokens": 509,
+        "cache_creation_input_tokens": 149,
+        "cache_read_input_tokens": 4214
+      },
+      "wall_time_s": 46.21,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 7,
+        "terminated_reason": "cumulative_cost_trip",
+        "total_usage": {
+          "input_tokens": 68713,
+          "output_tokens": 1565,
+          "cache_creation_input_tokens": 16751,
+          "cache_read_input_tokens": 205598
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 5687,
+              "output_tokens": 225,
+              "cache_creation_input_tokens": 4128,
+              "cache_read_input_tokens": 19586
+            },
+            "latency_ms": 9747,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 5474,
+              "output_tokens": 222,
+              "cache_creation_input_tokens": 2306,
+              "cache_read_input_tokens": 23828
+            },
+            "latency_ms": 4609,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 3,
+            "usage": {
+              "input_tokens": 4348,
+              "output_tokens": 131,
+              "cache_creation_input_tokens": 3122,
+              "cache_read_input_tokens": 26276
+            },
+            "latency_ms": 3295,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 4,
+            "usage": {
+              "input_tokens": 4793,
+              "output_tokens": 161,
+              "cache_creation_input_tokens": 2082,
+              "cache_read_input_tokens": 29525
+            },
+            "latency_ms": 3501,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 5,
+            "usage": {
+              "input_tokens": 3245,
+              "output_tokens": 95,
+              "cache_creation_input_tokens": 2014,
+              "cache_read_input_tokens": 31731
+            },
+            "latency_ms": 2711,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 6,
+            "usage": {
+              "input_tokens": 3497,
+              "output_tokens": 114,
+              "cache_creation_input_tokens": 2522,
+              "cache_read_input_tokens": 33877
+            },
+            "latency_ms": 3355,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 7,
+            "usage": {
+              "input_tokens": 5922,
+              "output_tokens": 108,
+              "cache_creation_input_tokens": 428,
+              "cache_read_input_tokens": 36561
+            },
+            "latency_ms": 2669,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 8,
+            "usage": {
+              "input_tokens": 35747,
+              "output_tokens": 509,
+              "cache_creation_input_tokens": 149,
+              "cache_read_input_tokens": 4214
+            },
+            "latency_ms": 14947,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 29
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 236
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 18
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 240
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 254
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 33
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 21
+          },
+          {
+            "name": "get_document_outline",
+            "is_error": false,
+            "latency_ms": 22
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 269
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 238
+          }
+        ]
+      }
+    },
+    {
+      "turn": 3,
+      "user_message": "One more thing \u2014 would adding the suite change our setback requirements at all, or do the existing ER-2 setback standards still apply?",
+      "assistant_text": "I now have the complete picture. Let me provide the answer.\n\n## Setbacks and Your Basement Suite: Short Answer\n\n**No, adding the secondary suite does not change your setback requirements.** The existing ER-2 setback standards continue to apply \u2014 and since you're doing an internal conversion with no changes to the building envelope, setbacks aren't really a factor at all.\n\n---\n\n### Why Setbacks Don't Change\n\nThe key here is **Section 63** (Internal Conversion within ER-3 or ER-2 Zone), which we discussed earlier. One of its requirements is:\n\n> *\"no increase in the height or volume of the building\"* (Section 63(b))\n\nSince you're converting existing interior space (your basement) into a second dwelling unit \u2014 without any additions, extensions, or changes to the building footprint \u2014 your building's relationship to the property lines stays exactly the same. The setback standards apply to the **building**, not to the number of units inside it.\n\n---\n\n### ER-2 Setback Standards (For Reference)\n\nIf you were to do any future exterior work, here are the ER-2 setbacks from **Part V, Chapter 9** (Sections 228\u2013230):\n\n| Setback | Requirement | Source |\n|---------|-------------|--------|\n| **Front / Flanking** | As specified on **Schedule 18** | Section 228(1) |\n| **Side** | **1.25 metres** (general); varies by Established Residential Special Area \u2014 see table below | Section 229(1)(c) |\n| **Rear** | **6.0 metres** | Section 230 |\n\n**Side setback exceptions** (Section 229(1)(b) and table):\n- Semi-detached or duplex apartment: **0.0 m** along common wall\n- Special Areas vary (e.g., Young Avenue: 10% of lot width up to 3.0 m; Grant Street: 1.5 m; North End Halifax 1: 1.5 m one side / 0.0 m other)\n\nWithout knowing your specific address on Windsor Street, I can't confirm whether you're in an Established Residential Special Area with different side setback rules. Most of Windsor Street uses the standard **1.25 m** side setback.\n\n---\n\n### Bottom Line\n\nFor a basement conversion with no exterior changes:\n- **Setbacks are not affected** \u2014 you're not changing the building envelope\n- The ER-2 setback standards remain the same regardless of whether you have one unit or two\n- Just comply with Section 63's requirement of no increase in height or volume\n\nIf you ever plan exterior additions in the future, the standard ER-2 setbacks (front per Schedule 18, side 1.25 m, rear 6.0 m) would apply \u2014 but that's a separate project from your basement suite.\n\n---\n\n**Before you act on these numbers:** this is general bylaw information, not legal advice or a site-specific compliance determination. Precinct boundaries, overlays, and on-the-ground site conditions can change what actually applies to a given parcel. Confirm the figures for your exact site with HRM Planning & Development or a qualified planner before proceeding \u2014 especially before you commit budget or design work.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 947,
+        "output_tokens": 663,
+        "cache_creation_input_tokens": 5486,
+        "cache_read_input_tokens": 39134
+      },
+      "wall_time_s": 40.98,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 6,
+        "terminated_reason": "end_turn",
+        "total_usage": {
+          "input_tokens": 49919,
+          "output_tokens": 1887,
+          "cache_creation_input_tokens": 56459,
+          "cache_read_input_tokens": 134876
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 21838,
+              "output_tokens": 384,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 9560
+            },
+            "latency_ms": 5678,
+            "tool_call_count": 4
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 3999,
+              "output_tokens": 211,
+              "cache_creation_input_tokens": 21835,
+              "cache_read_input_tokens": 9560
+            },
+            "latency_ms": 4779,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 3,
+            "usage": {
+              "input_tokens": 7578,
+              "output_tokens": 262,
+              "cache_creation_input_tokens": 21835,
+              "cache_read_input_tokens": 9560
+            },
+            "latency_ms": 4770,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 4,
+            "usage": {
+              "input_tokens": 9228,
+              "output_tokens": 227,
+              "cache_creation_input_tokens": 3866,
+              "cache_read_input_tokens": 31527
+            },
+            "latency_ms": 3991,
+            "tool_call_count": 3
+          },
+          {
+            "iteration": 5,
+            "usage": {
+              "input_tokens": 6329,
+              "output_tokens": 140,
+              "cache_creation_input_tokens": 3437,
+              "cache_read_input_tokens": 35535
+            },
+            "latency_ms": 4564,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 6,
+            "usage": {
+              "input_tokens": 947,
+              "output_tokens": 663,
+              "cache_creation_input_tokens": 5486,
+              "cache_read_input_tokens": 39134
+            },
+            "latency_ms": 16153,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 252
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 5
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 6
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 8
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 249
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 2
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 266
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 181
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 15
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 9
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 10
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 13
+          }
+        ]
+      }
+    }
+  ],
+  "spec": {
+    "id": "TC-002",
+    "title": "Homeowner secondary suite legality in ER-2",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Young couple exploring income suite to offset mortgage"
+    },
+    "address": "567 Windsor Street, Halifax, NS",
+    "zone": "ER-2",
+    "complexity": "simple",
+    "liability": "low",
+    "tags": [
+      "renovation",
+      "residential",
+      "secondary_suite",
+      "permitted_use",
+      "accessory_dwelling"
+    ],
+    "bylaw_features": [
+      "use_permission",
+      "combination_of_uses"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "We\u2019re on Windsor Street in Halifax in the ER-2 zone. We\u2019re thinking of converting our basement into a secondary suite to rent out. Is a secondary suite a permitted use in ER-2?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Perfect. Can we also run a small home-based tutoring business from the house at the same time as having the secondary suite, or does that create any issue under the bylaw?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "One more thing \u2014 would adding the suite change our setback requirements at all, or do the existing ER-2 setback standards still apply?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Section 49",
+      "Table 3"
+    ],
+    "expected_answer_keywords": [
+      "ER-2",
+      "two-unit dwelling",
+      "secondary suite",
+      "permitted"
+    ],
+    "expected_topics": [
+      "use_permission",
+      "combination_of_uses",
+      "setbacks"
+    ],
+    "notes": "Tests use permission lookup, combination-of-uses provision, and baseline setback standards. Three turns escalating breadth."
+  },
+  "case_wall_time_s": 143.38
+}

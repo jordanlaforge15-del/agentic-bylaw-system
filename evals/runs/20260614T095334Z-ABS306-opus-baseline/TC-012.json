@@ -1,0 +1,109 @@
+{
+  "id": "TC-012",
+  "title": "Lawyer advising adjoining owner on RPK encroachment risk",
+  "zone": "RPK",
+  "persona": {
+    "type": "real_estate_law_professional",
+    "subtype": null,
+    "description": "Real-estate lawyer fielding a question about a deck that may overhang into an RPK-zoned park parcel"
+  },
+  "complexity": "medium",
+  "liability": "medium",
+  "address": "Halifax Common, North Park Street side, Halifax, NS",
+  "session_id": "7011288b-0c06-4bd9-94f0-1c20bb13194b",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I'm acting for an adjoining property owner on the North Park Street side of Halifax Common. The land there falls under the RPK \u2014 Regional Park Zone. I need to confirm what uses are actually permitted as-of-right in that zone, because a neighbouring party appears to be operating some kind of accessory structure right up against the common boundary. Can you tell me what Table 1A or 1B says about permitted uses in RPK, and whether any residential or commercial use can be established there as-of-right?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.15,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Right, so if RPK doesn't appear in either Table 1A or 1B, that's significant from an encroachment standpoint. My client's concern is specifically about a small structure \u2014 looks like a shed or equipment storage \u2014 that appears to be sitting very close to, or possibly over, the boundary between the RPK land and the adjacent private lot. Under the bylaw, accessory buildings under 20 square metres in a rear yard are exempt from a development permit per section 9(d). Does that exemption apply on RPK-zoned land, or does it only operate where the underlying use itself is permitted? I want to understand whether the structure could even claim permit-exempt status here.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.16,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "That distinction matters a lot for my advice. If the permit exemption can't be invoked because there's no lawful principal use on RPK land to which the accessory structure is subordinate, then the structure has no regulatory footing at all. Now, for the setback question \u2014 the bylaw excerpt I have shows setback standards for ER and presumably other residential zones in Table 3, but I don't see RPK listed. Does the RPK zone carry any prescribed side or rear setback standards under the Regional Centre Land Use By-Law, and if no setbacks are enumerated, what's the legal implication for an encroachment claim \u2014 does the absence of a setback standard mean there's no minimum, or does it reinforce that no development is contemplated in the zone at all?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-012",
+    "title": "Lawyer advising adjoining owner on RPK encroachment risk",
+    "persona": {
+      "type": "real_estate_law_professional",
+      "subtype": null,
+      "description": "Real-estate lawyer fielding a question about a deck that may overhang into an RPK-zoned park parcel"
+    },
+    "address": "Halifax Common, North Park Street side, Halifax, NS",
+    "zone": "RPK",
+    "complexity": "medium",
+    "liability": "medium",
+    "tags": [
+      "park",
+      "encroachment",
+      "permitted_use",
+      "accessory_structure"
+    ],
+    "bylaw_features": [
+      "use_permission",
+      "setbacks",
+      "accessory_uses"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I'm acting for an adjoining property owner on the North Park Street side of Halifax Common. The land there falls under the RPK \u2014 Regional Park Zone. I need to confirm what uses are actually permitted as-of-right in that zone, because a neighbouring party appears to be operating some kind of accessory structure right up against the common boundary. Can you tell me what Table 1A or 1B says about permitted uses in RPK, and whether any residential or commercial use can be established there as-of-right?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Right, so if RPK doesn't appear in either Table 1A or 1B, that's significant from an encroachment standpoint. My client's concern is specifically about a small structure \u2014 looks like a shed or equipment storage \u2014 that appears to be sitting very close to, or possibly over, the boundary between the RPK land and the adjacent private lot. Under the bylaw, accessory buildings under 20 square metres in a rear yard are exempt from a development permit per section 9(d). Does that exemption apply on RPK-zoned land, or does it only operate where the underlying use itself is permitted? I want to understand whether the structure could even claim permit-exempt status here."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "That distinction matters a lot for my advice. If the permit exemption can't be invoked because there's no lawful principal use on RPK land to which the accessory structure is subordinate, then the structure has no regulatory footing at all. Now, for the setback question \u2014 the bylaw excerpt I have shows setback standards for ER and presumably other residential zones in Table 3, but I don't see RPK listed. Does the RPK zone carry any prescribed side or rear setback standards under the Regional Centre Land Use By-Law, and if no setbacks are enumerated, what's the legal implication for an encroachment claim \u2014 does the absence of a setback standard mean there's no minimum, or does it reinforce that no development is contemplated in the zone at all?"
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [
+      "RPK",
+      "permitted",
+      "Table 1A",
+      "setback",
+      "development permit",
+      "Section 9"
+    ],
+    "expected_topics": [],
+    "notes": "Tests RPK permitted/accessory uses and what the bylaw says (or doesn't say) about private encroachments into park-zoned land. Underrepresented zone."
+  },
+  "case_wall_time_s": 0.49
+}

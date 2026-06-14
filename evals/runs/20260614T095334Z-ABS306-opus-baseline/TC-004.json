@@ -1,0 +1,443 @@
+{
+  "id": "TC-004",
+  "title": "Architect scoping a mid-rise residential building in HR-1",
+  "zone": "HR-1",
+  "persona": {
+    "type": "architectural_consultant",
+    "subtype": "architect",
+    "description": "Registered architect in schematic design for a mid-rise residential client"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "200 Bayers Road, Halifax, NS",
+  "session_id": "20197729-0467-4dfd-bd08-c07f9206c964",
+  "model": "claude-opus-4-5-20251101",
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I\u2019m an architect working on a new mid-rise residential building at 200 Bayers Road in Halifax \u2014 the site is zoned HR-1. We\u2019re targeting a multi-unit dwelling. First pass: what are the permitted uses and key dimensional standards \u2014 height, setbacks, and lot coverage \u2014 for HR-1?",
+      "assistant_text": "Based on the evidence retrieved, here's what I can tell you about the **HR-1 zone** for your site at **200 Bayers Road**:\n\n---\n\n## HR-1 Zone Summary \u2014 200 Bayers Road\n\n| Parameter | Standard | Citation |\n|-----------|----------|----------|\n| **Zone** | HR-1 (Higher-Order Residential 1) | Regional Centre Land Use By-law |\n| **Permitted Use** | Multi-unit dwelling use \u2014 **conditionally permitted** | Table 1B, footnote \u246e |\n| **Condition** | Permitted except within the Halifax Grain Elevator (HGE) Special Area (Schedule 3F). Your site is not in that area, so multi-unit dwelling is permitted. | Footnote 15 |\n| **Max Height** | Per **Schedule 15** (height precinct map) | Section 196 |\n| **Front/Flanking Setbacks** | Per **Schedule 18** | Section 197 |\n| **Side Setbacks** | 6.0 m where abutting ER-3/ER-2/ER-1/CH-2/CH-1/PCF/RPK zones; 0.0 m where abutting DD/DH/CEN-2/CEN-1/COR zones; 2.5 m elsewhere | Section 198(1) |\n| **Rear Setbacks** | 6.0 m where abutting ER/CH/PCF/RPK zones; 3.0 m elsewhere | Section 199(1) |\n| **Max Streetwall Height** | Heritage property: existing streetwall height; Wood-frame/mass timber \u22646 storeys: building height (or 6 storeys if taller); Other construction \u22645 storeys: building height (or **3 storeys** if taller than 5) | Section 200(1) |\n| **Min Streetwall Height** | 2 storeys on pedestrian-oriented commercial streets (Schedule 7); otherwise per Section 201 | Section 201(1) |\n\n---\n\n## Key Design Notes\n\n1. **Streetwall control matters for mid-rise**: If your building exceeds 5 storeys and uses conventional (non-wood-frame) construction, the streetwall is capped at **3 storeys** \u2014 the upper storeys must step back. Wood-frame or mass timber construction gets a more generous 6-storey streetwall allowance.\n\n2. **Massing variation available via site plan approval**: Section 393 allows buildings in HR-1 to exceed the standard building-dimension limits if the massing is broken up to look like two or more distinct buildings \u2014 requiring at-grade open space along the streetline, max 64.0 m width/depth above the streetwall, and min 10.0 m separation between portions above the streetwall.\n\n3. **No lot coverage cap retrieved**: The HR-1/HR-2 chapter (Chapter 7, Sections 195\u2013201) does not appear to include a maximum lot coverage provision. Lot coverage limits in the RCLUB apply specifically to the **ER zones** (Section 231: 40% for single-unit dwellings, 50% for other uses on lots >325 m\u00b2, 60% on smaller lots). **HR-1 does not have a stated lot coverage maximum** \u2014 the building envelope is controlled by height, setbacks, streetwall, and FAR instead.\n\n---\n\n## What I Could Not Retrieve\n\n- **The specific height precinct value for 200 Bayers Road** requires a spatial lookup against **Schedule 15** (the height precinct map). The bylaw text confirms height is set by Schedule 15, but I did not retrieve the actual precinct value for your parcel. This would tell you whether the cap is in metres or storeys and the exact number.\n\n- **The specific front/flanking setback value** requires a spatial lookup against **Schedule 18**. The bylaw text confirms setbacks are per Schedule 18, but I did not retrieve the mapped value for your lot.\n\n- **Floor Area Ratio (FAR)** is set by **Schedule 17** for the HR-1 zone, but I did not retrieve the FAR precinct value for 200 Bayers Road.\n\n---\n\n## Recommendation\n\nBefore proceeding with schematic design, confirm the **Schedule 15 height precinct**, **Schedule 17 FAR precinct**, and **Schedule 18 setback precinct** values for 200 Bayers Road via HRM's online mapping tools or by contacting HRM Planning & Development. These schedule-based values are spatially assigned and vary across the HR-1 zone \u2014 they are not uniform zone-wide standards.\n\nThis is general bylaw information, not a site-specific compliance determination or legal advice. Confirm all dimensional standards with HRM before committing design decisions.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 49173,
+        "output_tokens": 1128,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 4214
+      },
+      "wall_time_s": 79.59,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 8,
+        "terminated_reason": "cumulative_cost_trip",
+        "total_usage": {
+          "input_tokens": 139148,
+          "output_tokens": 3948,
+          "cache_creation_input_tokens": 39331,
+          "cache_read_input_tokens": 145252
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 392,
+              "output_tokens": 154,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 3422,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 408,
+              "output_tokens": 430,
+              "cache_creation_input_tokens": 389,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 5705,
+            "tool_call_count": 4
+          },
+          {
+            "iteration": 3,
+            "usage": {
+              "input_tokens": 10439,
+              "output_tokens": 403,
+              "cache_creation_input_tokens": 389,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 6583,
+            "tool_call_count": 4
+          },
+          {
+            "iteration": 4,
+            "usage": {
+              "input_tokens": 21782,
+              "output_tokens": 221,
+              "cache_creation_input_tokens": 304,
+              "cache_read_input_tokens": 9586
+            },
+            "latency_ms": 4876,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 5,
+            "usage": {
+              "input_tokens": 22230,
+              "output_tokens": 340,
+              "cache_creation_input_tokens": 9874,
+              "cache_read_input_tokens": 10047
+            },
+            "latency_ms": 6451,
+            "tool_call_count": 3
+          },
+          {
+            "iteration": 6,
+            "usage": {
+              "input_tokens": 17007,
+              "output_tokens": 263,
+              "cache_creation_input_tokens": 11625,
+              "cache_read_input_tokens": 20046
+            },
+            "latency_ms": 5544,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 7,
+            "usage": {
+              "input_tokens": 11225,
+              "output_tokens": 545,
+              "cache_creation_input_tokens": 10354,
+              "cache_read_input_tokens": 31796
+            },
+            "latency_ms": 8097,
+            "tool_call_count": 6
+          },
+          {
+            "iteration": 8,
+            "usage": {
+              "input_tokens": 6492,
+              "output_tokens": 464,
+              "cache_creation_input_tokens": 6396,
+              "cache_read_input_tokens": 42281
+            },
+            "latency_ms": 7201,
+            "tool_call_count": 4
+          },
+          {
+            "iteration": 9,
+            "usage": {
+              "input_tokens": 49173,
+              "output_tokens": 1128,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 4214
+            },
+            "latency_ms": 26853,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "get_zone_profile",
+            "is_error": false,
+            "latency_ms": 1670
+          },
+          {
+            "name": "get_address_profile",
+            "is_error": false,
+            "latency_ms": 15
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 365
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 317
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 287
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 318
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 27
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 259
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 196
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 198
+          },
+          {
+            "name": "get_document_outline",
+            "is_error": false,
+            "latency_ms": 25
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 240
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 18
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 258
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 189
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 189
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 36
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 17
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 9
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 9
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 10
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 11
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 11
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 113
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 15
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 16
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 12
+          }
+        ]
+      }
+    },
+    {
+      "turn": 2,
+      "user_message": "Our site is 1,800 m\u00b2. We\u2019re planning a building footprint of roughly 900 m\u00b2. Is that within the lot coverage limit? And if we push to 18 metres in height, are we within the HR-1 maximum?",
+      "assistant_text": "Based on the evidence I've already retrieved, I can give you a clear answer on lot coverage and a qualified answer on height:\n\n---\n\n## Lot Coverage \u2014 900 m\u00b2 footprint on 1,800 m\u00b2 lot (50%)\n\n**You're fine.** The HR-1 zone does not have a maximum lot coverage requirement.\n\nLot coverage limits in the RCLUB apply specifically to the **ER zones** (Established Residential), where Section 231 caps coverage at 40\u201360% depending on use and lot size. The HR-1/HR-2 chapter (Part V, Chapter 7, Sections 195\u2013211) contains no lot coverage provision \u2014 your building envelope is controlled by **height, setbacks, streetwall height, FAR, and building dimensions** instead.\n\nA 900 m\u00b2 footprint on an 1,800 m\u00b2 lot is **not constrained by lot coverage** in HR-1.\n\n---\n\n## Height \u2014 18 metres\n\n**I cannot confirm this as-of-right without the Schedule 15 precinct value for your site.**\n\nWhat I know from Section 196:\n> \"Subject to Sections 103 and 104, and Part X, any main building shall not exceed the maximum required building height specified on **Schedule 15**.\"\n\nSchedule 15 is a spatial map that assigns height precincts across the Regional Centre. The HR-1 zone spans multiple height precincts \u2014 some areas allow mid-rise (e.g., 15\u201325 m or 5\u20138 storeys), others are more restrictive. **18 metres is plausible for HR-1, but not guaranteed** until we confirm your precinct.\n\nFor reference:\n- 18 m \u2248 approximately 5\u20136 storeys depending on floor-to-floor height\n- HR-1 is a \"Higher-Order Residential\" zone intended for mid-rise forms, so 18 m is within the range the zone typically accommodates \u2014 but the precinct controls\n\n---\n\n## What You Need to Confirm\n\n| Item | Source | Why It Matters |\n|------|--------|----------------|\n| **Height precinct** | Schedule 15 (spatial map) | Confirms whether 18 m is as-of-right or requires variance |\n| **FAR precinct** | Schedule 17 (spatial map) | At 1,800 m\u00b2 lot and 900 m\u00b2 footprint, a 6-storey building would yield ~5,400 m\u00b2 GFA \u2014 you need to confirm your FAR cap to know if that's achievable |\n| **Front/flanking setback** | Schedule 18 (spatial map) | Affects your buildable footprint placement |\n\n---\n\n## Bottom Line\n\n- **Lot coverage at 50%**: \u2705 No limit in HR-1 \u2014 you're good.\n- **Height at 18 m**: \u26a0\ufe0f Likely permissible in HR-1, but confirm via Schedule 15 for 200 Bayers Road.\n\nI'd recommend pulling up HRM's [Regional Centre Zoning Map Viewer](https://www.halifax.ca/business/planning-development/applications/regional-centre-package-a) or contacting HRM Planning & Development to get the exact Schedule 15 height precinct for your parcel before locking in your massing study. If you can share the precinct designation from the map, I can confirm the height limit for you.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 4601,
+        "output_tokens": 788,
+        "cache_creation_input_tokens": 6316,
+        "cache_read_input_tokens": 48852
+      },
+      "wall_time_s": 18.08,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 1,
+        "terminated_reason": "end_turn",
+        "total_usage": {
+          "input_tokens": 4601,
+          "output_tokens": 788,
+          "cache_creation_input_tokens": 6316,
+          "cache_read_input_tokens": 48852
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 4601,
+              "output_tokens": 788,
+              "cache_creation_input_tokens": 6316,
+              "cache_read_input_tokens": 48852
+            },
+            "latency_ms": 18066,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": []
+      }
+    },
+    {
+      "turn": 3,
+      "user_message": "We\u2019re designing for 40 dwelling units. What\u2019s the minimum off-street parking we\u2019d need to provide? Is there also a bicycle parking requirement?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 39.19,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "The client wants to know if a daycare could occupy the ground floor as an amenity use. Is daycare a permitted use in HR-1?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.93,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 5,
+      "user_message": "To summarize what I\u2019ve heard: we\u2019re looking at 20 m max height, 60% lot coverage, 3 m setbacks on all sides, 40 parking spaces, 10 bicycle spaces, and daycare is permitted. Is that an accurate read of what the bylaw allows for HR-1?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.28,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-004",
+    "title": "Architect scoping a mid-rise residential building in HR-1",
+    "persona": {
+      "type": "architectural_consultant",
+      "subtype": "architect",
+      "description": "Registered architect in schematic design for a mid-rise residential client"
+    },
+    "address": "200 Bayers Road, Halifax, NS",
+    "zone": "HR-1",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "new_construction",
+      "residential",
+      "multi_unit",
+      "height",
+      "setbacks",
+      "parking",
+      "lot_coverage"
+    ],
+    "bylaw_features": [
+      "height",
+      "setbacks",
+      "lot_coverage",
+      "parking",
+      "use_permission"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I\u2019m an architect working on a new mid-rise residential building at 200 Bayers Road in Halifax \u2014 the site is zoned HR-1. We\u2019re targeting a multi-unit dwelling. First pass: what are the permitted uses and key dimensional standards \u2014 height, setbacks, and lot coverage \u2014 for HR-1?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Our site is 1,800 m\u00b2. We\u2019re planning a building footprint of roughly 900 m\u00b2. Is that within the lot coverage limit? And if we push to 18 metres in height, are we within the HR-1 maximum?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "We\u2019re designing for 40 dwelling units. What\u2019s the minimum off-street parking we\u2019d need to provide? Is there also a bicycle parking requirement?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "The client wants to know if a daycare could occupy the ground floor as an amenity use. Is daycare a permitted use in HR-1?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "To summarize what I\u2019ve heard: we\u2019re looking at 20 m max height, 60% lot coverage, 3 m setbacks on all sides, 40 parking spaces, 10 bicycle spaces, and daycare is permitted. Is that an accurate read of what the bylaw allows for HR-1?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Table 3",
+      "Table 5",
+      "Section 120"
+    ],
+    "expected_answer_keywords": [
+      "HR-1",
+      "permitted",
+      "multi-unit dwelling",
+      "bicycle",
+      "daycare",
+      "Schedule 15"
+    ],
+    "expected_topics": [
+      "use_permission",
+      "height",
+      "setbacks",
+      "lot_coverage",
+      "parking"
+    ],
+    "notes": "High complexity: five parameters, five turns, synthesis confirmation in final turn. High construction cost and public occupancy (daycare)."
+  },
+  "case_wall_time_s": 138.08
+}
