@@ -88,15 +88,22 @@ Per-credit expected cost is therefore ~$2–3 CAD, not ~$18 CAD.
 
 ## 3. Tail risks (the real margin threats)
 
-1. **No cumulative per-turn cost cap.** The cost-circuit breaker
-   (`src/advisor/llm/budget.py`) caps each *request* at ~150k
-   billed-equivalent input tokens (~$2.25 of input per iteration), not the
-   turn's cumulative spend. Documented runaway turns on 2026-05-11: **849k
-   tokens / $12.93** and 611k / $9.30 — at the then-default
-   `max_iterations=10`. Complex tier now allows `max_iterations=55`
-   (ABS-287); a worst-case deep turn could plausibly bill **$30–50**. One
-   such turn consumes most of a Complex credit's $54.7 USD revenue. The case
-   budget only reacts *after* the turn completes.
+1. **No cumulative per-turn cost cap.** ✅ **CLOSED (ABS-305).** The
+   per-request cost-circuit breaker (`src/advisor/llm/budget.py`) caps each
+   *request* at ~150k billed-equivalent input tokens (~$2.25 of input per
+   iteration), not the turn's cumulative spend. Documented runaway turns on
+   2026-05-11: **849k tokens / $12.93** and 611k / $9.30 — at the
+   then-default `max_iterations=10`. Complex tier now allows
+   `max_iterations=55` (ABS-287); a worst-case deep turn could plausibly
+   have billed **$30–50**, consuming most of a Complex credit's $54.7 USD
+   revenue, and the case budget only reacts *after* the turn completes.
+   ABS-305 adds a **second, cumulative breaker** in `run_tool_loop`: it
+   sums every iteration's billed-equivalent estimate and forces synthesis
+   (`terminated_reason="cumulative_cost_trip"`) once the running total would
+   cross `ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET` (default 165k ≈ **$2.50**).
+   The worst case is now a chosen ceiling rather than `max_iterations ×
+   per-request cap`. This is also the load-bearing cost primitive for the
+   priced-question catalog — it bounds the cost of each PAID answer.
 2. **Cap-hit forced synthesis costs $2–3.50 per occurrence** (output-heavy,
    3000+ tokens). Currently 0% cap-hit rate in the measured prod posture
    (the ABS-304 revert eliminated the WI-1/WI-4-induced failure mode), but
@@ -128,7 +135,7 @@ Per-credit expected cost is therefore ~$2–3 CAD, not ~$18 CAD.
 | Lever | Measured effect | Status |
 |---|---|---|
 | Switch Opus → Sonnet 4.x | **7.2×** cheaper on the 2-case suite ($25.75 → $3.56), hallucinations tied at 0 (ABS-293, N=2 — needs the 20-case suite before a switch) | Open — largest lever by far; takes expected turn cost to ~$0.14–0.20 |
-| Per-turn *cumulative* cost cap | Bounds tail risk #1; converts worst case from ~$30–50 to a chosen ceiling | Not built |
+| Per-turn *cumulative* cost cap | Bounds tail risk #1; converts worst case from ~$30–50 to a chosen ceiling (default 165k ≈ $2.50) | **Built (ABS-305)** |
 | Cheaper forced synthesis (constrained output / cheaper model for the synthesis turn) | Cuts the $2–3.50 cap-hit penalty | Not built |
 | WI-1/WI-4 cache machinery | **Net-negative** — reverted (ABS-304); do not re-open without TC-005 deep-case evidence | Closed |
 
