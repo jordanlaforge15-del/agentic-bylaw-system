@@ -20,6 +20,7 @@ from advisor.llm import (
     ToolUseBlock,
 )
 from advisor.llm.budget import (
+    default_cumulative_token_budget,
     default_token_budget,
     estimate_request_input_tokens,
 )
@@ -131,6 +132,52 @@ def test_default_token_budget_falls_back_on_bad_env_value(monkeypatch, bad):
     monkeypatch.setenv("ADVISOR_TURN_INPUT_TOKEN_BUDGET", bad)
     default_token_budget.cache_clear()
     value = default_token_budget()
+    assert value > 0
+
+
+# ---------------------------------------------------------------------------
+# ABS-305: cumulative per-turn budget default
+# ---------------------------------------------------------------------------
+
+
+def test_default_cumulative_budget_falls_back_when_env_unset(monkeypatch):
+    """No env var => a sane positive integer (the module safety-net
+    default). Exact value isn't pinned so a future tweak doesn't break
+    the test."""
+    monkeypatch.delenv("ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET", raising=False)
+    default_cumulative_token_budget.cache_clear()
+    value = default_cumulative_token_budget()
+    assert isinstance(value, int)
+    assert value > 0
+
+
+def test_default_cumulative_budget_is_a_distinct_env_var(monkeypatch):
+    """The cumulative breaker reads its OWN env var; overriding the
+    per-request budget must not move the cumulative default (they bound
+    different things and must stay independently tunable)."""
+    monkeypatch.setenv("ADVISOR_TURN_INPUT_TOKEN_BUDGET", "12345")
+    monkeypatch.delenv("ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET", raising=False)
+    default_token_budget.cache_clear()
+    default_cumulative_token_budget.cache_clear()
+    assert default_token_budget() == 12345
+    assert default_cumulative_token_budget() != 12345
+
+
+def test_default_cumulative_budget_reads_env(monkeypatch):
+    """An ops override via env var is honored."""
+    monkeypatch.setenv("ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET", "200000")
+    default_cumulative_token_budget.cache_clear()
+    assert default_cumulative_token_budget() == 200000
+
+
+@pytest.mark.parametrize("bad", ["abc", "", "0", "-1"])
+def test_default_cumulative_budget_falls_back_on_bad_env_value(monkeypatch, bad):
+    """Non-integer / non-positive env values fall back to the module
+    default rather than crashing the chat layer at session-construction
+    time."""
+    monkeypatch.setenv("ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET", bad)
+    default_cumulative_token_budget.cache_clear()
+    value = default_cumulative_token_budget()
     assert value > 0
 
 

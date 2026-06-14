@@ -358,6 +358,153 @@ async def test_cost_circuit_trip_after_tool_round():
     assert text_of(result.final_response) == "answered from evidence above"
 
 
+# ----------------------------------------------------------------------
+# ABS-305: cumulative per-turn cost breaker
+#
+# The per-request breaker above bounds ONE gateway call; these pin the
+# SECOND breaker that bounds the running billed-equivalent total across
+# every request in a single ``run_tool_loop`` invocation — the load-
+# bearing cost ceiling on a paid answer.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cumulative_cost_breaker_trips_across_sub_cap_rounds():
+    """A deep loop whose individual requests each stay UNDER the
+    per-request budget can still blow the turn-level cumulative ceiling.
+    With a generous per-request budget but a tiny cumulative budget, the
+    running total crosses on a later round and the loop forces synthesis
+    with the distinct ``cumulative_cost_trip`` reason."""
+    calls = {"i": 0}
+
+    def script(req: CompletionRequest):
+        calls["i"] += 1
+        if not req.tools:
+            return text_response("answered from evidence above")
+        return tool_use_response(
+            tool_id=f"tu_{calls['i']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def fat_handler(_payload):
+        # Each round appends a chunky tool_result so the per-request
+        # estimate climbs round over round; no SINGLE request is large
+        # enough to trip the (default, huge) per-request breaker.
+        return "x" * 400
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": fat_handler},
+        cumulative_token_budget=100,
+    )
+
+    assert result.terminated_reason == "cumulative_cost_trip"
+    assert result.circuit_trip is not None
+    assert result.circuit_trip.budget == 100
+    # The recorded estimate is the RUNNING TOTAL that crossed the cap,
+    # not a single request — so it exceeds the cumulative budget.
+    assert result.circuit_trip.estimated_input_tokens > 100
+    # First round flowed through; the trip fired on a later iteration.
+    assert result.circuit_trip.iteration >= 2
+    # Synthesis still saw the retrieved evidence and produced an answer.
+    assert text_of(result.final_response) == "answered from evidence above"
+
+
+@pytest.mark.asyncio
+async def test_cumulative_cost_breaker_pass_through_under_budget():
+    """A normal two-round tool loop stays well under a generous
+    cumulative budget — no trip, ``circuit_trip`` is ``None``, and the
+    organic answer lands."""
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+            ),
+            text_response("organic answer."),
+        ]
+    )
+
+    async def handler(_payload):
+        return "small result"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+        cumulative_token_budget=10_000_000,
+    )
+
+    assert result.terminated_reason == "end_turn"
+    assert result.circuit_trip is None
+    assert text_of(result.final_response) == "organic answer."
+
+
+@pytest.mark.asyncio
+async def test_per_request_breaker_takes_precedence_over_cumulative():
+    """When BOTH breakers would fire on the same iteration, the
+    per-request check runs first, so a single oversized request is
+    reported as ``cost_circuit_trip`` — not ``cumulative_cost_trip``.
+    This keeps the two audit reasons unambiguous: ``cumulative`` means
+    'accumulated across rounds', never 'one giant request'."""
+    gateway = MockGateway(scripted=[text_response("bounded synthesis")])
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={},
+        token_budget=1,
+        cumulative_token_budget=1,
+    )
+
+    assert result.terminated_reason == "cost_circuit_trip"
+    assert result.circuit_trip is not None
+
+
+@pytest.mark.asyncio
+async def test_cumulative_breaker_records_synthesis_round_in_metrics():
+    """On a cumulative trip the forced-synthesis round is appended to
+    ``per_iteration`` so the metric sequence stays monotonic and the
+    final billable round is visible to observability."""
+    calls = {"i": 0}
+
+    def script(req: CompletionRequest):
+        calls["i"] += 1
+        if not req.tools:
+            return text_response("synth answer")
+        return tool_use_response(
+            tool_id=f"tu_{calls['i']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def fat_handler(_payload):
+        return "y" * 400
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": fat_handler},
+        cumulative_token_budget=100,
+    )
+
+    assert result.terminated_reason == "cumulative_cost_trip"
+    # At least one loop round ran before the trip, plus the synthesis
+    # round — iterations stay monotonic from 1.
+    iters = [m.iteration for m in result.per_iteration]
+    assert iters == sorted(iters)
+    assert iters[0] == 1
+    # The last recorded round is the tools-stripped synthesis call.
+    assert result.per_iteration[-1].tool_call_count == 0
+
+
 @pytest.mark.asyncio
 async def test_total_usage_aggregates_across_iterations():
     """``total_usage`` sums ``CompletionResponse.usage`` from every

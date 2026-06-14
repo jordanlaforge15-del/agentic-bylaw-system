@@ -1265,8 +1265,19 @@ def _patch_usage_event_tokens(
         return
     metadata: dict | None = None
     if trip is not None:
+        # ABS-305: both cost breakers (per-request and cumulative) record
+        # a ``CircuitTripInfo`` on ``last_turn_circuit_trip``. Carry the
+        # tool loop's ``terminated_reason`` so analytics can tell a
+        # single-oversized-request trip (``cost_circuit_trip``) apart
+        # from a whole-turn cumulative trip (``cumulative_cost_trip``);
+        # both still set the flat ``cost_circuit_trip`` boolean so the
+        # existing "any trip" query keeps working.
+        metrics = chat_session.last_tool_loop_metrics
         metadata = {
             "cost_circuit_trip": True,
+            "trip_reason": (
+                metrics.terminated_reason if metrics is not None else None
+            ),
             "estimated_input_tokens": trip.estimated_input_tokens,
             "turn_input_token_budget": trip.budget,
             "trip_iteration": trip.iteration,

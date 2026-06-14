@@ -43,6 +43,7 @@ from advisor.llm.base import (
 )
 from advisor.llm.budget import (
     CircuitTripInfo,
+    default_cumulative_token_budget,
     default_token_budget,
     estimate_request_input_tokens,
 )
@@ -77,15 +78,19 @@ class ToolLoopResult:
 
     ``terminated_reason`` is ``"end_turn"`` when the model produced a
     natural text response, ``"iteration_cap"`` when we hit
-    ``max_iterations`` and forced a text-only synthesis turn, or
-    ``"cost_circuit_trip"`` when the pre-flight token estimator caught
-    a runaway turn before it shipped. Callers can surface a UI hint
-    when the answer was forced rather than organic, and persist the
-    distinction in the audit trail.
+    ``max_iterations`` and forced a text-only synthesis turn,
+    ``"cost_circuit_trip"`` when the pre-flight token estimator caught a
+    single oversized request before it shipped, or
+    ``"cumulative_cost_trip"`` (ABS-305) when the turn's running
+    billed-equivalent total would have crossed the cumulative per-turn
+    ceiling. Callers can surface a UI hint when the answer was forced
+    rather than organic, and persist the distinction in the audit trail.
 
-    ``circuit_trip`` carries the estimate and budget when the breaker
-    fired, so the chat route can record both in the UsageEvent
-    metadata. ``None`` when the turn terminated normally.
+    ``circuit_trip`` carries the estimate and budget when either cost
+    breaker fired (the single request for ``cost_circuit_trip``, the
+    running turn total for ``cumulative_cost_trip``), so the chat route
+    can record both in the UsageEvent metadata. ``None`` when the turn
+    terminated normally.
     """
 
     final_response: CompletionResponse
@@ -104,8 +109,8 @@ class ToolLoopResult:
     # the round's reported ``usage`` and wall-clock ``latency_ms`` so
     # callers can reconstruct the staircase of context growth instead
     # of seeing only the aggregate. Includes the forced-synthesis round
-    # when the loop terminated on ``iteration_cap`` or
-    # ``cost_circuit_trip``.
+    # when the loop terminated on ``iteration_cap``,
+    # ``cost_circuit_trip``, or ``cumulative_cost_trip``.
     per_iteration: list[IterationMetric] = field(default_factory=list)
 
 
@@ -166,6 +171,13 @@ _COST_CIRCUIT_NUDGE = (
     "find an answer' — be specific about what was missing."
 )
 
+# Nudge appended when the CUMULATIVE per-turn input-token budget
+# (ABS-305) would be exceeded by the next gateway call. The cause is
+# total spend across the whole turn rather than one oversized request,
+# but the recovery the model must perform is identical to the
+# per-request ceiling, so the wording matches ``_COST_CIRCUIT_NUDGE``.
+_CUMULATIVE_COST_NUDGE = _COST_CIRCUIT_NUDGE
+
 
 async def run_tool_loop(
     gateway: LLMGateway,
@@ -174,6 +186,7 @@ async def run_tool_loop(
     handlers: dict[str, ToolHandler],
     max_iterations: int = 10,
     token_budget: int | None = None,
+    cumulative_token_budget: int | None = None,
 ) -> ToolLoopResult:
     """Drive a Messages API conversation through any number of tool-use
     rounds and return when the LLM stops asking for tools.
@@ -205,6 +218,19 @@ async def run_tool_loop(
     ``default_token_budget()`` (env-overridable). The breaker is
     always on; tests pin a small budget to exercise the trip.
 
+    ``cumulative_token_budget`` (ABS-305) is the *turn-level* cost
+    ceiling: the running sum of every iteration's billed-equivalent
+    estimate. The per-request ``token_budget`` bounds one gateway call;
+    this bounds the whole ``run_tool_loop`` invocation, so a deep loop
+    of many sub-cap requests can't silently bill $10+ in aggregate.
+    When adding the next iteration's estimate to the running total would
+    cross this ceiling, the loop takes the same synthesis-fallback path
+    with ``terminated_reason="cumulative_cost_trip"``. ``None`` reads
+    the default from ``default_cumulative_token_budget()``
+    (``ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET``-overridable). This is the
+    cost primitive that bounds each PAID answer in the
+    priced-question-catalog ("buy an answer") model.
+
     NOTE: WI-1 (rolling cache breakpoint placement) and WI-4 (in-flight
     tool_result compaction) were reverted in ABS-304 after ABS-303
     showed they were net-negative in production. The function no longer
@@ -215,11 +241,19 @@ async def run_tool_loop(
     for the evidence.
     """
     budget = token_budget if token_budget is not None else default_token_budget()
+    cumulative_budget = (
+        cumulative_token_budget
+        if cumulative_token_budget is not None
+        else default_cumulative_token_budget()
+    )
     conversation = list(request.messages)
     tool_calls: list[ToolInvocation] = []
     total_usage: TokenUsage | None = None
     # ABS-266: capture per-round metrics in dispatch order.
     per_iteration: list[IterationMetric] = []
+    # ABS-305: running sum of every iteration's billed-equivalent input
+    # estimate, used by the cumulative cost breaker below.
+    cumulative_estimated = 0
 
     for iteration in range(1, max_iterations + 1):
         # Snapshot the live conversation into the per-iteration request so
@@ -253,6 +287,43 @@ async def run_tool_loop(
                 circuit_trip=trip,
                 per_iteration=per_iteration,
             )
+
+        # ABS-305 cumulative breaker: would shipping THIS request push the
+        # turn's running billed-equivalent total past the turn-level
+        # ceiling? Checked after the per-request breaker so a single
+        # oversized request still reports as ``cost_circuit_trip``; this
+        # fires only when many sub-cap requests accumulate. Pre-flight
+        # like the per-request breaker — we never submit the request that
+        # would cross the line.
+        if cumulative_estimated + estimated > cumulative_budget:
+            running_total = cumulative_estimated + estimated
+            trip = CircuitTripInfo(
+                estimated_input_tokens=running_total,
+                budget=cumulative_budget,
+                iteration=iteration,
+            )
+            logger.warning(
+                "cumulative cost breaker tripped: turn total %d "
+                "billed-equivalent input tokens (this request %d) exceeds "
+                "cumulative budget %d on iteration %d; forcing synthesis turn",
+                running_total,
+                estimated,
+                cumulative_budget,
+                iteration,
+            )
+            return await _force_synthesis(
+                gateway,
+                request=request,
+                conversation=conversation,
+                tool_calls=tool_calls,
+                total_usage=total_usage,
+                iterations=iteration - 1,
+                nudge=_CUMULATIVE_COST_NUDGE,
+                terminated_reason="cumulative_cost_trip",
+                circuit_trip=trip,
+                per_iteration=per_iteration,
+            )
+        cumulative_estimated += estimated
 
         gateway_t0 = time.monotonic()
         response = await gateway.complete(current_request)

@@ -55,7 +55,11 @@ from advisor.llm import (
     ToolDefinition,
     ToolLoopMetricsEvent,
 )
-from advisor.llm.budget import CircuitTripInfo, default_token_budget
+from advisor.llm.budget import (
+    CircuitTripInfo,
+    default_cumulative_token_budget,
+    default_token_budget,
+)
 from advisor.llm.mock import MockGateway
 from advisor.llm.tool_loop import ToolHandler, run_tool_loop
 
@@ -120,6 +124,17 @@ class ChatSession:
     # safety-net cap); tests can pin a small value to exercise the
     # trip path without env-var manipulation.
     token_budget: int = field(default_factory=default_token_budget)
+    # ABS-305: cumulative per-turn input-token ceiling enforced by the
+    # second cost breaker in ``run_tool_loop``. Bounds the SUM of every
+    # iteration's billed-equivalent estimate across one turn (the
+    # per-request ``token_budget`` only bounds a single gateway call),
+    # so a deep tool loop can't bill $10+ in aggregate. Default reads
+    # from ``ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET``; this is the cost
+    # primitive that bounds each paid answer in the priced-question
+    # catalog.
+    cumulative_token_budget: int = field(
+        default_factory=default_cumulative_token_budget
+    )
     # Set by ``send_user_message_blocking`` when the cost-circuit
     # breaker fires on the most recent turn — ``None`` for turns that
     # completed under budget. The chat route reads this to enrich the
@@ -233,6 +248,7 @@ class ChatSession:
             request=request,
             handlers=self.tool_handlers,
             token_budget=self.token_budget,
+            cumulative_token_budget=self.cumulative_token_budget,
             max_iterations=_tier_def.max_iterations if _tier_def else 10,
         )
 

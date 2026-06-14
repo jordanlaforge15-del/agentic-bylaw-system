@@ -51,6 +51,15 @@ Scenario keywords in the user message override the default rules:
   Use this keyword to test UI that depends on the right-pane being
   non-empty.
 
+* ``"MOCK_CUMULATIVE_TRIP"`` (ABS-305) — every round returns a
+  ``search_bylaw_evidence`` ``tool_use`` whose preamble is a large
+  filler block, so each request's billed-equivalent estimate climbs
+  round over round while staying UNDER the per-request cost ceiling.
+  After a handful of rounds the *cumulative* per-turn breaker in
+  ``run_tool_loop`` crosses its ceiling and forces synthesis with
+  ``terminated_reason="cumulative_cost_trip"``. Use on a Complex-tier
+  case (``max_iterations=55``) so the iteration cap can't fire first.
+
 * ``"MOCK_FAN_OUT"`` — the first-turn response contains TWO
   ``search_bylaw_evidence`` ``tool_use`` blocks in a single assistant
   message (parallel fan-out). The tool loop executes both in parallel
@@ -88,6 +97,19 @@ _DEFAULT_CITATION = (
 # rather than forcing an early synthesis at iteration 10.
 _COMPLEX_DEEP_ROUNDS = 12
 
+# ABS-305 cumulative-trip scenario. Each round's preamble carries this
+# many filler characters (~80k chars ≈ 20k billed-equivalent tokens at
+# the 4-chars/token heuristic). The conversation grows by roughly this
+# much per round, so the running cumulative estimate crosses the default
+# 165k cumulative budget after ~5 rounds — well before the Complex-tier
+# iteration cap (55) and below the per-request cap (150k), so the
+# CUMULATIVE breaker is the one that fires. Sized large enough that the
+# trip is deterministic regardless of system-prompt length.
+_CUMULATIVE_TRIP_PREAMBLE_CHARS = 80_000
+# Hard stop so a regression that disables the breaker surfaces as a
+# normal answer (visible test failure) rather than an unbounded loop.
+_CUMULATIVE_TRIP_MAX_ROUNDS = 40
+
 
 def build_dispatcher() -> Callable[[CompletionRequest], CompletionResponse]:
     """Return the dispatcher callable wired into ``MockGateway(callable_=...)``."""
@@ -96,8 +118,17 @@ def build_dispatcher() -> Callable[[CompletionRequest], CompletionResponse]:
 
 def _dispatch(request: CompletionRequest) -> CompletionResponse:
     if not request.tools:
-        # Either the pre-flight classifier or an unrelated tools-less
-        # call. The classifier is the only such path we ship today.
+        # Two tools-less shapes reach the gateway:
+        #   * the pre-flight classifier — a fresh request whose only
+        #     message is the JSON anchor payload (no assistant turn yet);
+        #   * a forced-synthesis call — ``run_tool_loop`` strips tools for
+        #     the one-more answer turn after the iteration cap or a cost
+        #     breaker trips, so the conversation already holds an
+        #     assistant ``tool_use`` turn.
+        # Distinguish by whether a prior assistant tool_use exists, so the
+        # synthesis turn returns a real answer instead of a tier blob.
+        if _has_assistant_tool_use(request):
+            return _final_answer_response(_latest_user_text(request))
         return _classifier_response(request)
 
     user_text = _latest_user_text(request)
@@ -122,6 +153,24 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
                     "query": f"{user_text[:80]} (complex round {rounds_done + 1})"
                 },
                 preamble=f"Deep complex research (round {rounds_done + 1}).",
+                usage=TokenUsage(input_tokens=80, output_tokens=24),
+            )
+        return _final_answer_response(user_text)
+
+    if "MOCK_CUMULATIVE_TRIP" in user_text:
+        # Keep issuing search rounds with a big filler preamble so the
+        # turn's cumulative billed-equivalent estimate climbs until the
+        # ABS-305 cumulative breaker forces synthesis. The hard cap is a
+        # safety net: if the breaker is broken the loop answers here and
+        # the e2e assertion (terminated_reason == cumulative_cost_trip)
+        # fails loudly instead of running away.
+        rounds_done = _count_search_rounds(request)
+        if rounds_done < _CUMULATIVE_TRIP_MAX_ROUNDS:
+            return tool_use_response(
+                tool_id=f"t-cumtrip-{rounds_done + 1}",
+                tool_name="search_bylaw_evidence",
+                tool_input={"query": f"cumulative round {rounds_done + 1}"},
+                preamble="C" * _CUMULATIVE_TRIP_PREAMBLE_CHARS,
                 usage=TokenUsage(input_tokens=80, output_tokens=24),
             )
         return _final_answer_response(user_text)

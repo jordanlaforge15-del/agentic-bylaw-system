@@ -43,6 +43,28 @@ represents a turn cap of ~$2.25 at Opus rates, but the effective raw
 token headroom is ~10× larger for cached turns — allowing the tool
 loop to run to its natural conclusion rather than hitting the breaker.
 
+Cumulative per-turn breaker (ABS-305)
+-------------------------------------
+The per-request breaker above bounds *one* gateway call (~150k
+billed-equivalent input tokens, ~$2.25 of input). It does NOT bound a
+turn's *cumulative* spend: a deep tool loop that makes many requests
+each under the per-request cap can still bill $10+ in aggregate — the
+runaway turns of 2026-05-11 ($12.93 / $9.30) are exactly this shape,
+and a Complex-tier turn (``max_iterations=55``) could plausibly reach
+$30–50.
+
+``run_tool_loop`` therefore also sums each iteration's
+billed-equivalent estimate and trips a *second* breaker when the
+running total would cross a turn-level ceiling. The default
+(165k billed-equivalent input tokens ≈ $2.50 at Opus rates) is read by
+``default_cumulative_token_budget()`` from
+``ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET``. The trip takes the same
+forced-synthesis path as the per-request breaker but records a distinct
+``terminated_reason`` (``cumulative_cost_trip``). This is the
+load-bearing cost primitive for the priced-question-catalog ("buy an
+answer") model: it bounds the cost of each PAID answer so a fixed-price
+question cannot overspend.
+
 Configuration
 -------------
 The default budget is read once from the ``ADVISOR_TURN_INPUT_TOKEN_BUDGET``
@@ -99,18 +121,33 @@ _CACHE_READ_WEIGHT = 0.1
 # have ~10× the raw-token headroom before the breaker fires.
 _DEFAULT_TURN_INPUT_TOKEN_BUDGET = 150_000
 
+# Default cumulative per-turn cap (ABS-305): 165k billed-equivalent
+# input tokens summed across EVERY gateway request in one
+# ``run_tool_loop`` invocation. At Opus 4.5's $15/M input rate this
+# bounds a single turn's input spend at ~$2.50. Set slightly above the
+# per-request cap so a normal single-request turn never trips the
+# cumulative breaker first; it only fires when many sub-cap requests
+# accumulate (the runaway-deep-loop tail risk).
+_DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET = 165_000
+
 
 @dataclass(frozen=True)
 class CircuitTripInfo:
     """Records a cost-circuit trip so callers can audit it.
 
     ``estimated_input_tokens`` is the pre-flight estimate that crossed
-    the budget. ``budget`` is the value the loop was configured with;
-    persisted alongside so a future threshold change doesn't make old
-    trip records ambiguous. ``iteration`` is the loop iteration the
-    trip happened on — useful for distinguishing "first prompt was
-    huge" (iteration 1) from "tool results accumulated past the cap"
-    (later iterations).
+    the budget. For the per-request breaker (``cost_circuit_trip``)
+    this is the single request that was too big; for the cumulative
+    breaker (``cumulative_cost_trip``, ABS-305) it is the *running
+    total* across the turn that would have crossed the ceiling.
+    ``budget`` is the value the loop was configured with — the
+    per-request cap or the cumulative cap respectively; persisted
+    alongside so a future threshold change doesn't make old trip
+    records ambiguous, and so the two breakers' records stay
+    distinguishable by their companion ``terminated_reason``.
+    ``iteration`` is the loop iteration the trip happened on — useful
+    for distinguishing "first prompt was huge" (iteration 1) from "tool
+    results accumulated past the cap" (later iterations).
     """
 
     estimated_input_tokens: int
@@ -173,6 +210,42 @@ def default_token_budget() -> int:
             _DEFAULT_TURN_INPUT_TOKEN_BUDGET,
         )
         return _DEFAULT_TURN_INPUT_TOKEN_BUDGET
+    return value
+
+
+@lru_cache(maxsize=1)
+def default_cumulative_token_budget() -> int:
+    """Return the env-configured cumulative per-turn budget (ABS-305).
+
+    Mirrors ``default_token_budget`` but reads
+    ``ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET`` and falls back to
+    ``_DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET`` (165k). Cached so the
+    env-var read happens once per process; tests needing a fresh read
+    call ``default_cumulative_token_budget.cache_clear()``. Non-integer,
+    zero, or negative values fall back to the module default with a
+    warning rather than crashing the chat layer.
+    """
+    raw = os.environ.get("ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET")
+    if raw is None:
+        return _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET=%r is not an integer; "
+            "falling back to default %d",
+            raw,
+            _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET,
+        )
+        return _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET
+    if value <= 0:
+        logger.warning(
+            "ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET=%d is non-positive; "
+            "falling back to default %d",
+            value,
+            _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET,
+        )
+        return _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET
     return value
 
 
