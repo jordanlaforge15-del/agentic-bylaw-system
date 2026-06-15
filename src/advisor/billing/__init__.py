@@ -40,6 +40,13 @@ What you need to do when your Stripe account is ready
    * ``STRIPE_PRICE_QUICK_PAYG=price_...``
      (and 11 more — see ``settings.py``).
 
+   The launch product is the **priced-question catalog** (see
+   ``questions.py``), not packs. For it, create one one-time Price per
+   catalog question — its display amount MUST equal the question's
+   ``price_cents`` — and set the matching ``STRIPE_PRICE_QUESTION_<SLUG>``
+   env var (5 total, e.g. ``STRIPE_PRICE_QUESTION_PERMITTED_USE``). The
+   pure per-question model has no pack SKUs and no credit ledger.
+
 3. In the Stripe dashboard, create a webhook endpoint pointing at
    ``POST /v1/billing/webhook`` and subscribe to:
 
@@ -86,6 +93,20 @@ from advisor.billing.pricing import (
     AdvisorPricingSettings,
     get_pricing_settings,
 )
+from advisor.billing.questions import (
+    QUESTION_DEVELOPMENT_STANDARDS_DEF,
+    QUESTION_DUE_DILIGENCE_DEF,
+    QUESTION_LEGAL_NONCONFORMING_DEF,
+    QUESTION_ORDER,
+    QUESTION_PERMITTED_USE_DEF,
+    QUESTION_VARIANCE_JUSTIFICATION_DEF,
+    QUESTIONS,
+    InputField,
+    Question,
+    all_questions,
+    question_for,
+    question_for_stripe_price_id,
+)
 from advisor.billing.router import (
     build_billing_router,
     build_dormant_billing_router,
@@ -106,6 +127,18 @@ __all__ = [
     "PACKS",
     "Pack",
     "PackOffer",
+    "QUESTIONS",
+    "QUESTION_DEVELOPMENT_STANDARDS_DEF",
+    "QUESTION_DUE_DILIGENCE_DEF",
+    "QUESTION_LEGAL_NONCONFORMING_DEF",
+    "QUESTION_ORDER",
+    "QUESTION_PERMITTED_USE_DEF",
+    "QUESTION_VARIANCE_JUSTIFICATION_DEF",
+    "InputField",
+    "Question",
+    "all_questions",
+    "question_for",
+    "question_for_stripe_price_id",
     "StripeClient",
     "StripeCustomer",
     "StripeEvent",

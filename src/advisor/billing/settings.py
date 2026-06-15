@@ -92,6 +92,28 @@ class AdvisorBillingSettings(BaseSettings):
         default=None, alias="STRIPE_PRICE_COMPLEX_ENTERPRISE"
     )
 
+    # Priced-question catalog (launch product — see
+    # ``advisor.billing.questions``). One Stripe Price per catalog
+    # question, named ``STRIPE_PRICE_QUESTION_<SLUG>``. The webhook
+    # handler reverse-looks-up these by Price ID, so any question you
+    # want to sell must have its env var populated. The display amount
+    # of each Price MUST equal the question's ``price_cents``.
+    stripe_price_question_permitted_use: str | None = Field(
+        default=None, alias="STRIPE_PRICE_QUESTION_PERMITTED_USE"
+    )
+    stripe_price_question_development_standards: str | None = Field(
+        default=None, alias="STRIPE_PRICE_QUESTION_DEVELOPMENT_STANDARDS"
+    )
+    stripe_price_question_due_diligence: str | None = Field(
+        default=None, alias="STRIPE_PRICE_QUESTION_DUE_DILIGENCE"
+    )
+    stripe_price_question_legal_nonconforming: str | None = Field(
+        default=None, alias="STRIPE_PRICE_QUESTION_LEGAL_NONCONFORMING"
+    )
+    stripe_price_question_variance_justification: str | None = Field(
+        default=None, alias="STRIPE_PRICE_QUESTION_VARIANCE_JUSTIFICATION"
+    )
+
     success_url: str = Field(
         default="http://localhost:3000/billing/success",
         alias="ADVISOR_BILLING_SUCCESS_URL",
@@ -116,6 +138,11 @@ class AdvisorBillingSettings(BaseSettings):
         "stripe_price_complex_starter",
         "stripe_price_complex_pro",
         "stripe_price_complex_enterprise",
+        "stripe_price_question_permitted_use",
+        "stripe_price_question_development_standards",
+        "stripe_price_question_due_diligence",
+        "stripe_price_question_legal_nonconforming",
+        "stripe_price_question_variance_justification",
         mode="before",
     )
     @classmethod
