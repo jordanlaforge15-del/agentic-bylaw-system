@@ -26,7 +26,9 @@ import { useRouter } from "next/navigation";
 import {
   ANCHOR_KIND_DISPLAY,
   AnchorKind,
+  BillingMeResponse,
   CaseRow,
+  FreeStartResponse,
   IntakeResponse,
   MatchResponse,
   OtherCheckoutResponse,
@@ -88,6 +90,12 @@ export function CaseOpenForm({
   const [working, setWorking] = useState<Working>("idle");
   const [error, setError] = useState<string | null>(null);
 
+  // Free-question entitlement counter (ABS-314). null = not yet loaded
+  // or not authenticated; 0 = exhausted; >0 = credits available.
+  const [freeQuestionsRemaining, setFreeQuestionsRemaining] = useState<
+    number | null
+  >(null);
+
   // Load the live question catalog. Mirrors the pricing page: dormant
   // billing renders the menu with every question `available: false`.
   useEffect(() => {
@@ -103,6 +111,24 @@ export function CaseOpenForm({
       })
       .finally(() => {
         if (!cancelled) setWorking("idle");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load the user's free-question counter. Auth-required; 401 just means
+  // the user is not signed in — silently keep null (no free-trial button).
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/billing/me")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((data: BillingMeResponse) => {
+        if (!cancelled)
+          setFreeQuestionsRemaining(data.free_questions_remaining);
+      })
+      .catch(() => {
+        /* unauthenticated or unavailable — leave null */
       });
     return () => {
       cancelled = true;
@@ -152,6 +178,61 @@ export function CaseOpenForm({
     return false;
   }
 
+  // Payments-off path (ABS-320 / ABS-322): consume one free-question
+  // entitlement and open the case, then route to the in-app answer view.
+  // questionSlug is null for the "Other" off-menu path.
+  async function startFreeAnswer(
+    questionSlug: string | null,
+    inputs: Record<string, string>,
+  ) {
+    if (!anchorLabel.trim()) {
+      setError("Add a property anchor before continuing.");
+      return;
+    }
+    setWorking("checkout");
+    setError(null);
+    try {
+      let r: Response;
+      try {
+        r = await fetch("/api/billing/questions/free-start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question_slug: questionSlug,
+            inputs,
+            anchor_label: anchorLabel.trim(),
+            anchor_kind: anchorKind,
+          }),
+        });
+      } catch (e) {
+        setError(
+          `Network error: ${(e as Error).message}. Check your connection and try again.`,
+        );
+        return;
+      }
+      if (r.status === 401) return unauthorized();
+      if (r.status === 402) {
+        // Race: another tab consumed the last credit between the render
+        // and this click. Update local counter so the UI flips to exhausted.
+        setFreeQuestionsRemaining(0);
+        return;
+      }
+      if (!r.ok) {
+        const detail = await r.json().catch(() => null);
+        setError(
+          (detail?.detail as { message?: string } | undefined)?.message ??
+            `Couldn't start free answer (${r.status}).`,
+        );
+        return;
+      }
+      const data = (await r.json()) as FreeStartResponse;
+      setFreeQuestionsRemaining(data.free_questions_remaining);
+      router.push(`/app?case_id=${data.case_id}`);
+    } finally {
+      setWorking((w) => (w === "checkout" ? "idle" : w));
+    }
+  }
+
   // Catalog question: run one intake pass. The anchor address is seeded as
   // a collected input so an address-bearing question never re-asks for it.
   async function runIntake() {
@@ -198,7 +279,12 @@ export function CaseOpenForm({
         setAnchorLabel(data.inputs.address);
       }
       if (data.complete) {
-        await checkoutQuestion(selectedQuestion.slug, data.inputs);
+        // Payments-off: use free-question entitlement instead of Stripe.
+        if (!menu?.enabled) {
+          await startFreeAnswer(selectedQuestion.slug, data.inputs);
+        } else {
+          await checkoutQuestion(selectedQuestion.slug, data.inputs);
+        }
       }
     } finally {
       setWorking((w) => (w === "intake" ? "idle" : w));
@@ -493,6 +579,29 @@ export function CaseOpenForm({
                       )}`}
               </Btn>
             </div>
+          ) : freeQuestionsRemaining !== null && freeQuestionsRemaining > 0 ? (
+            <div className="flex gap-2 mt-2">
+              <Btn
+                variant="accent"
+                size="md"
+                onClick={runIntake}
+                disabled={busy}
+                data-testid="free-trial-btn"
+              >
+                {working === "intake"
+                  ? "Checking…"
+                  : working === "checkout"
+                    ? "Starting…"
+                    : "Get answer (free trial)"}
+              </Btn>
+            </div>
+          ) : freeQuestionsRemaining === 0 ? (
+            <div
+              className="mt-2 text-[12.5px] text-text-muted"
+              data-testid="free-trial-exhausted"
+            >
+              Free trial used — paid answers coming soon.
+            </div>
           ) : (
             <div className="mt-2 text-[12.5px] text-text-muted">
               Checkout isn&apos;t configured for this question yet.
@@ -534,9 +643,54 @@ export function CaseOpenForm({
           )}
 
           {menu && !menu.enabled ? (
-            <div className="mt-2 text-[12.5px] text-text-muted">
-              Off-menu checkout isn&apos;t configured yet.
-            </div>
+            !quote ? (
+              <div className="flex gap-2 mt-2">
+                <Btn
+                  variant="quiet"
+                  size="sm"
+                  onClick={getQuote}
+                  disabled={busy}
+                >
+                  {working === "quoting" ? "Quoting…" : "Get a price (free)"}
+                </Btn>
+              </div>
+            ) : freeQuestionsRemaining !== null &&
+              freeQuestionsRemaining > 0 ? (
+              <div className="flex gap-2 mt-2">
+                <Btn
+                  variant="accent"
+                  size="md"
+                  onClick={() =>
+                    startFreeAnswer(null, { question: otherQuestion.trim() })
+                  }
+                  disabled={busy}
+                  data-testid="free-trial-btn-other"
+                >
+                  {working === "checkout"
+                    ? "Starting…"
+                    : "Get answer (free trial)"}
+                </Btn>
+                <Btn
+                  variant="quiet"
+                  size="sm"
+                  onClick={getQuote}
+                  disabled={busy}
+                >
+                  Re-quote
+                </Btn>
+              </div>
+            ) : freeQuestionsRemaining === 0 ? (
+              <div
+                className="mt-2 text-[12.5px] text-text-muted"
+                data-testid="free-trial-exhausted-other"
+              >
+                Free trial used — paid answers coming soon.
+              </div>
+            ) : (
+              <div className="mt-2 text-[12.5px] text-text-muted">
+                Off-menu checkout isn&apos;t configured yet.
+              </div>
+            )
           ) : !quote ? (
             <div className="flex gap-2 mt-2">
               <Btn

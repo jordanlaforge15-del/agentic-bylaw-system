@@ -44,6 +44,7 @@ export type BillingMeResponse = {
   stripe_customer_id: string | null;
   tier_balances: TierBalance[];
   total_available_credits: number;
+  free_questions_remaining: number;
 };
 
 export type PurchaseSummary = {
@@ -190,6 +191,15 @@ export type QuoteResponse = {
   rationale: string;
   band_low_cents: number;
   band_high_cents: number;
+};
+
+// Free-question trial start (POST /api/billing/questions/free-start).
+// Used when payments are off (ABS-320 / ABS-322): consumes one free
+// entitlement, opens the case, and returns the case_id for routing.
+export type FreeStartResponse = {
+  case_id: number;
+  anchor_label: string;
+  free_questions_remaining: number;
 };
 
 // Checkout for an off-menu "Other" question (POST /api/billing/checkout/other).
