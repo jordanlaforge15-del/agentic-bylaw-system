@@ -114,7 +114,6 @@ class StripeClient(Protocol):
         cancel_url: str,
         metadata: dict[str, str],
         mode: str = "payment",
-        capture_method: str | None = None,
     ) -> CheckoutSessionResult:
         """Create a Stripe Checkout session.
 
@@ -123,15 +122,6 @@ class StripeClient(Protocol):
         flow. Defaults to one-time because subscriptions have been
         removed from the user-facing surface, but the parameter is
         kept so a future restore would be a one-line change.
-
-        ``capture_method`` controls how the resulting PaymentIntent is
-        settled. The default (``None``) means immediate capture —
-        Stripe charges the card when the session completes. Pass
-        ``"manual"`` for the priced-question "authorize then
-        capture/void" flow (ABS-312): the card is only AUTHORIZED at
-        checkout, and the caller later captures the hold on a grounded
-        answer or voids it on a failed question. Only meaningful for
-        ``mode="payment"``.
 
         ``customer_id`` may be ``None`` for first-time customers;
         Stripe will create the customer record and the webhook will
@@ -146,26 +136,6 @@ class StripeClient(Protocol):
 
     def get_customer(self, customer_id: str) -> StripeCustomer | None:
         """Fetch a Stripe customer by id, or ``None`` if not found."""
-
-    def capture_payment_intent(self, payment_intent_id: str) -> str:
-        """Capture a previously-authorized (manual-capture) PaymentIntent.
-
-        Used by the priced-question flow when the engine delivers a
-        grounded answer: the held authorization becomes a real charge.
-        Returns the PaymentIntent status string (``"succeeded"`` on a
-        clean capture). Raises on a Stripe error.
-        """
-
-    def cancel_payment_intent(self, payment_intent_id: str) -> str:
-        """Void (cancel) an uncaptured PaymentIntent — the customer is
-        never charged.
-
-        This is the failed-question mechanism: when a question is
-        ungroundable / zero-evidence / hits the cost ceiling, the
-        authorization is released so nothing hits the customer's
-        statement. Returns the PaymentIntent status (``"canceled"``).
-        Raises on a Stripe error.
-        """
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +194,6 @@ class LiveStripeClient:
         cancel_url: str,
         metadata: dict[str, str],
         mode: str = "payment",
-        capture_method: str | None = None,
     ) -> CheckoutSessionResult:
         params: dict[str, Any] = {
             "mode": mode,
@@ -241,14 +210,6 @@ class LiveStripeClient:
         # directly, so no mirroring is needed.
         if mode == "subscription":
             params["subscription_data"] = {"metadata": dict(metadata)}
-        if capture_method is not None and mode == "payment":
-            # ABS-312: authorize-then-capture. Mirror the metadata onto
-            # the PaymentIntent too so a manual capture/void can resolve
-            # the originating question purchase from the PI alone.
-            params["payment_intent_data"] = {
-                "capture_method": capture_method,
-                "metadata": dict(metadata),
-            }
         if customer_id:
             params["customer"] = customer_id
         else:
@@ -287,14 +248,6 @@ class LiveStripeClient:
             metadata=dict(customer.get("metadata") or {}),
         )
 
-    def capture_payment_intent(self, payment_intent_id: str) -> str:
-        intent = self._stripe.PaymentIntent.capture(payment_intent_id)
-        return str(intent["status"])
-
-    def cancel_payment_intent(self, payment_intent_id: str) -> str:
-        intent = self._stripe.PaymentIntent.cancel(payment_intent_id)
-        return str(intent["status"])
-
 
 # ---------------------------------------------------------------------------
 # Mock implementation. Tests script responses, then assert on the
@@ -312,7 +265,6 @@ class _CheckoutCall:
     cancel_url: str
     metadata: dict[str, str]
     mode: str = "payment"
-    capture_method: str | None = None
 
 
 @dataclass
@@ -320,14 +272,6 @@ class _WebhookCall:
     payload: bytes
     sig_header: str
     secret: str
-
-
-@dataclass
-class _PaymentIntentCall:
-    """A capture or cancel call against a PaymentIntent id."""
-
-    payment_intent_id: str
-    action: str  # "capture" | "cancel"
 
 
 class MockStripeClient:
@@ -363,9 +307,6 @@ class MockStripeClient:
         self._signature_error = signature_error
         self.checkout_calls: list[_CheckoutCall] = []
         self.webhook_calls: list[_WebhookCall] = []
-        # ABS-312: record manual capture/void calls so tests can assert
-        # the failed-question rule (capture on success, void on failure).
-        self.payment_intent_calls: list[_PaymentIntentCall] = []
 
     def create_checkout_session(
         self,
@@ -377,7 +318,6 @@ class MockStripeClient:
         cancel_url: str,
         metadata: dict[str, str],
         mode: str = "payment",
-        capture_method: str | None = None,
     ) -> CheckoutSessionResult:
         self.checkout_calls.append(
             _CheckoutCall(
@@ -388,7 +328,6 @@ class MockStripeClient:
                 cancel_url=cancel_url,
                 metadata=dict(metadata),
                 mode=mode,
-                capture_method=capture_method,
             )
         )
         if not self._checkout_results:
@@ -427,19 +366,3 @@ class MockStripeClient:
 
     def get_customer(self, customer_id: str) -> StripeCustomer | None:
         return self._customers.get(customer_id)
-
-    def capture_payment_intent(self, payment_intent_id: str) -> str:
-        self.payment_intent_calls.append(
-            _PaymentIntentCall(
-                payment_intent_id=payment_intent_id, action="capture"
-            )
-        )
-        return "succeeded"
-
-    def cancel_payment_intent(self, payment_intent_id: str) -> str:
-        self.payment_intent_calls.append(
-            _PaymentIntentCall(
-                payment_intent_id=payment_intent_id, action="cancel"
-            )
-        )
-        return "canceled"

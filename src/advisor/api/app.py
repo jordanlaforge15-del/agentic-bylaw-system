@@ -334,12 +334,6 @@ def create_app(
                 db_session_factory=billing_db_session_factory,
                 user_dependency=billing_user_dependency,
                 user_resolver=billing_user_resolver,
-                # ABS-312: wire the engine into the buy-an-answer
-                # run/refine endpoints. Reuses the same gateway, persona,
-                # and retrieval factory the chat route runs on.
-                answer_gateway=gateway,
-                answer_persona=persona,
-                answer_retrieval_factory=factory,
             )
         )
     else:
