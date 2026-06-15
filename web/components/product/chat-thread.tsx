@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AgentMarkdown } from "@/components/product/agent-markdown";
+import { PaidAnswerDisclaimer } from "@/components/product/paid-answer-disclaimer";
 import { HighlightWord } from "@/components/highlight-word";
 import { Mono } from "@/components/mono";
 import type {
@@ -213,15 +214,7 @@ function AgentMsg({ msg, idx, sessionId, feedbackMap }: { msg: AgentMessage; idx
           />
         )}
 
-        <div
-          data-testid="paid-answer-disclaimer"
-          role="note"
-          className="font-mono text-text-muted"
-          style={{ fontSize: 10, letterSpacing: "0.04em" }}
-        >
-          Bylaw-analysis output — not an official municipal determination.
-          Verify before relying.
-        </div>
+        <PaidAnswerDisclaimer />
       </div>
     </div>
   );
