@@ -162,6 +162,45 @@ export function humanizeQuestionSlug(slug: string): string {
     .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
     .join(" ");
 }
+// Consultant-style intake (ABS-315). One pass over the user's free-form
+// description: the backend extracts whatever inputs it can and reports
+// whether the question's required-input schema is satisfied. Always free.
+export type IntakeResponse = {
+  question_slug: string;
+  complete: boolean;
+  inputs: Record<string, string>;
+  missing_required: string[];
+  missing_optional: string[];
+  prompt: string;
+};
+
+// Checkout for a catalog question (POST /api/billing/checkout/question).
+export type QuestionCheckoutResponse = {
+  url: string;
+  purchase_id: number;
+};
+
+// Free off-menu price quote (ABS-316). Producing it never charges.
+export type QuoteResponse = {
+  question: string;
+  difficulty: string;
+  difficulty_display_name: string;
+  price_cents: number;
+  currency: string;
+  rationale: string;
+  band_low_cents: number;
+  band_high_cents: number;
+};
+
+// Checkout for an off-menu "Other" question (POST /api/billing/checkout/other).
+export type OtherCheckoutResponse = {
+  url: string;
+  purchase_id: number;
+  price_cents: number;
+  currency: string;
+  difficulty: string;
+  rationale: string;
+};
 
 export const ANCHOR_KIND_DISPLAY: Record<AnchorKind, string> = {
   address: "Property address",

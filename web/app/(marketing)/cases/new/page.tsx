@@ -33,10 +33,10 @@ export default async function NewCasePage({
           Open a case
         </h1>
         <p className="text-[14px] text-text-muted m-0 max-w-[600px]">
-          Anchor your inquiry to a specific property, project ref, or
-          development application. We&apos;ll classify the question to
-          recommend a tier, and reuse an existing case if you opened one
-          for the same anchor in the last 30 days.
+          Anchor your inquiry to a property, then pick the question you want
+          answered. Opening a case is free — you pay per answer. We&apos;ll
+          reuse an existing case if you opened one for the same anchor in the
+          last 30 days.
         </p>
       </header>
 
@@ -46,9 +46,8 @@ export default async function NewCasePage({
       />
 
       <div className="mt-8 text-[12.5px] text-text-muted">
-        Need credits first?{" "}
         <Link href="/pricing" className="underline">
-          See pricing
+          See all questions &amp; prices
         </Link>{" "}
         ·{" "}
         <Link href="/cases" className="underline">
