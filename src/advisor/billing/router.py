@@ -32,6 +32,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from advisor.billing import answers as answer_flow
+from advisor.billing.answers import (
+    MissingRequiredInputsError,
+    NewQuestionError,
+    PurchaseNotAuthorizedError,
+    QuestionPriceNotConfiguredError,
+    RefinementNotAvailableError,
+    UnknownQuestionError,
+    WindowExhaustedError,
+)
 from advisor.billing.checkout import (
     PriceNotConfiguredError,
     UnknownOfferError,
@@ -41,10 +51,11 @@ from advisor.billing.client import StripeClient
 from advisor.billing.packs import all_offers
 from advisor.billing.pricing import get_pricing_settings
 from advisor.billing.questions import all_questions
+from advisor.billing.quote import EmptyQuestionError, quote_question
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.billing.webhooks import handle_event
 from advisor.db.cases import credit_balance_for
-from advisor.db.models import CasePurchase, User
+from advisor.db.models import CasePurchase, QuestionPurchase, User
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +161,105 @@ class QuestionMenuResponse(BaseModel):
     questions: list[QuestionMenuItem]
 
 
+class CheckoutQuestionRequest(BaseModel):
+    """Body of ``POST /v1/billing/checkout/question``."""
+
+    question_slug: str = Field(
+        ..., description="Catalog question slug (see /v1/billing/questions)."
+    )
+    inputs: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Collected required-input values keyed by input name "
+            "(address, proposed_use, …)."
+        ),
+    )
+
+
+class QuestionCheckoutResponse(BaseModel):
+    url: str = Field(..., description="Stripe Checkout redirect URL.")
+    purchase_id: int = Field(
+        ..., description="Id of the pending QuestionPurchase row."
+    )
+
+
+class QuoteRequest(BaseModel):
+    """Body of ``POST /v1/billing/questions/quote`` (ABS-316)."""
+
+    question: str = Field(
+        ...,
+        min_length=1,
+        description="The free-form, off-menu question to price.",
+    )
+
+
+class QuoteResponse(BaseModel):
+    """A FREE off-menu price quote (ABS-316).
+
+    Producing this never charges the customer. ``price_cents`` is the
+    anchored price they would pay to buy the answer; ``difficulty`` /
+    ``rationale`` explain the price; the ``band_*`` fields give the
+    launch-menu envelope for context ("within the $79–$299 band").
+    """
+
+    question: str
+    difficulty: str
+    difficulty_display_name: str
+    price_cents: int
+    currency: str
+    rationale: str
+    band_low_cents: int
+    band_high_cents: int
+
+
+class CheckoutOtherRequest(BaseModel):
+    """Body of ``POST /v1/billing/checkout/other`` (ABS-316)."""
+
+    question: str = Field(
+        ...,
+        min_length=1,
+        description="The free-form, off-menu question to buy an answer to.",
+    )
+
+
+class OtherCheckoutResponse(BaseModel):
+    """Checkout for an off-menu question: URL + the server-bound quote."""
+
+    url: str = Field(..., description="Stripe Checkout redirect URL.")
+    purchase_id: int = Field(
+        ..., description="Id of the pending QuestionPurchase row."
+    )
+    price_cents: int = Field(
+        ..., description="The server-quoted price the card will hold."
+    )
+    currency: str = "CAD"
+    difficulty: str
+    rationale: str
+
+
+class RefineRequest(BaseModel):
+    """Body of ``POST /v1/billing/questions/purchases/{id}/refine``."""
+
+    message: str = Field(
+        ..., min_length=1, description="The refinement follow-up text."
+    )
+
+
+class QuestionPurchaseResponse(BaseModel):
+    """State of a priced-question purchase + its (raw) answer."""
+
+    id: int
+    question_slug: str
+    status: str
+    price_cents: int
+    currency: str
+    answer: str | None = None
+    failure_reason: str | None = None
+    refinement_count: int = 0
+    refinements_remaining: int = 0
+    window_expires_at: str | None = None
+
+
 class TierBalance(BaseModel):
     tier: str
     available: int
@@ -227,6 +337,27 @@ def _build_question_menu(
     return items
 
 
+def _question_purchase_response(
+    purchase: QuestionPurchase,
+) -> QuestionPurchaseResponse:
+    return QuestionPurchaseResponse(
+        id=purchase.id,
+        question_slug=purchase.question_slug,
+        status=purchase.status,
+        price_cents=purchase.price_cents,
+        currency=purchase.currency,
+        answer=purchase.answer_text,
+        failure_reason=purchase.failure_reason,
+        refinement_count=purchase.refinement_count,
+        refinements_remaining=answer_flow.refinements_remaining(purchase),
+        window_expires_at=(
+            purchase.window_expires_at.isoformat()
+            if purchase.window_expires_at is not None
+            else None
+        ),
+    )
+
+
 # -- Router factory ---------------------------------------------------------
 
 
@@ -240,8 +371,18 @@ def build_billing_router(
     db_session_factory: Callable[[], Any],
     user_dependency: Callable[..., Any],
     user_resolver: UserResolver,
+    answer_gateway: Any | None = None,
+    answer_persona: str | None = None,
+    answer_retrieval_factory: Callable[[], Any] | None = None,
 ) -> APIRouter:
-    """Assemble the billing router."""
+    """Assemble the billing router.
+
+    ``answer_gateway`` / ``answer_persona`` / ``answer_retrieval_factory``
+    wire the priced-question "buy an answer" run/refine endpoints
+    (ABS-312). When any is missing those endpoints return 503 — the
+    catalog/checkout/webhook endpoints still work, so the flow degrades
+    to "purchasable but not yet runnable" rather than crashing.
+    """
     router = APIRouter(prefix="/v1/billing", tags=["billing"])
 
     def _require_enabled() -> None:
@@ -271,6 +412,11 @@ def build_billing_router(
                 close = getattr(result, "close", None)
                 if callable(close):
                     close()
+
+    def _commit(db: Any) -> None:
+        commit = getattr(db, "commit", None)
+        if callable(commit):
+            commit()
 
     @router.get("/catalog", response_model=CatalogResponse)
     def get_catalog() -> CatalogResponse:
@@ -371,6 +517,308 @@ def build_billing_router(
                     },
                 ) from exc
             return CheckoutResponse(url=url)
+
+    # -- Priced-question "buy an answer" flow (ABS-312) --------------------
+
+    def _require_answer_runner() -> None:
+        if (
+            answer_gateway is None
+            or answer_persona is None
+            or answer_retrieval_factory is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "answer_runner_unavailable",
+                    "message": (
+                        "The answer engine is not wired into the billing "
+                        "router on this deployment."
+                    ),
+                },
+            )
+
+    def _require_answer_gateway() -> None:
+        # The off-menu quote (ABS-316) needs only the LLM gateway — no
+        # retrieval/persona — so it gates on the gateway alone.
+        if answer_gateway is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "answer_runner_unavailable",
+                    "message": (
+                        "The quote engine is not wired into the billing "
+                        "router on this deployment."
+                    ),
+                },
+            )
+
+    def _load_owned_purchase(db: Any, purchase_id: int, user: User):
+        purchase = db.get(QuestionPurchase, purchase_id)
+        if purchase is None or purchase.user_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "purchase_not_found",
+                    "message": f"no question purchase {purchase_id}",
+                },
+            )
+        return purchase
+
+    @router.post(
+        "/checkout/question", response_model=QuestionCheckoutResponse
+    )
+    def post_checkout_question(
+        body: CheckoutQuestionRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionCheckoutResponse:
+        _require_enabled()
+        if client_factory is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "billing_misconfigured",
+                    "message": "no Stripe client factory wired",
+                },
+            )
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            try:
+                purchase, url = answer_flow.start_question_checkout(
+                    db,
+                    user,
+                    question_slug=body.question_slug,
+                    inputs=body.inputs,
+                    client=client_factory(),
+                    settings=settings,
+                )
+            except UnknownQuestionError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"code": "unknown_question", "message": str(exc)},
+                ) from exc
+            except MissingRequiredInputsError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "missing_required_inputs",
+                        "message": str(exc),
+                        "missing": exc.missing,
+                    },
+                ) from exc
+            except QuestionPriceNotConfiguredError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "price_not_configured",
+                        "message": str(exc),
+                    },
+                ) from exc
+            purchase_id = purchase.id
+            _commit(db)
+            return QuestionCheckoutResponse(url=url, purchase_id=purchase_id)
+
+    # -- Off-menu "Other" question: free quote → buy (ABS-316) ------------
+
+    @router.post(
+        "/questions/quote", response_model=QuoteResponse
+    )
+    async def post_quote_question(
+        body: QuoteRequest,
+        auth_session: Any = Depends(user_dependency),  # noqa: ARG001
+    ) -> QuoteResponse:
+        """Quote a price for an off-menu question. ALWAYS FREE.
+
+        Producing a quote never charges the customer and never creates a
+        Stripe object — it is a single (free) LLM difficulty
+        classification mapped to an anchored price. Auth-gated so it
+        can't be scraped anonymously, but no money moves.
+        """
+        _require_enabled()
+        _require_answer_gateway()
+        try:
+            quote = await quote_question(answer_gateway, body.question)
+        except EmptyQuestionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "empty_question", "message": str(exc)},
+            ) from exc
+        return QuoteResponse(
+            question=quote.question_text,
+            difficulty=quote.difficulty,
+            difficulty_display_name=quote.difficulty_display_name,
+            price_cents=quote.price_cents,
+            currency=quote.currency,
+            rationale=quote.rationale,
+            band_low_cents=quote.band_low_cents,
+            band_high_cents=quote.band_high_cents,
+        )
+
+    @router.post(
+        "/checkout/other", response_model=OtherCheckoutResponse
+    )
+    async def post_checkout_other(
+        body: CheckoutOtherRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> OtherCheckoutResponse:
+        """Buy an answer to an off-menu question at the quoted price.
+
+        Re-quotes the question SERVER-SIDE (never trusting a
+        client-supplied price), then authorizes a manual-capture
+        PaymentIntent for that amount. The answer-run flow later captures
+        on a grounded answer / voids on a failed one — same
+        failed-question rule as catalog questions.
+        """
+        _require_enabled()
+        _require_answer_gateway()
+        if client_factory is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "billing_misconfigured",
+                    "message": "no Stripe client factory wired",
+                },
+            )
+        try:
+            quote = await quote_question(answer_gateway, body.question)
+        except EmptyQuestionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "empty_question", "message": str(exc)},
+            ) from exc
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase, url = answer_flow.start_other_checkout(
+                db,
+                user,
+                quote=quote,
+                client=client_factory(),
+                settings=settings,
+            )
+            purchase_id = purchase.id
+            _commit(db)
+            return OtherCheckoutResponse(
+                url=url,
+                purchase_id=purchase_id,
+                price_cents=quote.price_cents,
+                currency=quote.currency,
+                difficulty=quote.difficulty,
+                rationale=quote.rationale,
+            )
+
+    @router.post(
+        "/questions/purchases/{purchase_id}/answer",
+        response_model=QuestionPurchaseResponse,
+    )
+    async def post_run_answer(
+        purchase_id: int,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionPurchaseResponse:
+        _require_enabled()
+        _require_answer_runner()
+        if client_factory is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "billing_misconfigured",
+                    "message": "no Stripe client factory wired",
+                },
+            )
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase = _load_owned_purchase(db, purchase_id, user)
+            try:
+                purchase = await answer_flow.run_answer(
+                    db,
+                    purchase,
+                    gateway=answer_gateway,
+                    persona=answer_persona,
+                    retrieval_factory=answer_retrieval_factory,
+                    client=client_factory(),
+                )
+            except PurchaseNotAuthorizedError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "not_authorized",
+                        "message": str(exc),
+                    },
+                ) from exc
+            response = _question_purchase_response(purchase)
+            _commit(db)
+            return response
+
+    @router.post(
+        "/questions/purchases/{purchase_id}/refine",
+        response_model=QuestionPurchaseResponse,
+    )
+    async def post_refine(
+        purchase_id: int,
+        body: RefineRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionPurchaseResponse:
+        _require_enabled()
+        _require_answer_runner()
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase = _load_owned_purchase(db, purchase_id, user)
+            try:
+                await answer_flow.run_refinement(
+                    db,
+                    purchase,
+                    message=body.message,
+                    gateway=answer_gateway,
+                    persona=answer_persona,
+                    retrieval_factory=answer_retrieval_factory,
+                )
+            except NewQuestionError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "new_question",
+                        "message": (
+                            "This is a different question — please purchase "
+                            "a new answer."
+                        ),
+                        "suggested_slug": exc.suggested_slug,
+                    },
+                ) from exc
+            except WindowExhaustedError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "window_exhausted",
+                        "message": (
+                            "The refinement window for this answer is "
+                            "closed — please purchase a new answer."
+                        ),
+                        "reason": exc.reason,
+                    },
+                ) from exc
+            except RefinementNotAvailableError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "refinement_unavailable",
+                        "message": str(exc),
+                    },
+                ) from exc
+            response = _question_purchase_response(purchase)
+            _commit(db)
+            return response
+
+    @router.get(
+        "/questions/purchases/{purchase_id}",
+        response_model=QuestionPurchaseResponse,
+    )
+    def get_question_purchase(
+        purchase_id: int,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionPurchaseResponse:
+        _require_enabled()
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase = _load_owned_purchase(db, purchase_id, user)
+            return _question_purchase_response(purchase)
 
     @router.post("/webhook")
     async def post_webhook(

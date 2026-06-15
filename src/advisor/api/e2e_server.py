@@ -1525,6 +1525,299 @@ def _mount_advisor_search_include_flags_endpoint(app: FastAPI) -> None:
         }
 
 
+class _BuyAnswerCheckoutBody(BaseModel):
+    user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
+    question_slug: str = Field(min_length=1, max_length=64)
+    inputs: dict[str, str] = Field(default_factory=dict)
+
+
+class _BuyAnswerRunBody(BaseModel):
+    purchase_id: int
+
+
+class _BuyAnswerRefineBody(BaseModel):
+    purchase_id: int
+    message: str = Field(min_length=1, max_length=2000)
+
+
+class _BuyAnswerQuoteBody(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+
+
+class _BuyAnswerCheckoutOtherBody(BaseModel):
+    user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
+    question: str = Field(min_length=1, max_length=2000)
+
+
+def _mount_buy_answer_test_router(app: FastAPI) -> None:
+    """ABS-312: drive the priced-question "buy an answer" flow over HTTP.
+
+    Billing stays dormant in the e2e stack (no Stripe), so these
+    ``/v1/_test/...`` endpoints exercise the REAL ``advisor.billing
+    .answers`` service — start checkout, authorize via the webhook
+    handler, run the answer (capture/void), and refine — against the
+    test Postgres + the e2e ``MockGateway``, using a ``MockStripeClient``
+    in place of live Stripe. This is the same pattern the evaluator /
+    address-profile test endpoints use to cover heavy or external-
+    dependency code paths through the real stack.
+    """
+    from advisor.billing import answers as answer_flow  # noqa: PLC0415
+    from advisor.billing.answers import (  # noqa: PLC0415
+        MissingRequiredInputsError,
+        NewQuestionError,
+        RefinementNotAvailableError,
+        UnknownQuestionError,
+        WindowExhaustedError,
+    )
+    from advisor.billing.client import (  # noqa: PLC0415
+        CheckoutSessionResult,
+        MockStripeClient,
+        StripeEvent,
+    )
+    from advisor.billing.quote import (  # noqa: PLC0415
+        EmptyQuestionError,
+        quote_question,
+    )
+    from advisor.billing.settings import AdvisorBillingSettings  # noqa: PLC0415
+    from advisor.billing.webhooks import handle_event  # noqa: PLC0415
+    from advisor.db.models import QuestionPurchase as _QP  # noqa: PLC0415
+    from advisor.db.models import User as _User  # noqa: PLC0415
+
+    def _settings() -> AdvisorBillingSettings:
+        # Configure every question's Price ID so start_question_checkout
+        # resolves a price. Enabled flag is irrelevant here — these
+        # endpoints call the service directly, not the gated router.
+        return AdvisorBillingSettings(
+            ADVISOR_BILLING_ENABLED=True,
+            STRIPE_PRICE_QUESTION_PERMITTED_USE="price_test_permitted_use",
+            STRIPE_PRICE_QUESTION_DEVELOPMENT_STANDARDS="price_test_dev_standards",
+            STRIPE_PRICE_QUESTION_DUE_DILIGENCE="price_test_due_diligence",
+            STRIPE_PRICE_QUESTION_LEGAL_NONCONFORMING="price_test_legal_nc",
+            STRIPE_PRICE_QUESTION_VARIANCE_JUSTIFICATION="price_test_variance",
+        )
+
+    def _mock_client(session_id: str = "cs_test_buy_answer") -> MockStripeClient:
+        # Real Stripe issues a unique session id per checkout; mirror that
+        # so concurrent e2e workers don't collide on the UNIQUE
+        # stripe_checkout_session_id column.
+        return MockStripeClient(
+            checkout_result=CheckoutSessionResult(
+                session_id=session_id, url="https://stripe.test/checkout"
+            )
+        )
+
+    def _resolve_user(db, user_id: str) -> _User:
+        user = (
+            db.query(_User).filter(_User.clerk_user_id == user_id).one_or_none()
+        )
+        if user is None:
+            user = _User(clerk_user_id=user_id, email=f"{user_id}@e2e.test")
+            db.add(user)
+            db.flush()
+        return user
+
+    def _state(purchase: _QP) -> dict[str, object]:
+        return {
+            "purchase_id": purchase.id,
+            "question_slug": purchase.question_slug,
+            "status": purchase.status,
+            "answer": purchase.answer_text,
+            "failure_reason": purchase.failure_reason,
+            "refinement_count": purchase.refinement_count,
+            "refinements_remaining": answer_flow.refinements_remaining(purchase),
+            "window_expires_at": (
+                purchase.window_expires_at.isoformat()
+                if purchase.window_expires_at is not None
+                else None
+            ),
+        }
+
+    @app.post("/v1/_test/buy-answer/checkout")
+    async def buy_answer_checkout(
+        body: _BuyAnswerCheckoutBody,
+    ) -> dict[str, object]:
+        settings = _settings()
+        session_id = f"cs_test_{uuid.uuid4().hex[:16]}"
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            try:
+                purchase, _url = answer_flow.start_question_checkout(
+                    db,
+                    user,
+                    question_slug=body.question_slug,
+                    inputs=body.inputs,
+                    client=_mock_client(session_id),
+                    settings=settings,
+                )
+            except UnknownQuestionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except MissingRequiredInputsError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "missing_required_inputs", "missing": exc.missing},
+                ) from exc
+            purchase_id = purchase.id
+            # Simulate the checkout.session.completed webhook authorizing
+            # the manual-capture PaymentIntent — exercises the real
+            # webhook router path that flips the purchase to "authorized".
+            event = StripeEvent(
+                id=f"evt_test_{purchase_id}",
+                type="checkout.session.completed",
+                data={
+                    "id": session_id,
+                    "payment_intent": f"pi_test_{purchase_id}",
+                    "metadata": {
+                        "advisor_user_id": str(user.id),
+                        "question_purchase_id": str(purchase_id),
+                        "question_slug": body.question_slug,
+                    },
+                },
+            )
+            handle_event(db, event, settings)
+            db.flush()
+            purchase = db.get(_QP, purchase_id)
+            return _state(purchase)
+
+    @app.post("/v1/_test/buy-answer/quote")
+    async def buy_answer_quote(
+        body: _BuyAnswerQuoteBody,
+    ) -> dict[str, object]:
+        # ABS-316: produce a FREE off-menu price quote against the real
+        # advisor.billing.quote service + e2e MockGateway. No purchase
+        # row, no Stripe — quoting never charges.
+        try:
+            quote = await quote_question(app.state.gateway, body.question)
+        except EmptyQuestionError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "empty_question", "message": str(exc)},
+            ) from exc
+        return {
+            "question": quote.question_text,
+            "difficulty": quote.difficulty,
+            "difficulty_display_name": quote.difficulty_display_name,
+            "price_cents": quote.price_cents,
+            "currency": quote.currency,
+            "rationale": quote.rationale,
+            "cumulative_token_budget": quote.cumulative_token_budget,
+            "band_low_cents": quote.band_low_cents,
+            "band_high_cents": quote.band_high_cents,
+        }
+
+    @app.post("/v1/_test/buy-answer/checkout-other")
+    async def buy_answer_checkout_other(
+        body: _BuyAnswerCheckoutOtherBody,
+    ) -> dict[str, object]:
+        # ABS-316: re-quote server-side, then authorize an ad-hoc
+        # manual-capture checkout for the quoted amount. Mirrors the
+        # catalog checkout endpoint: simulate the
+        # checkout.session.completed webhook so the purchase lands in
+        # "authorized" ready for /answer.
+        settings = _settings()
+        session_id = f"cs_test_{uuid.uuid4().hex[:16]}"
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            try:
+                quote = await quote_question(app.state.gateway, body.question)
+            except EmptyQuestionError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "empty_question", "message": str(exc)},
+                ) from exc
+            purchase, _url = answer_flow.start_other_checkout(
+                db,
+                user,
+                quote=quote,
+                client=_mock_client(session_id),
+                settings=settings,
+            )
+            purchase_id = purchase.id
+            event = StripeEvent(
+                id=f"evt_test_{purchase_id}",
+                type="checkout.session.completed",
+                data={
+                    "id": session_id,
+                    "payment_intent": f"pi_test_{purchase_id}",
+                    "metadata": {
+                        "advisor_user_id": str(user.id),
+                        "question_purchase_id": str(purchase_id),
+                        "question_slug": "other",
+                    },
+                },
+            )
+            handle_event(db, event, settings)
+            db.flush()
+            purchase = db.get(_QP, purchase_id)
+            return {
+                "price_cents": quote.price_cents,
+                "difficulty": quote.difficulty,
+                "rationale": quote.rationale,
+                **_state(purchase),
+            }
+
+    @app.post("/v1/_test/buy-answer/answer")
+    async def buy_answer_run(body: _BuyAnswerRunBody) -> dict[str, object]:
+        with session_scope() as db:
+            purchase = db.get(_QP, body.purchase_id)
+            if purchase is None:
+                raise HTTPException(status_code=404, detail="purchase not found")
+            purchase = await answer_flow.run_answer(
+                db,
+                purchase,
+                gateway=app.state.gateway,
+                persona=app.state.persona_text,
+                retrieval_factory=app.state.retrieval_factory,
+                client=_mock_client(),
+            )
+            return _state(purchase)
+
+    @app.post("/v1/_test/buy-answer/refine")
+    async def buy_answer_refine(body: _BuyAnswerRefineBody) -> dict[str, object]:
+        with session_scope() as db:
+            purchase = db.get(_QP, body.purchase_id)
+            if purchase is None:
+                raise HTTPException(status_code=404, detail="purchase not found")
+            try:
+                answer = await answer_flow.run_refinement(
+                    db,
+                    purchase,
+                    message=body.message,
+                    gateway=app.state.gateway,
+                    persona=app.state.persona_text,
+                    retrieval_factory=app.state.retrieval_factory,
+                )
+            except NewQuestionError as exc:
+                return {
+                    "ok": False,
+                    "code": "new_question",
+                    "suggested_slug": exc.suggested_slug,
+                    **_state(purchase),
+                }
+            except WindowExhaustedError as exc:
+                return {
+                    "ok": False,
+                    "code": "window_exhausted",
+                    "reason": exc.reason,
+                    **_state(purchase),
+                }
+            except RefinementNotAvailableError as exc:
+                return {
+                    "ok": False,
+                    "code": "refinement_unavailable",
+                    "message": str(exc),
+                    **_state(purchase),
+                }
+            return {"ok": True, "answer": answer, **_state(purchase)}
+
+    @app.post("/v1/_test/buy-answer/get")
+    async def buy_answer_get(body: _BuyAnswerRunBody) -> dict[str, object]:
+        with session_scope() as db:
+            purchase = db.get(_QP, body.purchase_id)
+            if purchase is None:
+                raise HTTPException(status_code=404, detail="purchase not found")
+            return _state(purchase)
+
+
 app = build_e2e_app()
 _mount_seed_session_endpoint(app)
 _mount_search_evidence_endpoint(app)
@@ -1533,6 +1826,7 @@ _mount_zone_profile_endpoint(app)
 _mount_bylaw_query_endpoint(app)
 _mount_spatial_candidate_text_endpoint(app)
 _mount_advisor_search_include_flags_endpoint(app)
+_mount_buy_answer_test_router(app)
 
 
 if __name__ == "__main__":  # pragma: no cover
