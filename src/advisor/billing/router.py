@@ -40,6 +40,7 @@ from advisor.billing.checkout import (
 from advisor.billing.client import StripeClient
 from advisor.billing.packs import all_offers
 from advisor.billing.pricing import get_pricing_settings
+from advisor.billing.questions import all_questions
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.billing.webhooks import handle_event
 from advisor.db.cases import credit_balance_for
@@ -104,6 +105,51 @@ class CatalogResponse(BaseModel):
     offers: list[CatalogOffer]
 
 
+class QuestionInputField(BaseModel):
+    """One required-or-optional input for a catalog question."""
+
+    name: str
+    label: str
+    required: bool
+    description: str
+
+
+class QuestionMenuItem(BaseModel):
+    """One priced question on the launch menu."""
+
+    slug: str
+    display_name: str
+    price_cents: int
+    currency: str = "CAD"
+    summary: str
+    backing_calls: list[str]
+    required_inputs: list[QuestionInputField]
+    catalog_anchor: str
+    available: bool = Field(
+        ...,
+        description=(
+            "True iff the Stripe Price ID for this question is configured "
+            "and billing is enabled. Disabled questions render as 'coming "
+            "soon' on the menu."
+        ),
+    )
+
+
+class QuestionMenuResponse(BaseModel):
+    """Body of ``GET /v1/billing/questions`` — the priced-question menu."""
+
+    enabled: bool
+    currency: str = "CAD"
+    cad_per_usd: float = Field(
+        ...,
+        description=(
+            "FX rate for displaying USD equivalents on marketing pages. "
+            "CAD is authoritative."
+        ),
+    )
+    questions: list[QuestionMenuItem]
+
+
 class TierBalance(BaseModel):
     tier: str
     available: int
@@ -132,6 +178,52 @@ class PurchaseSummary(BaseModel):
 
 class PurchaseHistoryResponse(BaseModel):
     purchases: list[PurchaseSummary]
+
+
+# -- Shared builders --------------------------------------------------------
+
+
+def _build_question_menu(
+    *, settings: AdvisorBillingSettings | None, enabled: bool, currency: str
+) -> list[QuestionMenuItem]:
+    """Render the priced-question catalog into menu items.
+
+    ``available`` is True only when billing is enabled AND the
+    question's Stripe Price ID is configured on ``settings``. When
+    ``settings`` is None (minimal dormant setups), every question is
+    rendered but unavailable.
+    """
+    items: list[QuestionMenuItem] = []
+    for question in all_questions():
+        price_id = (
+            getattr(
+                settings, question.stripe_price_env_var.lower(), None
+            )
+            if settings is not None
+            else None
+        )
+        items.append(
+            QuestionMenuItem(
+                slug=question.slug,
+                display_name=question.display_name,
+                price_cents=question.price_cents,
+                currency=currency,
+                summary=question.summary,
+                backing_calls=list(question.backing_calls),
+                required_inputs=[
+                    QuestionInputField(
+                        name=f.name,
+                        label=f.label,
+                        required=f.required,
+                        description=f.description,
+                    )
+                    for f in question.required_inputs
+                ],
+                catalog_anchor=question.catalog_anchor,
+                available=bool(price_id) and enabled,
+            )
+        )
+    return items
 
 
 # -- Router factory ---------------------------------------------------------
@@ -213,6 +305,27 @@ def build_billing_router(
             currency=pricing.display_currency,
             cad_per_usd=pricing.cad_per_usd,
             offers=offers,
+        )
+
+    @router.get("/questions", response_model=QuestionMenuResponse)
+    def get_questions() -> QuestionMenuResponse:
+        """Return the priced-question launch menu.
+
+        Public by design — the question menu is shown to anonymous
+        visitors. The ``available`` flag per question tells the frontend
+        whether checkout will actually work (Stripe Price configured +
+        billing enabled).
+        """
+        pricing = get_pricing_settings()
+        return QuestionMenuResponse(
+            enabled=settings.enabled,
+            currency=pricing.display_currency,
+            cad_per_usd=pricing.cad_per_usd,
+            questions=_build_question_menu(
+                settings=settings,
+                enabled=settings.enabled,
+                currency=pricing.display_currency,
+            ),
         )
 
     @router.post("/checkout/pack", response_model=CheckoutResponse)
@@ -429,6 +542,20 @@ def build_dormant_billing_router(
             currency=pricing.display_currency,
             cad_per_usd=pricing.cad_per_usd,
             offers=offers,
+        )
+
+    @router.get("/questions", response_model=QuestionMenuResponse)
+    def get_questions_disabled() -> QuestionMenuResponse:
+        # The question menu renders without Stripe configured — every
+        # question's ``available`` flag is False so the frontend shows
+        # the menu but disables the "Buy" button.
+        return QuestionMenuResponse(
+            enabled=False,
+            currency=pricing.display_currency,
+            cad_per_usd=pricing.cad_per_usd,
+            questions=_build_question_menu(
+                settings=None, enabled=False, currency=pricing.display_currency
+            ),
         )
 
     @router.post("/checkout/pack")
