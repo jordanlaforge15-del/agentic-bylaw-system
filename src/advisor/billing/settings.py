@@ -45,6 +45,26 @@ class AdvisorBillingSettings(BaseSettings):
     """
 
     enabled: bool = Field(default=False, alias="ADVISOR_BILLING_ENABLED")
+
+    # ABS-322 — payments-off / free-trial master switch.
+    #
+    # ``enabled`` (ADVISOR_BILLING_ENABLED) turns the billing/questions
+    # subsystem ON (mounts the live router). ``payments_enabled``
+    # (ADVISOR_PAYMENTS_ENABLED) decides, within that live subsystem,
+    # whether an answer is unlocked by a **Stripe charge** (True) or by
+    # **consuming a free-question credit** (False).
+    #
+    # The go-live config is ``enabled=True`` + ``payments_enabled=False``
+    # + no Stripe Price IDs: a trial user picks a question and the
+    # buy-an-answer backend consumes a free-question entitlement (ABS-314)
+    # — no checkout session, no bank account needed. Flip
+    # ``ADVISOR_PAYMENTS_ENABLED=true`` and configure the
+    # ``STRIPE_PRICE_QUESTION_*`` IDs (banks ready) and the existing
+    # authorize→capture Stripe path (ABS-312) lights up with no code
+    # change. Default False so the trial never touches Stripe.
+    payments_enabled: bool = Field(
+        default=False, alias="ADVISOR_PAYMENTS_ENABLED"
+    )
     stripe_api_key: str | None = Field(default=None, alias="STRIPE_API_KEY")
     stripe_webhook_secret: str | None = Field(
         default=None, alias="STRIPE_WEBHOOK_SECRET"
