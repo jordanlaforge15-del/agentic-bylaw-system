@@ -15,8 +15,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision = "0021_question_purchase"
-down_revision = "0020_user_case_number"
+revision = "0022_question_purchase"
+down_revision = "0021_free_question_entitlement"
 branch_labels = None
 depends_on = None
 
