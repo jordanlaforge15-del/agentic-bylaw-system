@@ -48,6 +48,27 @@ reliance create it regardless of the label, and charging per answer arguably
 - **Failed-question rule:** if inputs are unworkable or the question can't be
   grounded, no charge / credit back. This is also the liability shield.
 
+## Launch question menu (from the productization catalog)
+
+Source: `docs/AI-Powered Land Use Bylaw Reports in Halifax_ Productization
+Catalog and Licensing Analysis.md` — Stage 1 products + its proxy price bands.
+Five fixed-price questions + the "Other" path. All are EXCELLENT / low-
+discretion / anyone-can-author items mapping to existing engine capabilities.
+Prices are grounded defaults within the doc's bands and trivially adjustable.
+
+| # | Question | Price (CAD) | Catalog anchor | Backing call |
+|---|---|---|---|---|
+| 1 | Permitted-use check — "Is [use] allowed at [address]?" | $79 | Item 2 | `get_address_profile` + `get_zone_profile` |
+| 2 | Development-standards / as-of-right compliance check (height, setbacks, coverage, FAR, parking) | $149 | Item 6 / Stage-1 #4 | `get_zone_profile` + `evaluate_submission` |
+| 3 | Zoning due-diligence summary (preliminary) | $199 | Item 3 (vs "$1,500+") | `get_address_profile` + `search` |
+| 4 | Legal non-conforming determination | $199 | Item 8 (vs $800–$2,500) | `evaluate_submission` + `search` |
+| 5 | Variance justification package (3 statutory criteria) | $299 | Item 1 ("a few hundred" vs $800–$5,000) | `evaluate_submission` |
+| — | "Other" — off-menu, LLM-quoted | variable | — | ABS-316 |
+
+Cost ~$1–2 USD/answer → >98% gross margin on price; every price sits well under
+the consultant fee it displaces. The Stage-2 items (pro forma / development
+potential, pre-application packages) are deliberately out of the launch menu.
+
 ## Checkout shape — pure per-question charge (decided 2026-06-12)
 
 **No balances, no packs, no token/credit currency.** The user pays for exactly
