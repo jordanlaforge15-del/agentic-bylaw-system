@@ -49,6 +49,16 @@ def main() -> int:
         action="store_true",
         help="Set unlimited_credits=True on the user (ABS-12).",
     )
+    parser.add_argument(
+        "--free-questions",
+        type=int,
+        default=None,
+        help=(
+            "Set free_questions_remaining to this value. "
+            "When omitted, the column is left at its current value "
+            "(0 for new users, unchanged for existing ones)."
+        ),
+    )
     args = parser.parse_args()
 
     with session_scope() as db:
@@ -95,6 +105,13 @@ def main() -> int:
             print(f"set unlimited_credits=True on user {user.id}")
         elif user.unlimited_credits and not args.unlimited:
             pass  # leave existing flag untouched unless explicitly set
+
+        if args.free_questions is not None:
+            user.free_questions_remaining = args.free_questions
+            print(
+                f"set free_questions_remaining={args.free_questions} "
+                f"on user {user.id}"
+            )
 
         for tier in TIERS:
             available = db.scalar(

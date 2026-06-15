@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from advisor.db.cases import (
+    FREE_QUESTION_GRANT,
     NoAvailableCreditError,
     REOPEN_WINDOW,
     STARTER_GRANT_QUANTITY,
@@ -14,6 +15,7 @@ from advisor.db.cases import (
     UnknownTierError,
     close_case,
     commit_credit_for_session,
+    consume_free_question,
     credit_balance_for,
     grant_admin_credits,
     grant_starter_credits_if_needed,
@@ -637,7 +639,7 @@ def test_open_case_records_open_event(tmp_path: Path) -> None:
 def test_grant_starter_credits_grants_default_pack_to_new_user(
     tmp_path: Path,
 ) -> None:
-    """A user with no credits gets the default starter pack."""
+    """A new user with no credits gets the free-question entitlement counter."""
     db_url = _db_url(tmp_path)
     create_all(db_url)
     user_id = _seed_user(db_url)
@@ -646,17 +648,19 @@ def test_grant_starter_credits_grants_default_pack_to_new_user(
         assert granted is True
 
     with session_scope(db_url) as s:
+        # No CaseCredit rows — the new model uses an entitlement counter.
         credits = list(s.query(CaseCredit).filter(CaseCredit.user_id == user_id))
-        assert len(credits) == STARTER_GRANT_QUANTITY
-        assert all(c.tier == STARTER_GRANT_TIER for c in credits)
-        assert all(c.state == "available" for c in credits)
-        assert all(c.source == "admin_grant" for c in credits)
+        assert len(credits) == 0
+        # The counter on the user row is set to FREE_QUESTION_GRANT.
+        user = s.get(User, user_id)
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT
+        assert user.metadata_json.get("free_question_grant_issued") is True
 
 
 def test_grant_starter_credits_is_noop_when_user_already_has_credits(
     tmp_path: Path,
 ) -> None:
-    """Existing credits — in any state — block a second starter grant."""
+    """A user with existing (legacy) credits is skipped — no double grant."""
     db_url = _db_url(tmp_path)
     create_all(db_url)
     user_id = _seed_user(db_url)
@@ -675,9 +679,70 @@ def test_grant_starter_credits_is_noop_when_user_already_has_credits(
 
     with session_scope(db_url) as s:
         credits = list(s.query(CaseCredit).filter(CaseCredit.user_id == user_id))
-        # Only the seeded credit — no starter pack on top.
+        # Only the seeded legacy credit — no free-question grant issued.
         assert len(credits) == 1
         assert credits[0].tier == "quick"
+        user = s.get(User, user_id)
+        assert user.free_questions_remaining == 0
+
+
+def test_grant_starter_credits_is_noop_when_already_issued(
+    tmp_path: Path,
+) -> None:
+    """Calling grant twice for the same creditless user is a no-op on the second call."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        first = grant_starter_credits_if_needed(s, user=s.get(User, user_id))
+        assert first is True
+
+    with session_scope(db_url) as s:
+        second = grant_starter_credits_if_needed(s, user=s.get(User, user_id))
+        assert second is False
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        # Counter unchanged — not incremented a second time.
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT
+
+
+def test_consume_free_question_decrements_counter(
+    tmp_path: Path,
+) -> None:
+    """consume_free_question decrements the counter and returns True."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        grant_starter_credits_if_needed(s, user=s.get(User, user_id))
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        consumed = consume_free_question(s, user=user)
+        assert consumed is True
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT - 1
+
+
+def test_consume_free_question_returns_false_when_counter_zero(
+    tmp_path: Path,
+) -> None:
+    """consume_free_question returns False when no free questions remain."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        assert user.free_questions_remaining == 0
+        consumed = consume_free_question(s, user=user)
+        assert consumed is False
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        assert user.free_questions_remaining == 0
 
 
 # ---------- refund_orphaned_case_reservations -----------------------------

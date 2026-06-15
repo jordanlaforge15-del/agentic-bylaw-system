@@ -666,25 +666,46 @@ def grant_admin_credits(
     return credits
 
 
-# Default trial allocation for any newly-created user that doesn't
-# arrive with invite-driven starter credits. Mirrors the 3-standard
-# gift the 0012_case_based_billing migration applied to pre-existing
-# active users so the on-ramp is consistent across migration cohorts.
+# Legacy constants kept for backward-compat references (e.g. existing
+# CaseCredit rows with source='signup_starter_grant'). No longer used to
+# issue new credits — replaced by the free-question entitlement counter.
 STARTER_GRANT_TIER = "standard"
 STARTER_GRANT_QUANTITY = 3
 
+# How many free questions a brand-new user receives before any Stripe
+# charge is placed. Granting free uses is not holding customer money —
+# this is an entitlement counter, not a balance.
+FREE_QUESTION_GRANT = 3
+
 
 def grant_starter_credits_if_needed(db: Session, *, user: User) -> bool:
-    """Issue the default trial credit pack to a user with no credits yet.
+    """Set the free-question entitlement counter for a new user.
 
-    Idempotent by construction: we only grant when the user has zero
-    ``CaseCredit`` rows of any state. Invite redemptions (which run
-    earlier in the user-creation flow) leave behind ``available``
-    credits, so invited users with starter packs are correctly skipped.
+    Idempotent: no-op when the user already has a legacy CaseCredit
+    signup_starter_grant row (old model) or the new
+    ``free_question_grant_issued`` metadata flag (new model). Invite
+    redemptions that carry legacy credits are also skipped — those users
+    already have a way to open cases.
 
-    Returns ``True`` if credits were granted, ``False`` if the user
-    already had credits and the call was a no-op.
+    Returns ``True`` if the grant was applied, ``False`` if already done.
     """
+    # Legacy path: skip if user ever received the old CaseCredit grant.
+    has_legacy_grant = (
+        db.query(CaseCredit.id)
+        .filter(
+            CaseCredit.user_id == user.id,
+            CaseCredit.source == "signup_starter_grant",
+        )
+        .first()
+        is not None
+    )
+    if has_legacy_grant:
+        return False
+    # New path: skip if grant was already issued under the new model.
+    if user.metadata_json.get("free_question_grant_issued"):
+        return False
+    # Also skip users who have any legacy credits (invite grants, etc.) —
+    # they already have a means to access the service.
     has_any_credit = (
         db.query(CaseCredit.id)
         .filter(CaseCredit.user_id == user.id)
@@ -693,12 +714,44 @@ def grant_starter_credits_if_needed(db: Session, *, user: User) -> bool:
     )
     if has_any_credit:
         return False
-    grant_admin_credits(
+    user.free_questions_remaining = FREE_QUESTION_GRANT
+    user.metadata_json["free_question_grant_issued"] = True
+    db.flush()
+    _record_event(
         db,
+        case=None,
         user=user,
-        tier=STARTER_GRANT_TIER,
-        quantity=STARTER_GRANT_QUANTITY,
-        reason="signup_starter_grant",
+        credit=None,
+        event_type="free_question_grant",
+        payload={"quantity": FREE_QUESTION_GRANT, "reason": "signup_starter_grant"},
+    )
+    return True
+
+
+def consume_free_question(db: Session, *, user: User) -> bool:
+    """Atomically decrement the free-question entitlement counter.
+
+    Returns ``True`` if a free question was consumed (counter was > 0
+    and has been decremented). Returns ``False`` when the counter is
+    already 0 — the caller should then place a Stripe charge.
+
+    Uses ``SELECT FOR UPDATE`` to prevent concurrent double-decrement
+    when two question-answer requests race for the same user.
+    """
+    locked_user = db.execute(
+        select(User).where(User.id == user.id).with_for_update()
+    ).scalar_one()
+    if locked_user.free_questions_remaining <= 0:
+        return False
+    locked_user.free_questions_remaining -= 1
+    db.flush()
+    _record_event(
+        db,
+        case=None,
+        user=locked_user,
+        credit=None,
+        event_type="free_question_consumed",
+        payload={"remaining": locked_user.free_questions_remaining},
     )
     return True
 
@@ -1123,8 +1176,10 @@ __all__: Iterable[str] = (
     "upgrade_case_credit",
     "grant_admin_credits",
     "grant_starter_credits_if_needed",
+    "consume_free_question",
     "STARTER_GRANT_TIER",
     "STARTER_GRANT_QUANTITY",
+    "FREE_QUESTION_GRANT",
     "issue_credits_from_pack_purchase",
     "credit_balance_for",
     "list_user_cases",

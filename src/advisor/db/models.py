@@ -97,6 +97,9 @@ class User(Base):
     unlimited_credits: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    free_questions_remaining: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     metadata_json: Mapped[dict] = mapped_column(
         MutableDict.as_mutable(json_type()), nullable=False, default=dict
     )

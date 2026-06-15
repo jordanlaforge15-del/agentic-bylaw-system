@@ -10,7 +10,7 @@ from advisor.auth.webhooks import (
     verify_signature,
 )
 from advisor.db import UsageEvent, User
-from advisor.db.cases import STARTER_GRANT_QUANTITY, STARTER_GRANT_TIER
+from advisor.db.cases import FREE_QUESTION_GRANT
 from advisor.db.models import CaseCredit
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
@@ -94,10 +94,11 @@ def test_user_created_missing_email_skips_insert(tmp_path: Path) -> None:
 
 
 def test_user_created_grants_starter_credits(tmp_path: Path) -> None:
-    """A brand-new user gets the default trial credit pack on user.created.
+    """A brand-new user gets the free-question entitlement on user.created.
 
-    Without this grant the user lands on /app with no credits and can't
-    open a case — the whole product is unusable for them.
+    The signup grant is now an entitlement counter (free_questions_remaining)
+    rather than CaseCredit rows — the per-question world has no credit balance
+    to convert into.
     """
     create_all(_db_url(tmp_path))
     with session_scope(_db_url(tmp_path)) as s:
@@ -119,10 +120,11 @@ def test_user_created_grants_starter_credits(tmp_path: Path) -> None:
 
     with session_scope(_db_url(tmp_path)) as s:
         user = s.query(User).filter(User.clerk_user_id == "user_starter").one()
+        # New model: no legacy CaseCredit rows; entitlement counter is set.
         credits = list(s.query(CaseCredit).filter(CaseCredit.user_id == user.id))
-        assert len(credits) == STARTER_GRANT_QUANTITY
-        assert all(c.tier == STARTER_GRANT_TIER for c in credits)
-        assert all(c.state == "available" for c in credits)
+        assert len(credits) == 0
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT
+        assert user.metadata_json.get("free_question_grant_issued") is True
 
 
 def test_user_created_existing_row_updates_drift(tmp_path: Path) -> None:
