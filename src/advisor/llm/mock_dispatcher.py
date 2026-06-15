@@ -132,6 +132,15 @@ def build_dispatcher() -> Callable[[CompletionRequest], CompletionResponse]:
 
 def _dispatch(request: CompletionRequest) -> CompletionResponse:
     if not request.tools:
+        # ABS-312: persona-gated new-question classifier (tools-less).
+        # The buy-an-answer refinement gate sends a one-shot
+        # classification prompt carrying this marker. Resolve a
+        # deterministic verdict: a new question iff the embedded
+        # follow-up text carries the MOCK_NEW_QUESTION sentinel.
+        classify_text = _latest_user_text(request)
+        if "__FOLLOWUP_CLASSIFY__" in classify_text:
+            verdict = "MOCK_NEW_QUESTION" in classify_text
+            return text_response(json.dumps({"new_question": verdict}))
         # Two tools-less shapes reach the gateway:
         #   * the pre-flight classifier — a fresh request whose only
         #     message is the JSON anchor payload (no assistant turn yet);
@@ -213,6 +222,17 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
             ],
             stop_reason="tool_use",
             usage=TokenUsage(input_tokens=80, output_tokens=40),
+        )
+
+    if "MOCK_UNGROUNDABLE" in user_text and not has_prior_tool_use:
+        # ABS-312 failed-question scenario: answer with NO grounding tool
+        # call (zero-evidence synthesis). The buy-an-answer classifier
+        # treats this as ungroundable and VOIDS the card authorization.
+        return text_response(
+            "I'm not able to ground an answer to this question in the "
+            "by-law evidence available. The specific provision that would "
+            "govern it does not appear in the corpus I can search.",
+            usage=TokenUsage(input_tokens=60, output_tokens=30),
         )
 
     if has_prior_tool_use:
