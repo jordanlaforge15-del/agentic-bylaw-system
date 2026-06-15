@@ -133,6 +133,36 @@ export type QuestionMenuResponse = {
   questions: QuestionMenuItem[];
 };
 
+// ABS-312/321 — state of a priced-question purchase + its raw answer.
+// Mirrors advisor.billing.router.QuestionPurchaseResponse. `answer` is
+// null until the engine produces a grounded result (status "captured");
+// on a failed question (status "voided"/"failed") it stays null and
+// `failure_reason` carries the machine code ("zero_evidence",
+// "cost_ceiling", "internal_error").
+export type QuestionPurchaseResponse = {
+  id: number;
+  question_slug: string;
+  status: string;
+  price_cents: number;
+  currency: string;
+  answer: string | null;
+  failure_reason: string | null;
+  refinement_count: number;
+  refinements_remaining: number;
+  window_expires_at: string | null;
+};
+
+// Turn a catalog slug ("permitted_use") into a human title
+// ("Permitted use") for the answer-view header when the full catalog
+// display_name isn't in hand. "other" is the off-menu free-form sentinel.
+export function humanizeQuestionSlug(slug: string): string {
+  if (slug === "other") return "Custom question";
+  return slug
+    .split("_")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
 export const ANCHOR_KIND_DISPLAY: Record<AnchorKind, string> = {
   address: "Property address",
   project_ref: "Project reference",
