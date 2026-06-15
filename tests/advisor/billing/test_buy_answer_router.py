@@ -31,8 +31,12 @@ class _StubRetrieval:
 
 
 def _settings() -> AdvisorBillingSettings:
+    # ABS-312 exercises the Stripe authorize→capture path, so payments
+    # are ON here. The payments-off / free-credit path (ABS-322 default)
+    # is covered separately in test_buy_answer_free.py.
     return AdvisorBillingSettings(
         ADVISOR_BILLING_ENABLED=True,
+        ADVISOR_PAYMENTS_ENABLED=True,
         STRIPE_WEBHOOK_SECRET="whsec_test",
         STRIPE_PRICE_QUESTION_PERMITTED_USE="price_permitted_use",
     )
@@ -330,3 +334,123 @@ def test_intake_unknown_question_is_400(tmp_path: Path) -> None:
     )
     assert res.status_code == 400
     assert res.json()["detail"]["code"] == "unknown_question"
+
+
+# -- Payments-off / free-trial path (ABS-322) ------------------------------
+
+
+def _build_client_payments_off(
+    tmp_path: Path,
+) -> tuple[TestClient, str]:
+    """Build a billing client with payments OFF (no Stripe). Returns the
+    client plus the db_url so a test can set the user's free-question
+    balance directly."""
+    db_url = f"sqlite:///{tmp_path / 'advisor.db'}"
+    create_all(db_url)
+
+    settings = AdvisorBillingSettings(
+        ADVISOR_BILLING_ENABLED=True,
+        ADVISOR_PAYMENTS_ENABLED=False,  # free-credit mode
+    )
+
+    def _db_factory():
+        return session_scope(db_url)
+
+    def _user_dependency(x_test_user_id: str = Header(default="u1")) -> str:
+        return x_test_user_id
+
+    def _user_resolver(auth_session, db) -> User:
+        user = (
+            db.query(User)
+            .filter(User.clerk_user_id == auth_session)
+            .one_or_none()
+        )
+        if user is None:
+            user = User(clerk_user_id=auth_session, email=f"{auth_session}@x.com")
+            db.add(user)
+            db.flush()
+        return user
+
+    router = build_billing_router(
+        settings=settings,
+        client_factory=None,  # no Stripe in payments-off mode
+        db_session_factory=_db_factory,
+        user_dependency=_user_dependency,
+        user_resolver=_user_resolver,
+        answer_gateway=MockGateway(callable_=build_dispatcher()),
+        answer_persona="Test persona.",
+        answer_retrieval_factory=_StubRetrieval(),
+    )
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app), db_url
+
+
+def _set_free_questions(db_url: str, clerk_id: str, n: int) -> None:
+    with session_scope(db_url) as db:
+        user = (
+            db.query(User).filter(User.clerk_user_id == clerk_id).one_or_none()
+        )
+        if user is None:
+            user = User(clerk_user_id=clerk_id, email=f"{clerk_id}@x.com")
+            db.add(user)
+        user.free_questions_remaining = n
+        db.flush()
+
+
+def test_payments_off_checkout_consumes_credit_no_stripe(tmp_path: Path) -> None:
+    client, db_url = _build_client_payments_off(tmp_path)
+    _set_free_questions(db_url, "u1", 2)
+
+    res = client.post(
+        "/v1/billing/checkout/question",
+        json={
+            "question_slug": "permitted_use",
+            "inputs": {"address": "1234 Elm St", "proposed_use": "a duplex"},
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # No Stripe checkout URL — purchase already authorized via free credit.
+    assert body["url"] is None
+    assert body["status"] == "authorized"
+    assert body["payments_enabled"] is False
+    purchase_id = body["purchase_id"]
+
+    # Answer runs with no Stripe client → grounded → captured.
+    res = client.post(f"/v1/billing/questions/purchases/{purchase_id}/answer")
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "captured"
+
+    # /me reflects payments-off mode and the consumed credit.
+    me = client.get("/v1/billing/me").json()
+    assert me["payments_enabled"] is False
+    assert me["free_questions_remaining"] == 1
+
+
+def test_payments_off_exhaustion_is_402(tmp_path: Path) -> None:
+    client, db_url = _build_client_payments_off(tmp_path)
+    _set_free_questions(db_url, "u1", 0)
+
+    res = client.post(
+        "/v1/billing/checkout/question",
+        json={
+            "question_slug": "permitted_use",
+            "inputs": {"address": "1234 Elm St", "proposed_use": "a duplex"},
+        },
+    )
+    assert res.status_code == 402, res.text
+    assert res.json()["detail"]["code"] == "free_questions_exhausted"
+
+
+def test_payments_off_questions_menu_available_without_price_ids(
+    tmp_path: Path,
+) -> None:
+    client, _ = _build_client_payments_off(tmp_path)
+    body = client.get("/v1/billing/questions").json()
+    assert body["payments_enabled"] is False
+    assert body["enabled"] is True
+    # Every question is answerable via a free credit — available despite
+    # no Stripe Price IDs configured.
+    assert body["questions"]
+    assert all(q["available"] for q in body["questions"])
