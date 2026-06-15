@@ -1583,10 +1583,13 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
             STRIPE_PRICE_QUESTION_VARIANCE_JUSTIFICATION="price_test_variance",
         )
 
-    def _mock_client() -> MockStripeClient:
+    def _mock_client(session_id: str = "cs_test_buy_answer") -> MockStripeClient:
+        # Real Stripe issues a unique session id per checkout; mirror that
+        # so concurrent e2e workers don't collide on the UNIQUE
+        # stripe_checkout_session_id column.
         return MockStripeClient(
             checkout_result=CheckoutSessionResult(
-                session_id="cs_test_buy_answer", url="https://stripe.test/checkout"
+                session_id=session_id, url="https://stripe.test/checkout"
             )
         )
 
@@ -1621,6 +1624,7 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
         body: _BuyAnswerCheckoutBody,
     ) -> dict[str, object]:
         settings = _settings()
+        session_id = f"cs_test_{uuid.uuid4().hex[:16]}"
         with session_scope() as db:
             user = _resolve_user(db, body.user_id)
             try:
@@ -1629,7 +1633,7 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
                     user,
                     question_slug=body.question_slug,
                     inputs=body.inputs,
-                    client=_mock_client(),
+                    client=_mock_client(session_id),
                     settings=settings,
                 )
             except UnknownQuestionError as exc:
@@ -1647,7 +1651,7 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
                 id=f"evt_test_{purchase_id}",
                 type="checkout.session.completed",
                 data={
-                    "id": "cs_test_buy_answer",
+                    "id": session_id,
                     "payment_intent": f"pi_test_{purchase_id}",
                     "metadata": {
                         "advisor_user_id": str(user.id),
