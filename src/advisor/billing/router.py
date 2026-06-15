@@ -48,9 +48,10 @@ from advisor.billing.checkout import (
     start_pack_checkout,
 )
 from advisor.billing.client import StripeClient
+from advisor.billing.intake import detect_intake
 from advisor.billing.packs import all_offers
 from advisor.billing.pricing import get_pricing_settings
-from advisor.billing.questions import all_questions
+from advisor.billing.questions import all_questions, question_for
 from advisor.billing.quote import EmptyQuestionError, quote_question
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.billing.webhooks import handle_event
@@ -210,6 +211,51 @@ class QuoteResponse(BaseModel):
     rationale: str
     band_low_cents: int
     band_high_cents: int
+
+
+class IntakeRequest(BaseModel):
+    """Body of ``POST /v1/billing/questions/intake`` (ABS-315).
+
+    The consultant-style intake step that runs BEFORE checkout. Carries
+    the selected catalog question, whatever the user has said so far
+    (free-form), and any inputs already collected in earlier intake turns.
+    """
+
+    question_slug: str = Field(
+        ..., description="Catalog question slug (see /v1/billing/questions)."
+    )
+    conversation: str = Field(
+        default="",
+        description=(
+            "The user's free-form description so far — the LLM extracts "
+            "the question's required inputs from this."
+        ),
+    )
+    inputs: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Inputs already confirmed in earlier intake turns, keyed by "
+            "input name. These take precedence over freshly-extracted "
+            "values."
+        ),
+    )
+
+
+class IntakeResponse(BaseModel):
+    """Result of one consultant-style intake pass (ABS-315).
+
+    Producing this is FREE (a single tools-less LLM extraction; no charge,
+    no Stripe object). When ``complete`` is True the merged ``inputs`` are
+    ready to hand to ``POST /v1/billing/checkout/question``; otherwise
+    ``prompt`` is the consultant's follow-up asking for ``missing_required``.
+    """
+
+    question_slug: str
+    complete: bool
+    inputs: dict[str, str]
+    missing_required: list[str]
+    missing_optional: list[str]
+    prompt: str
 
 
 class CheckoutOtherRequest(BaseModel):
@@ -616,6 +662,50 @@ def build_billing_router(
             purchase_id = purchase.id
             _commit(db)
             return QuestionCheckoutResponse(url=url, purchase_id=purchase_id)
+
+    # -- Consultant-style intake detection (ABS-315) ----------------------
+
+    @router.post("/questions/intake", response_model=IntakeResponse)
+    async def post_question_intake(
+        body: IntakeRequest,
+        auth_session: Any = Depends(user_dependency),  # noqa: ARG001
+    ) -> IntakeResponse:
+        """Detect missing inputs for a question and ask for them.
+
+        The consultant-style step BEFORE checkout (ABS-315): an LLM reads
+        the conversation, extracts whatever inputs it can, and the server
+        decides completeness against the question's required-input schema.
+        ALWAYS FREE — a single tools-less extraction, no Stripe object, no
+        charge. Auth-gated so it can't be scraped anonymously, but no money
+        moves. When ``complete`` is True the merged ``inputs`` are ready
+        for ``POST /v1/billing/checkout/question``.
+        """
+        _require_enabled()
+        _require_answer_gateway()
+        try:
+            question = question_for(body.question_slug)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "unknown_question",
+                    "message": f"unknown question {body.question_slug!r}",
+                },
+            ) from exc
+        result = await detect_intake(
+            answer_gateway,
+            question,
+            conversation=body.conversation,
+            provided_inputs=body.inputs,
+        )
+        return IntakeResponse(
+            question_slug=question.slug,
+            complete=result.complete,
+            inputs=result.inputs,
+            missing_required=result.missing_required,
+            missing_optional=result.missing_optional,
+            prompt=result.prompt,
+        )
 
     # -- Off-menu "Other" question: free quote → buy (ABS-316) ------------
 

@@ -82,6 +82,13 @@ Scenario keywords in the user message override the default rules:
   response: model declines to answer the new question and directs the
   user to purchase a new question from the question menu.
 
+* ``"MOCK_INPUT[<field>]=<value>|"`` (ABS-315) — recognised inside the
+  tools-less ``__INTAKE_DETECT__`` consultant-intake prompt. Each
+  sentinel is parsed into an extracted input value, so a spec can drive
+  the intake detector deterministically: omit a required field's
+  sentinel to force a "needs more input" consultant prompt, then add it
+  on the next call to complete the intake.
+
 All responses are deterministic, so identical sessions produce
 identical SSE traces — a hard requirement for screenshot-stable UI
 tests.
@@ -147,6 +154,13 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
             # sentinel embedded in the question; default to mid-band
             # 'moderate' when no sentinel is present.
             return text_response(json.dumps(_quote_verdict(classify_text)))
+        if "__INTAKE_DETECT__" in classify_text:
+            # ABS-315: consultant-style intake extractor (tools-less).
+            # Resolve a deterministic extraction from MOCK_INPUT[<field>]=
+            # <value>| sentinels embedded in the conversation; the module
+            # decides completeness against the schema, so the mock only
+            # needs to return what the "customer said".
+            return text_response(json.dumps(_intake_verdict(classify_text)))
         # Two tools-less shapes reach the gateway:
         #   * the pre-flight classifier — a fresh request whose only
         #     message is the JSON anchor payload (no assistant turn yet);
@@ -301,6 +315,28 @@ def _quote_verdict(classify_text: str) -> dict[str, str]:
                 "rationale": f"Mock-classified as {tier}.",
             }
     return {"difficulty": "moderate", "rationale": "Mock default mid-band."}
+
+
+def _intake_verdict(classify_text: str) -> dict[str, object]:
+    """Resolve a deterministic intake extraction (ABS-315).
+
+    The intake prompt embeds the conversation, which in e2e carries
+    ``MOCK_INPUT[<field>]=<value>|`` sentinels for whatever the customer
+    "said". Parse them into the extracted-inputs map the real module
+    expects; the module then merges with already-collected inputs and
+    decides completeness from the schema. Absent any sentinel, nothing is
+    extracted (the module asks for everything required).
+    """
+    import re  # noqa: PLC0415
+
+    extracted = {
+        m.group(1): m.group(2).strip()
+        for m in re.finditer(r"MOCK_INPUT\[([a-z_]+)\]=([^|]*)\|", classify_text)
+    }
+    return {
+        "inputs": extracted,
+        "message": "Happy to help — could you share a couple more details?",
+    }
 
 
 def _classifier_response(request: CompletionRequest) -> CompletionResponse:

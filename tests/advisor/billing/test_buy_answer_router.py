@@ -268,3 +268,65 @@ def test_full_other_buy_flow_over_http(tmp_path: Path) -> None:
     assert answered["question_slug"] == "other"
     assert answered["answer"]
     assert [c.action for c in stripe.payment_intent_calls] == ["capture"]
+
+
+# -- Consultant-style intake detection (ABS-315) ---------------------------
+
+
+def test_intake_asks_for_missing_input_then_completes(tmp_path: Path) -> None:
+    client, stripe = _build_client(tmp_path)
+
+    # 1. Incomplete: only proposed_use supplied → intake asks for the address.
+    res = client.post(
+        "/v1/billing/questions/intake",
+        json={
+            "question_slug": "permitted_use",
+            "conversation": (
+                "Can I build a fourplex on my lot? "
+                "MOCK_INPUT[proposed_use]=a four-unit dwelling|"
+            ),
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["complete"] is False
+    assert body["missing_required"] == ["address"]
+    assert "Property address" in body["prompt"]
+    # Intake never creates a Stripe object or charges.
+    assert stripe.checkout_calls == []
+    assert stripe.payment_intent_calls == []
+
+    # 2. User supplies the address; the prior input is carried forward.
+    res = client.post(
+        "/v1/billing/questions/intake",
+        json={
+            "question_slug": "permitted_use",
+            "conversation": "It's at 12 Pine Street. MOCK_INPUT[address]=12 Pine Street|",
+            "inputs": body["inputs"],
+        },
+    )
+    assert res.status_code == 200, res.text
+    done = res.json()
+    assert done["complete"] is True
+    assert done["prompt"] == ""
+    assert done["inputs"] == {
+        "address": "12 Pine Street",
+        "proposed_use": "a four-unit dwelling",
+    }
+
+    # 3. The collected inputs flow straight into checkout (no 400).
+    res = client.post(
+        "/v1/billing/checkout/question",
+        json={"question_slug": "permitted_use", "inputs": done["inputs"]},
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_intake_unknown_question_is_400(tmp_path: Path) -> None:
+    client, _ = _build_client(tmp_path)
+    res = client.post(
+        "/v1/billing/questions/intake",
+        json={"question_slug": "nope", "conversation": "hi"},
+    )
+    assert res.status_code == 400
+    assert res.json()["detail"]["code"] == "unknown_question"
