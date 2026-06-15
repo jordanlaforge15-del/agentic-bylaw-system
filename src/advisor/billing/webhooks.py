@@ -44,6 +44,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from advisor.billing.answers import apply_question_authorization
 from advisor.billing.client import StripeEvent
 from advisor.billing.packs import (
     PACKS,
@@ -148,6 +149,15 @@ def _handle_checkout_completed(
     db: Session, event: StripeEvent, settings: AdvisorBillingSettings
 ) -> WebhookResult:
     metadata = _metadata_from_data(event.data)
+
+    # ABS-312: priced-question "buy an answer" purchases round-trip a
+    # ``question_purchase_id`` in metadata. They authorize a manual-
+    # capture PaymentIntent (no credits issued); the answer-run flow
+    # later captures or voids the hold. Route them before the pack path.
+    question_purchase_id = _parse_int(metadata.get("question_purchase_id"))
+    if question_purchase_id is not None:
+        return _handle_question_authorized(db, event, question_purchase_id)
+
     user_id = _parse_int(metadata.get("advisor_user_id"))
     tier = metadata.get("tier")
     pack_sku = metadata.get("pack_sku")
@@ -251,6 +261,44 @@ def _handle_checkout_completed(
         event_type=event.type,
         event_id=event.id,
         user_id=user.id,
+    )
+
+
+def _handle_question_authorized(
+    db: Session, event: StripeEvent, purchase_id: int
+) -> WebhookResult:
+    """Mark a priced-question purchase ``authorized`` (ABS-312).
+
+    The card hold (manual-capture PaymentIntent) now exists; the
+    answer-run flow captures or voids it. No credits are issued — the
+    priced-question model has no balance.
+    """
+    payment_intent = _string(event.data.get("payment_intent"))
+    checkout_session_id = _string(event.data.get("id"))
+    purchase = apply_question_authorization(
+        db,
+        purchase_id=purchase_id,
+        payment_intent_id=payment_intent,
+        checkout_session_id=checkout_session_id,
+    )
+    if purchase is None:
+        logger.warning(
+            "stripe webhook: question_purchase_id %s not found (event_id=%s)",
+            purchase_id,
+            event.id,
+        )
+        return WebhookResult(
+            handled=True,
+            event_type=event.type,
+            event_id=event.id,
+            note="question_purchase_missing",
+        )
+    return WebhookResult(
+        handled=True,
+        event_type=event.type,
+        event_id=event.id,
+        user_id=purchase.user_id,
+        note="question_authorized",
     )
 
 
