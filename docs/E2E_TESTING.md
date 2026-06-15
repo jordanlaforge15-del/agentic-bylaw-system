@@ -267,6 +267,15 @@ Note: the test database `layer1_test` lives inside each worktree's own Postgres 
 
 **`alembic upgrade head` fails with `value too long for type character varying(32)`.** Revision id `0008_advisor_billing_subscription` is 33 chars and overflows the default `alembic_version.version_num`. `e2e-up.sh` pre-creates the table with `VARCHAR(255)` to work around this for fresh databases — confirm the pre-create ran by checking `\d alembic_version`.
 
+**`e2e-up` prints "Multiple Alembic heads detected" and exits 1.** Two concurrent feature branches both parented their migration to the same `down_revision`. `alembic upgrade head` would fail with "Multiple head revisions are present". Fix:
+```bash
+# From your feature-branch worktree root:
+python scripts/rechain_migration.py
+git log --oneline -3   # verify the [rechain] commit landed
+make e2e               # re-run; guard should pass now
+```
+The Night Manager's `merge_to_dev` runs this automatically before each merge, so this error should only appear when running `make e2e` on a branch that has not yet gone through the NM merge flow. See [docs/NIGHT_MANAGER.md — Alembic collision resistance](NIGHT_MANAGER.md#alembic-collision-resistance) for the full mechanism.
+
 **FastAPI logs show `database "layer1_test" does not exist` even though it was created.** Symptom of two worktrees both trying to bind `host:5432` — one container ends up unpublished and the host-side alembic / uvicorn hit the wrong Postgres. Use the parallel-worktrees recipe to give each worktree its own host port, or tear down the stack of the worktree you're not actively using.
 
 **Tests hit 402 Payment Required.** Credits drained — `globalSetup` should be topping them up but didn't fire. Run `scripts/seed_e2e_user.py --credits-per-tier 200` manually with the right `DATABASE_URL`.
