@@ -38,6 +38,7 @@ from advisor.billing.client import StripeClient
 from advisor.billing.questions import Question, question_for
 from advisor.billing.quote import OTHER_QUESTION_SLUG, Quote
 from advisor.billing.settings import AdvisorBillingSettings
+from advisor.db.cases import consume_free_question, refund_free_question
 from advisor.db.models import QuestionPurchase, User
 from advisor.llm import LLMGateway, Message, TextBlock
 from layer1.db.base import utcnow
@@ -105,6 +106,14 @@ class MissingRequiredInputsError(AnswerFlowError):
 class QuestionPriceNotConfiguredError(AnswerFlowError):
     """The question has no Stripe Price ID configured on settings —
     operator misconfiguration, not a user error. → HTTP 503."""
+
+
+class FreeQuestionsExhaustedError(AnswerFlowError):
+    """Payments-off (ABS-322): the trial user has no free-question credit
+    left to consume and Stripe payments are not enabled, so there is no
+    way to unlock another answer yet. → HTTP 402 ("free trial used —
+    paid answers coming soon"). The entry flow (ABS-320) renders this as
+    the exhaustion state rather than a dead checkout button."""
 
 
 class PurchaseNotAuthorizedError(AnswerFlowError):
@@ -254,6 +263,81 @@ def start_question_checkout(
     purchase.stripe_checkout_session_id = result.session_id
     db.flush()
     return purchase, result.url
+
+
+# Marker stored on ``QuestionPurchase.metadata_json`` for a payments-off
+# (ABS-322) purchase: the answer was unlocked by consuming a free-question
+# credit, not a Stripe charge. ``run_answer`` / ``_void`` branch on this to
+# skip Stripe capture/void and instead refund the free credit on failure.
+PAYMENTS_OFF_KEY = "payments_off"
+
+
+def _is_free_purchase(purchase: QuestionPurchase) -> bool:
+    """True when the purchase was unlocked by a free-question credit
+    (payments-off / ABS-322) rather than a Stripe authorization."""
+    return bool((purchase.metadata_json or {}).get(PAYMENTS_OFF_KEY))
+
+
+def start_question_free(
+    db: Session,
+    user: User,
+    *,
+    question_slug: str,
+    inputs: dict,
+) -> QuestionPurchase:
+    """Open an answerable catalog-question purchase by consuming one free
+    credit — the payments-off (ABS-322) equivalent of
+    checkout→webhook→authorize, with NO Stripe.
+
+    The principle: an answer is unlocked by consuming a question-credit,
+    not by a payment. This reserves one free-question entitlement
+    (ABS-314) and inserts a ``QuestionPurchase`` straight into
+    ``authorized`` state — ready for ``run_answer`` — without ever
+    creating a Stripe object or Price-ID lookup.
+
+    Order of operations honours the failed-question rule: unworkable
+    (missing required) inputs raise BEFORE any credit is reserved, so a
+    question we can't even run never costs the user a credit. If the
+    answer later turns out ungroundable / over the ABS-305 cost cap,
+    ``run_answer`` refunds the reserved credit (the void equivalent).
+
+    Raises ``UnknownQuestionError`` (bad slug),
+    ``MissingRequiredInputsError`` (unworkable inputs, no credit
+    reserved), or ``FreeQuestionsExhaustedError`` (no free credit left —
+    the trial is used up).
+    """
+    try:
+        question = question_for(question_slug)
+    except KeyError as exc:
+        raise UnknownQuestionError(
+            f"unknown question {question_slug!r}"
+        ) from exc
+
+    cleaned = validate_inputs(question, inputs)
+
+    # Reserve the credit only after inputs validate. consume_free_question
+    # is a FOR UPDATE decrement; False means the counter is already 0.
+    if not consume_free_question(db, user=user):
+        raise FreeQuestionsExhaustedError(
+            "no free-question credits remaining and payments are disabled"
+        )
+
+    purchase = QuestionPurchase(
+        user_id=user.id,
+        question_slug=question.slug,
+        inputs_json=dict(cleaned),
+        price_cents=question.price_cents,
+        currency="CAD",
+        # No Stripe authorize step exists in payments-off mode, so the
+        # purchase is born ``authorized`` (credit already reserved) and is
+        # immediately runnable. No stripe_* ids are ever set.
+        status="authorized",
+        authorized_at=utcnow(),
+        metadata_json={PAYMENTS_OFF_KEY: True},
+    )
+    db.add(purchase)
+    db.flush()
+    return purchase
 
 
 def start_other_checkout(
@@ -491,13 +575,22 @@ async def run_answer(
     gateway: LLMGateway,
     persona: str,
     retrieval_factory,
-    client: StripeClient,
+    client: StripeClient | None = None,
     model: str | None = None,
 ) -> QuestionPurchase:
     """Run the purchased question and settle the authorization.
 
-    Captures the card on a grounded answer; voids it on a failed
-    question. Idempotent: a purchase already settled
+    Two settlement modes share one code path (the failed-question rule is
+    identical in both):
+
+    * **Stripe (payments-on):** capture the card hold on a grounded
+      answer; void it on a failed question. Requires ``client``.
+    * **Free credit (payments-off / ABS-322):** the credit was already
+      reserved at ``start_question_free``; a grounded answer simply
+      confirms the consumption (nothing to capture), and a failed answer
+      refunds the credit (the void equivalent). ``client`` may be ``None``.
+
+    Idempotent: a purchase already settled
     (``captured``/``voided``/``failed``) is returned unchanged. Raises
     ``PurchaseNotAuthorizedError`` if the card hasn't been authorized
     yet.
@@ -526,32 +619,52 @@ async def run_answer(
             "error running answer for purchase %s; voiding authorization",
             purchase.id,
         )
-        _void(client, purchase, reason="internal_error", status="failed")
+        _void(db, client, purchase, reason="internal_error", status="failed")
         db.flush()
         return purchase
 
     purchase.transcript_json = _serialize(outcome.messages)
     if outcome.grounded:
-        client.capture_payment_intent(purchase.stripe_payment_intent_id)
+        # Payments-off: the free credit was already consumed at checkout,
+        # so there is nothing to capture — the grounded answer simply
+        # confirms the consumption. Stripe path: capture the card hold.
+        if not _is_free_purchase(purchase):
+            client.capture_payment_intent(purchase.stripe_payment_intent_id)
         purchase.status = "captured"
         purchase.answer_text = outcome.answer_text
         purchase.window_expires_at = utcnow() + timedelta(hours=WINDOW_HOURS)
         purchase.settled_at = utcnow()
     else:
-        _void(client, purchase, reason=outcome.failure_reason, status="voided")
+        _void(
+            db, client, purchase, reason=outcome.failure_reason, status="voided"
+        )
     db.flush()
     return purchase
 
 
 def _void(
-    client: StripeClient,
+    db: Session,
+    client: StripeClient | None,
     purchase: QuestionPurchase,
     *,
     reason: str | None,
     status: str,
 ) -> None:
-    """Release the card authorization and record the failure."""
-    if purchase.stripe_payment_intent_id:
+    """Settle a failed question without charging the customer.
+
+    Payments-off (ABS-322): refund the reserved free-question credit —
+    the failed-question rule says an ungroundable / over-cap question
+    must not consume the trial credit. Stripe path: release the card
+    authorization.
+    """
+    if _is_free_purchase(purchase):
+        try:
+            refund_free_question(db, user=purchase.user)
+        except Exception:  # noqa: BLE001 — log, don't mask the failure state
+            logger.exception(
+                "failed to refund free question for purchase %s", purchase.id
+            )
+    elif purchase.stripe_payment_intent_id and client is not None:
         try:
             client.cancel_payment_intent(purchase.stripe_payment_intent_id)
         except Exception:  # noqa: BLE001 — log, don't mask the failure state

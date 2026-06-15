@@ -1535,6 +1535,15 @@ class _BuyAnswerRunBody(BaseModel):
     purchase_id: int
 
 
+class _BuyAnswerFreeBalanceBody(BaseModel):
+    user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
+
+
+class _BuyAnswerGrantFreeBody(BaseModel):
+    user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
+    quantity: int = Field(ge=1, le=1000)
+
+
 class _BuyAnswerRefineBody(BaseModel):
     purchase_id: int
     message: str = Field(min_length=1, max_length=2000)
@@ -1572,6 +1581,7 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
     """
     from advisor.billing import answers as answer_flow  # noqa: PLC0415
     from advisor.billing.answers import (  # noqa: PLC0415
+        FreeQuestionsExhaustedError,
         MissingRequiredInputsError,
         NewQuestionError,
         RefinementNotAvailableError,
@@ -1719,6 +1729,85 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
             db.flush()
             purchase = db.get(_QP, purchase_id)
             return _state(purchase)
+
+    @app.post("/v1/_test/buy-answer/checkout-free")
+    async def buy_answer_checkout_free(
+        body: _BuyAnswerCheckoutBody,
+    ) -> dict[str, object]:
+        # ABS-322: payments-off / free-trial checkout. Consumes one
+        # free-question credit and lands the purchase straight in
+        # "authorized" — NO Stripe, no webhook. Returns ok=False with
+        # code=free_questions_exhausted when the trial is used up so the
+        # spec can assert the exhaustion state.
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            try:
+                purchase = answer_flow.start_question_free(
+                    db,
+                    user,
+                    question_slug=body.question_slug,
+                    inputs=body.inputs,
+                )
+            except UnknownQuestionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except MissingRequiredInputsError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "missing_required_inputs",
+                        "missing": exc.missing,
+                    },
+                ) from exc
+            except FreeQuestionsExhaustedError:
+                return {
+                    "ok": False,
+                    "code": "free_questions_exhausted",
+                    "free_questions_remaining": user.free_questions_remaining,
+                }
+            purchase_id = purchase.id
+            remaining = user.free_questions_remaining
+            db.flush()
+            purchase = db.get(_QP, purchase_id)
+            return {
+                "ok": True,
+                "free_questions_remaining": remaining,
+                **_state(purchase),
+            }
+
+    @app.post("/v1/_test/buy-answer/free-balance")
+    async def buy_answer_free_balance(
+        body: _BuyAnswerFreeBalanceBody,
+    ) -> dict[str, object]:
+        # ABS-322: read the user's current free-question entitlement so a
+        # spec can assert grant / consume / refund deltas.
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            return {
+                "user_id": body.user_id,
+                "free_questions_remaining": user.free_questions_remaining,
+            }
+
+    @app.post("/v1/_test/buy-answer/grant-free-questions")
+    async def buy_answer_grant_free(
+        body: _BuyAnswerGrantFreeBody,
+    ) -> dict[str, object]:
+        # ABS-322: exercise the admin-grant-more-free-questions service
+        # path (advisor.db.cases.grant_free_questions) end-to-end.
+        from advisor.db.cases import grant_free_questions  # noqa: PLC0415
+
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            remaining = grant_free_questions(
+                db,
+                user=user,
+                quantity=body.quantity,
+                reason="e2e-grant",
+            )
+            return {
+                "user_id": body.user_id,
+                "granted": body.quantity,
+                "free_questions_remaining": remaining,
+            }
 
     @app.post("/v1/_test/buy-answer/quote")
     async def buy_answer_quote(

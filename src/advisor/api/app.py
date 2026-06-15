@@ -307,7 +307,13 @@ def create_app(
 
     # Billing router. Mounted in two flavours:
     # * If ``billing_settings`` is provided AND ``enabled=True`` AND
-    #   the wiring kwargs are present, the live router is mounted.
+    #   the DB/user wiring kwargs are present, the live router is mounted.
+    #   ``stripe_client_factory`` is REQUIRED only when payments are on
+    #   (ABS-322): in payments-off / free-trial mode the buy-an-answer
+    #   flow unlocks answers by consuming free-question credits with no
+    #   Stripe client, so the live router mounts with ``client_factory``
+    #   left None and the Stripe-only endpoints (pack checkout, webhook)
+    #   self-503.
     # * Otherwise, a dormant stub router that 503s purchase endpoints
     #   but serves real credit balances on ``GET /me`` so the billing
     #   page accurately reflects admin-granted credits even before
@@ -319,10 +325,11 @@ def create_app(
         build_dormant_billing_router,
     )
 
+    _payments_enabled = getattr(billing_settings, "payments_enabled", False)
     if (
         billing_settings is not None
         and getattr(billing_settings, "enabled", False)
-        and stripe_client_factory is not None
+        and (stripe_client_factory is not None or not _payments_enabled)
         and billing_db_session_factory is not None
         and billing_user_dependency is not None
         and billing_user_resolver is not None

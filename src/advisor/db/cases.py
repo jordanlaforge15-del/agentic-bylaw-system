@@ -756,6 +756,73 @@ def consume_free_question(db: Session, *, user: User) -> bool:
     return True
 
 
+def refund_free_question(db: Session, *, user: User) -> int:
+    """Atomically increment the free-question entitlement counter by one.
+
+    The payments-off (ABS-322) inverse of :func:`consume_free_question`:
+    when a credit-gated answer turns out to be ungroundable / fails the
+    cost cap (the failed-question rule), the reserved free question is
+    handed back rather than burned — the trial user is no worse off than
+    if they had never asked. Mirrors the Stripe path's authorization
+    *void*, where a failed question releases the card hold.
+
+    Returns the user's free-question balance after the refund. Uses
+    ``SELECT FOR UPDATE`` so a concurrent consume/refund can't lose an
+    update.
+    """
+    locked_user = db.execute(
+        select(User).where(User.id == user.id).with_for_update()
+    ).scalar_one()
+    locked_user.free_questions_remaining += 1
+    db.flush()
+    _record_event(
+        db,
+        case=None,
+        user=locked_user,
+        credit=None,
+        event_type="free_question_refunded",
+        payload={"remaining": locked_user.free_questions_remaining},
+    )
+    return locked_user.free_questions_remaining
+
+
+def grant_free_questions(
+    db: Session,
+    *,
+    user: User,
+    quantity: int,
+    reason: str,
+) -> int:
+    """Top up a user's free-question entitlement counter (admin grant).
+
+    The admin-grant path for the payments-off trial (ABS-322 / ABS-314):
+    where :func:`grant_starter_credits_if_needed` is the one-time signup
+    grant, this is the repeatable "give this user N more free questions"
+    lever for support / generosity. Unlike the signup grant it is NOT
+    idempotency-guarded — each call adds ``quantity`` more.
+
+    Returns the user's free-question balance after the grant. ``quantity``
+    must be positive; a non-positive value is a no-op that returns the
+    current balance unchanged.
+    """
+    if quantity <= 0:
+        return user.free_questions_remaining
+    locked_user = db.execute(
+        select(User).where(User.id == user.id).with_for_update()
+    ).scalar_one()
+    locked_user.free_questions_remaining += quantity
+    db.flush()
+    _record_event(
+        db,
+        case=None,
+        user=locked_user,
+        credit=None,
+        event_type="free_question_grant",
+        payload={"quantity": quantity, "reason": reason},
+    )
+    return locked_user.free_questions_remaining
+
+
 def issue_credits_from_pack_purchase(
     db: Session,
     *,
@@ -1177,6 +1244,8 @@ __all__: Iterable[str] = (
     "grant_admin_credits",
     "grant_starter_credits_if_needed",
     "consume_free_question",
+    "refund_free_question",
+    "grant_free_questions",
     "STARTER_GRANT_TIER",
     "STARTER_GRANT_QUANTITY",
     "FREE_QUESTION_GRANT",
