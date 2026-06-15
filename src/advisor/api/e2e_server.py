@@ -1549,6 +1549,15 @@ class _BuyAnswerCheckoutOtherBody(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
 
 
+class _BuyAnswerIntakeBody(BaseModel):
+    # ABS-315: consultant-style intake detection. A catalog question slug,
+    # the user's free-form conversation so far, and any inputs already
+    # confirmed in earlier intake turns.
+    question_slug: str = Field(min_length=1, max_length=64)
+    conversation: str = Field(default="", max_length=4000)
+    inputs: dict[str, str] = Field(default_factory=dict)
+
+
 def _mount_buy_answer_test_router(app: FastAPI) -> None:
     """ABS-312: drive the priced-question "buy an answer" flow over HTTP.
 
@@ -1574,6 +1583,8 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
         MockStripeClient,
         StripeEvent,
     )
+    from advisor.billing.intake import detect_intake  # noqa: PLC0415
+    from advisor.billing.questions import question_for  # noqa: PLC0415
     from advisor.billing.quote import (  # noqa: PLC0415
         EmptyQuestionError,
         quote_question,
@@ -1630,6 +1641,37 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
                 if purchase.window_expires_at is not None
                 else None
             ),
+        }
+
+    @app.post("/v1/_test/buy-answer/intake")
+    async def buy_answer_intake(
+        body: _BuyAnswerIntakeBody,
+    ) -> dict[str, object]:
+        # ABS-315: consultant-style intake detection against the real
+        # advisor.billing.intake service + e2e MockGateway. No purchase
+        # row, no Stripe — detecting/asking for inputs never charges. The
+        # mock resolves a deterministic extraction from MOCK_INPUT[...]
+        # sentinels in the conversation.
+        try:
+            question = question_for(body.question_slug)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown question {body.question_slug!r}",
+            ) from exc
+        result = await detect_intake(
+            app.state.gateway,
+            question,
+            conversation=body.conversation,
+            provided_inputs=body.inputs,
+        )
+        return {
+            "question_slug": question.slug,
+            "complete": result.complete,
+            "inputs": result.inputs,
+            "missing_required": result.missing_required,
+            "missing_optional": result.missing_optional,
+            "prompt": result.prompt,
         }
 
     @app.post("/v1/_test/buy-answer/checkout")
