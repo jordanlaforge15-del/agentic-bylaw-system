@@ -70,34 +70,32 @@ test("duplicate POST /v1/cases for the same anchor returns the same case and cre
   expect(second.reused_existing_case).toBe(true);
 });
 
-test("clicking Open case for an already-open anchor reuses the same case", async ({
+test("continuing an already-open anchor reuses the same case (no new charge)", async ({
   page,
 }) => {
   // Open the case via the API first so we have a known case_id to
   // compare against after the UI flow.
+  //
+  // ABS-320: the case-open form no longer mints a tier credit on submit —
+  // a case is a free container and the form sells priced answers. The
+  // reuse path is now the "EXISTING CASE FOUND" banner's "Continue case"
+  // button, which navigates straight into the existing case without any
+  // POST (and therefore can't double-charge or orphan a credit).
   const anchor = `idem-ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const { caseId: firstId } = await openCaseViaApi({ anchorLabel: anchor });
 
   await page.goto("/cases/new");
   const anchorInput = page.getByPlaceholder(/1234 Main St, Halifax/);
   await anchorInput.fill(anchor);
-  await page
-    .getByPlaceholder(/Describe the inquiry/)
-    .fill("Same anchor re-opened — should not double-charge.");
 
-  // Triggering blur surfaces the "EXISTING CASE FOUND" banner. The
-  // user can click "Continue case" to navigate without a second POST,
-  // but the bug we are guarding against is the user clicking the
-  // form's main "Open case" button anyway (double-click, refresh,
-  // habit). Drive that path explicitly.
+  // Blur surfaces the in-window match banner.
   await anchorInput.blur();
   await expect(page.getByText(/EXISTING CASE FOUND/)).toBeVisible();
 
-  await page.getByRole("button", { name: /^Open case$/ }).click();
+  await page.getByRole("button", { name: /Continue case/ }).click();
 
-  // Redirect lands on /app with the *same* case_id, proving the
-  // second POST reused the existing case rather than minting a new
-  // one (which would also have burned a second credit).
+  // Lands on /app with the *same* case_id — the existing case is reused,
+  // never re-created.
   await page.waitForURL(/\/app\?case_id=\d+/);
   const url = new URL(page.url());
   const reopenedId = Number(url.searchParams.get("case_id"));

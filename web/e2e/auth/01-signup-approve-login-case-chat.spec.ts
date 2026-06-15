@@ -25,6 +25,7 @@ import {
   approveInviteForEmail,
   expect,
   mintTestIdentity,
+  openCaseAsIdentity,
   signInAs,
   submitInviteRequest,
   test,
@@ -67,18 +68,23 @@ test("sign-up → approve → login → case → chat", async ({
   // covered separately by terms-acceptance-gate.spec.ts.
   await acceptCurrentTermsAs(context, identity);
 
-  // 4. Open a case via the marketing form so the spec covers the
-  //    UI seam too. Unique anchor to avoid collisions with parallel
-  //    workers (smoke/03-open-case.spec.ts uses the same form).
+  // 4. Visit the migrated case-open surface so the spec still covers the
+  //    entry-flow UI seam (ABS-320: it now renders the priced-question
+  //    menu, not the retired tier selector). The first authenticated
+  //    backend request here JIT-inserts the advisor_user row and redeems
+  //    the approved invite.
   await page.goto("/cases/new");
+  await expect(page.getByTestId("question-menu")).toBeVisible();
+
+  // A case is a free container; opening one consumes a starter credit and
+  // exercises the post-Clerk identity path. We open it via the
+  // authenticated API (the form sells answers rather than minting the
+  // container) and jump into the chat product with the case bound.
   const anchor = `Signup Flow ${identity.subUserId}`;
-  await page
-    .getByPlaceholder(/1234 Main St, Halifax/)
-    .fill(anchor);
-  await page
-    .getByPlaceholder(/Describe the inquiry/)
-    .fill("Can I build an ADU at this address under the new bylaw?");
-  await page.getByRole("button", { name: /^Open case$/ }).click();
+  const { caseId } = await openCaseAsIdentity(context, identity, {
+    anchorLabel: anchor,
+  });
+  await page.goto(`/app?case_id=${caseId}`);
   await page.waitForURL(/\/app\?case_id=\d+/);
 
   // 5. Ask a question and verify the SSE stream renders the
