@@ -40,6 +40,13 @@ What you need to do when your Stripe account is ready
    * ``STRIPE_PRICE_QUICK_PAYG=price_...``
      (and 11 more — see ``settings.py``).
 
+   The launch product is the **priced-question catalog** (see
+   ``questions.py``), not packs. For it, create one one-time Price per
+   catalog question — its display amount MUST equal the question's
+   ``price_cents`` — and set the matching ``STRIPE_PRICE_QUESTION_<SLUG>``
+   env var (5 total, e.g. ``STRIPE_PRICE_QUESTION_PERMITTED_USE``). The
+   pure per-question model has no pack SKUs and no credit ledger.
+
 3. In the Stripe dashboard, create a webhook endpoint pointing at
    ``POST /v1/billing/webhook`` and subscribe to:
 
