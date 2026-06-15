@@ -8,14 +8,66 @@
 // shows none of the retired tier / reasoning-step / classifier copy.
 //
 // Billing is dormant in the e2e stack (no Stripe), so the catalog marks
-// every question `available: false`. The form therefore renders the menu
-// and prices but degrades checkout to a "not configured yet" notice —
-// mirroring the pricing page + buy-question-button. (The intake -> checkout
-// and quote -> buy money paths are exercised against the real services by
-// abs315 / abs316 via the /v1/_test/buy-answer harness; here we pin the UI
-// wiring and the cross-surface removal of the tier model.)
+// every question `available: false`. The default demo user is seeded with
+// 3 free questions (global-setup.ts --free-questions 3), so the form
+// shows "Get answer (free trial)" instead of a checkout button.
+//
+// API-level tests verify the free-start endpoint consumes the entitlement
+// and returns a case_id (happy path) and returns 402 when exhausted.
 
-import { expect, openCaseViaApi, test } from "../fixtures/test-env";
+import { execSync } from "node:child_process";
+import * as path from "node:path";
+
+import {
+  E2E_API_URL,
+  E2E_BASE_URL,
+  expect,
+  openCaseViaApi,
+  test,
+} from "../fixtures/test-env";
+import { DEMO_USER_ID } from "../fixtures/test-env";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeUserId(suffix: string): string {
+  return `abs320-${suffix}-${Date.now()}`;
+}
+
+function seedUser(opts: {
+  userId: string;
+  freeQuestions: number;
+}): void {
+  const repoRoot = path.resolve(__dirname, "..", "..", "..");
+  const seed = path.join(repoRoot, "scripts", "seed_e2e_user.py");
+  const venvPython = path.join(repoRoot, ".venv", "bin", "python");
+  const pgPort = process.env.PG_PORT || "5432";
+  const databaseUrl =
+    process.env.DATABASE_URL ||
+    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  execSync(
+    `"${venvPython}" "${seed}" ` +
+      `--user-id "${opts.userId}" ` +
+      `--email "${opts.userId}@e2e.test" ` +
+      `--credits-per-tier 0 ` +
+      `--free-questions ${opts.freeQuestions}`,
+    {
+      env: {
+        ...process.env,
+        DATABASE_URL: databaseUrl,
+        PYTHONPATH: `${path.join(repoRoot, "src")}:${
+          process.env.PYTHONPATH || ""
+        }`,
+      },
+      stdio: "inherit",
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Browser tests (demo user: 3 free questions, billing dormant)
+// ---------------------------------------------------------------------------
 
 test("case-open form renders the priced-question menu, not tiers", async ({
   page,
@@ -58,34 +110,96 @@ test("case-open form renders the priced-question menu, not tiers", async ({
   }
 });
 
-test("selecting a question opens its intake; dormant billing degrades checkout", async ({
+test("billing dormant + free credits: shows free-trial button, not 'not configured'", async ({
   page,
 }) => {
+  // The default demo user has 3 free questions (seeded in global-setup).
+  // Billing is dormant (no Stripe in e2e), so questions are `available:false`,
+  // but the form should show the free-trial CTA instead of a "not configured"
+  // notice.
   await page.goto("/cases/new");
   await expect(page.getByTestId("question-menu")).toBeVisible();
 
-  // Selecting a catalog question reveals the consultant-style intake box.
   await page.getByTestId("question-option-permitted_use").click();
   await expect(page.getByText(/Describe your situation/i)).toBeVisible();
 
-  // With billing dormant (no Stripe) the question is not purchasable, so
-  // the form surfaces the "not configured" notice instead of a buy button.
+  // Free-trial button visible; "not configured" notice absent.
+  await expect(page.getByTestId("free-trial-btn")).toBeVisible();
   await expect(
     page.getByText(/Checkout isn.?t configured for this question yet/i),
-  ).toBeVisible();
+  ).not.toBeVisible();
+  await expect(page.getByTestId("free-trial-exhausted")).not.toBeVisible();
 });
 
-test("the Other path offers a free-quote flow", async ({ page }) => {
+test("billing dormant + zero free credits: shows exhausted message", async ({
+  page,
+  request,
+}) => {
+  // Seed a zero-credit user and sign the browser in as them by swapping
+  // the auth cookies that authedContext already set.
+  const userId = makeUserId("zero");
+  seedUser({ userId, freeQuestions: 0 });
+
+  // Mint a JWT for the zero-credit user via the test helper.
+  const jwtRes = await request.post(`${E2E_API_URL}/v1/_test/mint-jwt`, {
+    data: { sub: userId, email: `${userId}@e2e.test` },
+  });
+  const { token } = (await jwtRes.json()) as { token: string };
+
+  // Overwrite the auth cookies for this page's context.
+  const origin = new URL(E2E_BASE_URL);
+  await page.context().addCookies([
+    {
+      name: "abs_test_sub_user_id",
+      value: userId,
+      domain: origin.hostname,
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+    {
+      name: "abs_test_clerk_jwt",
+      value: token,
+      domain: origin.hostname,
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await page.goto("/cases/new");
+  await expect(page.getByTestId("question-menu")).toBeVisible();
+
+  await page.getByTestId("question-option-permitted_use").click();
+  await expect(page.getByText(/Describe your situation/i)).toBeVisible();
+
+  // Exhausted message visible; free-trial button absent.
+  await expect(page.getByTestId("free-trial-exhausted")).toBeVisible();
+  await expect(
+    page.getByText(/Free trial used.*paid answers coming soon/i),
+  ).toBeVisible();
+  await expect(page.getByTestId("free-trial-btn")).not.toBeVisible();
+});
+
+test("the Other path shows quote step then free-trial button (billing dormant)", async ({
+  page,
+}) => {
   await page.goto("/cases/new");
   await expect(page.getByTestId("question-menu")).toBeVisible();
 
   await page.getByTestId("question-option-other").click();
   await expect(page.getByText(/Describe your question/i)).toBeVisible();
 
-  // Dormant billing also gates the off-menu buy path.
+  // With billing dormant and free credits, the user still gets the quote
+  // step first (always free), then will see the free-trial buy button.
+  await expect(page.getByText(/Get a price \(free\)/i)).toBeVisible();
+  // The "Off-menu checkout isn't configured yet" message is replaced by
+  // the free-trial UX — no checkout error visible upfront.
   await expect(
     page.getByText(/Off-menu checkout isn.?t configured yet/i),
-  ).toBeVisible();
+  ).not.toBeVisible();
 });
 
 test("anchor still surfaces an in-window existing-case match", async ({
@@ -105,4 +219,69 @@ test("anchor still surfaces an in-window existing-case match", async ({
   await expect(
     page.getByRole("button", { name: /Continue case/ }),
   ).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// API tests: free-start endpoint (ABS-314 / ABS-320 / ABS-322)
+// ---------------------------------------------------------------------------
+
+test("free-start API: consumes one credit and returns case_id", async ({
+  request,
+}) => {
+  // Seed a fresh user with 1 free question.
+  const userId = makeUserId("fresh");
+  seedUser({ userId, freeQuestions: 1 });
+
+  const res = await request.post(`${E2E_API_URL}/v1/billing/questions/free-start`, {
+    headers: { "X-Test-User-Id": userId },
+    data: {
+      question_slug: "permitted_use",
+      inputs: { address: "123 Test St, Halifax" },
+      anchor_label: "123 Test St, Halifax",
+      anchor_kind: "address",
+    },
+  });
+
+  expect(
+    res.status(),
+    `expected 200 but got ${res.status()}: ${await res.text()}`,
+  ).toBe(200);
+
+  const body = (await res.json()) as {
+    case_id: number;
+    anchor_label: string;
+    free_questions_remaining: number;
+  };
+
+  expect(body.case_id, "case_id should be a positive integer").toBeGreaterThan(0);
+  expect(
+    body.free_questions_remaining,
+    "counter should be decremented to 0 after consuming the single credit",
+  ).toBe(0);
+});
+
+test("free-start API: returns 402 when free credits exhausted", async ({
+  request,
+}) => {
+  // Seed a user with 0 free questions.
+  const userId = makeUserId("exhausted");
+  seedUser({ userId, freeQuestions: 0 });
+
+  const res = await request.post(`${E2E_API_URL}/v1/billing/questions/free-start`, {
+    headers: { "X-Test-User-Id": userId },
+    data: {
+      question_slug: "permitted_use",
+      inputs: {},
+      anchor_label: "456 Oak Ave, Dartmouth",
+      anchor_kind: "address",
+    },
+  });
+
+  expect(
+    res.status(),
+    "exhausted counter should return 402 Payment Required",
+  ).toBe(402);
+
+  const body = (await res.json()) as { detail: { code: string } };
+  expect(body.detail.code).toBe("free_trial_exhausted");
 });

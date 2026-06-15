@@ -22,7 +22,7 @@ export default async function globalSetup() {
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
 
   try {
-    execSync(`"${venvPython}" "${seed}" --credits-per-tier 200`, {
+    execSync(`"${venvPython}" "${seed}" --credits-per-tier 200 --free-questions 3`, {
       env: {
         ...process.env,
         DATABASE_URL: databaseUrl,
