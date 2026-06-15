@@ -45,6 +45,7 @@ from advisor.db.cases import (
     UnknownTierError,
     credit_balance_for,
     grant_admin_credits,
+    grant_free_questions,
     refund_orphaned_case_reservations,
 )
 from advisor.db.models import (
@@ -104,6 +105,19 @@ class GrantCreditsRequest(BaseModel):
 class GrantCreditsResponse(BaseModel):
     granted: int
     tier: str
+    reason: str
+
+
+class GrantFreeQuestionsRequest(BaseModel):
+    """Body of ``POST /v1/admin/users/{id}/free-questions`` (ABS-322)."""
+
+    quantity: int = Field(ge=1, le=1000)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class GrantFreeQuestionsResponse(BaseModel):
+    granted: int
+    free_questions_remaining: int
     reason: str
 
 
@@ -307,6 +321,45 @@ def build_admin_router(
             return GrantCreditsResponse(
                 granted=len(credits),
                 tier=body.tier,
+                reason=body.reason,
+            )
+
+    @router.post(
+        "/users/{user_id}/free-questions",
+        response_model=GrantFreeQuestionsResponse,
+    )
+    def post_grant_free_questions(
+        user_id: int,
+        body: GrantFreeQuestionsRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> GrantFreeQuestionsResponse:
+        """Top up a user's free-question entitlement (ABS-322 trial).
+
+        The admin-grant path for the payments-off trial: give a user N
+        more free questions on top of the one-time signup grant. Each
+        call adds ``quantity`` more (not idempotent). Used for support /
+        generosity while Stripe payments are still off.
+        """
+        with _open_db() as db:
+            caller = user_resolver(auth_session, db)
+            _require_admin(caller)
+            target = db.get(User, user_id)
+            if target is None:
+                raise HTTPException(
+                    status_code=404, detail={"code": "user_not_found"}
+                )
+            remaining = grant_free_questions(
+                db,
+                user=target,
+                quantity=body.quantity,
+                reason=f"admin:{caller.clerk_user_id}:{body.reason}",
+            )
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                commit()
+            return GrantFreeQuestionsResponse(
+                granted=body.quantity,
+                free_questions_remaining=remaining,
                 reason=body.reason,
             )
 
@@ -698,6 +751,9 @@ def build_dormant_admin_router() -> APIRouter:
         )
 
     router.add_api_route("/users/{user_id}/credits", _disabled, methods=["GET", "POST"])
+    router.add_api_route(
+        "/users/{user_id}/free-questions", _disabled, methods=["POST"]
+    )
     router.add_api_route("/users/{user_id}/unlimited-credits", _disabled, methods=["PUT"])
     router.add_api_route("/cases", _disabled, methods=["GET"])
     router.add_api_route("/analytics/tier-distribution", _disabled, methods=["GET"])

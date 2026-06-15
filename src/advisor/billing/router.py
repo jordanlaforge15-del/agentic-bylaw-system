@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from advisor.billing import answers as answer_flow
 from advisor.billing.answers import (
+    FreeQuestionsExhaustedError,
     MissingRequiredInputsError,
     NewQuestionError,
     PurchaseNotAuthorizedError,
@@ -151,6 +152,15 @@ class QuestionMenuResponse(BaseModel):
     """Body of ``GET /v1/billing/questions`` — the priced-question menu."""
 
     enabled: bool
+    payments_enabled: bool = Field(
+        default=False,
+        description=(
+            "ABS-322: when False the buy-an-answer flow consumes a "
+            "free-question credit (no Stripe); when True it runs the "
+            "Stripe authorize→capture path. The entry flow uses this to "
+            "decide between a free-trial CTA and a paid checkout."
+        ),
+    )
     currency: str = "CAD"
     cad_per_usd: float = Field(
         ...,
@@ -178,9 +188,28 @@ class CheckoutQuestionRequest(BaseModel):
 
 
 class QuestionCheckoutResponse(BaseModel):
-    url: str = Field(..., description="Stripe Checkout redirect URL.")
+    url: str | None = Field(
+        default=None,
+        description=(
+            "Stripe Checkout redirect URL. NULL in payments-off mode "
+            "(ABS-322): no checkout session is created — the purchase is "
+            "already authorized via a free-question credit and the client "
+            "goes straight to POST .../answer."
+        ),
+    )
     purchase_id: int = Field(
         ..., description="Id of the pending QuestionPurchase row."
+    )
+    status: str = Field(
+        default="authorizing",
+        description=(
+            "Purchase status. 'authorizing' awaits the Stripe webhook; "
+            "'authorized' (payments-off) is immediately runnable."
+        ),
+    )
+    payments_enabled: bool = Field(
+        default=True,
+        description="False when this purchase was unlocked by a free credit.",
     )
 
 
@@ -315,6 +344,16 @@ class TierBalance(BaseModel):
 
 class BillingMeResponse(BaseModel):
     enabled: bool
+    payments_enabled: bool = Field(
+        default=False,
+        description=(
+            "ABS-322: False when answers are unlocked by free-question "
+            "credits (no Stripe). The entry flow combines this with "
+            "free_questions_remaining to show the 'free trial used — paid "
+            "answers coming soon' exhaustion state instead of a checkout "
+            "button."
+        ),
+    )
     stripe_customer_id: str | None
     tier_balances: list[TierBalance]
     total_available_credits: int
@@ -341,14 +380,26 @@ class PurchaseHistoryResponse(BaseModel):
 
 
 def _build_question_menu(
-    *, settings: AdvisorBillingSettings | None, enabled: bool, currency: str
+    *,
+    settings: AdvisorBillingSettings | None,
+    enabled: bool,
+    currency: str,
+    payments_enabled: bool = False,
 ) -> list[QuestionMenuItem]:
     """Render the priced-question catalog into menu items.
 
-    ``available`` is True only when billing is enabled AND the
-    question's Stripe Price ID is configured on ``settings``. When
-    ``settings`` is None (minimal dormant setups), every question is
-    rendered but unavailable.
+    ``available`` means "this question can be unlocked right now":
+
+    * **payments-off (ABS-322):** True whenever billing is enabled —
+      every question is answerable by consuming a free-question credit,
+      independent of any Stripe Price ID. (Per-user exhaustion is a
+      separate, authenticated signal — ``GET /me``'s
+      ``free_questions_remaining`` — since this menu is public.)
+    * **payments-on:** True only when billing is enabled AND the
+      question's Stripe Price ID is configured on ``settings``.
+
+    When ``settings`` is None (minimal dormant setups), there are no
+    Price IDs, so payments-on questions render unavailable.
     """
     items: list[QuestionMenuItem] = []
     for question in all_questions():
@@ -358,6 +409,9 @@ def _build_question_menu(
             )
             if settings is not None
             else None
+        )
+        available = enabled and (
+            True if not payments_enabled else bool(price_id)
         )
         items.append(
             QuestionMenuItem(
@@ -377,7 +431,7 @@ def _build_question_menu(
                     for f in question.required_inputs
                 ],
                 catalog_anchor=question.catalog_anchor,
-                available=bool(price_id) and enabled,
+                available=available,
             )
         )
     return items
@@ -505,19 +559,21 @@ def build_billing_router(
         """Return the priced-question launch menu.
 
         Public by design — the question menu is shown to anonymous
-        visitors. The ``available`` flag per question tells the frontend
-        whether checkout will actually work (Stripe Price configured +
-        billing enabled).
+        visitors. ``payments_enabled`` tells the frontend which unlock
+        path is live (free credit vs Stripe), and the per-question
+        ``available`` flag whether that path can run the question.
         """
         pricing = get_pricing_settings()
         return QuestionMenuResponse(
             enabled=settings.enabled,
+            payments_enabled=settings.payments_enabled,
             currency=pricing.display_currency,
             cad_per_usd=pricing.cad_per_usd,
             questions=_build_question_menu(
                 settings=settings,
                 enabled=settings.enabled,
                 currency=pricing.display_currency,
+                payments_enabled=settings.payments_enabled,
             ),
         )
 
@@ -617,7 +673,68 @@ def build_billing_router(
         body: CheckoutQuestionRequest,
         auth_session: Any = Depends(user_dependency),
     ) -> QuestionCheckoutResponse:
+        """Open a buy-an-answer purchase for one catalog question.
+
+        Branches on ``settings.payments_enabled`` (ABS-322):
+
+        * **off (default):** consume a free-question credit and return an
+          already-``authorized`` purchase with ``url=None`` — the client
+          proceeds straight to ``.../answer``. No Stripe object created.
+          A trial with no credits left → HTTP 402 (exhaustion).
+        * **on:** the unchanged Stripe authorize→capture path — create a
+          manual-capture Checkout session and return its URL.
+        """
         _require_enabled()
+        # Payments-off: free-credit path, no Stripe.
+        if not settings.payments_enabled:
+            with _open_db() as db:
+                user = user_resolver(auth_session, db)
+                try:
+                    purchase = answer_flow.start_question_free(
+                        db,
+                        user,
+                        question_slug=body.question_slug,
+                        inputs=body.inputs,
+                    )
+                except UnknownQuestionError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": "unknown_question",
+                            "message": str(exc),
+                        },
+                    ) from exc
+                except MissingRequiredInputsError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": "missing_required_inputs",
+                            "message": str(exc),
+                            "missing": exc.missing,
+                        },
+                    ) from exc
+                except FreeQuestionsExhaustedError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail={
+                            "code": "free_questions_exhausted",
+                            "message": (
+                                "Your free trial questions are used up. "
+                                "Paid answers are coming soon."
+                            ),
+                        },
+                    ) from exc
+                purchase_id = purchase.id
+                purchase_status = purchase.status
+                _commit(db)
+                return QuestionCheckoutResponse(
+                    url=None,
+                    purchase_id=purchase_id,
+                    status=purchase_status,
+                    payments_enabled=False,
+                )
+
+        # Payments-on: Stripe authorize→capture path.
         if client_factory is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -660,8 +777,14 @@ def build_billing_router(
                     },
                 ) from exc
             purchase_id = purchase.id
+            purchase_status = purchase.status
             _commit(db)
-            return QuestionCheckoutResponse(url=url, purchase_id=purchase_id)
+            return QuestionCheckoutResponse(
+                url=url,
+                purchase_id=purchase_id,
+                status=purchase_status,
+                payments_enabled=True,
+            )
 
     # -- Consultant-style intake detection (ABS-315) ----------------------
 
@@ -805,7 +928,9 @@ def build_billing_router(
     ) -> QuestionPurchaseResponse:
         _require_enabled()
         _require_answer_runner()
-        if client_factory is None:
+        # Payments-off (ABS-322) runs answers with no Stripe client; the
+        # Stripe path still requires one.
+        if settings.payments_enabled and client_factory is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
@@ -823,7 +948,7 @@ def build_billing_router(
                     gateway=answer_gateway,
                     persona=answer_persona,
                     retrieval_factory=answer_retrieval_factory,
-                    client=client_factory(),
+                    client=client_factory() if client_factory else None,
                 )
             except PurchaseNotAuthorizedError as exc:
                 raise HTTPException(
@@ -985,6 +1110,7 @@ def build_billing_router(
             ]
             return BillingMeResponse(
                 enabled=settings.enabled,
+                payments_enabled=settings.payments_enabled,
                 stripe_customer_id=user.stripe_customer_id,
                 tier_balances=tier_balances,
                 total_available_credits=sum(
