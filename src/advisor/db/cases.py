@@ -366,6 +366,78 @@ def open_case(
     return case, credit
 
 
+def open_case_free(
+    db: Session,
+    *,
+    user: User,
+    anchor_label: str,
+    anchor_kind: str,
+) -> Case:
+    """Open or find a case container without consuming a tier credit.
+
+    Used for the free-question trial path (ABS-314 / ABS-320) where a
+    free-entitlement counter is consumed instead of a paid tier credit.
+    The case gets ``current_tier=None`` because no tier credit is involved.
+
+    Callers should call ``consume_free_question`` before this function to
+    atomically gate the operation; if that call returns False the caller
+    should reject with 402 before ever calling here.
+    """
+    match = match_case(
+        db, user_id=user.id, anchor_label=anchor_label, anchor_kind=anchor_kind
+    )
+    now = _utcnow()
+    if match.case is None:
+        next_num = (
+            db.execute(
+                select(func.coalesce(func.max(Case.user_case_number), 0) + 1)
+                .where(Case.user_id == user.id)
+            ).scalar()
+        ) or 1
+        case = Case(
+            user_id=user.id,
+            user_case_number=next_num,
+            anchor_label=anchor_label,
+            anchor_key=normalise_anchor(anchor_label, anchor_kind),
+            anchor_kind=anchor_kind,
+            status="open",
+            current_tier=None,
+            tokens_consumed=0,
+            opened_at=now,
+            last_activity_at=now,
+        )
+        db.add(case)
+        db.flush()
+        _record_event(
+            db,
+            case=case,
+            user=user,
+            credit=None,
+            event_type="opened",
+            payload={
+                "anchor_kind": anchor_kind,
+                "anchor_key": case.anchor_key,
+                "tier": None,
+                "source": "free_question",
+            },
+        )
+    else:
+        case = match.case
+        if case.status == "closed":
+            case.status = "open"
+            case.closed_at = None
+            _record_event(
+                db,
+                case=case,
+                user=user,
+                credit=None,
+                event_type="reopened",
+                payload={"source": "free_question"},
+            )
+        case.last_activity_at = now
+    return case
+
+
 def close_case(db: Session, *, case: Case, reason: str = "user_request") -> None:
     """Mark a case closed. Reserved-but-uncommitted credits are refunded.
 
@@ -1236,6 +1308,7 @@ __all__: Iterable[str] = (
     "normalise_anchor",
     "match_case",
     "open_case",
+    "open_case_free",
     "close_case",
     "commit_credit_for_session",
     "refund_credit_for_session",

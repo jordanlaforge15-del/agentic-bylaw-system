@@ -56,7 +56,7 @@ from advisor.billing.questions import all_questions, question_for
 from advisor.billing.quote import EmptyQuestionError, quote_question
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.billing.webhooks import handle_event
-from advisor.db.cases import credit_balance_for
+from advisor.db.cases import consume_free_question, credit_balance_for, open_case_free
 from advisor.db.models import CasePurchase, QuestionPurchase, User
 
 logger = logging.getLogger(__name__)
@@ -374,6 +374,27 @@ class PurchaseSummary(BaseModel):
 
 class PurchaseHistoryResponse(BaseModel):
     purchases: list[PurchaseSummary]
+
+
+class FreeStartRequest(BaseModel):
+    """Body of ``POST /v1/billing/questions/free-start``.
+
+    Used when billing is dormant (payments off) to consume one
+    free-question entitlement and open the case container, routing
+    the browser directly to the in-app answer view instead of Stripe.
+    ``question_slug`` is None for off-menu "Other" questions.
+    """
+
+    question_slug: str | None = None
+    inputs: dict[str, str] = Field(default_factory=dict)
+    anchor_label: str
+    anchor_kind: str = "address"
+
+
+class FreeStartResponse(BaseModel):
+    case_id: int
+    anchor_label: str
+    free_questions_remaining: int
 
 
 # -- Shared builders --------------------------------------------------------
@@ -1285,6 +1306,45 @@ def build_dormant_billing_router(
                     total_available_credits=sum(
                         b.available for b in tier_balances
                     ),
+                    free_questions_remaining=user.free_questions_remaining,
+                )
+
+        @router.post("/questions/free-start", response_model=FreeStartResponse)
+        def post_free_start(
+            body: FreeStartRequest,
+            auth_session: Any = Depends(user_dependency),
+        ) -> FreeStartResponse:
+            """Consume one free-question entitlement and open the case.
+
+            Called by the case-open form when billing is dormant (payments
+            off, ABS-320 / ABS-322). Atomically decrements the user's
+            ``free_questions_remaining`` counter, then opens or finds the
+            case container for the given anchor. Returns the ``case_id``
+            so the browser can navigate straight to the in-app answer view.
+
+            Returns 402 if the user's free-question counter is already 0.
+            """
+            with _open_db_dormant() as db:
+                user = user_resolver(auth_session, db)
+                consumed = consume_free_question(db, user=user)
+                if not consumed:
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail={
+                            "code": "free_trial_exhausted",
+                            "message": "Free trial questions are used up.",
+                        },
+                    )
+                case = open_case_free(
+                    db,
+                    user=user,
+                    anchor_label=body.anchor_label,
+                    anchor_kind=body.anchor_kind,
+                )
+                db.commit()
+                return FreeStartResponse(
+                    case_id=case.id,
+                    anchor_label=case.anchor_label,
                     free_questions_remaining=user.free_questions_remaining,
                 )
 
