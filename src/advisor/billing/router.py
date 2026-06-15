@@ -162,6 +162,7 @@ class BillingMeResponse(BaseModel):
     stripe_customer_id: str | None
     tier_balances: list[TierBalance]
     total_available_credits: int
+    free_questions_remaining: int = 0
 
 
 class PurchaseSummary(BaseModel):
@@ -451,6 +452,7 @@ def build_billing_router(
                 total_available_credits=sum(
                     b.available for b in tier_balances
                 ),
+                free_questions_remaining=user.free_questions_remaining,
             )
 
     @router.get("/purchases", response_model=PurchaseHistoryResponse)
@@ -619,6 +621,7 @@ def build_dormant_billing_router(
                     total_available_credits=sum(
                         b.available for b in tier_balances
                     ),
+                    free_questions_remaining=user.free_questions_remaining,
                 )
 
     else:
