@@ -225,12 +225,20 @@ class ChatSession:
             keep_recent=resolve_keep_recent(self.compact_keep_recent),
         )
 
+        # A "refinement turn" is any turn after the first assistant response
+        # has been delivered — the user is following up on a paid answer.
+        # Detect this BEFORE appending the new user message: if the current
+        # message list already contains an assistant turn, the incoming
+        # message is a refinement, not a fresh question.
+        is_refinement = any(m.role == LLMRole.ASSISTANT for m in self.messages)
+
         request = CompletionRequest(
             model=self.model,
             system=_compose_system_prompt(
                 self.system_prompt,
                 anchor_label=self.case_anchor_label,
                 anchor_kind=self.case_anchor_kind,
+                is_refinement=is_refinement,
             ),
             messages=_mark_conversation_cache_milestones(submission_messages),
             tools=list(self.tool_defs),
@@ -385,35 +393,68 @@ _ANCHOR_KIND_LABELS = {
 }
 
 
+_REFINEMENT_GUARDRAIL_BLOCK = """\
+## Active refinement turn
+
+The user is following up on an answer already delivered in this conversation. \
+The "Refinement window" rules from your standing instructions apply with full \
+force here:
+
+1. **EVIDENCE INTEGRITY** — you may reformat, condense, clarify, or expand \
+the explanation, but only over evidence already cited in this conversation. \
+Do NOT introduce any claim unsupported by a citation from the retrieved \
+evidence. If the user pushes for a conclusion the evidence does not support, \
+hold the grounded determination and say so clearly.
+
+2. **ANTI-NEW-REPORT** — if this message is asking about a materially \
+different address, parcel, use, or determination type from the original \
+purchased question, do NOT answer it. Acknowledge the new question, explain \
+that it requires a separate purchase, and direct the user to the question menu.\
+"""
+
+
 def _compose_system_prompt(
     persona: str,
     *,
     anchor_label: str | None,
     anchor_kind: str | None,
+    is_refinement: bool = False,
 ) -> str:
-    """Stitch the active-case anchor onto the persona prompt.
+    """Stitch the active-case anchor and optional refinement guardrails onto the
+    persona prompt.
 
-    Returns ``persona`` unchanged when no anchor is set (legacy / test
-    path). Otherwise appends a short block telling the LLM the case's
-    implicit subject — the agent then populates ``search_bylaw_evidence``'s
-    structured ``location`` slot from this anchor instead of asking the
-    user to repeat the address on every turn.
+    Returns ``persona`` unchanged when no anchor is set and not a refinement
+    (legacy / test path). Otherwise appends:
+
+    * An "Active case" block when an anchor is set, telling the LLM the case's
+      implicit subject so it doesn't ask the user to repeat the address.
+    * An "Active refinement turn" block when ``is_refinement=True``,
+      reinforcing the evidence-integrity and anti-new-report guardrails that
+      appear in the base persona. Double-injection makes these rules more
+      salient on follow-up turns where they matter most.
     """
-    if not anchor_label:
+    parts = [persona]
+
+    if anchor_label:
+        kind_label = _ANCHOR_KIND_LABELS.get(anchor_kind or "", "anchor")
+        parts.append(
+            "## Active case\n\n"
+            f"The user has opened a case for the following {kind_label}: "
+            f"{anchor_label}\n\n"
+            "Treat this anchor as the implicit subject of every question in "
+            "this conversation unless the user explicitly changes the "
+            "subject. When you call ``search_bylaw_evidence`` about this "
+            "property, parse the anchor into the structured ``location`` "
+            "slot (civic_number + street for addresses) rather than asking "
+            "the user to repeat it."
+        )
+
+    if is_refinement:
+        parts.append(_REFINEMENT_GUARDRAIL_BLOCK)
+
+    if len(parts) == 1:
         return persona
-    kind_label = _ANCHOR_KIND_LABELS.get(anchor_kind or "", "anchor")
-    return (
-        f"{persona}\n\n"
-        "## Active case\n\n"
-        f"The user has opened a case for the following {kind_label}: "
-        f"{anchor_label}\n\n"
-        "Treat this anchor as the implicit subject of every question in "
-        "this conversation unless the user explicitly changes the "
-        "subject. When you call ``search_bylaw_evidence`` about this "
-        "property, parse the anchor into the structured ``location`` "
-        "slot (civic_number + street for addresses) rather than asking "
-        "the user to repeat it."
-    )
+    return "\n\n".join(parts)
 
 
 def _mark_conversation_cache_milestones(messages: list[Message]) -> list[Message]:

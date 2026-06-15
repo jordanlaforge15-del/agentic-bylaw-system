@@ -869,3 +869,115 @@ async def test_streaming_metrics_event_reports_tool_errors():
     assert len(metrics.tool_calls) == 1
     assert metrics.tool_calls[0].is_error is True
     assert metrics.tool_calls[0].name == "search_bylaw_evidence"
+
+
+# ----------------------------------------------------------------------
+# ABS-317: Refinement-window guardrails — _compose_system_prompt and
+# the is_refinement detection in send_user_message_blocking.
+# ----------------------------------------------------------------------
+
+
+def test_compose_system_prompt_no_anchor_no_refinement():
+    """Bare persona with no anchor and not a refinement: returned unchanged."""
+    from advisor.chat.session import _compose_system_prompt
+
+    persona = "You are a senior urban planner."
+    result = _compose_system_prompt(
+        persona, anchor_label=None, anchor_kind=None, is_refinement=False
+    )
+    assert result == persona
+
+
+def test_compose_system_prompt_with_anchor_no_refinement():
+    """Anchor block is appended; no refinement block when is_refinement=False."""
+    from advisor.chat.session import _compose_system_prompt
+
+    persona = "You are a senior urban planner."
+    result = _compose_system_prompt(
+        persona,
+        anchor_label="1234 Main St",
+        anchor_kind="address",
+        is_refinement=False,
+    )
+    assert persona in result
+    assert "Active case" in result
+    assert "1234 Main St" in result
+    assert "Active refinement turn" not in result
+
+
+def test_compose_system_prompt_with_refinement_no_anchor():
+    """Refinement block is appended even without an anchor."""
+    from advisor.chat.session import _compose_system_prompt
+
+    persona = "You are a senior urban planner."
+    result = _compose_system_prompt(
+        persona, anchor_label=None, anchor_kind=None, is_refinement=True
+    )
+    assert persona in result
+    assert "Active refinement turn" in result
+    assert "EVIDENCE INTEGRITY" in result
+    assert "ANTI-NEW-REPORT" in result
+
+
+def test_compose_system_prompt_with_anchor_and_refinement():
+    """Both anchor and refinement blocks appear when both flags are set."""
+    from advisor.chat.session import _compose_system_prompt
+
+    persona = "You are a senior urban planner."
+    result = _compose_system_prompt(
+        persona,
+        anchor_label="1234 Main St",
+        anchor_kind="address",
+        is_refinement=True,
+    )
+    assert "Active case" in result
+    assert "1234 Main St" in result
+    assert "Active refinement turn" in result
+    assert "EVIDENCE INTEGRITY" in result
+    assert "ANTI-NEW-REPORT" in result
+
+
+@pytest.mark.asyncio
+async def test_refinement_guardrails_injected_on_second_turn():
+    """ABS-317: the system prompt on the second user turn must contain
+    the refinement guardrail block because there is already an assistant
+    turn in the conversation. The first turn must NOT contain it."""
+    session = _empty_session()
+    seen_systems: list[str] = []
+
+    scripted = iter([text_response("first answer"), text_response("second answer")])
+
+    def capture(request):
+        seen_systems.append(request.system)
+        return next(scripted)
+
+    gateway = MockGateway(callable_=capture)
+
+    await session.send_user_message_blocking(gateway, "first question")
+    await session.send_user_message_blocking(gateway, "second question")
+
+    assert len(seen_systems) == 2
+    # First turn: no prior assistant turn → not a refinement.
+    assert "Active refinement turn" not in seen_systems[0]
+    # Second turn: prior assistant turn exists → refinement guardrails injected.
+    assert "Active refinement turn" in seen_systems[1]
+    assert "EVIDENCE INTEGRITY" in seen_systems[1]
+    assert "ANTI-NEW-REPORT" in seen_systems[1]
+
+
+@pytest.mark.asyncio
+async def test_refinement_guardrails_not_injected_on_first_turn():
+    """ABS-317: the very first user turn on a fresh session must NOT
+    contain the refinement block — there is no prior answer to refine."""
+    session = _empty_session()
+    seen_systems: list[str] = []
+
+    def capture(request):
+        seen_systems.append(request.system)
+        return text_response("first answer")
+
+    gateway = MockGateway(callable_=capture)
+    await session.send_user_message_blocking(gateway, "What is the height limit?")
+
+    assert len(seen_systems) == 1
+    assert "Active refinement turn" not in seen_systems[0]

@@ -68,6 +68,20 @@ Scenario keywords in the user message override the default rules:
   guard the parallel-execution path that the persona's fan-out
   instruction now relies on.
 
+* ``"MOCK_REFINEMENT_HOLD"`` (ABS-317) — on the *first* turn, behaves
+  normally (tool call → cited answer). On a *follow-up* turn that
+  already has prior tool_use, returns a response that demonstrates the
+  EVIDENCE INTEGRITY guardrail: the model restates its grounded
+  determination and explicitly declines to change it. The response
+  includes the original citation so citation-preservation tests can
+  assert it survived the refinement turn.
+
+* ``"MOCK_ANTI_NEW_REPORT"`` (ABS-317) — on the *first* turn, behaves
+  normally (tool call → cited answer). On a *follow-up* turn that
+  already has prior tool_use, returns the ANTI-NEW-REPORT guardrail
+  response: model declines to answer the new question and directs the
+  user to purchase a new question from the question menu.
+
 All responses are deterministic, so identical sessions produce
 identical SSE traces — a hard requirement for screenshot-stable UI
 tests.
@@ -204,6 +218,18 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
     if has_prior_tool_use:
         return _final_answer_response(user_text)
 
+    # ABS-317 guardrail scenarios: on the first turn they behave normally
+    # (search → cited answer). The mock keyword is preserved in the user
+    # text so _final_answer_response can detect it on the follow-up call.
+    if "MOCK_REFINEMENT_HOLD" in user_text or "MOCK_ANTI_NEW_REPORT" in user_text:
+        return tool_use_response(
+            tool_id="t-guardrail-search",
+            tool_name="search_bylaw_evidence",
+            tool_input={"query": user_text[:80]},
+            preamble="Searching the bylaw for relevant passages.",
+            usage=TokenUsage(input_tokens=80, output_tokens=24),
+        )
+
     if "MOCK_REQUEST_UPGRADE" in user_text:
         return tool_use_response(
             tool_id="t-upgrade",
@@ -294,6 +320,41 @@ def _final_answer_response(user_text: str) -> CompletionResponse:
         return text_response(
             body,
             usage=TokenUsage(input_tokens=160, output_tokens=120),
+            stop_reason="end_turn",
+        )
+
+    if "MOCK_REFINEMENT_HOLD" in user_text:
+        # ABS-317 EVIDENCE INTEGRITY: model holds its grounded determination
+        # and restates the original citation rather than capitulating to
+        # pressure. Citation preserved verbatim so the spec can assert it.
+        body = (
+            "I understand you are looking for a different answer, but the "
+            "bylaw evidence does not support that conclusion. The "
+            "determination remains unchanged: the setback requirement applies "
+            "as stated.\n\n"
+            f"Source: {_DEFAULT_CITATION}\n\n"
+            "If you have new evidence or a changed proposal, please open a "
+            "new question so it can be evaluated on its own merits."
+        )
+        return text_response(
+            body,
+            usage=TokenUsage(input_tokens=140, output_tokens=90),
+            stop_reason="end_turn",
+        )
+
+    if "MOCK_ANTI_NEW_REPORT" in user_text:
+        # ABS-317 ANTI-NEW-REPORT: model declines to answer a materially
+        # different question and directs the user to purchase a new report.
+        body = (
+            "That follow-up is asking about a different property and use "
+            "from the question you purchased. Answering it would constitute "
+            "a separate bylaw report.\n\n"
+            "To get an answer, please purchase a new question from the "
+            "question menu."
+        )
+        return text_response(
+            body,
+            usage=TokenUsage(input_tokens=140, output_tokens=90),
             stop_reason="end_turn",
         )
 
