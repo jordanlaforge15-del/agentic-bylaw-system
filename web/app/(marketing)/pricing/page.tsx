@@ -1,70 +1,52 @@
-// /pricing — case-credit pack matrix.
+// /pricing — priced-question menu.
 //
-// Three tiers (Quick / Standard / Complex) × four pack SKUs (PAYG /
-// Starter / Pro / Enterprise) = 12 buy options. The catalog is fetched
-// from the backend so prices stay in lockstep with the Stripe-side
-// Price IDs (the backend's PackOffer.amount_due_cents is the source
-// of truth).
-//
-// "Standard" is the recommended middle tier — flagged with the same
-// inverted card treatment the v1 design used for "Practice".
+// Renders the five-question launch catalog (data-driven from the
+// backend at /v1/billing/questions) so prices stay in lockstep with
+// the catalog code and the decision doc. An "Other" card links to the
+// off-menu path for questions outside the fixed menu.
 
 import { ADVISOR_API_URL } from "@/lib/api";
 import {
-  CatalogResponse,
-  Tier,
-  TIER_DISPLAY,
+  QuestionMenuResponse,
+  QuestionMenuItem,
   formatCurrency,
-  formatDiscount,
-  formatTokenBudget,
 } from "@/lib/cases";
 import { HighlightWord } from "@/components/highlight-word";
 import { Mono } from "@/components/mono";
-import { BuyPackButton } from "@/components/marketing/buy-pack-button";
+import { BuyQuestionButton } from "@/components/marketing/buy-question-button";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
-const TIER_BLURBS: Record<Tier, string> = {
-  quick:
-    "Single-property zoning lookups, permitted-use checks. ~4–6 reasoning steps.",
-  standard:
-    "Variance research, multi-section cross-references, development standards. ~12–18 reasoning steps.",
-  complex:
-    "Rezoning, multi-overlay analysis, deep development-application files. ~35–50 reasoning steps.",
-};
-
-const TIER_ORDER: Tier[] = ["quick", "standard", "complex"];
-
 const FAQS = [
   {
-    q: "What counts as a case?",
-    a: "A bylaw research inquiry tied to one specific property address, project reference, or development application. Follow-up questions in the same case don't cost extra.",
+    q: "What do I get?",
+    a: "A sourced answer to the exact question you selected — grounded in the current Halifax Regional Centre Land Use By-law, with citations to the governing provisions. Delivered in writing, ready to attach to a permit application or due-diligence report.",
   },
   {
-    q: "Do unused credits expire?",
-    a: "Pay-as-you-go and starter credits never expire. Pro and enterprise packs may carry a renewal window; check your invoice.",
+    q: "What if my question isn't on the list?",
+    a: 'Use the "Other" option to describe your situation. We\'ll review whether it\'s groundable in the by-law and quote the research separately.',
   },
   {
-    q: "Can I upgrade a case mid-research?",
-    a: "Yes. If a case outgrows its tier the agent will surface an upgrade prompt; one click swaps the credit for a higher tier and the budget extends accordingly.",
+    q: "What if the question can't be answered?",
+    a: "If we can't ground a sourced answer in the available by-law data — for instance the parcel is outside our coverage area — you won't be charged.",
   },
   {
     q: "What jurisdictions are supported?",
-    a: "Halifax Regional Centre (the urban core of HRM, governed by the Regional Centre Land Use By-law) during private beta. We're adding the rest of HRM and other Atlantic Canada jurisdictions through 2026.",
+    a: "Halifax Regional Centre (the urban core of HRM, governed by the Regional Centre Land Use By-law) during private beta. More HRM bylaws are coming through 2026.",
   },
 ];
 
 
-async function fetchCatalog(): Promise<CatalogResponse | null> {
-  // Server-side fetch — we hit the backend directly rather than going
-  // through our own /api proxy because this is a server component
-  // already on the server. Skips a round-trip.
+async function fetchQuestionMenu(): Promise<QuestionMenuResponse | null> {
+  // Server-side fetch — hit the backend directly rather than going
+  // through our own /api proxy, since this is already a server component.
   try {
-    const r = await fetch(`${ADVISOR_API_URL}/v1/billing/catalog`, {
+    const r = await fetch(`${ADVISOR_API_URL}/v1/billing/questions`, {
       cache: "no-store",
     });
     if (!r.ok) return null;
-    return (await r.json()) as CatalogResponse;
+    return (await r.json()) as QuestionMenuResponse;
   } catch {
     return null;
   }
@@ -72,7 +54,7 @@ async function fetchCatalog(): Promise<CatalogResponse | null> {
 
 
 export default async function PricingPage() {
-  const catalog = await fetchCatalog();
+  const menu = await fetchQuestionMenu();
   return (
     <div
       className="px-5 sm:px-8 py-10 sm:py-12 lg:py-14 mx-auto max-w-[1200px]"
@@ -80,33 +62,35 @@ export default async function PricingPage() {
     >
       <header className="flex flex-col gap-3 sm:gap-3.5 pb-6 sm:pb-7 mb-7 sm:mb-9 lg:mb-10 border-b border-hair">
         <Mono muted size={11}>
-          PRICING · CASE CREDITS
+          PRICING · QUESTIONS
         </Mono>
         <h1
           className="font-sans font-extrabold m-0 text-[36px] sm:text-[44px] lg:text-[56px] leading-[1] lg:leading-[0.98]"
           style={{ letterSpacing: "-0.04em" }}
         >
-          One credit. <HighlightWord>One case.</HighlightWord>
+          Pick your question.{" "}
+          <HighlightWord>Get a sourced answer.</HighlightWord>
         </h1>
         <p className="text-[14px] sm:text-[16px] lg:text-[17px] text-text-muted leading-[1.45] m-0 max-w-[680px]">
-          Pay per file, not per seat. Bill the credit to your client as a
-          disbursement on their invoice. Pick the tier that matches the
-          depth of the inquiry — the agent will tell you mid-research if
-          you've undersized.
+          Select the question that matches your situation. We read the
+          by-law, locate the governing provisions, and deliver a written
+          answer with citations — ready to attach to a permit application
+          or due-diligence file.
         </p>
       </header>
 
-      {catalog === null ? (
-        <CatalogUnavailable />
+      {menu === null ? (
+        <MenuUnavailable />
       ) : (
-        <div className="flex flex-col gap-10 sm:gap-12 lg:gap-14">
-          {TIER_ORDER.map((tierName) => (
-            <TierSection
-              key={tierName}
-              tierName={tierName}
-              catalog={catalog}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-3.5">
+          {menu.questions.map((q) => (
+            <QuestionCard
+              key={q.slug}
+              question={q}
+              currency={menu.currency}
             />
           ))}
+          <OtherCard />
         </div>
       )}
 
@@ -133,124 +117,87 @@ export default async function PricingPage() {
 }
 
 
-function CatalogUnavailable() {
+function QuestionCard({
+  question,
+  currency,
+}: {
+  question: QuestionMenuItem;
+  currency: string;
+}) {
   return (
-    <div className="bg-surface-alt border border-hair p-8 text-center">
-      <div className="font-semibold mb-2">Pricing temporarily unavailable</div>
-      <div className="text-text-muted text-[13.5px]">
-        We couldn&apos;t load the live catalog. Refresh in a moment, or
-        contact us at{" "}
-        <a className="underline" href="mailto:info@agenticbylawsystems.com">
-          info@agenticbylawsystems.com
-        </a>{" "}
-        for direct pricing.
+    <div
+      className="bg-surface border border-hair p-5 flex flex-col gap-3 min-h-[220px]"
+      data-testid={`question-card-${question.slug}`}
+    >
+      <div>
+        <div
+          className="text-[32px] font-extrabold leading-none mb-0.5"
+          style={{ letterSpacing: "-0.03em" }}
+        >
+          {formatCurrency(question.price_cents, question.currency || currency)}
+        </div>
+        <div className="text-[12px] text-text-muted">CAD · per answer</div>
+      </div>
+      <div className="flex-1">
+        <div
+          className="font-semibold text-[14px] sm:text-[15px] mb-1"
+          style={{ letterSpacing: "-0.01em" }}
+        >
+          {question.display_name}
+        </div>
+        <div className="text-[13px] text-text-muted leading-[1.45]">
+          {question.summary}
+        </div>
+      </div>
+      <div className="pt-1">
+        <BuyQuestionButton
+          questionSlug={question.slug}
+          available={question.available}
+        />
       </div>
     </div>
   );
 }
 
 
-function TierSection({
-  tierName,
-  catalog,
-}: {
-  tierName: Tier;
-  catalog: CatalogResponse;
-}) {
-  const offers = catalog.offers.filter((o) => o.tier === tierName);
-  if (offers.length === 0) return null;
-  const sample = offers[0];
-  const featured = tierName === "standard";
+function OtherCard() {
   return (
-    <section>
-      <div className="mb-4 sm:mb-5 flex flex-col gap-1.5">
-        <div className="flex items-baseline justify-between gap-3 flex-wrap">
-          <h2
-            className="font-sans font-extrabold m-0 text-[24px] sm:text-[28px] lg:text-[32px]"
-            style={{ letterSpacing: "-0.03em" }}
-          >
-            {sample.tier_display_name}
-            {featured && (
-              <span
-                className="ml-3 align-middle inline-block px-2 py-1 bg-accent text-on-accent text-[10px] font-mono uppercase"
-                style={{ letterSpacing: "0.06em" }}
-              >
-                Most popular
-              </span>
-            )}
-          </h2>
-          <Mono muted size={12}>
-            {formatTokenBudget(sample.tier_token_budget)} per case
-          </Mono>
+    <div className="bg-surface-alt border border-hair p-5 flex flex-col gap-3 min-h-[220px]">
+      <div>
+        <div
+          className="font-semibold text-[14px] sm:text-[15px] mb-1"
+          style={{ letterSpacing: "-0.01em" }}
+        >
+          My question isn&apos;t on the list
         </div>
-        <p className="text-[13.5px] sm:text-[14px] text-text-muted m-0 max-w-[680px]">
-          {TIER_BLURBS[tierName]}
-        </p>
+        <div className="text-[13px] text-text-muted leading-[1.45]">
+          Describe your situation and we&apos;ll review whether it&apos;s
+          groundable in the by-law and quote the research separately.
+        </div>
       </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-3.5">
-        {offers.map((offer) => (
-          <PackCard
-            key={`${offer.tier}-${offer.pack_sku}`}
-            offer={offer}
-            currency={catalog.currency}
-            highlightTier={featured}
-          />
-        ))}
+      <div className="mt-auto pt-1">
+        <Link href="/support">
+          <button className="w-full border border-hair px-3 py-2 text-[12.5px] font-semibold text-center hover:bg-surface transition-colors tracking-[-0.01em]">
+            Get in touch →
+          </button>
+        </Link>
       </div>
-    </section>
+    </div>
   );
 }
 
 
-function PackCard({
-  offer,
-  currency,
-  highlightTier,
-}: {
-  offer: CatalogResponse["offers"][number];
-  currency: string;
-  highlightTier: boolean;
-}) {
-  const featured = highlightTier && offer.pack_sku === "starter";
-  const tone = featured
-    ? "bg-text text-surface border-text"
-    : "bg-surface text-text border-hair";
+function MenuUnavailable() {
   return (
-    <div className={`${tone} border p-5 flex flex-col gap-3 min-h-[200px]`}>
-      <div className="flex items-baseline justify-between">
-        <Mono size={11} muted={!featured}>
-          {offer.pack_display_name.toUpperCase()}
-        </Mono>
-        {offer.discount_bps > 0 && (
-          <span className="text-[11px] font-mono uppercase">
-            {formatDiscount(offer.discount_bps)}
-          </span>
-        )}
-      </div>
-      <div className="flex flex-col gap-0.5">
-        <div className="text-[28px] font-extrabold leading-none" style={{ letterSpacing: "-0.03em" }}>
-          {formatCurrency(offer.amount_due_cents, offer.currency || currency)}
-        </div>
-        <div className={`text-[12.5px] ${featured ? "opacity-70" : "text-text-muted"}`}>
-          {offer.quantity === 1
-            ? `1 ${offer.tier} credit`
-            : `${offer.quantity} × ${offer.tier} credits`}
-        </div>
-        {offer.discount_bps > 0 && (
-          <div className={`text-[11.5px] ${featured ? "opacity-50 line-through" : "text-text-muted line-through"}`}>
-            {formatCurrency(offer.list_price_cents, offer.currency || currency)}{" "}
-            list
-          </div>
-        )}
-      </div>
-      <div className="mt-auto pt-2">
-        <BuyPackButton
-          tier={offer.tier}
-          packSku={offer.pack_sku}
-          available={offer.available}
-          featured={featured}
-        />
+    <div className="bg-surface-alt border border-hair p-8 text-center">
+      <div className="font-semibold mb-2">Pricing temporarily unavailable</div>
+      <div className="text-text-muted text-[13.5px]">
+        We couldn&apos;t load the question menu. Refresh in a moment, or
+        contact us at{" "}
+        <a className="underline" href="mailto:info@agenticbylawsystems.com">
+          info@agenticbylawsystems.com
+        </a>{" "}
+        for direct pricing.
       </div>
     </div>
   );

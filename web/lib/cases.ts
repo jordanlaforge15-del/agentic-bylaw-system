@@ -107,6 +107,32 @@ export const TIER_DISPLAY: Record<Tier, string> = {
   complex: "Complex File",
 };
 
+export type QuestionInputField = {
+  name: string;
+  label: string;
+  required: boolean;
+  description: string;
+};
+
+export type QuestionMenuItem = {
+  slug: string;
+  display_name: string;
+  price_cents: number;
+  currency: string;
+  summary: string;
+  backing_calls: string[];
+  required_inputs: QuestionInputField[];
+  catalog_anchor: string;
+  available: boolean;
+};
+
+export type QuestionMenuResponse = {
+  enabled: boolean;
+  currency: string;
+  cad_per_usd: number;
+  questions: QuestionMenuItem[];
+};
+
 export const ANCHOR_KIND_DISPLAY: Record<AnchorKind, string> = {
   address: "Property address",
   project_ref: "Project reference",

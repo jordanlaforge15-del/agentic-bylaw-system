@@ -1,38 +1,30 @@
-// Functional: /pricing renders the halved tier prices.
+// Functional: /pricing renders the priced-question menu with grounded amounts.
 //
-// ABS-24 cut every tier's unit price in half. The pricing page is
-// fully dynamic — it fetches the backend catalog and formats each
-// offer with Intl.NumberFormat("en-CA", "CAD"). Asserting the three
-// PAYG amounts is enough to catch regressions in the catalog wiring:
-// PAYG has no discount, so the rendered figure equals the tier's
-// unit price.
+// ABS-310 replaces the turn-pack tier matrix with a per-question menu.
+// The five launch questions have fixed CAD prices grounded in the
+// decision doc (docs/decisions/2026-06-priced-question-catalog.md).
+// Asserting the rendered amounts locks the catalog wiring — a price
+// change in the backend code causes this spec to fail.
 
 import { expect, test } from "../fixtures/test-env";
 
-test("pricing page shows halved PAYG prices for each tier", async ({
+test("pricing page shows question cards with grounded CAD amounts", async ({
   page,
 }) => {
   await page.goto("/pricing");
 
-  // Each tier section renders a Pay-as-you-go card with the unit
-  // price as its headline. Scope the assertion to the card that
-  // identifies the matching credit ("1 quick credit" / "1 standard
-  // credit" / "1 complex credit") so the test isn't fooled by the
-  // multi-credit pack cards.
-  const quickPayg = page
-    .locator("div")
-    .filter({ hasText: /^1 quick credit$/ })
-    .locator("..");
-  const standardPayg = page
-    .locator("div")
-    .filter({ hasText: /^1 standard credit$/ })
-    .locator("..");
-  const complexPayg = page
-    .locator("div")
-    .filter({ hasText: /^1 complex credit$/ })
-    .locator("..");
+  // Five question cards — one per catalog question. Each card carries a
+  // data-testid="question-card-{slug}" so the assertion is scoped to the
+  // card rather than relying on DOM hierarchy.
+  const permitted = page.getByTestId("question-card-permitted_use");
+  const devStd = page.getByTestId("question-card-development_standards");
+  const dueDil = page.getByTestId("question-card-due_diligence");
+  const legalNc = page.getByTestId("question-card-legal_nonconforming");
+  const variance = page.getByTestId("question-card-variance_justification");
 
-  await expect(quickPayg).toContainText("$12.50");
-  await expect(standardPayg).toContainText("$32.50");
-  await expect(complexPayg).toContainText("$75");
+  await expect(permitted).toContainText("$79");
+  await expect(devStd).toContainText("$149");
+  await expect(dueDil).toContainText("$199");
+  await expect(legalNc).toContainText("$199");
+  await expect(variance).toContainText("$299");
 });
