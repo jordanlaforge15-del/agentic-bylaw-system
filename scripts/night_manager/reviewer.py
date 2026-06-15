@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -934,6 +935,47 @@ async def _clean_agent_leaked_files(cwd: str) -> int:
     return len(dirty_lines)
 
 
+async def _rechain_migrations_if_needed(issue: IssueState) -> tuple[bool, str]:
+    """Run rechain_migration.py on the worktree if the branch adds migrations.
+
+    ABS-318: parallel agents can both parent their migration to the same
+    down_revision, producing a dual-head chain that breaks `alembic upgrade
+    head` on merge. Call this BEFORE the rebase so the feature branch carries
+    the corrected down_revision when it lands on top of dev.
+
+    Returns (ok, message). Failure is non-fatal — if we cannot determine
+    dev's head the script exits 0 and the single-head guard in e2e-up.sh
+    catches any residual dual-head at test time.
+    """
+    worktree = issue.worktree
+    if not worktree:
+        return True, ""
+
+    # Only worth running when the branch actually adds migration files.
+    touches = await _diff_touches(worktree, "alembic/versions/")
+    if not touches:
+        return True, ""
+
+    log.info("merge_to_dev: rechaining migrations for %s", issue.identifier)
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "rechain_migration.py"),
+        "--worktree", worktree,
+        cwd=worktree,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await proc.communicate()
+    output = stdout.decode("utf-8", errors="replace").strip()
+    if output:
+        for line in output.splitlines():
+            log.info("rechain: %s", line)
+
+    if proc.returncode != 0:
+        return False, f"rechain_migration.py exited {proc.returncode}: {output}"
+    return True, output
+
+
 async def _rebase_branch_onto_dev(issue: IssueState) -> tuple[bool, str]:
     """Rebase the agent branch onto current dev tip before merge.
 
@@ -975,6 +1017,19 @@ async def merge_to_dev(issue: IssueState) -> tuple[bool, str]:
     checkout is *still* dirty (e.g. submodule state, lock files), the
     merge is refused with a clear error — same as before.
     """
+    # ABS-318: rechain any new migrations onto dev's current head before
+    # rebasing. If two concurrent agents both parented their migration to
+    # the same down_revision, the rechain fixes the conflict on the feature
+    # branch so the rebase lands a single-head chain. Must run BEFORE the
+    # rebase so the corrected down_revision is in the commits that get
+    # replayed onto dev tip.
+    rechain_ok, rechain_msg = await _rechain_migrations_if_needed(issue)
+    if not rechain_ok:
+        log.warning(
+            "Migration rechain failed for %s (non-fatal, continuing): %s",
+            issue.identifier, rechain_msg,
+        )
+
     # ABS-172: rebase agent branch onto dev tip to absorb sibling merges.
     rebase_ok, rebase_err = await _rebase_branch_onto_dev(issue)
     if not rebase_ok:

@@ -148,6 +148,37 @@ ensure_test_db() {
 
 run_migrations() {
   log "Running Alembic migrations against ${E2E_TEST_DB}"
+
+  # ABS-318: Guard against dual-head chains before attempting the upgrade.
+  # Two concurrent agents can both parent their migration to the same
+  # down_revision; the resulting dual head makes `alembic upgrade head`
+  # fail with "Multiple head revisions are present". Catching it here
+  # produces an actionable error instead of an opaque migration crash.
+  local alembic_heads head_count
+  alembic_heads=$(
+    DATABASE_URL="$DATABASE_URL_E2E" \
+    PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" \
+    "${REPO_ROOT}/.venv/bin/alembic" -c "${REPO_ROOT}/alembic.ini" heads 2>&1
+  )
+  head_count=$(printf '%s\n' "$alembic_heads" | grep -c '(head)' || true)
+  if [[ "$head_count" -gt 1 ]]; then
+    printf '\n' >&2
+    printf '!! ============================================================ !!\n' >&2
+    printf '!! ERROR: Multiple Alembic heads detected (%s heads)\n' "$head_count" >&2
+    printf '!!\n' >&2
+    printf '%s\n' "$alembic_heads" | grep '(head)' | sed 's/^/!!   /' >&2
+    printf '!!\n' >&2
+    printf '!! Two concurrent migration branches both parented to the same\n' >&2
+    printf '!! down_revision. `alembic upgrade head` would fail.\n' >&2
+    printf '!!\n' >&2
+    printf '!! To fix on a feature branch, run from the worktree root:\n' >&2
+    printf '!!   python scripts/rechain_migration.py\n' >&2
+    printf '!!\n' >&2
+    printf '!! Then commit and re-run `make e2e`.\n' >&2
+    printf '!! ============================================================ !!\n\n' >&2
+    exit 1
+  fi
+
   # Pre-create alembic_version with a wider column. The default
   # VARCHAR(32) is one char too short for the revision id
   # ``0008_advisor_billing_subscription`` (33 chars), which makes a
