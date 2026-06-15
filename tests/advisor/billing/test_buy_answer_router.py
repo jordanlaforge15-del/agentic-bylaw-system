@@ -205,3 +205,66 @@ def test_void_on_ungroundable_over_http(tmp_path: Path) -> None:
     assert body["failure_reason"] == "zero_evidence"
     assert body["answer"] is None
     assert [c.action for c in stripe.payment_intent_calls] == ["cancel"]
+
+
+# -- Off-menu "Other": free quote → buy → answer (ABS-316) ------------------
+
+
+def test_quote_endpoint_is_free_and_anchored(tmp_path: Path) -> None:
+    client, stripe = _build_client(tmp_path)
+    res = client.post(
+        "/v1/billing/questions/quote",
+        json={"question": "Is a backyard suite allowed here? MOCK_QUOTE_SIMPLE"},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["difficulty"] == "simple"
+    assert body["price_cents"] == 7_900
+    assert body["band_low_cents"] == 7_900
+    assert body["band_high_cents"] == 29_900
+    assert body["rationale"]
+    # Quoting NEVER creates a Stripe object or charges.
+    assert stripe.checkout_calls == []
+    assert stripe.payment_intent_calls == []
+
+
+def test_quote_endpoint_rejects_empty_question(tmp_path: Path) -> None:
+    client, _ = _build_client(tmp_path)
+    res = client.post("/v1/billing/questions/quote", json={"question": "  ?  "})
+    assert res.status_code == 400
+    assert res.json()["detail"]["code"] == "empty_question"
+
+
+def test_full_other_buy_flow_over_http(tmp_path: Path) -> None:
+    client, stripe = _build_client(tmp_path)
+
+    # 1. Buy an answer to an off-menu question (server re-quotes the price).
+    res = client.post(
+        "/v1/billing/checkout/other",
+        json={"question": "A complex custom variance ask. MOCK_QUOTE_COMPLEX"},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    purchase_id = body["purchase_id"]
+    assert body["price_cents"] == 29_900
+    assert body["difficulty"] == "complex"
+    assert body["url"].startswith("https://stripe.test")
+    # Ad-hoc amount, no Price ID, manual-capture hold.
+    call = stripe.checkout_calls[0]
+    assert call.price_id is None
+    assert call.amount_cents == 29_900
+    assert call.capture_method == "manual"
+
+    # 2. Authorize via the webhook.
+    _authorize_via_webhook(client, purchase_id)
+
+    # 3. Run the answer → grounded → capture.
+    res = client.post(
+        f"/v1/billing/questions/purchases/{purchase_id}/answer"
+    )
+    assert res.status_code == 200, res.text
+    answered = res.json()
+    assert answered["status"] == "captured"
+    assert answered["question_slug"] == "other"
+    assert answered["answer"]
+    assert [c.action for c in stripe.payment_intent_calls] == ["capture"]

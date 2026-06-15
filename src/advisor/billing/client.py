@@ -109,12 +109,15 @@ class StripeClient(Protocol):
         *,
         customer_id: str | None,
         customer_email: str,
-        price_id: str,
+        price_id: str | None = None,
         success_url: str,
         cancel_url: str,
         metadata: dict[str, str],
         mode: str = "payment",
         capture_method: str | None = None,
+        amount_cents: int | None = None,
+        product_name: str | None = None,
+        currency: str = "cad",
     ) -> CheckoutSessionResult:
         """Create a Stripe Checkout session.
 
@@ -132,6 +135,15 @@ class StripeClient(Protocol):
         checkout, and the caller later captures the hold on a grounded
         answer or voids it on a failed question. Only meaningful for
         ``mode="payment"``.
+
+        **Pricing — fixed Price vs ad-hoc amount.** A catalog purchase
+        passes ``price_id`` (a pre-created Stripe Price). The off-menu
+        "Other" path (ABS-316) has no pre-created Price — its amount is
+        the LLM-quoted price — so it passes ``amount_cents`` +
+        ``product_name`` instead and Stripe builds an inline
+        ``price_data`` line item in ``currency`` (lower-case ISO, e.g.
+        ``"cad"``). Exactly one of ``price_id`` / ``amount_cents`` must
+        be supplied.
 
         ``customer_id`` may be ``None`` for first-time customers;
         Stripe will create the customer record and the webhook will
@@ -166,6 +178,48 @@ class StripeClient(Protocol):
         statement. Returns the PaymentIntent status (``"canceled"``).
         Raises on a Stripe error.
         """
+
+
+def _build_line_item(
+    *,
+    price_id: str | None,
+    amount_cents: int | None,
+    product_name: str | None,
+    currency: str,
+) -> dict[str, Any]:
+    """Build the single Checkout line item for either pricing shape.
+
+    Catalog purchases reference a pre-created Stripe ``price_id``; the
+    off-menu "Other" path (ABS-316) has no Price object and supplies an
+    inline ``price_data`` amount instead. Exactly one of the two must be
+    given — passing both, or neither, is a programming error and raises
+    ``ValueError`` rather than letting Stripe reject the call opaquely.
+    """
+    if price_id and amount_cents is not None:
+        raise ValueError(
+            "create_checkout_session: pass price_id OR amount_cents, not both."
+        )
+    if price_id:
+        return {"price": price_id, "quantity": 1}
+    if amount_cents is not None:
+        if amount_cents <= 0:
+            raise ValueError(
+                f"create_checkout_session: amount_cents must be positive; "
+                f"got {amount_cents}."
+            )
+        return {
+            "price_data": {
+                "currency": currency,
+                "product_data": {
+                    "name": product_name or "Bylaw answer (custom question)"
+                },
+                "unit_amount": amount_cents,
+            },
+            "quantity": 1,
+        }
+    raise ValueError(
+        "create_checkout_session: one of price_id / amount_cents is required."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -219,16 +273,25 @@ class LiveStripeClient:
         *,
         customer_id: str | None,
         customer_email: str,
-        price_id: str,
+        price_id: str | None = None,
         success_url: str,
         cancel_url: str,
         metadata: dict[str, str],
         mode: str = "payment",
         capture_method: str | None = None,
+        amount_cents: int | None = None,
+        product_name: str | None = None,
+        currency: str = "cad",
     ) -> CheckoutSessionResult:
+        line_item = _build_line_item(
+            price_id=price_id,
+            amount_cents=amount_cents,
+            product_name=product_name,
+            currency=currency,
+        )
         params: dict[str, Any] = {
             "mode": mode,
-            "line_items": [{"price": price_id, "quantity": 1}],
+            "line_items": [line_item],
             "success_url": success_url,
             "cancel_url": cancel_url,
             "metadata": dict(metadata),
@@ -307,12 +370,17 @@ class LiveStripeClient:
 class _CheckoutCall:
     customer_id: str | None
     customer_email: str
-    price_id: str
+    price_id: str | None
     success_url: str
     cancel_url: str
     metadata: dict[str, str]
     mode: str = "payment"
     capture_method: str | None = None
+    # Off-menu "Other" ad-hoc pricing (ABS-316). ``None`` for catalog
+    # purchases that pass a ``price_id``.
+    amount_cents: int | None = None
+    product_name: str | None = None
+    currency: str = "cad"
 
 
 @dataclass
@@ -372,13 +440,25 @@ class MockStripeClient:
         *,
         customer_id: str | None,
         customer_email: str,
-        price_id: str,
+        price_id: str | None = None,
         success_url: str,
         cancel_url: str,
         metadata: dict[str, str],
         mode: str = "payment",
         capture_method: str | None = None,
+        amount_cents: int | None = None,
+        product_name: str | None = None,
+        currency: str = "cad",
     ) -> CheckoutSessionResult:
+        # Validate the pricing shape exactly as the live client does, so
+        # the "exactly one of price_id / amount_cents" contract is
+        # exercised in tests rather than only against real Stripe.
+        _build_line_item(
+            price_id=price_id,
+            amount_cents=amount_cents,
+            product_name=product_name,
+            currency=currency,
+        )
         self.checkout_calls.append(
             _CheckoutCall(
                 customer_id=customer_id,
@@ -389,6 +469,9 @@ class MockStripeClient:
                 metadata=dict(metadata),
                 mode=mode,
                 capture_method=capture_method,
+                amount_cents=amount_cents,
+                product_name=product_name,
+                currency=currency,
             )
         )
         if not self._checkout_results:

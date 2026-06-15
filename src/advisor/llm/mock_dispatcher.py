@@ -141,6 +141,12 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
         if "__FOLLOWUP_CLASSIFY__" in classify_text:
             verdict = "MOCK_NEW_QUESTION" in classify_text
             return text_response(json.dumps({"new_question": verdict}))
+        if "__QUOTE_DIFFICULTY__" in classify_text:
+            # ABS-316: off-menu price-quote classifier (tools-less). Resolve
+            # a deterministic difficulty tier from a MOCK_QUOTE_<TIER>
+            # sentinel embedded in the question; default to mid-band
+            # 'moderate' when no sentinel is present.
+            return text_response(json.dumps(_quote_verdict(classify_text)))
         # Two tools-less shapes reach the gateway:
         #   * the pre-flight classifier — a fresh request whose only
         #     message is the JSON anchor payload (no assistant turn yet);
@@ -278,6 +284,23 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
         preamble="Searching the bylaw for relevant passages.",
         usage=TokenUsage(input_tokens=80, output_tokens=24),
     )
+
+
+def _quote_verdict(classify_text: str) -> dict[str, str]:
+    """Resolve a deterministic off-menu difficulty verdict (ABS-316).
+
+    The quote classifier prompt embeds the question, which in e2e carries
+    a ``MOCK_QUOTE_<TIER>`` sentinel. Map it to the matching difficulty
+    tier so the priced amount is deterministic; absent any sentinel,
+    default to the mid-band ``moderate`` tier.
+    """
+    for tier in ("simple", "moderate", "involved", "complex", "exceptional"):
+        if f"MOCK_QUOTE_{tier.upper()}" in classify_text:
+            return {
+                "difficulty": tier,
+                "rationale": f"Mock-classified as {tier}.",
+            }
+    return {"difficulty": "moderate", "rationale": "Mock default mid-band."}
 
 
 def _classifier_response(request: CompletionRequest) -> CompletionResponse:

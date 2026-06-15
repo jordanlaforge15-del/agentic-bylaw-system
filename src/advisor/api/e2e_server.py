@@ -1540,6 +1540,15 @@ class _BuyAnswerRefineBody(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
 
 
+class _BuyAnswerQuoteBody(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+
+
+class _BuyAnswerCheckoutOtherBody(BaseModel):
+    user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
+    question: str = Field(min_length=1, max_length=2000)
+
+
 def _mount_buy_answer_test_router(app: FastAPI) -> None:
     """ABS-312: drive the priced-question "buy an answer" flow over HTTP.
 
@@ -1564,6 +1573,10 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
         CheckoutSessionResult,
         MockStripeClient,
         StripeEvent,
+    )
+    from advisor.billing.quote import (  # noqa: PLC0415
+        EmptyQuestionError,
+        quote_question,
     )
     from advisor.billing.settings import AdvisorBillingSettings  # noqa: PLC0415
     from advisor.billing.webhooks import handle_event  # noqa: PLC0415
@@ -1664,6 +1677,83 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
             db.flush()
             purchase = db.get(_QP, purchase_id)
             return _state(purchase)
+
+    @app.post("/v1/_test/buy-answer/quote")
+    async def buy_answer_quote(
+        body: _BuyAnswerQuoteBody,
+    ) -> dict[str, object]:
+        # ABS-316: produce a FREE off-menu price quote against the real
+        # advisor.billing.quote service + e2e MockGateway. No purchase
+        # row, no Stripe — quoting never charges.
+        try:
+            quote = await quote_question(app.state.gateway, body.question)
+        except EmptyQuestionError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "empty_question", "message": str(exc)},
+            ) from exc
+        return {
+            "question": quote.question_text,
+            "difficulty": quote.difficulty,
+            "difficulty_display_name": quote.difficulty_display_name,
+            "price_cents": quote.price_cents,
+            "currency": quote.currency,
+            "rationale": quote.rationale,
+            "cumulative_token_budget": quote.cumulative_token_budget,
+            "band_low_cents": quote.band_low_cents,
+            "band_high_cents": quote.band_high_cents,
+        }
+
+    @app.post("/v1/_test/buy-answer/checkout-other")
+    async def buy_answer_checkout_other(
+        body: _BuyAnswerCheckoutOtherBody,
+    ) -> dict[str, object]:
+        # ABS-316: re-quote server-side, then authorize an ad-hoc
+        # manual-capture checkout for the quoted amount. Mirrors the
+        # catalog checkout endpoint: simulate the
+        # checkout.session.completed webhook so the purchase lands in
+        # "authorized" ready for /answer.
+        settings = _settings()
+        session_id = f"cs_test_{uuid.uuid4().hex[:16]}"
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            try:
+                quote = await quote_question(app.state.gateway, body.question)
+            except EmptyQuestionError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "empty_question", "message": str(exc)},
+                ) from exc
+            purchase, _url = answer_flow.start_other_checkout(
+                db,
+                user,
+                quote=quote,
+                client=_mock_client(session_id),
+                settings=settings,
+            )
+            purchase_id = purchase.id
+            event = StripeEvent(
+                id=f"evt_test_{purchase_id}",
+                type="checkout.session.completed",
+                data={
+                    "id": session_id,
+                    "payment_intent": f"pi_test_{purchase_id}",
+                    "metadata": {
+                        "advisor_user_id": str(user.id),
+                        "question_purchase_id": str(purchase_id),
+                        "question_slug": "other",
+                    },
+                },
+            )
+            handle_event(db, event, settings)
+            db.flush()
+            purchase = db.get(_QP, purchase_id)
+            return {
+                "price_cents": quote.price_cents,
+                "difficulty": quote.difficulty,
+                "rationale": quote.rationale,
+                **_state(purchase),
+            }
 
     @app.post("/v1/_test/buy-answer/answer")
     async def buy_answer_run(body: _BuyAnswerRunBody) -> dict[str, object]:

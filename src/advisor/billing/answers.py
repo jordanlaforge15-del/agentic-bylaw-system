@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from advisor.billing.client import StripeClient
 from advisor.billing.questions import Question, question_for
+from advisor.billing.quote import OTHER_QUESTION_SLUG, Quote
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.db.models import QuestionPurchase, User
 from advisor.llm import LLMGateway, Message, TextBlock
@@ -255,6 +256,70 @@ def start_question_checkout(
     return purchase, result.url
 
 
+def start_other_checkout(
+    db: Session,
+    user: User,
+    *,
+    quote: Quote,
+    client: StripeClient,
+    settings: AdvisorBillingSettings,
+) -> tuple[QuestionPurchase, str]:
+    """Create a manual-capture checkout for an off-menu "Other" question.
+
+    The off-menu path (ABS-316) has no pre-created Stripe Price — the
+    amount is the LLM-quoted price — so this uses an inline ``price_data``
+    amount instead of a ``price_id``. Otherwise identical to
+    ``start_question_checkout``: inserts a ``QuestionPurchase`` in
+    ``authorizing`` state under the sentinel ``other`` slug, with the
+    free-form question in ``inputs_json`` and the quote (difficulty,
+    rationale, and the ABS-305 cost envelope the answer will run under) in
+    ``metadata_json``. No charge happens here — the card is only
+    authorized when the user completes checkout.
+
+    The price is bound from the server-side ``quote``; callers must NOT
+    accept a client-supplied price (the user could otherwise pick their
+    own). Re-quote on the server before calling this.
+    """
+    purchase = QuestionPurchase(
+        user_id=user.id,
+        question_slug=OTHER_QUESTION_SLUG,
+        inputs_json={"question": quote.question_text},
+        price_cents=quote.price_cents,
+        currency=quote.currency,
+        status="authorizing",
+        metadata_json={
+            "difficulty": quote.difficulty,
+            "difficulty_display_name": quote.difficulty_display_name,
+            "rationale": quote.rationale,
+            "cumulative_token_budget": quote.cumulative_token_budget,
+            "anchor": quote.anchor,
+        },
+    )
+    db.add(purchase)
+    db.flush()  # assign purchase.id for the metadata round-trip
+
+    metadata = {
+        "advisor_user_id": str(user.id),
+        "question_purchase_id": str(purchase.id),
+        "question_slug": OTHER_QUESTION_SLUG,
+    }
+    result = client.create_checkout_session(
+        customer_id=user.stripe_customer_id,
+        customer_email=user.email,
+        success_url=settings.success_url,
+        cancel_url=settings.cancel_url,
+        metadata=metadata,
+        mode="payment",
+        capture_method="manual",
+        amount_cents=quote.price_cents,
+        product_name="Bylaw answer — custom question",
+        currency=quote.currency.lower(),
+    )
+    purchase.stripe_checkout_session_id = result.session_id
+    db.flush()
+    return purchase, result.url
+
+
 def apply_question_authorization(
     db: Session,
     *,
@@ -324,6 +389,7 @@ async def run_turn(
     user_text: str,
     prior_messages: list[Message] | None = None,
     model: str | None = None,
+    cumulative_token_budget: int | None = None,
 ) -> TurnOutcome:
     """Run one bounded tool-loop turn and classify the result.
 
@@ -332,6 +398,12 @@ async def run_turn(
     the answer is grounded. The ABS-305 cumulative cost breaker is active
     by default on the session, so a runaway turn is forced to synthesize
     and reported as ``cost_ceiling``.
+
+    ``cumulative_token_budget`` overrides the session's default ABS-305
+    ceiling. The off-menu "Other" flow (ABS-316) passes the quote's
+    envelope here so a pricier (harder) question is allowed proportionally
+    more reasoning while the served cost still cannot exceed the quoted
+    band. ``None`` keeps the env-configured default (catalog questions).
     """
     # Imported lazily to keep the billing package importable without the
     # chat layer present (mirrors the lazy Stripe-SDK pattern).
@@ -339,6 +411,9 @@ async def run_turn(
     from advisor.chat.tools import build_bylaw_tools  # noqa: PLC0415
 
     tool_defs, tool_handlers = build_bylaw_tools(retrieval_factory)
+    session_kwargs: dict = {}
+    if cumulative_token_budget is not None:
+        session_kwargs["cumulative_token_budget"] = cumulative_token_budget
     session = ChatSession(
         session_id=f"qp-{uuid.uuid4().hex[:12]}",
         user_id="question-purchase",
@@ -346,6 +421,7 @@ async def run_turn(
         tool_defs=tool_defs,
         tool_handlers=tool_handlers,
         model=model or _default_model(),
+        **session_kwargs,
     )
     session.messages = list(prior_messages or [])
     await session.send_user_message_blocking(gateway, user_text)
@@ -389,6 +465,25 @@ def _classify(metrics) -> tuple[bool, str | None]:
     return True, None
 
 
+def _resolve_run_inputs(purchase: QuestionPurchase) -> tuple[str, int | None]:
+    """Return ``(prompt, cumulative_token_budget)`` for a purchase.
+
+    Catalog questions render their ``prompt_template`` from the collected
+    inputs and run under the session's default ABS-305 ceiling
+    (``None``). The off-menu "Other" path (ABS-316) runs the user's raw
+    free-form question text under the quote's envelope, persisted on
+    ``metadata_json`` at checkout.
+    """
+    if purchase.question_slug == OTHER_QUESTION_SLUG:
+        question_text = str(
+            (purchase.inputs_json or {}).get("question", "")
+        ).strip()
+        budget = (purchase.metadata_json or {}).get("cumulative_token_budget")
+        return question_text, (int(budget) if budget else None)
+    question = question_for(purchase.question_slug)
+    return render_prompt(question, purchase.inputs_json), None
+
+
 async def run_answer(
     db: Session,
     purchase: QuestionPurchase,
@@ -414,8 +509,7 @@ async def run_answer(
             f"purchase {purchase.id} is {purchase.status!r}, not authorized"
         )
 
-    question = question_for(purchase.question_slug)
-    prompt = render_prompt(question, purchase.inputs_json)
+    prompt, cumulative_budget = _resolve_run_inputs(purchase)
     purchase.answered_at = utcnow()
 
     try:
@@ -425,6 +519,7 @@ async def run_answer(
             retrieval_factory=retrieval_factory,
             user_text=prompt,
             model=model,
+            cumulative_token_budget=cumulative_budget,
         )
     except Exception:  # noqa: BLE001 — never leave a hold uncaptured
         logger.exception(
@@ -509,6 +604,7 @@ async def run_refinement(
         raise NewQuestionError(purchase.question_slug)
 
     prior = _deserialize(purchase.transcript_json)
+    _, cumulative_budget = _resolve_run_inputs(purchase)
     outcome = await run_turn(
         gateway=gateway,
         persona=persona,
@@ -516,6 +612,7 @@ async def run_refinement(
         user_text=message,
         prior_messages=prior,
         model=model,
+        cumulative_token_budget=cumulative_budget,
     )
     purchase.transcript_json = _serialize(outcome.messages)
     purchase.refinement_count += 1
@@ -628,12 +725,19 @@ async def llm_is_new_question(
 
     from advisor.llm import CompletionRequest  # noqa: PLC0415
 
-    question = question_for(purchase.question_slug)
-    original_subject = purchase.inputs_json.get("address", "(unspecified)")
+    # Off-menu "Other" purchases (ABS-316) have no catalog entry; fall
+    # back to a generic label and the free-form question as the subject.
+    try:
+        display_name = question_for(purchase.question_slug).display_name
+    except KeyError:
+        display_name = "your custom question"
+    original_subject = purchase.inputs_json.get("address") or purchase.inputs_json.get(
+        "question", "(unspecified)"
+    )
     prompt = (
         f"{FOLLOWUP_CLASSIFY_MARKER}\n"
         "You are gating a paid answer's refinement window. The customer "
-        f"bought: {question.display_name} about {original_subject!r}.\n"
+        f"bought: {display_name} about {original_subject!r}.\n"
         f"Their follow-up: {follow_up!r}\n\n"
         "Is this follow-up a REFINEMENT of the existing answer (reformat, "
         "clarify, expand a point already covered) or a materially NEW "

@@ -51,6 +51,7 @@ from advisor.billing.client import StripeClient
 from advisor.billing.packs import all_offers
 from advisor.billing.pricing import get_pricing_settings
 from advisor.billing.questions import all_questions
+from advisor.billing.quote import EmptyQuestionError, quote_question
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.billing.webhooks import handle_event
 from advisor.db.cases import credit_balance_for
@@ -180,6 +181,60 @@ class QuestionCheckoutResponse(BaseModel):
     purchase_id: int = Field(
         ..., description="Id of the pending QuestionPurchase row."
     )
+
+
+class QuoteRequest(BaseModel):
+    """Body of ``POST /v1/billing/questions/quote`` (ABS-316)."""
+
+    question: str = Field(
+        ...,
+        min_length=1,
+        description="The free-form, off-menu question to price.",
+    )
+
+
+class QuoteResponse(BaseModel):
+    """A FREE off-menu price quote (ABS-316).
+
+    Producing this never charges the customer. ``price_cents`` is the
+    anchored price they would pay to buy the answer; ``difficulty`` /
+    ``rationale`` explain the price; the ``band_*`` fields give the
+    launch-menu envelope for context ("within the $79–$299 band").
+    """
+
+    question: str
+    difficulty: str
+    difficulty_display_name: str
+    price_cents: int
+    currency: str
+    rationale: str
+    band_low_cents: int
+    band_high_cents: int
+
+
+class CheckoutOtherRequest(BaseModel):
+    """Body of ``POST /v1/billing/checkout/other`` (ABS-316)."""
+
+    question: str = Field(
+        ...,
+        min_length=1,
+        description="The free-form, off-menu question to buy an answer to.",
+    )
+
+
+class OtherCheckoutResponse(BaseModel):
+    """Checkout for an off-menu question: URL + the server-bound quote."""
+
+    url: str = Field(..., description="Stripe Checkout redirect URL.")
+    purchase_id: int = Field(
+        ..., description="Id of the pending QuestionPurchase row."
+    )
+    price_cents: int = Field(
+        ..., description="The server-quoted price the card will hold."
+    )
+    currency: str = "CAD"
+    difficulty: str
+    rationale: str
 
 
 class RefineRequest(BaseModel):
@@ -482,6 +537,21 @@ def build_billing_router(
                 },
             )
 
+    def _require_answer_gateway() -> None:
+        # The off-menu quote (ABS-316) needs only the LLM gateway — no
+        # retrieval/persona — so it gates on the gateway alone.
+        if answer_gateway is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "answer_runner_unavailable",
+                    "message": (
+                        "The quote engine is not wired into the billing "
+                        "router on this deployment."
+                    ),
+                },
+            )
+
     def _load_owned_purchase(db: Any, purchase_id: int, user: User):
         purchase = db.get(QuestionPurchase, purchase_id)
         if purchase is None or purchase.user_id != user.id:
@@ -546,6 +616,94 @@ def build_billing_router(
             purchase_id = purchase.id
             _commit(db)
             return QuestionCheckoutResponse(url=url, purchase_id=purchase_id)
+
+    # -- Off-menu "Other" question: free quote → buy (ABS-316) ------------
+
+    @router.post(
+        "/questions/quote", response_model=QuoteResponse
+    )
+    async def post_quote_question(
+        body: QuoteRequest,
+        auth_session: Any = Depends(user_dependency),  # noqa: ARG001
+    ) -> QuoteResponse:
+        """Quote a price for an off-menu question. ALWAYS FREE.
+
+        Producing a quote never charges the customer and never creates a
+        Stripe object — it is a single (free) LLM difficulty
+        classification mapped to an anchored price. Auth-gated so it
+        can't be scraped anonymously, but no money moves.
+        """
+        _require_enabled()
+        _require_answer_gateway()
+        try:
+            quote = await quote_question(answer_gateway, body.question)
+        except EmptyQuestionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "empty_question", "message": str(exc)},
+            ) from exc
+        return QuoteResponse(
+            question=quote.question_text,
+            difficulty=quote.difficulty,
+            difficulty_display_name=quote.difficulty_display_name,
+            price_cents=quote.price_cents,
+            currency=quote.currency,
+            rationale=quote.rationale,
+            band_low_cents=quote.band_low_cents,
+            band_high_cents=quote.band_high_cents,
+        )
+
+    @router.post(
+        "/checkout/other", response_model=OtherCheckoutResponse
+    )
+    async def post_checkout_other(
+        body: CheckoutOtherRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> OtherCheckoutResponse:
+        """Buy an answer to an off-menu question at the quoted price.
+
+        Re-quotes the question SERVER-SIDE (never trusting a
+        client-supplied price), then authorizes a manual-capture
+        PaymentIntent for that amount. The answer-run flow later captures
+        on a grounded answer / voids on a failed one — same
+        failed-question rule as catalog questions.
+        """
+        _require_enabled()
+        _require_answer_gateway()
+        if client_factory is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "billing_misconfigured",
+                    "message": "no Stripe client factory wired",
+                },
+            )
+        try:
+            quote = await quote_question(answer_gateway, body.question)
+        except EmptyQuestionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "empty_question", "message": str(exc)},
+            ) from exc
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase, url = answer_flow.start_other_checkout(
+                db,
+                user,
+                quote=quote,
+                client=client_factory(),
+                settings=settings,
+            )
+            purchase_id = purchase.id
+            _commit(db)
+            return OtherCheckoutResponse(
+                url=url,
+                purchase_id=purchase_id,
+                price_cents=quote.price_cents,
+                currency=quote.currency,
+                difficulty=quote.difficulty,
+                rationale=quote.rationale,
+            )
 
     @router.post(
         "/questions/purchases/{purchase_id}/answer",
