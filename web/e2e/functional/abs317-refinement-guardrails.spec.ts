@@ -36,12 +36,18 @@ async function sendAndWait(
   await expect(page.locator(THREAD)).toContainText(expected, { timeout });
 }
 
-/** Wait for the send button to become enabled (previous turn finished). */
+/**
+ * Wait for the composer textarea to become enabled — the textarea is
+ * disabled={thinking} (no empty-value guard), so it becomes enabled as
+ * soon as the previous turn's stream finishes. The Send button has an
+ * additional !val.trim() guard that keeps it disabled on an empty input,
+ * so it cannot be used as an idle signal.
+ */
 async function waitForIdle(
   page: Parameters<typeof test>[1]["page"],
   timeout = 15_000,
 ) {
-  await expect(page.locator(SEND_BTN)).toBeEnabled({ timeout });
+  await expect(page.locator(TEXTAREA)).toBeEnabled({ timeout });
 }
 
 test.describe("refinement-window guardrails (ABS-317)", () => {
