@@ -1,45 +1,61 @@
-// Case-open client form. Two visible steps:
+// Case-open client form, migrated onto the priced-question catalog
+// (ABS-320). The product no longer sells quick/standard/complex tiers —
+// it sells answers to specific questions. The flow is now:
 //
-//   1. Anchor + first message + (optional) classify → preview tier
-//      recommendation + warn about an in-window match.
-//   2. Tier selector + Open button.
+//   1. Anchor (address) input + in-window match lookup (unchanged — a
+//      case is a free container, so finding an existing case lets the
+//      user continue it without buying anything).
+//   2. Pick a question from the live catalog (GET /api/billing/questions),
+//      or the "Other" free-form path.
+//   3. Catalog question → consultant-style intake gathers any required
+//      inputs (POST /api/billing/questions/intake), then checkout
+//      (POST /api/billing/checkout/question) → hosted-checkout redirect.
+//      "Other" → free quote (POST /api/billing/questions/quote) → buy
+//      (POST /api/billing/checkout/other) → hosted-checkout redirect.
 //
-// Stays in /components/marketing/ because the in-app product chrome
-// has its own composer that uses /api/chat directly. This form's job
-// is to mint the case credit reservation and hand the user off to
-// /app?case_id=N&first_message=<encoded>.
+// Stays in /components/marketing/ alongside the rest of the account
+// chrome. When billing is dormant (no payment processor configured) the
+// catalog marks every question `available: false`; the form still renders
+// the menu and disables purchase, mirroring buy-question-button.tsx so the
+// page is usable before checkout is wired.
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ANCHOR_KIND_DISPLAY,
   AnchorKind,
+  BillingMeResponse,
   CaseRow,
-  ClassifyResponse,
+  FreeStartResponse,
+  IntakeResponse,
   MatchResponse,
-  OpenCaseResponse,
-  Tier,
+  OtherCheckoutResponse,
+  QuestionCheckoutResponse,
+  QuestionMenuItem,
+  QuestionMenuResponse,
+  QuoteResponse,
   TIER_DISPLAY,
+  formatCurrency,
 } from "@/lib/cases";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 
-const TIER_BUDGETS: Record<Tier, string> = {
-  quick: "12k tokens · 4–6 reasoning steps",
-  standard: "45k tokens · 12–18 reasoning steps",
-  complex: "130k tokens · 35–50 reasoning steps",
-};
-
-// Only "address" is backed by a live data source in beta.
-// project_ref and development_application have no ingestion pipeline yet —
-// showing them causes users to create cases that immediately ask for an
-// address anyway (ABS-200).
+// Only "address" is backed by a live data source in beta (see ABS-200).
 const ANCHOR_KIND_OPTIONS: AnchorKind[] = ["address"];
 
-const TIER_OPTIONS: Tier[] = ["quick", "standard", "complex"];
+// Sentinel slug for the off-menu "Other" path. Not a catalog question —
+// it routes to the free-quote → buy flow rather than intake → checkout.
+const OTHER_SLUG = "__other__";
 
+type Working =
+  | "idle"
+  | "matching"
+  | "loadingMenu"
+  | "intake"
+  | "quoting"
+  | "checkout";
 
 export function CaseOpenForm({
   initialAnchorLabel = "",
@@ -51,16 +67,83 @@ export function CaseOpenForm({
   const router = useRouter();
   const [anchorLabel, setAnchorLabel] = useState(initialAnchorLabel);
   const [anchorKind, setAnchorKind] = useState<AnchorKind>("address");
-  const [message, setMessage] = useState(initialMessage);
-  const [tier, setTier] = useState<Tier>("standard");
   const [match, setMatch] = useState<CaseRow | null | undefined>(undefined);
-  const [classification, setClassification] = useState<
-    ClassifyResponse | null
-  >(null);
-  const [working, setWorking] = useState<
-    "idle" | "matching" | "classifying" | "opening"
-  >("idle");
+
+  // Catalog menu, loaded once on mount.
+  const [menu, setMenu] = useState<QuestionMenuResponse | null>(null);
+  const [menuError, setMenuError] = useState(false);
+
+  // Selection: a catalog slug, OTHER_SLUG, or null.
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
+
+  // Consultant-style intake state for the selected catalog question.
+  const [conversation, setConversation] = useState(initialMessage);
+  const [collectedInputs, setCollectedInputs] = useState<
+    Record<string, string>
+  >({});
+  const [intake, setIntake] = useState<IntakeResponse | null>(null);
+
+  // "Other" free-form path state.
+  const [otherQuestion, setOtherQuestion] = useState(initialMessage);
+  const [quote, setQuote] = useState<QuoteResponse | null>(null);
+
+  const [working, setWorking] = useState<Working>("idle");
   const [error, setError] = useState<string | null>(null);
+
+  // Free-question entitlement counter (ABS-314). null = not yet loaded
+  // or not authenticated; 0 = exhausted; >0 = credits available.
+  const [freeQuestionsRemaining, setFreeQuestionsRemaining] = useState<
+    number | null
+  >(null);
+
+  // Load the live question catalog. Mirrors the pricing page: dormant
+  // billing renders the menu with every question `available: false`.
+  useEffect(() => {
+    let cancelled = false;
+    setWorking("loadingMenu");
+    fetch("/api/billing/questions")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((data: QuestionMenuResponse) => {
+        if (!cancelled) setMenu(data);
+      })
+      .catch(() => {
+        if (!cancelled) setMenuError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setWorking("idle");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load the user's free-question counter. Auth-required; 401 just means
+  // the user is not signed in — silently keep null (no free-trial button).
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/billing/me")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((data: BillingMeResponse) => {
+        if (!cancelled)
+          setFreeQuestionsRemaining(data.free_questions_remaining);
+      })
+      .catch(() => {
+        /* unauthenticated or unavailable — leave null */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedQuestion: QuestionMenuItem | undefined =
+    menu?.questions.find((q) => q.slug === selectedSlug);
+
+  function resetSelectionState() {
+    setIntake(null);
+    setCollectedInputs({});
+    setQuote(null);
+    setError(null);
+  }
 
   async function lookupMatch() {
     if (!anchorLabel.trim()) return;
@@ -81,107 +164,248 @@ export function CaseOpenForm({
     }
   }
 
-  async function classify() {
-    if (!anchorLabel.trim() || !message.trim()) {
-      setError("Anchor and first message are required to classify.");
-      return;
-    }
-    setWorking("classifying");
-    setError(null);
-    try {
-      const r = await fetch("/api/cases/classify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          anchor_label: anchorLabel,
-          anchor_kind: anchorKind,
-          message,
-        }),
-      });
-      if (!r.ok) {
-        setError("Couldn't reach the classifier. Pick a tier manually.");
-        return;
-      }
-      const data = (await r.json()) as ClassifyResponse;
-      setClassification(data);
-      // If the classifier comes back with high confidence, suggest
-      // its tier (the user can still override with the radio group).
-      if (data.confidence >= 0.7) {
-        setTier(data.tier);
-      }
-    } finally {
-      setWorking("idle");
-    }
+  function unauthorized() {
+    router.push("/login?next=/cases/new");
   }
 
-  async function openCase() {
+  // Redirect the browser to a hosted-checkout URL.
+  function goToCheckout(url: string | undefined) {
+    if (url) {
+      window.location.href = url;
+      return true;
+    }
+    setError("Checkout returned no URL. Try again.");
+    return false;
+  }
+
+  // Payments-off path (ABS-320 / ABS-322): consume one free-question
+  // entitlement and open the case, then route to the in-app answer view.
+  // questionSlug is null for the "Other" off-menu path.
+  async function startFreeAnswer(
+    questionSlug: string | null,
+    inputs: Record<string, string>,
+  ) {
     if (!anchorLabel.trim()) {
-      setError("Anchor is required.");
+      setError("Add a property anchor before continuing.");
       return;
     }
-    setWorking("opening");
+    setWorking("checkout");
     setError(null);
     try {
       let r: Response;
       try {
-        r = await fetch("/api/cases", {
+        r = await fetch("/api/billing/questions/free-start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            anchor_label: anchorLabel,
+            question_slug: questionSlug,
+            inputs,
+            anchor_label: anchorLabel.trim(),
             anchor_kind: anchorKind,
-            tier,
           }),
         });
       } catch (e) {
-        // fetch() rejected — DNS, TLS, connection drop, Safari "Load
-        // failed" etc. Without this catch the error vanished silently
-        // (no error message, button stuck on "Opening case…" until the
-        // finally fires). Now the user sees something actionable.
         setError(
-          `Network error opening case: ${(e as Error).message}. Check your connection and try again.`,
+          `Network error: ${(e as Error).message}. Check your connection and try again.`,
         );
         return;
       }
-      if (r.status === 401) {
-        router.push("/login?next=/cases/new");
-        return;
-      }
+      if (r.status === 401) return unauthorized();
       if (r.status === 402) {
-        // No available credit at the requested tier.
-        const detail = await r.json().catch(() => null);
-        const t =
-          (detail?.detail as { tier?: string } | undefined)?.tier ?? tier;
-        setError(
-          `No available ${t} credits. Buy a credit on /pricing first.`,
-        );
+        // Race: another tab consumed the last credit between the render
+        // and this click. Update local counter so the UI flips to exhausted.
+        setFreeQuestionsRemaining(0);
         return;
       }
       if (!r.ok) {
         const detail = await r.json().catch(() => null);
-        const msg =
+        setError(
           (detail?.detail as { message?: string } | undefined)?.message ??
-          `Failed to open case (${r.status}).`;
-        setError(msg);
+            `Couldn't start free answer (${r.status}).`,
+        );
         return;
       }
-      const data = (await r.json()) as OpenCaseResponse;
-      // Redirect into the chat product with the case_id pre-bound.
-      // The first message is sent from the chat composer — passing it
-      // through the URL would risk losing it on a hard refresh, and
-      // the chat API call must happen client-side anyway.
-      const params = new URLSearchParams({
-        case_id: String(data.case.id),
-        case_number: String(data.case.user_case_number),
-      });
-      if (message.trim()) {
-        params.set("first_message", message.trim());
-      }
-      router.push(`/app?${params.toString()}`);
+      const data = (await r.json()) as FreeStartResponse;
+      setFreeQuestionsRemaining(data.free_questions_remaining);
+      router.push(`/app?case_id=${data.case_id}`);
     } finally {
-      setWorking("idle");
+      setWorking((w) => (w === "checkout" ? "idle" : w));
     }
   }
+
+  // Catalog question: run one intake pass. The anchor address is seeded as
+  // a collected input so an address-bearing question never re-asks for it.
+  async function runIntake() {
+    if (!selectedQuestion) return;
+    setWorking("intake");
+    setError(null);
+    const seeded: Record<string, string> = { ...collectedInputs };
+    if (anchorKind === "address" && anchorLabel.trim() && !seeded.address) {
+      seeded.address = anchorLabel.trim();
+    }
+    try {
+      let r: Response;
+      try {
+        r = await fetch("/api/billing/questions/intake", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question_slug: selectedQuestion.slug,
+            conversation,
+            inputs: seeded,
+          }),
+        });
+      } catch (e) {
+        setError(
+          `Network error: ${(e as Error).message}. Check your connection and try again.`,
+        );
+        return;
+      }
+      if (r.status === 401) return unauthorized();
+      if (!r.ok) {
+        const detail = await r.json().catch(() => null);
+        setError(
+          (detail?.detail as { message?: string } | undefined)?.message ??
+            `Couldn't process intake (${r.status}).`,
+        );
+        return;
+      }
+      const data = (await r.json()) as IntakeResponse;
+      setIntake(data);
+      setCollectedInputs(data.inputs);
+      // Reflect any newly-extracted address back onto the anchor field so
+      // the two stay consistent.
+      if (data.inputs.address && anchorKind === "address" && !anchorLabel) {
+        setAnchorLabel(data.inputs.address);
+      }
+      if (data.complete) {
+        // Payments-off: use free-question entitlement instead of Stripe.
+        if (!menu?.enabled) {
+          await startFreeAnswer(selectedQuestion.slug, data.inputs);
+        } else {
+          await checkoutQuestion(selectedQuestion.slug, data.inputs);
+        }
+      }
+    } finally {
+      setWorking((w) => (w === "intake" ? "idle" : w));
+    }
+  }
+
+  // Catalog question checkout: hand the collected inputs to the backend,
+  // which authorizes the card and returns a hosted-checkout URL.
+  async function checkoutQuestion(
+    slug: string,
+    inputs: Record<string, string>,
+  ) {
+    setWorking("checkout");
+    setError(null);
+    try {
+      let r: Response;
+      try {
+        r = await fetch("/api/billing/checkout/question", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question_slug: slug, inputs }),
+        });
+      } catch (e) {
+        setError(
+          `Network error opening checkout: ${(e as Error).message}. Check your connection and try again.`,
+        );
+        return;
+      }
+      if (r.status === 401) return unauthorized();
+      if (!r.ok) {
+        const detail = await r.json().catch(() => null);
+        setError(
+          (detail?.detail as { message?: string } | undefined)?.message ??
+            `Checkout failed (${r.status}).`,
+        );
+        return;
+      }
+      const data = (await r.json()) as QuestionCheckoutResponse & {
+        url?: string;
+      };
+      goToCheckout(data.url);
+    } finally {
+      setWorking((w) => (w === "checkout" ? "idle" : w));
+    }
+  }
+
+  // "Other": free quote first (no charge), then the user confirms to buy.
+  async function getQuote() {
+    if (!otherQuestion.trim()) {
+      setError("Describe your question to get a quote.");
+      return;
+    }
+    setWorking("quoting");
+    setError(null);
+    try {
+      let r: Response;
+      try {
+        r = await fetch("/api/billing/questions/quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: otherQuestion.trim() }),
+        });
+      } catch (e) {
+        setError(
+          `Network error: ${(e as Error).message}. Check your connection and try again.`,
+        );
+        return;
+      }
+      if (r.status === 401) return unauthorized();
+      if (!r.ok) {
+        const detail = await r.json().catch(() => null);
+        setError(
+          (detail?.detail as { message?: string } | undefined)?.message ??
+            `Couldn't quote that question (${r.status}).`,
+        );
+        return;
+      }
+      setQuote((await r.json()) as QuoteResponse);
+    } finally {
+      setWorking((w) => (w === "quoting" ? "idle" : w));
+    }
+  }
+
+  // "Other" checkout: the backend re-quotes server-side and authorizes.
+  async function buyOther() {
+    if (!otherQuestion.trim()) return;
+    setWorking("checkout");
+    setError(null);
+    try {
+      let r: Response;
+      try {
+        r = await fetch("/api/billing/checkout/other", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: otherQuestion.trim() }),
+        });
+      } catch (e) {
+        setError(
+          `Network error opening checkout: ${(e as Error).message}. Check your connection and try again.`,
+        );
+        return;
+      }
+      if (r.status === 401) return unauthorized();
+      if (!r.ok) {
+        const detail = await r.json().catch(() => null);
+        setError(
+          (detail?.detail as { message?: string } | undefined)?.message ??
+            `Checkout failed (${r.status}).`,
+        );
+        return;
+      }
+      const data = (await r.json()) as OtherCheckoutResponse & {
+        url?: string;
+      };
+      goToCheckout(data.url);
+    } finally {
+      setWorking((w) => (w === "checkout" ? "idle" : w));
+    }
+  }
+
+  const busy = working !== "idle";
 
   return (
     <div className="flex flex-col gap-6">
@@ -193,7 +417,6 @@ export function CaseOpenForm({
             onChange={(e) => {
               setAnchorKind(e.target.value as AnchorKind);
               setMatch(undefined);
-              setClassification(null);
             }}
             className="bg-surface border border-hair px-3 py-2 text-[13.5px]"
           >
@@ -212,15 +435,13 @@ export function CaseOpenForm({
               setError(null);
             }}
             onBlur={lookupMatch}
-            placeholder={
-              anchorKind === "address"
-                ? "e.g. 1234 Main St, Halifax"
-                : anchorKind === "project_ref"
-                  ? "e.g. Project NS-2026-04"
-                  : "e.g. DA-2024-12345"
-            }
+            placeholder="e.g. 1234 Main St, Halifax"
             className="flex-1 bg-surface border border-hair px-3 py-2 text-[13.5px]"
           />
+        </div>
+        <div className="text-[12px] text-text-muted mt-1.5">
+          Anchor your inquiry to a property. Opening or continuing a case is
+          free — you only pay when you buy an answer below.
         </div>
       </Field>
 
@@ -233,7 +454,7 @@ export function CaseOpenForm({
             You opened a case for this anchor on{" "}
             {new Date(match.last_activity_at).toLocaleDateString("en-CA")}{" "}
             ({match.current_tier ? TIER_DISPLAY[match.current_tier] : "—"}).
-            Continuing it costs no credits.
+            Continuing it is free.
           </div>
           <div className="mt-3 flex gap-2">
             <Btn
@@ -243,108 +464,271 @@ export function CaseOpenForm({
             >
               Continue case
             </Btn>
-            <Btn
-              variant="quiet"
-              size="sm"
-              onClick={() => setMatch(null)}
-            >
+            <Btn variant="quiet" size="sm" onClick={() => setMatch(null)}>
               Start new case anyway
             </Btn>
           </div>
         </div>
       )}
 
-      <Field label="First message">
-        <textarea
-          value={message}
-          onChange={(e) => {
-            setMessage(e.target.value);
-            setError(null);
-          }}
-          rows={5}
-          placeholder="Describe the inquiry. The classifier reads this to recommend a tier."
-          className="bg-surface border border-hair px-3 py-2 text-[13.5px] font-sans resize-y w-full"
-        />
-        <div className="flex gap-2 mt-2">
-          <Btn
-            variant="quiet"
-            size="sm"
-            onClick={classify}
-            disabled={working !== "idle"}
-          >
-            {working === "classifying"
-              ? "Classifying…"
-              : "Get tier recommendation"}
-          </Btn>
-        </div>
-      </Field>
-
-      {classification && (
-        <div className="bg-surface-alt border border-hair p-4">
-          <Mono size={11} muted>
-            CLASSIFIER RECOMMENDS · {Math.round(classification.confidence * 100)}%
-            CONFIDENCE
-          </Mono>
-          <div className="mt-1 text-[14px] font-semibold capitalize">
-            {TIER_DISPLAY[classification.tier]}
+      <Field label="Choose a question">
+        {menuError ? (
+          <div className="bg-surface-alt border border-hair p-4 text-[13px] text-text-muted">
+            We couldn&apos;t load the question menu. Refresh in a moment, or
+            see{" "}
+            <a className="underline" href="/pricing">
+              pricing
+            </a>
+            .
           </div>
-          {classification.reasons.length > 0 && (
-            <ul className="mt-2 text-[12.5px] text-text-muted list-disc list-inside">
-              {classification.reasons.map((r) => (
-                <li key={r}>{r}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      <Field label="Open at tier">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {TIER_OPTIONS.map((t) => (
-            <label
-              key={t}
-              className={`border p-3 cursor-pointer flex flex-col gap-1 ${
-                tier === t ? "border-text" : "border-hair"
+        ) : menu === null ? (
+          <div className="text-[13px] text-text-muted">Loading questions…</div>
+        ) : (
+          <div
+            className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+            data-testid="question-menu"
+          >
+            {menu.questions.map((q) => (
+              <button
+                key={q.slug}
+                type="button"
+                data-testid={`question-option-${q.slug}`}
+                onClick={() => {
+                  setSelectedSlug(q.slug);
+                  resetSelectionState();
+                }}
+                className={`text-left border p-3 flex flex-col gap-1 transition-colors ${
+                  selectedSlug === q.slug
+                    ? "border-text"
+                    : "border-hair hover:bg-surface-alt"
+                }`}
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-semibold text-[13.5px]">
+                    {q.display_name}
+                  </span>
+                  <span className="font-mono text-[12px] whitespace-nowrap">
+                    {formatCurrency(q.price_cents, q.currency)}
+                  </span>
+                </div>
+                <span className="text-[12px] text-text-muted leading-[1.4]">
+                  {q.summary}
+                </span>
+              </button>
+            ))}
+            <button
+              type="button"
+              data-testid="question-option-other"
+              onClick={() => {
+                setSelectedSlug(OTHER_SLUG);
+                resetSelectionState();
+              }}
+              className={`text-left border p-3 flex flex-col gap-1 transition-colors ${
+                selectedSlug === OTHER_SLUG
+                  ? "border-text"
+                  : "border-hair hover:bg-surface-alt"
               }`}
             >
-              <div className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="tier"
-                  value={t}
-                  checked={tier === t}
-                  onChange={() => setTier(t)}
-                />
-                <span className="font-semibold capitalize">
-                  {TIER_DISPLAY[t]}
-                </span>
-              </div>
-              <span className="text-[12px] text-text-muted">
-                {TIER_BUDGETS[t]}
+              <span className="font-semibold text-[13.5px]">
+                Other — my question isn&apos;t listed
               </span>
-            </label>
-          ))}
-        </div>
+              <span className="text-[12px] text-text-muted leading-[1.4]">
+                Describe it and we&apos;ll quote a price before you buy.
+              </span>
+            </button>
+          </div>
+        )}
       </Field>
 
-      {error && (
-        <div className="text-[13px] text-red-600">{error}</div>
+      {/* Catalog question: consultant-style intake. */}
+      {selectedQuestion && (
+        <Field label="Describe your situation">
+          <textarea
+            value={conversation}
+            onChange={(e) => {
+              setConversation(e.target.value);
+              setError(null);
+            }}
+            rows={4}
+            placeholder="Tell us what you want answered. We'll ask for anything else we need before you pay."
+            className="bg-surface border border-hair px-3 py-2 text-[13.5px] font-sans resize-y w-full"
+          />
+
+          {intake && !intake.complete && intake.prompt && (
+            <div
+              className="bg-surface-alt border border-hair p-4 mt-2"
+              data-testid="intake-prompt"
+            >
+              <Mono size={11} muted>
+                ONE MORE THING
+              </Mono>
+              <div className="mt-1 text-[13.5px]">{intake.prompt}</div>
+            </div>
+          )}
+
+          {selectedQuestion.available ? (
+            <div className="flex gap-2 mt-2">
+              <Btn variant="accent" size="md" onClick={runIntake} disabled={busy}>
+                {working === "intake"
+                  ? "Checking…"
+                  : working === "checkout"
+                    ? "Opening checkout…"
+                    : `Continue · ${formatCurrency(
+                        selectedQuestion.price_cents,
+                        selectedQuestion.currency,
+                      )}`}
+              </Btn>
+            </div>
+          ) : freeQuestionsRemaining !== null && freeQuestionsRemaining > 0 ? (
+            <div className="flex gap-2 mt-2">
+              <Btn
+                variant="accent"
+                size="md"
+                onClick={runIntake}
+                disabled={busy}
+                data-testid="free-trial-btn"
+              >
+                {working === "intake"
+                  ? "Checking…"
+                  : working === "checkout"
+                    ? "Starting…"
+                    : "Get answer (free trial)"}
+              </Btn>
+            </div>
+          ) : freeQuestionsRemaining === 0 ? (
+            <div
+              className="mt-2 text-[12.5px] text-text-muted"
+              data-testid="free-trial-exhausted"
+            >
+              Free trial used — paid answers coming soon.
+            </div>
+          ) : (
+            <div className="mt-2 text-[12.5px] text-text-muted">
+              Checkout isn&apos;t configured for this question yet.
+            </div>
+          )}
+        </Field>
       )}
 
-      <div className="flex gap-3">
-        <Btn
-          variant="accent"
-          size="md"
-          onClick={openCase}
-          disabled={working !== "idle"}
-        >
-          {working === "opening" ? "Opening case…" : "Open case"}
-        </Btn>
-      </div>
+      {/* "Other" free-form path: free quote, then buy. */}
+      {selectedSlug === OTHER_SLUG && (
+        <Field label="Describe your question">
+          <textarea
+            value={otherQuestion}
+            onChange={(e) => {
+              setOtherQuestion(e.target.value);
+              setQuote(null);
+              setError(null);
+            }}
+            rows={4}
+            placeholder="Describe the off-menu question you want answered."
+            className="bg-surface border border-hair px-3 py-2 text-[13.5px] font-sans resize-y w-full"
+          />
+
+          {quote && (
+            <div
+              className="bg-surface-alt border border-hair p-4 mt-2"
+              data-testid="other-quote"
+            >
+              <Mono size={11} muted>
+                QUOTE · {quote.difficulty_display_name.toUpperCase()}
+              </Mono>
+              <div className="mt-1 text-[20px] font-extrabold">
+                {formatCurrency(quote.price_cents, quote.currency)}
+              </div>
+              <div className="mt-1 text-[12.5px] text-text-muted">
+                {quote.rationale}
+              </div>
+            </div>
+          )}
+
+          {menu && !menu.enabled ? (
+            !quote ? (
+              <div className="flex gap-2 mt-2">
+                <Btn
+                  variant="quiet"
+                  size="sm"
+                  onClick={getQuote}
+                  disabled={busy}
+                >
+                  {working === "quoting" ? "Quoting…" : "Get a price (free)"}
+                </Btn>
+              </div>
+            ) : freeQuestionsRemaining !== null &&
+              freeQuestionsRemaining > 0 ? (
+              <div className="flex gap-2 mt-2">
+                <Btn
+                  variant="accent"
+                  size="md"
+                  onClick={() =>
+                    startFreeAnswer(null, { question: otherQuestion.trim() })
+                  }
+                  disabled={busy}
+                  data-testid="free-trial-btn-other"
+                >
+                  {working === "checkout"
+                    ? "Starting…"
+                    : "Get answer (free trial)"}
+                </Btn>
+                <Btn
+                  variant="quiet"
+                  size="sm"
+                  onClick={getQuote}
+                  disabled={busy}
+                >
+                  Re-quote
+                </Btn>
+              </div>
+            ) : freeQuestionsRemaining === 0 ? (
+              <div
+                className="mt-2 text-[12.5px] text-text-muted"
+                data-testid="free-trial-exhausted-other"
+              >
+                Free trial used — paid answers coming soon.
+              </div>
+            ) : (
+              <div className="mt-2 text-[12.5px] text-text-muted">
+                Off-menu checkout isn&apos;t configured yet.
+              </div>
+            )
+          ) : !quote ? (
+            <div className="flex gap-2 mt-2">
+              <Btn
+                variant="quiet"
+                size="sm"
+                onClick={getQuote}
+                disabled={busy}
+              >
+                {working === "quoting" ? "Quoting…" : "Get a price (free)"}
+              </Btn>
+            </div>
+          ) : (
+            <div className="flex gap-2 mt-2">
+              <Btn
+                variant="accent"
+                size="md"
+                onClick={buyOther}
+                disabled={busy}
+              >
+                {working === "checkout"
+                  ? "Opening checkout…"
+                  : `Buy answer · ${formatCurrency(
+                      quote.price_cents,
+                      quote.currency,
+                    )}`}
+              </Btn>
+              <Btn variant="quiet" size="sm" onClick={getQuote} disabled={busy}>
+                Re-quote
+              </Btn>
+            </div>
+          )}
+        </Field>
+      )}
+
+      {error && <div className="text-[13px] text-red-600">{error}</div>}
     </div>
   );
 }
-
 
 function Field({
   label,

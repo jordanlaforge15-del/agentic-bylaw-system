@@ -1,61 +1,38 @@
-// Functional: a network failure on POST /api/cases (Safari "Load failed",
-// dropped connection, DNS error) surfaces an actionable error message in
-// the case-open form instead of leaving the "Open case" button stuck on
-// "Opening case…" with no feedback.
+// Functional: the case-open form tolerates a network failure on the
+// anchor match-lookup without crashing or wedging the UI.
 //
-// Regression for ABS-9 (Linear): prod user norman.stephanie@gmail.com hit
-// "Network error: Load failed" on Safari and was given no recovery path —
-// the fetch().catch was missing, so the rejection bubbled into the
-// finally{} that re-enabled the button but the surrounding code never
-// surfaced the error to the user. The /api/cases fetch is now wrapped in
-// a try/catch that sets the form's error banner; this spec pins that
-// behaviour.
-//
-// Implementation: Playwright's route.abort("failed") tells the browser to
-// reject the fetch with the same NS_ERROR_NET_RESET / NetworkError shape
-// Safari produces on a dropped connection. The frontend has no way to
-// tell the simulated abort from a real one, so this is the cleanest
-// in-browser reproduction of the original bug.
+// History: this spec originally guarded POST /api/cases (the old
+// tier-credit "Open case" button) against a silent hang on a dropped
+// connection (ABS-9, Safari "Load failed"). ABS-320 migrated the form off
+// the tier model onto the priced-question catalog, so that button and its
+// POST are gone. The always-reachable network call in the migrated form is
+// the on-blur anchor match-lookup (GET /api/cases/match); this spec pins
+// that a failed lookup degrades gracefully (treated as "no match") and the
+// form stays usable — the question menu still renders and is interactive.
 
 import { expect, test } from "../fixtures/test-env";
 
-test("fetch failure on POST /api/cases shows a network-error banner", async ({
-  page,
-}) => {
+test("a failed anchor match-lookup degrades gracefully", async ({ page }) => {
   await page.goto("/cases/new");
 
-  // Force every POST /api/cases to fail at the network layer.
-  await page.route("**/api/cases", (route) => {
-    if (route.request().method() === "POST") {
-      return route.abort("failed");
-    }
-    return route.continue();
-  });
+  // Force the match-lookup to fail at the network layer.
+  await page.route("**/api/cases/match*", (route) => route.abort("failed"));
 
   const anchor = `network-err-${Date.now()}-${Math.random()
     .toString(36)
     .slice(2, 8)}`;
-  await page.getByPlaceholder(/1234 Main St, Halifax/).fill(anchor);
-  await page
-    .getByPlaceholder(/Describe the inquiry/)
-    .fill("Triggering a network failure on case open.");
+  const anchorInput = page.getByPlaceholder(/1234 Main St, Halifax/);
+  await anchorInput.fill(anchor);
+  await anchorInput.blur();
 
-  const openBtn = page.getByRole("button", { name: /^Open case$/ });
-  await openBtn.click();
+  // No "existing case" banner is shown (the failed lookup is treated as
+  // "no match"), and crucially the form did not crash: the question menu
+  // is still rendered and interactive.
+  await expect(page.getByText(/EXISTING CASE FOUND/)).toHaveCount(0);
+  await expect(page.getByTestId("question-menu")).toBeVisible();
+  await page.getByTestId("question-option-permitted_use").click();
+  await expect(page.getByText(/Describe your situation/i)).toBeVisible();
 
-  // The new try/catch produces a message starting with "Network error
-  // opening case:". Without the fix the form sat indefinitely with no
-  // visible error.
-  await expect(page.getByText(/Network error opening case/i)).toBeVisible({
-    timeout: 5_000,
-  });
-
-  // And the button is no longer stuck on "Opening case…" — the finally
-  // block returns `working` to "idle" so the user can retry without a
-  // page reload.
-  await expect(openBtn).toBeEnabled();
-  await expect(openBtn).toHaveText(/^Open case$/);
-
-  // The URL stayed on /cases/new (we did NOT navigate into /app).
+  // We stayed on /cases/new.
   expect(new URL(page.url()).pathname).toBe("/cases/new");
 });

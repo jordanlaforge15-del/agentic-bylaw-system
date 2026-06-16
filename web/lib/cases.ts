@@ -44,6 +44,7 @@ export type BillingMeResponse = {
   stripe_customer_id: string | null;
   tier_balances: TierBalance[];
   total_available_credits: number;
+  free_questions_remaining: number;
 };
 
 export type PurchaseSummary = {
@@ -162,6 +163,54 @@ export function humanizeQuestionSlug(slug: string): string {
     .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
     .join(" ");
 }
+// Consultant-style intake (ABS-315). One pass over the user's free-form
+// description: the backend extracts whatever inputs it can and reports
+// whether the question's required-input schema is satisfied. Always free.
+export type IntakeResponse = {
+  question_slug: string;
+  complete: boolean;
+  inputs: Record<string, string>;
+  missing_required: string[];
+  missing_optional: string[];
+  prompt: string;
+};
+
+// Checkout for a catalog question (POST /api/billing/checkout/question).
+export type QuestionCheckoutResponse = {
+  url: string;
+  purchase_id: number;
+};
+
+// Free off-menu price quote (ABS-316). Producing it never charges.
+export type QuoteResponse = {
+  question: string;
+  difficulty: string;
+  difficulty_display_name: string;
+  price_cents: number;
+  currency: string;
+  rationale: string;
+  band_low_cents: number;
+  band_high_cents: number;
+};
+
+// Free-question trial start (POST /api/billing/questions/free-start).
+// Used when payments are off (ABS-320 / ABS-322): consumes one free
+// entitlement, opens the case, and returns the case_id for routing.
+export type FreeStartResponse = {
+  case_id: number;
+  anchor_label: string;
+  free_questions_remaining: number;
+};
+
+// Checkout for an off-menu "Other" question (POST /api/billing/checkout/other).
+export type OtherCheckoutResponse = {
+  url: string;
+  purchase_id: number;
+  price_cents: number;
+  currency: string;
+  difficulty: string;
+  rationale: string;
+};
 
 export const ANCHOR_KIND_DISPLAY: Record<AnchorKind, string> = {
   address: "Property address",

@@ -23,7 +23,7 @@ const FAQS: Array<{ q: string; a: string }> = [
   },
   {
     q: "How is billing set up right now?",
-    a: "Pricing is published per case credit (Quick / Standard / Complex). On this deployment the purchase flow may be dormant — beta accounts are typically granted credits manually. See the Billing page once signed in.",
+    a: "You pay per answer: pick a question from the menu, see its price up front, and buy just that answer (the Pricing page lists them). Opening a case is free. On this deployment the purchase flow may be dormant — beta accounts are typically granted access manually. See the Billing page once signed in.",
   },
 ];
 

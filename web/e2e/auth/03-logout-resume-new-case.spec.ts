@@ -56,20 +56,19 @@ test("logout / login + open a second case shows both on /cases", async ({
   // what makes the second case attach correctly.
   await signInAs(context, identity);
 
-  // Second case via the marketing form so the spec hits the open-
-  // case UI surface at least once. Unique anchor per identity so
-  // the 30-day match window doesn't collapse it onto the first
-  // case.
+  // Visit the migrated case-open surface so the spec still hits that UI
+  // seam (ABS-320: it now renders the priced-question menu rather than the
+  // tier selector + "Open case" button).
   await page.goto("/cases/new");
+  await expect(page.getByTestId("question-menu")).toBeVisible();
+
+  // Second case via the authenticated API (a case is a free container; the
+  // form sells answers rather than minting it). Unique anchor per identity
+  // so the 30-day match window doesn't collapse it onto the first case.
   const secondAnchor = `Resume New Second ${identity.subUserId}`;
-  await page
-    .getByPlaceholder(/1234 Main St, Halifax/)
-    .fill(secondAnchor);
-  await page
-    .getByPlaceholder(/Describe the inquiry/)
-    .fill("Different parcel, follow-up question after a logout cycle.");
-  await page.getByRole("button", { name: /^Open case$/ }).click();
-  await page.waitForURL(/\/app\?case_id=\d+/);
+  await openCaseAsIdentity(context, identity, {
+    anchorLabel: secondAnchor,
+  });
 
   // Both cases must appear on /cases for the *same* user. We
   // assert by anchor label, which is unique per spec run.
