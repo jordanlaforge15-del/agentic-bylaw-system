@@ -1341,11 +1341,25 @@ def build_dormant_billing_router(
                     anchor_label=body.anchor_label,
                     anchor_kind=body.anchor_kind,
                 )
+                # Read the post-decrement count while still inside the
+                # transaction (consume_free_question has already flushed
+                # it). We cannot trust user.free_questions_remaining here
+                # because user_resolver may return the detached auth_session
+                # User object, which is a different Python instance from the
+                # locked_user that consume_free_question actually decremented.
+                remaining = (
+                    db.scalar(
+                        select(User.free_questions_remaining).where(
+                            User.id == user.id
+                        )
+                    )
+                    or 0
+                )
                 db.commit()
                 return FreeStartResponse(
                     case_id=case.id,
                     anchor_label=case.anchor_label,
-                    free_questions_remaining=user.free_questions_remaining,
+                    free_questions_remaining=remaining,
                 )
 
     else:

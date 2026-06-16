@@ -20,7 +20,6 @@ import * as path from "node:path";
 
 import {
   E2E_API_URL,
-  E2E_BASE_URL,
   expect,
   openCaseViaApi,
   test,
@@ -133,41 +132,26 @@ test("billing dormant + free credits: shows free-trial button, not 'not configur
 
 test("billing dormant + zero free credits: shows exhausted message", async ({
   page,
-  request,
 }) => {
-  // Seed a zero-credit user and sign the browser in as them by swapping
-  // the auth cookies that authedContext already set.
-  const userId = makeUserId("zero");
-  seedUser({ userId, freeQuestions: 0 });
-
-  // Mint a JWT for the zero-credit user via the test helper.
-  const jwtRes = await request.post(`${E2E_API_URL}/v1/_test/mint-jwt`, {
-    data: { sub: userId, email: `${userId}@e2e.test` },
-  });
-  const { token } = (await jwtRes.json()) as { token: string };
-
-  // Overwrite the auth cookies for this page's context.
-  const origin = new URL(E2E_BASE_URL);
-  await page.context().addCookies([
-    {
-      name: "abs_test_sub_user_id",
-      value: userId,
-      domain: origin.hostname,
-      path: "/",
-      httpOnly: false,
-      secure: false,
-      sameSite: "Lax",
-    },
-    {
-      name: "abs_test_clerk_jwt",
-      value: token,
-      domain: origin.hostname,
-      path: "/",
-      httpOnly: false,
-      secure: false,
-      sameSite: "Lax",
-    },
-  ]);
+  // Intercept the billing/me call at the browser level so we don't have
+  // to fight the JWT-cookie pipeline that the e2e mock-Clerk stack uses.
+  // The cookie-override approach is unreliable here because
+  // isClerkConfigured() returns true in e2e (CLERK_SECRET_KEY is set to
+  // the mock key), so buildAdvisorAuthHeaders() uses auth().getToken()
+  // rather than the X-Test-User-Id header path.
+  await page.route("**/api/billing/me", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        enabled: false,
+        stripe_customer_id: null,
+        tier_balances: [],
+        total_available_credits: 0,
+        free_questions_remaining: 0,
+      }),
+    }),
+  );
 
   await page.goto("/cases/new");
   await expect(page.getByTestId("question-menu")).toBeVisible();
