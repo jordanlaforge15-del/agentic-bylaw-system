@@ -162,6 +162,11 @@ export function CaseOpenForm({
       }
       const data = (await r.json()) as MatchResponse;
       setMatch(data.case);
+    } catch {
+      // A dropped connection (Safari "Load failed") must degrade to
+      // "no match", not bubble as an unhandled rejection that wedges the
+      // form. See case-open-network-error.spec.ts.
+      setMatch(null);
     } finally {
       setWorking("idle");
     }
