@@ -127,14 +127,22 @@ test("self-heal is idempotent — a consumed question is not topped back up on n
   const first = await billingMe(request, userId);
   expect(first.free_questions_remaining).toBe(FREE_QUESTION_GRANT);
 
-  // Spend one free question on a case (consumes the entitlement).
+  // Spend one free question (consumes the entitlement).
+  // ABS-324: free-start now opens an Answers QuestionPurchase and validates
+  // the question's required inputs BEFORE reserving the credit (the
+  // failed-question rule). `permitted_use` requires both `address` and
+  // `proposed_use`, so the call must supply complete inputs or it 400s
+  // ("missing_required_inputs") instead of consuming the free question.
   const start = await request.post(
     `${E2E_API_URL}/v1/billing/questions/free-start`,
     {
       headers: { "X-Test-User-Id": userId },
       data: {
         question_slug: "permitted_use",
-        inputs: { address: "123 Test St, Halifax" },
+        inputs: {
+          address: "123 Test St, Halifax",
+          proposed_use: "a four-unit dwelling",
+        },
         anchor_label: "123 Test St, Halifax",
         anchor_kind: "address",
       },
