@@ -3,9 +3,12 @@
 // The product pivoted from the quick/standard/complex tier model to a
 // priced-question catalog ("buy an answer"). This spec pins the migrated
 // primary entry flow: the case-open form renders the live question menu
-// (GET /api/billing/questions — the 5 launch questions + an "Other"
-// option), keeps the free anchor input + in-window match behaviour, and
-// shows none of the retired tier / reasoning-step / classifier copy.
+// (GET /api/billing/questions — the 5 launch questions), keeps the free
+// anchor input + in-window match behaviour, and shows none of the retired
+// tier / reasoning-step / classifier copy.
+//
+// ABS-325 removed the off-menu "Other" free-form option from the menu;
+// absence of that entry point is pinned in abs325-other-disabled.spec.ts.
 //
 // Billing is dormant in the e2e stack (no Stripe), so the catalog marks
 // every question `available: false`. The default demo user is seeded with
@@ -76,7 +79,7 @@ test("case-open form renders the priced-question menu, not tiers", async ({
   // The question menu loads from the live catalog.
   await expect(page.getByTestId("question-menu")).toBeVisible();
 
-  // The 5 launch questions are present, with grounded prices, plus "Other".
+  // The 5 launch questions are present, with grounded prices.
   await expect(
     page.getByTestId("question-option-permitted_use"),
   ).toBeVisible();
@@ -92,7 +95,6 @@ test("case-open form renders the priced-question menu, not tiers", async ({
   await expect(
     page.getByTestId("question-option-variance_justification"),
   ).toBeVisible();
-  await expect(page.getByTestId("question-option-other")).toBeVisible();
 
   // The cheapest launch question shows its $79 anchor price.
   await expect(
@@ -165,25 +167,6 @@ test("billing dormant + zero free credits: shows exhausted message", async ({
     page.getByText(/Free trial used.*paid answers coming soon/i),
   ).toBeVisible();
   await expect(page.getByTestId("free-trial-btn")).not.toBeVisible();
-});
-
-test("the Other path shows quote step then free-trial button (billing dormant)", async ({
-  page,
-}) => {
-  await page.goto("/cases/new");
-  await expect(page.getByTestId("question-menu")).toBeVisible();
-
-  await page.getByTestId("question-option-other").click();
-  await expect(page.getByText(/Describe your question/i)).toBeVisible();
-
-  // With billing dormant and free credits, the user still gets the quote
-  // step first (always free), then will see the free-trial buy button.
-  await expect(page.getByText(/Get a price \(free\)/i)).toBeVisible();
-  // The "Off-menu checkout isn't configured yet" message is replaced by
-  // the free-trial UX — no checkout error visible upfront.
-  await expect(
-    page.getByText(/Off-menu checkout isn.?t configured yet/i),
-  ).not.toBeVisible();
 });
 
 test("anchor still surfaces an in-window existing-case match", async ({
