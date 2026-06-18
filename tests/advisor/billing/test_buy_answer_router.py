@@ -37,6 +37,9 @@ def _settings() -> AdvisorBillingSettings:
     return AdvisorBillingSettings(
         ADVISOR_BILLING_ENABLED=True,
         ADVISOR_PAYMENTS_ENABLED=True,
+        # ABS-325: the off-menu "Other" path is disabled by default. These
+        # tests exercise that (intact) engine end to end, so flip it on.
+        ADVISOR_OTHER_QUESTION_ENABLED=True,
         STRIPE_WEBHOOK_SECRET="whsec_test",
         STRIPE_PRICE_QUESTION_PERMITTED_USE="price_permitted_use",
     )
@@ -272,6 +275,80 @@ def test_full_other_buy_flow_over_http(tmp_path: Path) -> None:
     assert answered["question_slug"] == "other"
     assert answered["answer"]
     assert [c.action for c in stripe.payment_intent_calls] == ["capture"]
+
+
+def _build_client_other_disabled(tmp_path: Path) -> TestClient:
+    """Build a router with the off-menu path disabled (ABS-325 default).
+
+    Identical wiring to ``_build_client`` but ``other_question_enabled`` is
+    left at its default False, so the quote / checkout-other endpoints must
+    reject. Everything else (catalog checkout, intake, …) stays live.
+    """
+    db_url = f"sqlite:///{tmp_path / 'advisor.db'}"
+    create_all(db_url)
+    settings = AdvisorBillingSettings(
+        ADVISOR_BILLING_ENABLED=True,
+        ADVISOR_PAYMENTS_ENABLED=True,
+        STRIPE_WEBHOOK_SECRET="whsec_test",
+        STRIPE_PRICE_QUESTION_PERMITTED_USE="price_permitted_use",
+    )
+
+    def _user_dependency(x_test_user_id: str = Header(default="u1")) -> str:
+        return x_test_user_id
+
+    def _user_resolver(auth_session, db) -> User:  # noqa: ANN001
+        user = (
+            db.query(User)
+            .filter(User.clerk_user_id == auth_session)
+            .one_or_none()
+        )
+        if user is None:
+            user = User(clerk_user_id=auth_session, email=f"{auth_session}@x.com")
+            db.add(user)
+            db.flush()
+        return user
+
+    router = build_billing_router(
+        settings=settings,
+        client_factory=lambda: MockStripeClient(
+            checkout_result=CheckoutSessionResult(
+                session_id="cs_test", url="https://stripe.test/checkout"
+            )
+        ),
+        db_session_factory=lambda: session_scope(db_url),
+        user_dependency=_user_dependency,
+        user_resolver=_user_resolver,
+        answer_gateway=MockGateway(callable_=build_dispatcher()),
+        answer_persona="Test persona.",
+        answer_retrieval_factory=_StubRetrieval(),
+    )
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_quote_endpoint_rejects_when_other_disabled(tmp_path: Path) -> None:
+    # ABS-325: the off-menu free-form path is off by default. The quote
+    # endpoint must 503 even though the engine is fully wired.
+    client = _build_client_other_disabled(tmp_path)
+    res = client.post(
+        "/v1/billing/questions/quote",
+        json={"question": "Is a backyard suite allowed? MOCK_QUOTE_SIMPLE"},
+    )
+    assert res.status_code == 503, res.text
+    assert res.json()["detail"]["code"] == "other_question_disabled"
+
+
+def test_checkout_other_rejects_when_other_disabled(tmp_path: Path) -> None:
+    # ABS-325: buying an off-menu answer must 503 when the flag is off, and
+    # never authorize a card.
+    client = _build_client_other_disabled(tmp_path)
+    res = client.post(
+        "/v1/billing/checkout/other",
+        json={"question": "A complex custom variance ask. MOCK_QUOTE_COMPLEX"},
+    )
+    assert res.status_code == 503, res.text
+    assert res.json()["detail"]["code"] == "other_question_disabled"
 
 
 # -- Consultant-style intake detection (ABS-315) ---------------------------

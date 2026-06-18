@@ -5,13 +5,18 @@
 //   1. Anchor (address) input + in-window match lookup (unchanged — a
 //      case is a free container, so finding an existing case lets the
 //      user continue it without buying anything).
-//   2. Pick a question from the live catalog (GET /api/billing/questions),
-//      or the "Other" free-form path.
+//   2. Pick a question from the live catalog (GET /api/billing/questions).
 //   3. Catalog question → consultant-style intake gathers any required
 //      inputs (POST /api/billing/questions/intake), then checkout
 //      (POST /api/billing/checkout/question) → hosted-checkout redirect.
-//      "Other" → free quote (POST /api/billing/questions/quote) → buy
-//      (POST /api/billing/checkout/other) → hosted-checkout redirect.
+//
+// ABS-325: the off-menu "Other" free-form path (type a question, get an
+// LLM-quoted price, buy an answer) is disabled at launch — too open-ended
+// to expose (unbounded scope / quoting / liability). The entry point is
+// removed here; the backend quote/checkout-other endpoints are gated
+// behind ADVISOR_OTHER_QUESTION_ENABLED (default false), so re-enabling is
+// a flag flip plus restoring this UI, not a rebuild. Only the fixed
+// catalog questions are sold.
 //
 // Stays in /components/marketing/ alongside the rest of the account
 // chrome. When billing is dormant (no payment processor configured) the
@@ -31,11 +36,9 @@ import {
   FreeStartResponse,
   IntakeResponse,
   MatchResponse,
-  OtherCheckoutResponse,
   QuestionCheckoutResponse,
   QuestionMenuItem,
   QuestionMenuResponse,
-  QuoteResponse,
   TIER_DISPLAY,
   formatCurrency,
 } from "@/lib/cases";
@@ -45,16 +48,11 @@ import { Mono } from "@/components/mono";
 // Only "address" is backed by a live data source in beta (see ABS-200).
 const ANCHOR_KIND_OPTIONS: AnchorKind[] = ["address"];
 
-// Sentinel slug for the off-menu "Other" path. Not a catalog question —
-// it routes to the free-quote → buy flow rather than intake → checkout.
-const OTHER_SLUG = "__other__";
-
 type Working =
   | "idle"
   | "matching"
   | "loadingMenu"
   | "intake"
-  | "quoting"
   | "checkout";
 
 export function CaseOpenForm({
@@ -73,7 +71,7 @@ export function CaseOpenForm({
   const [menu, setMenu] = useState<QuestionMenuResponse | null>(null);
   const [menuError, setMenuError] = useState(false);
 
-  // Selection: a catalog slug, OTHER_SLUG, or null.
+  // Selection: a catalog slug, or null.
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
 
   // Consultant-style intake state for the selected catalog question.
@@ -82,10 +80,6 @@ export function CaseOpenForm({
     Record<string, string>
   >({});
   const [intake, setIntake] = useState<IntakeResponse | null>(null);
-
-  // "Other" free-form path state.
-  const [otherQuestion, setOtherQuestion] = useState(initialMessage);
-  const [quote, setQuote] = useState<QuoteResponse | null>(null);
 
   const [working, setWorking] = useState<Working>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -141,7 +135,6 @@ export function CaseOpenForm({
   function resetSelectionState() {
     setIntake(null);
     setCollectedInputs({});
-    setQuote(null);
     setError(null);
   }
 
@@ -180,9 +173,8 @@ export function CaseOpenForm({
 
   // Payments-off path (ABS-320 / ABS-322): consume one free-question
   // entitlement and open the case, then route to the in-app answer view.
-  // questionSlug is null for the "Other" off-menu path.
   async function startFreeAnswer(
-    questionSlug: string | null,
+    questionSlug: string,
     inputs: Record<string, string>,
   ) {
     if (!anchorLabel.trim()) {
@@ -331,80 +323,6 @@ export function CaseOpenForm({
     }
   }
 
-  // "Other": free quote first (no charge), then the user confirms to buy.
-  async function getQuote() {
-    if (!otherQuestion.trim()) {
-      setError("Describe your question to get a quote.");
-      return;
-    }
-    setWorking("quoting");
-    setError(null);
-    try {
-      let r: Response;
-      try {
-        r = await fetch("/api/billing/questions/quote", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: otherQuestion.trim() }),
-        });
-      } catch (e) {
-        setError(
-          `Network error: ${(e as Error).message}. Check your connection and try again.`,
-        );
-        return;
-      }
-      if (r.status === 401) return unauthorized();
-      if (!r.ok) {
-        const detail = await r.json().catch(() => null);
-        setError(
-          (detail?.detail as { message?: string } | undefined)?.message ??
-            `Couldn't quote that question (${r.status}).`,
-        );
-        return;
-      }
-      setQuote((await r.json()) as QuoteResponse);
-    } finally {
-      setWorking((w) => (w === "quoting" ? "idle" : w));
-    }
-  }
-
-  // "Other" checkout: the backend re-quotes server-side and authorizes.
-  async function buyOther() {
-    if (!otherQuestion.trim()) return;
-    setWorking("checkout");
-    setError(null);
-    try {
-      let r: Response;
-      try {
-        r = await fetch("/api/billing/checkout/other", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: otherQuestion.trim() }),
-        });
-      } catch (e) {
-        setError(
-          `Network error opening checkout: ${(e as Error).message}. Check your connection and try again.`,
-        );
-        return;
-      }
-      if (r.status === 401) return unauthorized();
-      if (!r.ok) {
-        const detail = await r.json().catch(() => null);
-        setError(
-          (detail?.detail as { message?: string } | undefined)?.message ??
-            `Checkout failed (${r.status}).`,
-        );
-        return;
-      }
-      const data = (await r.json()) as OtherCheckoutResponse & {
-        url?: string;
-      };
-      goToCheckout(data.url);
-    } finally {
-      setWorking((w) => (w === "checkout" ? "idle" : w));
-    }
-  }
-
   const busy = working !== "idle";
 
   return (
@@ -516,26 +434,6 @@ export function CaseOpenForm({
                 </span>
               </button>
             ))}
-            <button
-              type="button"
-              data-testid="question-option-other"
-              onClick={() => {
-                setSelectedSlug(OTHER_SLUG);
-                resetSelectionState();
-              }}
-              className={`text-left border p-3 flex flex-col gap-1 transition-colors ${
-                selectedSlug === OTHER_SLUG
-                  ? "border-text"
-                  : "border-hair hover:bg-surface-alt"
-              }`}
-            >
-              <span className="font-semibold text-[13.5px]">
-                Other — my question isn&apos;t listed
-              </span>
-              <span className="text-[12px] text-text-muted leading-[1.4]">
-                Describe it and we&apos;ll quote a price before you buy.
-              </span>
-            </button>
           </div>
         )}
       </Field>
@@ -605,121 +503,6 @@ export function CaseOpenForm({
           ) : (
             <div className="mt-2 text-[12.5px] text-text-muted">
               Checkout isn&apos;t configured for this question yet.
-            </div>
-          )}
-        </Field>
-      )}
-
-      {/* "Other" free-form path: free quote, then buy. */}
-      {selectedSlug === OTHER_SLUG && (
-        <Field label="Describe your question">
-          <textarea
-            value={otherQuestion}
-            onChange={(e) => {
-              setOtherQuestion(e.target.value);
-              setQuote(null);
-              setError(null);
-            }}
-            rows={4}
-            placeholder="Describe the off-menu question you want answered."
-            className="bg-surface border border-hair px-3 py-2 text-[13.5px] font-sans resize-y w-full"
-          />
-
-          {quote && (
-            <div
-              className="bg-surface-alt border border-hair p-4 mt-2"
-              data-testid="other-quote"
-            >
-              <Mono size={11} muted>
-                QUOTE · {quote.difficulty_display_name.toUpperCase()}
-              </Mono>
-              <div className="mt-1 text-[20px] font-extrabold">
-                {formatCurrency(quote.price_cents, quote.currency)}
-              </div>
-              <div className="mt-1 text-[12.5px] text-text-muted">
-                {quote.rationale}
-              </div>
-            </div>
-          )}
-
-          {menu && !menu.enabled ? (
-            !quote ? (
-              <div className="flex gap-2 mt-2">
-                <Btn
-                  variant="quiet"
-                  size="sm"
-                  onClick={getQuote}
-                  disabled={busy}
-                >
-                  {working === "quoting" ? "Quoting…" : "Get a price (free)"}
-                </Btn>
-              </div>
-            ) : freeQuestionsRemaining !== null &&
-              freeQuestionsRemaining > 0 ? (
-              <div className="flex gap-2 mt-2">
-                <Btn
-                  variant="accent"
-                  size="md"
-                  onClick={() =>
-                    startFreeAnswer(null, { question: otherQuestion.trim() })
-                  }
-                  disabled={busy}
-                  data-testid="free-trial-btn-other"
-                >
-                  {working === "checkout"
-                    ? "Starting…"
-                    : "Get answer (free trial)"}
-                </Btn>
-                <Btn
-                  variant="quiet"
-                  size="sm"
-                  onClick={getQuote}
-                  disabled={busy}
-                >
-                  Re-quote
-                </Btn>
-              </div>
-            ) : freeQuestionsRemaining === 0 ? (
-              <div
-                className="mt-2 text-[12.5px] text-text-muted"
-                data-testid="free-trial-exhausted-other"
-              >
-                Free trial used — paid answers coming soon.
-              </div>
-            ) : (
-              <div className="mt-2 text-[12.5px] text-text-muted">
-                Off-menu checkout isn&apos;t configured yet.
-              </div>
-            )
-          ) : !quote ? (
-            <div className="flex gap-2 mt-2">
-              <Btn
-                variant="quiet"
-                size="sm"
-                onClick={getQuote}
-                disabled={busy}
-              >
-                {working === "quoting" ? "Quoting…" : "Get a price (free)"}
-              </Btn>
-            </div>
-          ) : (
-            <div className="flex gap-2 mt-2">
-              <Btn
-                variant="accent"
-                size="md"
-                onClick={buyOther}
-                disabled={busy}
-              >
-                {working === "checkout"
-                  ? "Opening checkout…"
-                  : `Buy answer · ${formatCurrency(
-                      quote.price_cents,
-                      quote.currency,
-                    )}`}
-              </Btn>
-              <Btn variant="quiet" size="sm" onClick={getQuote} disabled={busy}>
-                Re-quote
-              </Btn>
             </div>
           )}
         </Field>

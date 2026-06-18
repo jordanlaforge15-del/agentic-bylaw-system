@@ -65,6 +65,21 @@ class AdvisorBillingSettings(BaseSettings):
     payments_enabled: bool = Field(
         default=False, alias="ADVISOR_PAYMENTS_ENABLED"
     )
+
+    # ABS-325 — off-menu "Other" free-form question kill switch.
+    #
+    # The off-menu path (ABS-316) lets a user type a free-form question,
+    # has the LLM quote a price, and sells an answer. It is too open-ended
+    # to expose at launch (unbounded scope / quoting / liability), so it is
+    # disabled by default: the ``/questions/quote`` and ``/checkout/other``
+    # endpoints reject with 503 when this is False. The quote/answer engine
+    # (advisor.billing.quote + the off-menu branch in answers.py) is left
+    # fully intact — re-enabling the launch path is a flag flip
+    # (``ADVISOR_OTHER_QUESTION_ENABLED=true``), not a rebuild. The catalog
+    # ``/checkout/question`` + free-start paths are unaffected.
+    other_question_enabled: bool = Field(
+        default=False, alias="ADVISOR_OTHER_QUESTION_ENABLED"
+    )
     stripe_api_key: str | None = Field(default=None, alias="STRIPE_API_KEY")
     stripe_webhook_secret: str | None = Field(
         default=None, alias="STRIPE_WEBHOOK_SECRET"

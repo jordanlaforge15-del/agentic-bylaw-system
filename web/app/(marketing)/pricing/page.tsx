@@ -2,8 +2,9 @@
 //
 // Renders the five-question launch catalog (data-driven from the
 // backend at /v1/billing/questions) so prices stay in lockstep with
-// the catalog code and the decision doc. An "Other" card links to the
-// off-menu path for questions outside the fixed menu.
+// the catalog code and the decision doc. A contact card routes questions
+// outside the fixed menu to support — the self-serve off-menu quote path
+// (ABS-316) is disabled at launch (ABS-325).
 
 import { ADVISOR_API_URL } from "@/lib/api";
 import {
@@ -25,7 +26,7 @@ const FAQS = [
   },
   {
     q: "What if my question isn't on the list?",
-    a: 'Use the "Other" option to describe your situation. We\'ll review whether it\'s groundable in the by-law and quote the research separately.',
+    a: "Get in touch and describe your situation. We'll review whether it's groundable in the by-law and quote the research separately.",
   },
   {
     q: "What if the question can't be answered?",
