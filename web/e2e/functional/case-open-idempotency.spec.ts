@@ -84,6 +84,18 @@ test("continuing an already-open anchor reuses the same case (no new charge)", a
   const anchor = `idem-ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const { caseId: firstId } = await openCaseViaApi({ anchorLabel: anchor });
 
+  // ABS-324: continuing an existing case is a Conversation-product entry,
+  // hidden from /cases/new at launch (Answers-only). This test exercises
+  // that Conversation reuse path, so enable the entry by patching the
+  // question-menu response's conversation_enabled flag — the runtime toggle
+  // the form reads. (Production flips it via ADVISOR_CONVERSATION_ENTRY_ENABLED.)
+  await page.route("**/api/billing/questions", async (route) => {
+    const resp = await route.fetch();
+    const body = await resp.json();
+    body.conversation_enabled = true;
+    await route.fulfill({ response: resp, json: body });
+  });
+
   await page.goto("/cases/new");
   const anchorInput = page.getByPlaceholder(/1234 Main St, Halifax/);
   await anchorInput.fill(anchor);
