@@ -1553,6 +1553,18 @@ def _resolve_or_create_test_user(
     if changed:
         user.updated_at = utcnow()
         db.flush()
+    # Self-heal existing users who pre-date the free-question grant (or
+    # whose account was created via a path that skipped it). Mirrors the
+    # production existing-user branch in
+    # ``advisor.api.auth.resolve_or_create_user`` so the e2e suite
+    # actually exercises the ABS-323 self-heal. The helper is gated
+    # solely on the ``free_question_grant_issued`` flag, so it is a no-op
+    # for users who already hold the grant.
+    from advisor.db.cases import (  # noqa: PLC0415
+        grant_starter_credits_if_needed,
+    )
+
+    grant_starter_credits_if_needed(db, user=user)
     return user
 
 

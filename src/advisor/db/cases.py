@@ -751,40 +751,26 @@ FREE_QUESTION_GRANT = 3
 
 
 def grant_starter_credits_if_needed(db: Session, *, user: User) -> bool:
-    """Set the free-question entitlement counter for a new user.
+    """Set the free-question entitlement counter for a user.
 
-    Idempotent: no-op when the user already has a legacy CaseCredit
-    signup_starter_grant row (old model) or the new
-    ``free_question_grant_issued`` metadata flag (new model). Invite
-    redemptions that carry legacy credits are also skipped — those users
-    already have a way to open cases.
+    Idempotent on the ``free_question_grant_issued`` metadata flag, which
+    is the *sole* gate: the grant issues once per user and self-heals
+    existing users on their next authenticated request (it runs on every
+    login), so no backfill migration is needed.
+
+    ABS-323: the legacy-credit skips that used to live here (the
+    ``signup_starter_grant`` CaseCredit check and the broader
+    "has any CaseCredit" check) were removed. They predated the
+    tier→question pivot and assumed "holds credits ⇒ already onboarded."
+    After the pivot legacy *tier* credits cannot buy answers, so those
+    skips locked every existing user out of the free trial with payments
+    off — ``free_questions_remaining = 0`` and the grant never issued.
+    Legacy CaseCredit rows now coexist with the free-question grant
+    rather than suppressing it.
 
     Returns ``True`` if the grant was applied, ``False`` if already done.
     """
-    # Legacy path: skip if user ever received the old CaseCredit grant.
-    has_legacy_grant = (
-        db.query(CaseCredit.id)
-        .filter(
-            CaseCredit.user_id == user.id,
-            CaseCredit.source == "signup_starter_grant",
-        )
-        .first()
-        is not None
-    )
-    if has_legacy_grant:
-        return False
-    # New path: skip if grant was already issued under the new model.
     if user.metadata_json.get("free_question_grant_issued"):
-        return False
-    # Also skip users who have any legacy credits (invite grants, etc.) —
-    # they already have a means to access the service.
-    has_any_credit = (
-        db.query(CaseCredit.id)
-        .filter(CaseCredit.user_id == user.id)
-        .first()
-        is not None
-    )
-    if has_any_credit:
         return False
     user.free_questions_remaining = FREE_QUESTION_GRANT
     user.metadata_json["free_question_grant_issued"] = True

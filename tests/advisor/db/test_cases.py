@@ -657,10 +657,18 @@ def test_grant_starter_credits_grants_default_pack_to_new_user(
         assert user.metadata_json.get("free_question_grant_issued") is True
 
 
-def test_grant_starter_credits_is_noop_when_user_already_has_credits(
+def test_grant_starter_credits_issues_for_legacy_credit_user(
     tmp_path: Path,
 ) -> None:
-    """A user with existing (legacy) credits is skipped — no double grant."""
+    """ABS-323: a user holding legacy tier credits STILL gets the grant.
+
+    Pre-ABS-323 this was skipped on the "holds any CaseCredit ⇒ already
+    onboarded" assumption. After the tier→question pivot legacy tier
+    credits can't buy answers, so suppressing the grant locked every
+    existing user out of the free trial with payments off. The grant
+    must now issue regardless of legacy credits, gated only on the
+    idempotency flag.
+    """
     db_url = _db_url(tmp_path)
     create_all(db_url)
     user_id = _seed_user(db_url)
@@ -675,15 +683,42 @@ def test_grant_starter_credits_is_noop_when_user_already_has_credits(
 
     with session_scope(db_url) as s:
         granted = grant_starter_credits_if_needed(s, user=s.get(User, user_id))
-        assert granted is False
+        assert granted is True
 
     with session_scope(db_url) as s:
+        # The legacy tier credit is untouched and coexists with the grant.
         credits = list(s.query(CaseCredit).filter(CaseCredit.user_id == user_id))
-        # Only the seeded legacy credit — no free-question grant issued.
         assert len(credits) == 1
         assert credits[0].tier == "quick"
         user = s.get(User, user_id)
-        assert user.free_questions_remaining == 0
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT
+        assert user.metadata_json.get("free_question_grant_issued") is True
+
+
+def test_grant_starter_credits_flag_is_sole_gate_even_with_legacy_credits(
+    tmp_path: Path,
+) -> None:
+    """ABS-323: once the flag is set, legacy credits don't re-trigger a grant.
+
+    The ``free_question_grant_issued`` flag is the only idempotency gate.
+    A user who already holds the grant AND legacy tier credits is a
+    no-op — the counter is not topped back up.
+    """
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        grant_admin_credits(s, user=user, tier="quick", quantity=1, reason="seed")
+        # Grant once, then consume so the counter sits below the default.
+        assert grant_starter_credits_if_needed(s, user=user) is True
+        consume_free_question(s, user=user)
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        # Flag set + legacy credits present → no-op, counter not restored.
+        assert grant_starter_credits_if_needed(s, user=user) is False
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT - 1
 
 
 def test_grant_starter_credits_is_noop_when_already_issued(

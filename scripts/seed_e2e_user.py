@@ -108,6 +108,16 @@ def main() -> int:
 
         if args.free_questions is not None:
             user.free_questions_remaining = args.free_questions
+            # Explicitly seeding a free-question count means "this user is
+            # already onboarded to the free-question model with exactly N
+            # questions" — record the grant flag so the ABS-323 self-heal
+            # in resolve_or_create_user treats the seeded count as
+            # authoritative (no-op) rather than overwriting it with the
+            # default grant on the next request. Users seeded WITHOUT
+            # --free-questions are left flag-unset on purpose: they model
+            # legacy / pre-feature accounts that should self-heal to the
+            # default grant when they next authenticate.
+            user.metadata_json["free_question_grant_issued"] = True
             print(
                 f"set free_questions_remaining={args.free_questions} "
                 f"on user {user.id}"
