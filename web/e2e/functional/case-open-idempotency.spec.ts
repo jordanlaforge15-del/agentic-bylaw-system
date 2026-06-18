@@ -86,17 +86,17 @@ test("continuing an already-open anchor reuses the same case (no new charge)", a
 
   // ABS-324: continuing an existing case is a Conversation-product entry,
   // hidden from /cases/new at launch (Answers-only). This test exercises
-  // that Conversation reuse path, so enable the entry by patching the
-  // question-menu response's conversation_enabled flag — the runtime toggle
-  // the form reads. (Production flips it via ADVISOR_CONVERSATION_ENTRY_ENABLED.)
-  await page.route("**/api/billing/questions", async (route) => {
-    const resp = await route.fetch();
-    const body = await resp.json();
-    body.conversation_enabled = true;
-    await route.fulfill({ response: resp, json: body });
-  });
-
+  // that Conversation reuse path; the e2e server runs with
+  // ADVISOR_CONVERSATION_ENTRY_ENABLED=true (see scripts/e2e-up.sh) so the
+  // entry is live — no API stub needed. (Production flips the same flag.)
   await page.goto("/cases/new");
+
+  // Wait for the question menu to load before interacting: the form gates
+  // the anchor match-lookup on the menu's conversation_enabled flag, which
+  // only settles once GET /api/billing/questions resolves. Blurring before
+  // that races the flag (the lookup is skipped while it's still false).
+  await expect(page.getByTestId("question-menu")).toBeVisible();
+
   const anchorInput = page.getByPlaceholder(/1234 Main St, Halifax/);
   await anchorInput.fill(anchor);
 

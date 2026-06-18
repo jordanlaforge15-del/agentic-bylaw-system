@@ -178,6 +178,18 @@ test("Answers-only entry: the Conversation continue-case CTA is hidden (ABS-324)
   // off), so even when a matching case exists the "EXISTING CASE FOUND" /
   // "Continue case" entry must NOT surface. The Conversation product stays
   // in the codebase; it's just not the primary in-app door.
+  //
+  // The e2e server runs with the flag ON (so the legacy continue-case suite
+  // can exercise it). This test asserts the production launch posture, so it
+  // stubs the question-menu response's conversation_enabled back to false —
+  // the exact signal /cases/new reads to decide whether the entry exists.
+  await page.route("**/api/billing/questions", async (route) => {
+    const resp = await route.fetch();
+    const body = await resp.json();
+    body.conversation_enabled = false;
+    await route.fulfill({ response: resp, json: body });
+  });
+
   const anchor = `abs320-match-${Date.now()}`;
   await openCaseViaApi({ anchorLabel: anchor });
 
