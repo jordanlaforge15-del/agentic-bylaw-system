@@ -129,6 +129,9 @@ export type QuestionMenuItem = {
 
 export type QuestionMenuResponse = {
   enabled: boolean;
+  // ABS-324 launch posture: when false, /cases/new is Answers-only — the
+  // continue-existing-case (Conversation /app chat) entry is hidden.
+  conversation_enabled?: boolean;
   currency: string;
   cad_per_usd: number;
   questions: QuestionMenuItem[];
@@ -194,11 +197,12 @@ export type QuoteResponse = {
 };
 
 // Free-question trial start (POST /api/billing/questions/free-start).
-// Used when payments are off (ABS-320 / ABS-322): consumes one free
-// entitlement, opens the case, and returns the case_id for routing.
+// Payments-off (ABS-322), decoupled by ABS-324: consumes one free
+// entitlement and opens an Answers `QuestionPurchase` (NOT a Case),
+// returning the purchase_id so the browser routes to /app/answers/{id}.
 export type FreeStartResponse = {
-  case_id: number;
-  anchor_label: string;
+  purchase_id: number;
+  status: string;
   free_questions_remaining: number;
 };
 

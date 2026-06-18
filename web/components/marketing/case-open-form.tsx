@@ -132,6 +132,12 @@ export function CaseOpenForm({
   const selectedQuestion: QuestionMenuItem | undefined =
     menu?.questions.find((q) => q.slug === selectedSlug);
 
+  // ABS-324 launch posture: /cases/new is Answers-only. The Conversation
+  // product (continuing an existing case into the /app chat) stays in the
+  // codebase but its entry is hidden until the backend flips
+  // ADVISOR_CONVERSATION_ENTRY_ENABLED, surfaced here as conversation_enabled.
+  const conversationEnabled = menu?.conversation_enabled ?? false;
+
   function resetSelectionState() {
     setIntake(null);
     setCollectedInputs({});
@@ -139,6 +145,10 @@ export function CaseOpenForm({
   }
 
   async function lookupMatch() {
+    // Continuing an existing case routes into the Conversation /app chat,
+    // which is hidden at launch (ABS-324). Skip the lookup entirely when
+    // the Conversation entry is gated off.
+    if (!conversationEnabled) return;
     if (!anchorLabel.trim()) return;
     setWorking("matching");
     setMatch(undefined);
@@ -152,6 +162,11 @@ export function CaseOpenForm({
       }
       const data = (await r.json()) as MatchResponse;
       setMatch(data.case);
+    } catch {
+      // A dropped connection (Safari "Load failed") must degrade to
+      // "no match", not bubble as an unhandled rejection that wedges the
+      // form. See case-open-network-error.spec.ts.
+      setMatch(null);
     } finally {
       setWorking("idle");
     }
@@ -171,8 +186,9 @@ export function CaseOpenForm({
     return false;
   }
 
-  // Payments-off path (ABS-320 / ABS-322): consume one free-question
-  // entitlement and open the case, then route to the in-app answer view.
+  // Payments-off path (ABS-322), decoupled by ABS-324: consume one
+  // free-question entitlement to open an Answers purchase, then route to
+  // the dedicated answer/refine view. No Case, no CaseCredit.
   async function startFreeAnswer(
     questionSlug: string,
     inputs: Record<string, string>,
@@ -219,7 +235,10 @@ export function CaseOpenForm({
       }
       const data = (await r.json()) as FreeStartResponse;
       setFreeQuestionsRemaining(data.free_questions_remaining);
-      router.push(`/app?case_id=${data.case_id}`);
+      // ABS-324: the Answers free path terminates in the dedicated
+      // answer/refine view — NOT the Conversation /app chat. No Case is
+      // opened and no CaseCredit is reserved.
+      router.push(`/app/answers/${data.purchase_id}`);
     } finally {
       setWorking((w) => (w === "checkout" ? "idle" : w));
     }
@@ -363,7 +382,7 @@ export function CaseOpenForm({
         </div>
       </Field>
 
-      {match !== undefined && match !== null && (
+      {conversationEnabled && match !== undefined && match !== null && (
         <div className="bg-surface-alt border border-hair p-4">
           <Mono size={11} muted>
             EXISTING CASE FOUND

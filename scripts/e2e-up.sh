@@ -317,6 +317,15 @@ start_fastapi() {
   # callers piping this script (e.g. `bash e2e-up.sh | tail`) from
   # hanging: the subshell lingers as long as uvicorn runs, and would
   # otherwise hold the caller's pipe open via its inherited stdout.
+  #
+  # ABS-324: the prod launch posture is Answers-only (the Conversation
+  # continue-case entry is gated OFF by default). But the AC also requires
+  # that the Conversation product still works when its flag is enabled, and
+  # the legacy /app continue-case suite (smoke 03-open-case,
+  # case-existing-match, case-open-idempotency) drives exactly that path.
+  # Enable ADVISOR_CONVERSATION_ENTRY_ENABLED here so those specs exercise
+  # REAL behavior with no API stubbing; the launch-off posture is asserted
+  # separately by abs320 (which stubs the flag false per-test).
   ( cd "$REPO_ROOT" && \
     DATABASE_URL="$DATABASE_URL_E2E" \
     PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" \
@@ -325,6 +334,7 @@ start_fastapi() {
     ADVISOR_E2E_CORS_ORIGINS="http://localhost:${E2E_WEB_PORT}" \
     ADVISOR_ADMIN_API_ENABLED=true \
     ADVISOR_ADMIN_CLERK_USER_IDS="${E2E_USER_ID}" \
+    ADVISOR_CONVERSATION_ENTRY_ENABLED=true \
     MONITOR_TARGET_URL="http://127.0.0.1:${E2E_FASTAPI_PORT}/healthz" \
     nohup "${REPO_ROOT}/.venv/bin/uvicorn" advisor.api.e2e_server:app \
       --host 127.0.0.1 --port "$E2E_FASTAPI_PORT" &

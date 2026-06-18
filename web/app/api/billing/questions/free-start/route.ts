@@ -1,11 +1,11 @@
 // POST /api/billing/questions/free-start — proxy to
 // POST /v1/billing/questions/free-start.
 //
-// Payments-off path (ABS-320 / ABS-322): when billing is dormant the
-// case-open form calls this instead of the Stripe checkout. The backend
-// atomically decrements the user's free-question entitlement counter,
-// opens (or finds) the case container, and returns the case_id so the
-// browser can navigate straight to the in-app answer view.
+// Payments-off path (ABS-322), decoupled by ABS-324: the case-open form
+// calls this to start a free-trial answer. The backend consumes one
+// free-question entitlement and opens an Answers `QuestionPurchase` (NOT a
+// Case — no CaseCredit interaction), returning the `purchase_id` so the
+// browser navigates to the dedicated answer view (/app/answers/{id}).
 //
 // Returns 402 when the user's free-question counter is already 0.
 
@@ -20,9 +20,9 @@ export async function POST(req: NextRequest) {
     string,
     unknown
   > | null;
-  if (!body || typeof body.anchor_label !== "string") {
+  if (!body || typeof body.question_slug !== "string") {
     return new Response(
-      JSON.stringify({ error: "anchor_label required" }),
+      JSON.stringify({ error: "question_slug required" }),
       {
         status: 400,
         headers: { "Content-Type": "application/json" },

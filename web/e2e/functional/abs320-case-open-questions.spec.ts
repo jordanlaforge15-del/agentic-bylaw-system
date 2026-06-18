@@ -16,7 +16,8 @@
 // shows "Get answer (free trial)" instead of a checkout button.
 //
 // API-level tests verify the free-start endpoint consumes the entitlement
-// and returns a case_id (happy path) and returns 402 when exhausted.
+// and returns a purchase_id (happy path, ABS-324 decoupled) and returns
+// 402 when exhausted.
 
 import { execSync } from "node:child_process";
 import * as path from "node:path";
@@ -169,30 +170,51 @@ test("billing dormant + zero free credits: shows exhausted message", async ({
   await expect(page.getByTestId("free-trial-btn")).not.toBeVisible();
 });
 
-test("anchor still surfaces an in-window existing-case match", async ({
+test("Answers-only entry: the Conversation continue-case CTA is hidden (ABS-324)", async ({
   page,
 }) => {
-  // A case is a free container — opening/continuing one never charges. The
-  // match lookup that powers "continue without buying again" is preserved.
+  // Continuing an existing case routes into the Conversation /app chat. At
+  // launch /cases/new is Answers-only (ADVISOR_CONVERSATION_ENTRY_ENABLED
+  // off), so even when a matching case exists the "EXISTING CASE FOUND" /
+  // "Continue case" entry must NOT surface. The Conversation product stays
+  // in the codebase; it's just not the primary in-app door.
+  //
+  // The e2e server runs with the flag ON (so the legacy continue-case suite
+  // can exercise it). This test asserts the production launch posture, so it
+  // stubs the question-menu response's conversation_enabled back to false —
+  // the exact signal /cases/new reads to decide whether the entry exists.
+  await page.route("**/api/billing/questions", async (route) => {
+    const resp = await route.fetch();
+    const body = await resp.json();
+    body.conversation_enabled = false;
+    await route.fulfill({ response: resp, json: body });
+  });
+
   const anchor = `abs320-match-${Date.now()}`;
   await openCaseViaApi({ anchorLabel: anchor });
 
   await page.goto("/cases/new");
+  await expect(page.getByTestId("question-menu")).toBeVisible();
   const anchorInput = page.getByPlaceholder(/1234 Main St, Halifax/);
   await anchorInput.fill(anchor);
   await anchorInput.blur();
 
-  await expect(page.getByText(/EXISTING CASE FOUND/)).toBeVisible();
+  // Give any (skipped) match lookup a beat — the CTA must stay absent.
+  await expect(page.getByText(/EXISTING CASE FOUND/)).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: /Continue case/ }),
-  ).toBeVisible();
+  ).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
 // API tests: free-start endpoint (ABS-314 / ABS-320 / ABS-322)
 // ---------------------------------------------------------------------------
 
-test("free-start API: consumes one credit and returns case_id", async ({
+// ABS-324: free-start now opens an Answers QuestionPurchase (not a Case)
+// and returns purchase_id for routing to the dedicated answer view. The
+// deeper "never touches CaseCredit" assertions live in
+// abs324-answers-decoupled.spec.ts.
+test("free-start API: consumes one credit and returns purchase_id", async ({
   request,
 }) => {
   // Seed a fresh user with 1 free question.
@@ -203,7 +225,10 @@ test("free-start API: consumes one credit and returns case_id", async ({
     headers: { "X-Test-User-Id": userId },
     data: {
       question_slug: "permitted_use",
-      inputs: { address: "123 Test St, Halifax" },
+      inputs: {
+        address: "123 Test St, Halifax",
+        proposed_use: "a duplex",
+      },
       anchor_label: "123 Test St, Halifax",
       anchor_kind: "address",
     },
@@ -215,12 +240,19 @@ test("free-start API: consumes one credit and returns case_id", async ({
   ).toBe(200);
 
   const body = (await res.json()) as {
-    case_id: number;
-    anchor_label: string;
+    purchase_id: number;
+    status: string;
     free_questions_remaining: number;
   };
 
-  expect(body.case_id, "case_id should be a positive integer").toBeGreaterThan(0);
+  expect(
+    body.purchase_id,
+    "purchase_id should be a positive integer",
+  ).toBeGreaterThan(0);
+  expect(
+    body.status,
+    "the purchase is born authorized — ready for /answer",
+  ).toBe("authorized");
   expect(
     body.free_questions_remaining,
     "counter should be decremented to 0 after consuming the single credit",
@@ -238,7 +270,13 @@ test("free-start API: returns 402 when free credits exhausted", async ({
     headers: { "X-Test-User-Id": userId },
     data: {
       question_slug: "permitted_use",
-      inputs: {},
+      // Inputs are complete so validation passes and the credit check —
+      // not input validation — is what rejects: an exhausted trial is a
+      // 402, distinct from a 400 unworkable-inputs rejection.
+      inputs: {
+        address: "456 Oak Ave, Dartmouth",
+        proposed_use: "a triplex",
+      },
       anchor_label: "456 Oak Ave, Dartmouth",
       anchor_kind: "address",
     },
@@ -250,5 +288,5 @@ test("free-start API: returns 402 when free credits exhausted", async ({
   ).toBe(402);
 
   const body = (await res.json()) as { detail: { code: string } };
-  expect(body.detail.code).toBe("free_trial_exhausted");
+  expect(body.detail.code).toBe("free_questions_exhausted");
 });
