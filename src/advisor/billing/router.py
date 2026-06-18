@@ -660,6 +660,24 @@ def build_billing_router(
                 },
             )
 
+    def _require_other_question_enabled() -> None:
+        # ABS-325: the off-menu "Other" free-form path is disabled at
+        # launch. Keep the engine wired but reject the public quote /
+        # checkout-other endpoints until ADVISOR_OTHER_QUESTION_ENABLED is
+        # flipped true. Catalog questions are unaffected.
+        if not settings.other_question_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "other_question_disabled",
+                    "message": (
+                        "The off-menu free-form question path is disabled "
+                        "on this deployment. Set "
+                        "ADVISOR_OTHER_QUESTION_ENABLED=true to enable it."
+                    ),
+                },
+            )
+
     def _require_answer_gateway() -> None:
         # The off-menu quote (ABS-316) needs only the LLM gateway — no
         # retrieval/persona — so it gates on the gateway alone.
@@ -868,6 +886,7 @@ def build_billing_router(
         can't be scraped anonymously, but no money moves.
         """
         _require_enabled()
+        _require_other_question_enabled()
         _require_answer_gateway()
         try:
             quote = await quote_question(answer_gateway, body.question)
@@ -903,6 +922,7 @@ def build_billing_router(
         failed-question rule as catalog questions.
         """
         _require_enabled()
+        _require_other_question_enabled()
         _require_answer_gateway()
         if client_factory is None:
             raise HTTPException(
