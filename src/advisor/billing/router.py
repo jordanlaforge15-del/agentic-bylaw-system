@@ -23,6 +23,7 @@ False — same dormant-by-default safety as v1.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any
@@ -56,7 +57,13 @@ from advisor.billing.questions import all_questions, question_for
 from advisor.billing.quote import EmptyQuestionError, quote_question
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.billing.webhooks import handle_event
-from advisor.db.cases import consume_free_question, credit_balance_for, open_case_free
+# ABS-324: this Answers-product router must NOT import the Conversation /
+# Case ledger helpers (``open_case_free`` / ``reserve_credit_for_session``).
+# The free-question "buy an answer" path consumes ONLY its own
+# entitlement, via ``advisor.billing.answers.start_question_free``. Only the
+# read-only ``credit_balance_for`` (for the shared ``GET /me`` balance view)
+# is borrowed. The import-boundary guard test pins this.
+from advisor.db.cases import credit_balance_for
 from advisor.db.models import CasePurchase, QuestionPurchase, User
 
 logger = logging.getLogger(__name__)
@@ -159,6 +166,18 @@ class QuestionMenuResponse(BaseModel):
             "free-question credit (no Stripe); when True it runs the "
             "Stripe authorize→capture path. The entry flow uses this to "
             "decide between a free-trial CTA and a paid checkout."
+        ),
+    )
+    conversation_enabled: bool = Field(
+        default=False,
+        description=(
+            "ABS-324 launch posture: when False the in-app /cases/new entry "
+            "surfaces ONLY the Answers question menu. The Conversation "
+            "product (turn-based /app chat reached by continuing an existing "
+            "case) stays intact in the codebase but is hidden from this "
+            "primary entry until ADVISOR_CONVERSATION_ENTRY_ENABLED is "
+            "flipped true. The frontend uses this to gate the "
+            "continue-existing-case CTA."
         ),
     )
     currency: str = "CAD"
@@ -379,21 +398,29 @@ class PurchaseHistoryResponse(BaseModel):
 class FreeStartRequest(BaseModel):
     """Body of ``POST /v1/billing/questions/free-start``.
 
-    Used when billing is dormant (payments off) to consume one
-    free-question entitlement and open the case container, routing
-    the browser directly to the in-app answer view instead of Stripe.
-    ``question_slug`` is None for off-menu "Other" questions.
+    The payments-off (ABS-322) "buy an answer" entry, decoupled by ABS-324:
+    it consumes one free-question entitlement and opens a ``QuestionPurchase``
+    in the **Answers** product — it does NOT open a Case or touch the
+    Conversation CaseCredit ledger. The browser routes to the dedicated
+    answer/refine view (``/app/answers/{purchase_id}``).
+
+    ``anchor_label`` / ``anchor_kind`` are accepted for backward
+    compatibility (the form still posts them) but are no longer used: an
+    Answers purchase carries its subject in ``inputs``, not a Case anchor.
     """
 
     question_slug: str | None = None
     inputs: dict[str, str] = Field(default_factory=dict)
-    anchor_label: str
+    anchor_label: str | None = None
     anchor_kind: str = "address"
 
 
 class FreeStartResponse(BaseModel):
-    case_id: int
-    anchor_label: str
+    """ABS-324: the Answers free-start lands a runnable ``QuestionPurchase``,
+    not a Case. ``purchase_id`` is the answer-view target."""
+
+    purchase_id: int
+    status: str
     free_questions_remaining: int
 
 
@@ -477,6 +504,255 @@ def _question_purchase_response(
             else None
         ),
     )
+
+
+def _conversation_entry_enabled() -> bool:
+    """ABS-324: is the Conversation product exposed in the in-app entry?
+
+    Launch posture is Answers-only — ``/cases/new`` surfaces only the
+    question menu. The turn-based ``/app`` chat (Conversation) stays in the
+    codebase but its entry (continuing an existing case) is hidden until
+    ``ADVISOR_CONVERSATION_ENTRY_ENABLED`` is flipped true. Read from the
+    environment so the toggle is a config flip with no redeploy of logic.
+    """
+    return os.environ.get(
+        "ADVISOR_CONVERSATION_ENTRY_ENABLED", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_owned_purchase(db: Any, purchase_id: int, user: User) -> QuestionPurchase:
+    """Fetch a purchase that belongs to ``user`` or raise HTTP 404."""
+    purchase = db.get(QuestionPurchase, purchase_id)
+    if purchase is None or purchase.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "purchase_not_found",
+                "message": f"no question purchase {purchase_id}",
+            },
+        )
+    return purchase
+
+
+def _mount_answer_delivery_routes(
+    router: APIRouter,
+    *,
+    user_dependency: Callable[..., Any],
+    user_resolver: Callable[[Any, Session], User],
+    open_db: Callable[[], Any],
+    commit: Callable[[Any], None],
+    answer_gateway: Any | None,
+    answer_persona: str | None,
+    answer_retrieval_factory: Callable[[], Any] | None,
+    client_factory: Callable[[], StripeClient] | None = None,
+    payments_enabled: bool = False,
+    require_enabled: Callable[[], None] | None = None,
+) -> None:
+    """Mount the **Answers** delivery surface (ABS-321/312/317).
+
+    These three endpoints — run-answer, refine, get-purchase — are the
+    dedicated answer/refine view's backend. They are *payments-agnostic*:
+    a free-credit (payments-off) purchase runs with ``client_factory=None``
+    and never authorizes a card, while the Stripe path captures/voids the
+    hold. ABS-324 mounts this on BOTH the live and dormant routers so the
+    payments-off launch terminates the Answers flow in its own view instead
+    of routing through the Conversation ``/app`` chat.
+
+    Crucially, this surface consumes ONLY the Answers entitlement
+    (``QuestionPurchase`` + free-question credit) — it never reserves or
+    commits a CaseCredit. The import-boundary guard test enforces that.
+    """
+
+    def _require_runner() -> None:
+        if (
+            answer_gateway is None
+            or answer_persona is None
+            or answer_retrieval_factory is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "answer_runner_unavailable",
+                    "message": (
+                        "The answer engine is not wired into the billing "
+                        "router on this deployment."
+                    ),
+                },
+            )
+
+    def _guard() -> None:
+        if require_enabled is not None:
+            require_enabled()
+        _require_runner()
+
+    def _require_gateway() -> None:
+        if answer_gateway is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "answer_runner_unavailable",
+                    "message": (
+                        "The intake engine is not wired into the billing "
+                        "router on this deployment."
+                    ),
+                },
+            )
+
+    @router.post("/questions/intake", response_model=IntakeResponse)
+    async def post_question_intake(
+        body: IntakeRequest,
+        auth_session: Any = Depends(user_dependency),  # noqa: ARG001
+    ) -> IntakeResponse:
+        """Detect missing inputs for a question and ask for them (ABS-315).
+
+        The consultant-style step BEFORE the purchase: an LLM reads the
+        conversation, extracts whatever inputs it can, and the server
+        decides completeness against the question's required-input schema.
+        ALWAYS FREE — a single tools-less extraction, no charge, no Stripe
+        object. Part of the Answers product, so it is mounted in payments-off
+        (dormant) mode too: it only needs the LLM gateway, which is wired
+        regardless of whether Stripe is configured.
+        """
+        if require_enabled is not None:
+            require_enabled()
+        _require_gateway()
+        try:
+            question = question_for(body.question_slug)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "unknown_question",
+                    "message": f"unknown question {body.question_slug!r}",
+                },
+            ) from exc
+        result = await detect_intake(
+            answer_gateway,
+            question,
+            conversation=body.conversation,
+            provided_inputs=body.inputs,
+        )
+        return IntakeResponse(
+            question_slug=question.slug,
+            complete=result.complete,
+            inputs=result.inputs,
+            missing_required=result.missing_required,
+            missing_optional=result.missing_optional,
+            prompt=result.prompt,
+        )
+
+    @router.post(
+        "/questions/purchases/{purchase_id}/answer",
+        response_model=QuestionPurchaseResponse,
+    )
+    async def post_run_answer(
+        purchase_id: int,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionPurchaseResponse:
+        _guard()
+        # Payments-off (ABS-322) runs answers with no Stripe client; the
+        # Stripe path still requires one.
+        if payments_enabled and client_factory is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "billing_misconfigured",
+                    "message": "no Stripe client factory wired",
+                },
+            )
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase = _load_owned_purchase(db, purchase_id, user)
+            try:
+                purchase = await answer_flow.run_answer(
+                    db,
+                    purchase,
+                    gateway=answer_gateway,
+                    persona=answer_persona,
+                    retrieval_factory=answer_retrieval_factory,
+                    client=client_factory() if client_factory else None,
+                )
+            except PurchaseNotAuthorizedError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": "not_authorized", "message": str(exc)},
+                ) from exc
+            response = _question_purchase_response(purchase)
+            commit(db)
+            return response
+
+    @router.post(
+        "/questions/purchases/{purchase_id}/refine",
+        response_model=QuestionPurchaseResponse,
+    )
+    async def post_refine(
+        purchase_id: int,
+        body: RefineRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionPurchaseResponse:
+        _guard()
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase = _load_owned_purchase(db, purchase_id, user)
+            try:
+                await answer_flow.run_refinement(
+                    db,
+                    purchase,
+                    message=body.message,
+                    gateway=answer_gateway,
+                    persona=answer_persona,
+                    retrieval_factory=answer_retrieval_factory,
+                )
+            except NewQuestionError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "new_question",
+                        "message": (
+                            "This is a different question — please purchase "
+                            "a new answer."
+                        ),
+                        "suggested_slug": exc.suggested_slug,
+                    },
+                ) from exc
+            except WindowExhaustedError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "window_exhausted",
+                        "message": (
+                            "The refinement window for this answer is "
+                            "closed — please purchase a new answer."
+                        ),
+                        "reason": exc.reason,
+                    },
+                ) from exc
+            except RefinementNotAvailableError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "refinement_unavailable",
+                        "message": str(exc),
+                    },
+                ) from exc
+            response = _question_purchase_response(purchase)
+            commit(db)
+            return response
+
+    @router.get(
+        "/questions/purchases/{purchase_id}",
+        response_model=QuestionPurchaseResponse,
+    )
+    def get_question_purchase(
+        purchase_id: int,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionPurchaseResponse:
+        if require_enabled is not None:
+            require_enabled()
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase = _load_owned_purchase(db, purchase_id, user)
+            return _question_purchase_response(purchase)
 
 
 # -- Router factory ---------------------------------------------------------
@@ -588,6 +864,7 @@ def build_billing_router(
         return QuestionMenuResponse(
             enabled=settings.enabled,
             payments_enabled=settings.payments_enabled,
+            conversation_enabled=_conversation_entry_enabled(),
             currency=pricing.display_currency,
             cad_per_usd=pricing.cad_per_usd,
             questions=_build_question_menu(
@@ -643,23 +920,6 @@ def build_billing_router(
 
     # -- Priced-question "buy an answer" flow (ABS-312) --------------------
 
-    def _require_answer_runner() -> None:
-        if (
-            answer_gateway is None
-            or answer_persona is None
-            or answer_retrieval_factory is None
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "answer_runner_unavailable",
-                    "message": (
-                        "The answer engine is not wired into the billing "
-                        "router on this deployment."
-                    ),
-                },
-            )
-
     def _require_other_question_enabled() -> None:
         # ABS-325: the off-menu "Other" free-form path is disabled at
         # launch. Keep the engine wired but reject the public quote /
@@ -692,18 +952,6 @@ def build_billing_router(
                     ),
                 },
             )
-
-    def _load_owned_purchase(db: Any, purchase_id: int, user: User):
-        purchase = db.get(QuestionPurchase, purchase_id)
-        if purchase is None or purchase.user_id != user.id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "code": "purchase_not_found",
-                    "message": f"no question purchase {purchase_id}",
-                },
-            )
-        return purchase
 
     @router.post(
         "/checkout/question", response_model=QuestionCheckoutResponse
@@ -827,48 +1075,6 @@ def build_billing_router(
 
     # -- Consultant-style intake detection (ABS-315) ----------------------
 
-    @router.post("/questions/intake", response_model=IntakeResponse)
-    async def post_question_intake(
-        body: IntakeRequest,
-        auth_session: Any = Depends(user_dependency),  # noqa: ARG001
-    ) -> IntakeResponse:
-        """Detect missing inputs for a question and ask for them.
-
-        The consultant-style step BEFORE checkout (ABS-315): an LLM reads
-        the conversation, extracts whatever inputs it can, and the server
-        decides completeness against the question's required-input schema.
-        ALWAYS FREE — a single tools-less extraction, no Stripe object, no
-        charge. Auth-gated so it can't be scraped anonymously, but no money
-        moves. When ``complete`` is True the merged ``inputs`` are ready
-        for ``POST /v1/billing/checkout/question``.
-        """
-        _require_enabled()
-        _require_answer_gateway()
-        try:
-            question = question_for(body.question_slug)
-        except KeyError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "code": "unknown_question",
-                    "message": f"unknown question {body.question_slug!r}",
-                },
-            ) from exc
-        result = await detect_intake(
-            answer_gateway,
-            question,
-            conversation=body.conversation,
-            provided_inputs=body.inputs,
-        )
-        return IntakeResponse(
-            question_slug=question.slug,
-            complete=result.complete,
-            inputs=result.inputs,
-            missing_required=result.missing_required,
-            missing_optional=result.missing_optional,
-            prompt=result.prompt,
-        )
-
     # -- Off-menu "Other" question: free quote → buy (ABS-316) ------------
 
     @router.post(
@@ -959,122 +1165,22 @@ def build_billing_router(
                 rationale=quote.rationale,
             )
 
-    @router.post(
-        "/questions/purchases/{purchase_id}/answer",
-        response_model=QuestionPurchaseResponse,
+    # ABS-321/312/317: the Answers delivery surface (run / refine / get).
+    # Shared with the dormant router so the payments-off launch terminates
+    # in the dedicated answer view, not the Conversation /app chat.
+    _mount_answer_delivery_routes(
+        router,
+        user_dependency=user_dependency,
+        user_resolver=user_resolver,
+        open_db=_open_db,
+        commit=_commit,
+        answer_gateway=answer_gateway,
+        answer_persona=answer_persona,
+        answer_retrieval_factory=answer_retrieval_factory,
+        client_factory=client_factory,
+        payments_enabled=settings.payments_enabled,
+        require_enabled=_require_enabled,
     )
-    async def post_run_answer(
-        purchase_id: int,
-        auth_session: Any = Depends(user_dependency),
-    ) -> QuestionPurchaseResponse:
-        _require_enabled()
-        _require_answer_runner()
-        # Payments-off (ABS-322) runs answers with no Stripe client; the
-        # Stripe path still requires one.
-        if settings.payments_enabled and client_factory is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "billing_misconfigured",
-                    "message": "no Stripe client factory wired",
-                },
-            )
-        with _open_db() as db:
-            user = user_resolver(auth_session, db)
-            purchase = _load_owned_purchase(db, purchase_id, user)
-            try:
-                purchase = await answer_flow.run_answer(
-                    db,
-                    purchase,
-                    gateway=answer_gateway,
-                    persona=answer_persona,
-                    retrieval_factory=answer_retrieval_factory,
-                    client=client_factory() if client_factory else None,
-                )
-            except PurchaseNotAuthorizedError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "code": "not_authorized",
-                        "message": str(exc),
-                    },
-                ) from exc
-            response = _question_purchase_response(purchase)
-            _commit(db)
-            return response
-
-    @router.post(
-        "/questions/purchases/{purchase_id}/refine",
-        response_model=QuestionPurchaseResponse,
-    )
-    async def post_refine(
-        purchase_id: int,
-        body: RefineRequest,
-        auth_session: Any = Depends(user_dependency),
-    ) -> QuestionPurchaseResponse:
-        _require_enabled()
-        _require_answer_runner()
-        with _open_db() as db:
-            user = user_resolver(auth_session, db)
-            purchase = _load_owned_purchase(db, purchase_id, user)
-            try:
-                await answer_flow.run_refinement(
-                    db,
-                    purchase,
-                    message=body.message,
-                    gateway=answer_gateway,
-                    persona=answer_persona,
-                    retrieval_factory=answer_retrieval_factory,
-                )
-            except NewQuestionError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "code": "new_question",
-                        "message": (
-                            "This is a different question — please purchase "
-                            "a new answer."
-                        ),
-                        "suggested_slug": exc.suggested_slug,
-                    },
-                ) from exc
-            except WindowExhaustedError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "code": "window_exhausted",
-                        "message": (
-                            "The refinement window for this answer is "
-                            "closed — please purchase a new answer."
-                        ),
-                        "reason": exc.reason,
-                    },
-                ) from exc
-            except RefinementNotAvailableError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "code": "refinement_unavailable",
-                        "message": str(exc),
-                    },
-                ) from exc
-            response = _question_purchase_response(purchase)
-            _commit(db)
-            return response
-
-    @router.get(
-        "/questions/purchases/{purchase_id}",
-        response_model=QuestionPurchaseResponse,
-    )
-    def get_question_purchase(
-        purchase_id: int,
-        auth_session: Any = Depends(user_dependency),
-    ) -> QuestionPurchaseResponse:
-        _require_enabled()
-        with _open_db() as db:
-            user = user_resolver(auth_session, db)
-            purchase = _load_owned_purchase(db, purchase_id, user)
-            return _question_purchase_response(purchase)
 
     @router.post("/webhook")
     async def post_webhook(
@@ -1200,17 +1306,28 @@ def build_dormant_billing_router(
     db_session_factory: Callable[[], Any] | None = None,
     user_dependency: Callable[..., Any] | None = None,
     user_resolver: Callable[[Any, Any], Any] | None = None,
+    answer_gateway: Any | None = None,
+    answer_persona: str | None = None,
+    answer_retrieval_factory: Callable[[], Any] | None = None,
 ) -> APIRouter:
-    """Mount a stub router that 503s purchase endpoints but serves real
-    credit balances on ``GET /me`` so the billing page accurately
-    reflects admin-granted credits even before Stripe is configured.
+    """Mount the dormant (Stripe-off) billing router.
+
+    Conversation product (packs / Stripe checkout / webhook) is fully
+    dormant here — those endpoints 503 until Stripe is wired up. But the
+    **Answers** product is its own thing (ABS-324): when the answer engine
+    is wired (``answer_gateway`` / ``answer_persona`` /
+    ``answer_retrieval_factory``), the payments-off "buy an answer" path is
+    live — ``POST /questions/free-start`` consumes a free-question credit and
+    opens a ``QuestionPurchase`` (NOT a Case), and the answer/refine/get
+    endpoints serve the dedicated answer view. This is the decoupling: the
+    Answers free path no longer routes through the Conversation ``/app``
+    chat or reserves a CaseCredit.
 
     ``GET /catalog`` always works (price list for the pricing page).
     ``GET /me`` returns real per-tier credit counts when ``db_session_factory``,
     ``user_dependency``, and ``user_resolver`` are all provided; otherwise
     it returns an empty-balance response so the page still renders without
-    crashing. Checkout / webhook endpoints always 503 when billing is
-    dormant — users cannot purchase credits until Stripe is wired up.
+    crashing.
     """
     router = APIRouter(prefix="/v1/billing", tags=["billing"])
     pricing = get_pricing_settings()
@@ -1258,6 +1375,7 @@ def build_dormant_billing_router(
         # the menu but disables the "Buy" button.
         return QuestionMenuResponse(
             enabled=False,
+            conversation_enabled=_conversation_entry_enabled(),
             currency=pricing.display_currency,
             cad_per_usd=pricing.cad_per_usd,
             questions=_build_question_menu(
@@ -1303,6 +1421,11 @@ def build_dormant_billing_router(
                     if callable(close):
                         close()
 
+        def _commit_dormant(db: Any) -> None:
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                commit()
+
         @router.get("/me", response_model=BillingMeResponse)
         def get_me_dormant(
             auth_session: Any = Depends(user_dependency),
@@ -1334,39 +1457,68 @@ def build_dormant_billing_router(
             body: FreeStartRequest,
             auth_session: Any = Depends(user_dependency),
         ) -> FreeStartResponse:
-            """Consume one free-question entitlement and open the case.
+            """Open a free-trial **Answers** purchase (ABS-324 decoupled).
 
-            Called by the case-open form when billing is dormant (payments
-            off, ABS-320 / ABS-322). Atomically decrements the user's
-            ``free_questions_remaining`` counter, then opens or finds the
-            case container for the given anchor. Returns the ``case_id``
-            so the browser can navigate straight to the in-app answer view.
+            Called by the case-open form for the payments-off launch. It
+            consumes one free-question credit and opens a
+            ``QuestionPurchase`` straight in ``authorized`` state — ready
+            for ``.../answer`` — via the Answers engine
+            (``start_question_free``). It does NOT open a Case, does NOT
+            touch the Conversation CaseCredit ledger, and returns a
+            ``purchase_id`` so the browser routes to the dedicated answer
+            view (``/app/answers/{purchase_id}``), never the ``/app`` chat.
 
-            Returns 402 if the user's free-question counter is already 0.
+            Order of operations honours the failed-question rule:
+            unworkable inputs raise BEFORE a credit is reserved. Returns
+            402 (``free_questions_exhausted``) when the trial is used up.
             """
+            if body.question_slug is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "unknown_question",
+                        "message": "question_slug is required",
+                    },
+                )
             with _open_db_dormant() as db:
                 user = user_resolver(auth_session, db)
-                consumed = consume_free_question(db, user=user)
-                if not consumed:
+                try:
+                    purchase = answer_flow.start_question_free(
+                        db,
+                        user,
+                        question_slug=body.question_slug,
+                        inputs=body.inputs,
+                    )
+                except UnknownQuestionError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={"code": "unknown_question", "message": str(exc)},
+                    ) from exc
+                except MissingRequiredInputsError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": "missing_required_inputs",
+                            "message": str(exc),
+                            "missing": exc.missing,
+                        },
+                    ) from exc
+                except FreeQuestionsExhaustedError as exc:
                     raise HTTPException(
                         status_code=status.HTTP_402_PAYMENT_REQUIRED,
                         detail={
-                            "code": "free_trial_exhausted",
-                            "message": "Free trial questions are used up.",
+                            "code": "free_questions_exhausted",
+                            "message": (
+                                "Your free trial questions are used up. "
+                                "Paid answers are coming soon."
+                            ),
                         },
-                    )
-                case = open_case_free(
-                    db,
-                    user=user,
-                    anchor_label=body.anchor_label,
-                    anchor_kind=body.anchor_kind,
-                )
-                # Read the post-decrement count while still inside the
-                # transaction (consume_free_question has already flushed
-                # it). We cannot trust user.free_questions_remaining here
-                # because user_resolver may return the detached auth_session
-                # User object, which is a different Python instance from the
-                # locked_user that consume_free_question actually decremented.
+                    ) from exc
+                purchase_id = purchase.id
+                purchase_status = purchase.status
+                # Read the post-decrement count inside the transaction —
+                # the resolver may return a detached User instance, distinct
+                # from the row start_question_free actually decremented.
                 remaining = (
                     db.scalar(
                         select(User.free_questions_remaining).where(
@@ -1377,10 +1529,29 @@ def build_dormant_billing_router(
                 )
                 db.commit()
                 return FreeStartResponse(
-                    case_id=case.id,
-                    anchor_label=case.anchor_label,
+                    purchase_id=purchase_id,
+                    status=purchase_status,
                     free_questions_remaining=remaining,
                 )
+
+        # ABS-324: mount the Answers delivery surface (run / refine / get)
+        # on the dormant router too, wired to the same engine the chat route
+        # uses. This is what lets the payments-off free-trial answer land in
+        # its own view (/app/answers/{id}) end-to-end without billing being
+        # "enabled" in the Stripe sense.
+        _mount_answer_delivery_routes(
+            router,
+            user_dependency=user_dependency,
+            user_resolver=user_resolver,
+            open_db=_open_db_dormant,
+            commit=_commit_dormant,
+            answer_gateway=answer_gateway,
+            answer_persona=answer_persona,
+            answer_retrieval_factory=answer_retrieval_factory,
+            client_factory=None,
+            payments_enabled=False,
+            require_enabled=None,
+        )
 
     else:
         @router.get("/me", response_model=BillingMeResponse)

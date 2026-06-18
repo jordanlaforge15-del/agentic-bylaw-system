@@ -365,6 +365,14 @@ def create_app(
                 db_session_factory=_dormant_db,
                 user_dependency=_dormant_user_dep,
                 user_resolver=_dormant_resolver,
+                # ABS-324: the Answers product is decoupled from the
+                # Conversation/Stripe billing toggle. Wire the same engine
+                # the chat route uses so the payments-off free-trial path
+                # runs answers in the dedicated answer view, with no Case
+                # and no CaseCredit.
+                answer_gateway=gateway,
+                answer_persona=persona,
+                answer_retrieval_factory=factory,
             )
         )
 
