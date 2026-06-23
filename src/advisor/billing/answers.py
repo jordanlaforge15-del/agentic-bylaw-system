@@ -27,6 +27,7 @@ new purchase rather than served free (``NewQuestionError``).
 from __future__ import annotations
 
 import logging
+import math
 import re
 import uuid
 from dataclasses import dataclass
@@ -457,8 +458,55 @@ def _answer_text(messages: list[Message]) -> str:
     return ""
 
 
+def _scrub_text(value: str) -> str:
+    """Strip the one character Postgres ``text``/``jsonb`` cannot store.
+
+    The bylaw evidence is extracted from municipal PDFs, which routinely
+    carry stray NUL (``0x00``) bytes; that NUL rides through a string
+    ``tool_result`` (and the LLM's echoed answer) untouched by Pydantic —
+    ``model_dump`` does not scrub strings. Postgres then rejects it on
+    write: ``text fields cannot contain NUL (0x00) bytes`` for the
+    ``answer_text`` column, ``unsupported Unicode escape sequence … \\u0000
+    cannot be converted to text`` for the ``transcript_json`` JSONB column.
+    Both are ``db.flush()`` ``DataError``s. Other control characters are
+    legal in both types, so we strip only the NUL.
+    """
+    return value.replace("\x00", "") if "\x00" in value else value
+
+
+def _json_safe(value):
+    """Recursively coerce a JSON-able structure into one Postgres accepts.
+
+    Two values are well-formed JSON yet rejected by a Postgres column, and
+    both can ride into a persisted answer transcript from the real bylaw
+    tools where the mock/sqlite test paths never produce them:
+
+    * **NUL bytes** in a string (see :func:`_scrub_text`).
+    * **Non-finite floats** (``NaN`` / ``±Infinity``) — a ``0/0`` ratio or
+      divide-by-zero in a geometry tool yields one, and Postgres ``JSONB``
+      rejects the bare ``NaN`` / ``Infinity`` tokens. (Pydantic's json-mode
+      dump already nulls these inside typed model fields; we belt-and-brace
+      any that arrive raw.)
+
+    Because the transcript is written by ``db.flush()`` *outside* the
+    engine-error guard in :func:`run_answer`, either rejection surfaces as
+    a raw HTTP 500 on a grounded answer the user already waited for — the
+    symptom reported in ABS-332. We scrub the NUL and null the non-finite
+    scalar, keeping the transcript well-formed and resumable.
+    """
+    if isinstance(value, str):
+        return _scrub_text(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {_json_safe(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 def _serialize(messages: list[Message]) -> list:
-    return [m.model_dump(mode="json") for m in messages]
+    return [_json_safe(m.model_dump(mode="json")) for m in messages]
 
 
 def _deserialize(raw: list) -> list[Message]:
@@ -631,7 +679,7 @@ async def run_answer(
         if not _is_free_purchase(purchase):
             client.capture_payment_intent(purchase.stripe_payment_intent_id)
         purchase.status = "captured"
-        purchase.answer_text = outcome.answer_text
+        purchase.answer_text = _scrub_text(outcome.answer_text)
         purchase.window_expires_at = utcnow() + timedelta(hours=WINDOW_HOURS)
         purchase.settled_at = utcnow()
     else:
@@ -729,7 +777,7 @@ async def run_refinement(
     )
     purchase.transcript_json = _serialize(outcome.messages)
     purchase.refinement_count += 1
-    purchase.answer_text = outcome.answer_text
+    purchase.answer_text = _scrub_text(outcome.answer_text)
     db.flush()
     return outcome.answer_text
 
