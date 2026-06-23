@@ -180,6 +180,31 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
     if "MOCK_EMPTY_TURN" in user_text:
         return text_response("")
 
+    if "MOCK_NUL_BYTES" in user_text:
+        # ABS-332: drive a NUL byte (0x00) — the one character Postgres
+        # text/jsonb cannot store — through the persisted answer, mirroring
+        # real bylaw evidence extracted from municipal PDFs that carries
+        # stray NULs. Round one grounds with a NUL inside the tool_use input
+        # (→ transcript_json JSONB); round two answers with a NUL inside the
+        # final text (→ answer_text TEXT). Both writes happen in db.flush()
+        # OUTSIDE run_answer's engine-error guard, so without the
+        # _scrub_text/_json_safe sanitizers in advisor.billing.answers each
+        # raises a DataError → HTTP 500 on a grounded, paid-for answer.
+        nul = chr(0)
+        if has_prior_tool_use:
+            return text_response(
+                f"The permitted use is confirmed.{nul} See the cited section.",
+                usage=TokenUsage(input_tokens=40, output_tokens=20),
+                stop_reason="end_turn",
+            )
+        return tool_use_response(
+            tool_id="t-nul-1",
+            tool_name="search_bylaw_evidence",
+            tool_input={"query": f"permitted use{nul} setback"},
+            preamble="Looking up the bylaw evidence.",
+            usage=TokenUsage(input_tokens=40, output_tokens=12),
+        )
+
     if "MOCK_COMPLEX_DEEP" in user_text:
         # Run _COMPLEX_DEEP_ROUNDS (12) serial search rounds before
         # answering. 12 > old hardcoded cap (10), so on a Standard- or
