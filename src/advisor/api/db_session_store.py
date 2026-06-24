@@ -72,6 +72,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from advisor.api.sessions import SessionListEntry
 from advisor.chat.session import ChatSession
+from advisor.db.jsonsafe import json_safe, scrub_text
 from advisor.db.models import ChatMessage as DbChatMessage
 from advisor.db.models import ChatSession as DbChatSession
 from advisor.db.models import User
@@ -423,10 +424,21 @@ def _message_content_to_json(message: Message) -> Any:
     Plain strings stay as strings (matches the schema's permissive
     ``str | list | dict`` shape). Block lists are dumped to JSON-mode
     pydantic dicts so the round-trip through the DB is lossless.
+
+    Both shapes are routed through the ``advisor.db.jsonsafe`` sanitizer
+    before they reach the JSONB column. Real bylaw evidence is extracted
+    from municipal PDFs that carry stray NUL (``0x00``) bytes; a
+    ``tool_result`` string (or an LLM answer echoing one) rides untouched
+    through ``model_dump`` — Pydantic does not scrub strings — and a raw
+    NUL makes ``db.flush()`` raise ``psycopg.DataError`` (``unsupported
+    Unicode escape sequence … \\u0000 cannot be converted to text``), a
+    bare HTTP 500 on a chat turn. SQLite + the mock gateway accept the
+    byte, so unit/e2e fixtures miss it. This is the same crash ABS-332
+    fixed for persisted answers; ABS-333 closes it on the chat path.
     """
     if isinstance(message.content, str):
-        return message.content
-    return [block.model_dump(mode="json") for block in message.content]
+        return scrub_text(message.content)
+    return [json_safe(block.model_dump(mode="json")) for block in message.content]
 
 
 def _scan_db_messages_for_summary(
