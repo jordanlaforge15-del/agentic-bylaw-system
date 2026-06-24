@@ -41,6 +41,20 @@ test("workspace menu routes from /app to Open a case", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("sidebar primary action is '+ Open a case' and routes to /cases/new", async ({
+  page,
+}) => {
+  await page.goto("/app");
+  // The desktop sidebar's primary button is relabeled from "+ New reading".
+  const openCase = page.getByRole("button", { name: "+ Open a case" });
+  await expect(openCase).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "+ New reading" }),
+  ).toHaveCount(0);
+  await openCase.click();
+  await page.waitForURL(/\/cases\/new/);
+});
+
 test("workspace menu closes on Escape", async ({ page }) => {
   await page.goto("/app");
   await page.getByRole("button", { name: "Workspace menu" }).click();
