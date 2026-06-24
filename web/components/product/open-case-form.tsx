@@ -642,7 +642,7 @@ function QuestionCard({
       }}
     >
       <div className="flex justify-between items-start gap-4">
-        <div className="flex items-start gap-[11px]">
+        <div className="flex items-start gap-[14px]">
           <CaseRadio selected={selected} />
           <span className="text-[16px] font-bold tracking-[-0.02em] leading-[1.18]">
             {q.display_name}
@@ -660,7 +660,7 @@ function QuestionCard({
           </Mono>
         </div>
       </div>
-      <p className="text-[13px] leading-[1.5] text-text-muted m-0" style={{ paddingLeft: 27 }}>
+      <p className="text-[13px] leading-[1.5] text-text-muted m-0" style={{ paddingLeft: 30 }}>
         {q.summary}
       </p>
     </button>

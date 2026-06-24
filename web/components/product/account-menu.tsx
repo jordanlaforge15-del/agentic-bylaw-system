@@ -126,7 +126,7 @@ export function AccountMenu({ compact = false, showNav = true }: Props) {
         aria-label="Workspace menu"
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          "inline-flex items-center gap-[9px] bg-surface cursor-pointer font-sans border transition-colors",
+          "inline-flex items-center gap-[11px] bg-surface cursor-pointer font-sans border transition-colors",
           open ? "border-text" : "border-hair",
           compact ? "py-1 pr-2 pl-1" : "py-1 pr-3 pl-1",
         )}
