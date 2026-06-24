@@ -31,7 +31,11 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
-const isProtectedRoute = createRouteMatcher(["/app(.*)", "/admin(.*)"]);
+const isProtectedRoute = createRouteMatcher([
+  "/app(.*)",
+  "/admin(.*)",
+  "/cases/new",
+]);
 const isAdminRoute = createRouteMatcher(["/admin(.*)"]);
 
 // Comma-separated list of Clerk userIds (e.g. "user_2abc,user_2def")
