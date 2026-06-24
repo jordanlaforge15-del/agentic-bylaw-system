@@ -24,12 +24,12 @@ type OpenCaseBody = {
   reused_existing_case: boolean;
 };
 
-async function openCase(anchorLabel: string): Promise<OpenCaseBody> {
+async function openCase(anchorLabel: string, userId: string): Promise<OpenCaseBody> {
   const res = await fetch(`${E2E_API_URL}/v1/cases`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Test-User-Id": DEMO_USER_ID,
+      "X-Test-User-Id": userId,
     },
     body: JSON.stringify({
       anchor_label: anchorLabel,
@@ -44,9 +44,12 @@ async function openCase(anchorLabel: string): Promise<OpenCaseBody> {
 }
 
 test("user_case_number is present and sequential across two new cases", async () => {
+  // Use a unique user per test run so parallel tests opening cases for
+  // the shared DEMO_USER_ID don't interleave and break the +1 assertion.
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const first = await openCase(`abs186-first-${suffix}`);
-  const second = await openCase(`abs186-second-${suffix}`);
+  const isolatedUserId = `abs186-seq-${suffix}`;
+  const first = await openCase(`abs186-first-${suffix}`, isolatedUserId);
+  const second = await openCase(`abs186-second-${suffix}`, isolatedUserId);
 
   // user_case_number must be a positive integer on each response.
   expect(first.case.user_case_number).toBeGreaterThan(0);
@@ -66,7 +69,7 @@ test("Case #N label in /app header shows user_case_number, not raw DB id", async
   // Open a case via the API and navigate to /app with both case_id and
   // case_number in the URL (the same redirect the case-open form uses).
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const opened = await openCase(`abs186-label-${suffix}`);
+  const opened = await openCase(`abs186-label-${suffix}`, DEMO_USER_ID);
   const { id: caseId, user_case_number: caseNum } = opened.case;
 
   await page.goto(`/app?case_id=${caseId}&case_number=${caseNum}`);
