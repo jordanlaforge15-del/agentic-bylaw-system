@@ -119,7 +119,7 @@ export function Sidebar({
     >
       <div className="border-b border-hair p-4 flex flex-col gap-3">
         <Btn variant="primary" size="sm" onClick={onNew} className="w-full">
-          + New reading
+          + Open a case
         </Btn>
         <input
           value={q}

@@ -1,8 +1,9 @@
 // /app/billing — in-app account & billing view. Fetches the user's
 // credit balance, purchase history, and cases from the backend, then
-// renders them within the app shell (header + sidebar). Same content
-// as /billing (the marketing site billing page) but keeps the user
-// in the app chrome with immediate navigation back to chat.
+// renders them inside the authorized shell (AuthBar + workspace menu +
+// AuthFooter — ABS-334). Same content as /billing (the marketing site
+// billing page) but keeps the user in the authorized chrome, with the
+// shared workspace menu for navigation back to chat / Open a case.
 
 import Link from "next/link";
 import { ADVISOR_API_URL } from "@/lib/api";
@@ -17,6 +18,7 @@ import {
 import { buildAdvisorAuthHeaders } from "@/lib/advisor-auth";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
+import { AuthShell } from "@/components/product/auth-shell";
 
 export const dynamic = "force-dynamic";
 
@@ -51,57 +53,35 @@ export default async function AppBillingPage() {
     (cases && "_unauthorized" in cases);
 
   return (
-    <div className="flex flex-col h-dvh bg-surface text-text overflow-hidden">
-      {/* App header */}
-      <div className="border-b border-hair bg-surface flex items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3 safe-pt safe-px gap-2">
-        <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
-          <Link href="/app" className="flex items-center gap-2 text-text-muted hover:text-text transition-colors">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M13 8H3m0 0l6-6m-6 6l6 6" />
-            </svg>
-            <span className="text-sm">Back to chat</span>
-          </Link>
-        </div>
-        <div className="flex items-center gap-2 sm:gap-2.5 flex-shrink-0">
-          <Mono muted className="hidden lg:inline">
-            VERIFIED 2026·05·06
+    <AuthShell>
+      <div className="px-5 sm:px-8 py-12 sm:py-14 mx-auto max-w-[1100px]">
+        <header className="flex flex-col gap-3 sm:gap-4 pb-7 sm:pb-9 mb-7 sm:mb-9 border-b border-hair">
+          <Mono muted size={10}>
+            ACCOUNT · CASE CREDITS
           </Mono>
-        </div>
-      </div>
+          <h1
+            className="font-sans font-extrabold m-0 text-[40px] sm:text-[56px] leading-none"
+            style={{ letterSpacing: "-0.04em" }}
+          >
+            Billing.
+          </h1>
+        </header>
 
-      {/* Main content */}
-      <div className="flex-1 overflow-y-auto">
-        <div
-          className="px-5 sm:px-8 py-10 sm:py-12 lg:py-14 mx-auto max-w-[1100px]"
-        >
-          <header className="flex flex-col gap-3 sm:gap-3.5 pb-6 sm:pb-7 mb-7 sm:mb-9 border-b border-hair">
-            <Mono muted size={11}>
-              ACCOUNT · CASE CREDITS
-            </Mono>
-            <h1
-              className="font-sans font-extrabold m-0 text-[28px] sm:text-[36px] lg:text-[42px] leading-[1]"
-              style={{ letterSpacing: "-0.04em" }}
-            >
-              Billing
-            </h1>
-          </header>
-
-          {unauthorized ? (
-            <UnauthorizedCard />
-          ) : (
-            <div className="flex flex-col gap-9 sm:gap-12">
-              <BalanceCard me={me as BillingMeResponse | null} />
-              <PurchasesCard
-                purchases={(purchases as PurchaseHistoryResponse | null)?.purchases ?? []}
-              />
-              <CasesCard
-                cases={(cases as CaseListResponse | null)?.cases ?? []}
-              />
-            </div>
-          )}
-        </div>
+        {unauthorized ? (
+          <UnauthorizedCard />
+        ) : (
+          <div className="flex flex-col gap-9 sm:gap-12">
+            <BalanceCard me={me as BillingMeResponse | null} />
+            <PurchasesCard
+              purchases={(purchases as PurchaseHistoryResponse | null)?.purchases ?? []}
+            />
+            <CasesCard
+              cases={(cases as CaseListResponse | null)?.cases ?? []}
+            />
+          </div>
+        )}
       </div>
-    </div>
+    </AuthShell>
   );
 }
 

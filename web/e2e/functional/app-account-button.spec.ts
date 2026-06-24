@@ -1,53 +1,43 @@
+// Functional: navigation between /app and /app/billing now goes through
+// the shared workspace menu (AccountMenu) — the single authorized nav
+// control introduced in ABS-334. The old per-page "Billing" button and
+// the bespoke "Back to chat" link were removed in favour of this menu, so
+// these specs exercise the menu path that replaced them.
+
 import { expect, test, openCaseViaApi } from "../fixtures/test-env";
 
-test("app header: Billing button navigates to /app/billing", async ({
+test("app header: workspace menu navigates to /app/billing", async ({
   page,
 }) => {
-  // Open a case to have a valid case context
+  // Open a case to have a valid case context.
   const { caseId } = await openCaseViaApi();
 
-  // Navigate to /app with the case
   await page.goto(`/app?case_id=${caseId}`);
-  await page.waitForLoadState("networkidle");
 
-  // Look for the Billing button by text
-  const billingButton = page.locator('a[href="/app/billing"]');
+  // The compact workspace menu lives in the app header.
+  await page.getByRole("button", { name: "Workspace menu" }).click();
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
 
-  // Verify the link exists, is visible, and labeled "Billing"
-  await expect(billingButton).toBeVisible();
-  await expect(billingButton).toContainText("Billing");
-
-  // Click the Billing button
-  await billingButton.click();
-
-  // Verify we navigated to /app/billing
+  // The Billing row routes to /app/billing.
+  await menu.getByRole("menuitem", { name: /Billing/ }).click();
   await page.waitForURL(/\/app\/billing/, { timeout: 10000 });
-  await page.waitForLoadState("networkidle");
-
-  // Verify the billing page content is visible
-  const heading = page.locator("h1");
-  await expect(heading).toContainText("Billing");
+  await expect(page.getByRole("heading", { name: /Billing/ })).toBeVisible();
 });
 
-test("app billing page: back to chat link works", async ({ page }) => {
-  // Open a case
-  const { caseId } = await openCaseViaApi();
-
-  // Navigate directly to /app/billing
+test("app billing page: workspace menu returns to Readings (/app)", async ({
+  page,
+}) => {
   await page.goto("/app/billing");
-  await page.waitForLoadState("networkidle");
+  await expect(page.getByRole("heading", { name: /Billing/ })).toBeVisible();
 
-  // Verify the page loaded
-  await expect(page.locator("h1")).toContainText("Billing");
+  // The same workspace menu (now in the AuthBar) routes back to the chat
+  // workspace via the Readings row.
+  await page.getByRole("button", { name: "Workspace menu" }).click();
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  await menu.getByRole("menuitem", { name: /Readings/ }).click();
 
-  // Verify the back link exists and links to /app
-  const backLink = page.locator('a[href="/app"]');
-  await expect(backLink).toBeVisible();
-  await expect(backLink).toContainText("Back to chat");
-
-  // Click the back link
-  await backLink.click();
-
-  // Should navigate back to /app (the root, not a specific case)
-  await page.waitForURL(/\/app/, { timeout: 10000 });
+  // Should land on the chat workspace root.
+  await page.waitForURL(/\/app(\?.*)?$/, { timeout: 10000 });
 });
