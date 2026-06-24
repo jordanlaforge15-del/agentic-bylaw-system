@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AgentMarkdown } from "@/components/product/agent-markdown";
 import { PaidAnswerDisclaimer } from "@/components/product/paid-answer-disclaimer";
+import { ReadingIndicator } from "@/components/product/reading-indicator";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 import {
@@ -154,21 +155,22 @@ export function AnswerView({ purchaseId }: { purchaseId: number }) {
   }
 
   if (state.phase === "loading" || state.phase === "answering") {
+    // ABS-331: reinstate the app-page reading UX — the animated
+    // "ABS · READING → Reading the bylaw…" cursor (shared with the /app
+    // chat thread) instead of a static "Generating your answer" line.
     return (
-      <Centered>
-        <span data-testid="answer-status">
-          <Mono muted size={11}>
-            {state.phase === "answering"
-              ? "GENERATING YOUR ANSWER…"
-              : "LOADING YOUR ANSWER…"}
-          </Mono>
-        </span>
-        <div className="text-text-muted text-[13.5px] mt-2">
+      <div className="flex flex-col gap-3" data-testid="answer-status">
+        <ReadingIndicator
+          label={
+            state.phase === "answering" ? "Reading the bylaw" : "Loading your answer"
+          }
+        />
+        <div className="pl-7 sm:pl-8 text-text-muted text-[13px]">
           {state.phase === "answering"
             ? "The engine is grounding your answer in the bylaw. This can take a few seconds."
             : "One moment."}
         </div>
-      </Centered>
+      </div>
     );
   }
 
@@ -388,10 +390,6 @@ function Header({ title }: { title: string }) {
       </h1>
     </header>
   );
-}
-
-function Centered({ children }: { children: React.ReactNode }) {
-  return <div className="py-16 text-center flex flex-col items-center">{children}</div>;
 }
 
 function Notice({
