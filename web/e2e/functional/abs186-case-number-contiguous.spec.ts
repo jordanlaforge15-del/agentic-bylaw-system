@@ -8,6 +8,9 @@
 // the same transaction as the case row, so it always rolls back with
 // the case on failure.
 
+import { execSync } from "node:child_process";
+import * as path from "node:path";
+
 import {
   DEMO_USER_ID,
   E2E_API_URL,
@@ -24,12 +27,12 @@ type OpenCaseBody = {
   reused_existing_case: boolean;
 };
 
-async function openCase(anchorLabel: string): Promise<OpenCaseBody> {
+async function openCase(anchorLabel: string, userId: string): Promise<OpenCaseBody> {
   const res = await fetch(`${E2E_API_URL}/v1/cases`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Test-User-Id": DEMO_USER_ID,
+      "X-Test-User-Id": userId,
     },
     body: JSON.stringify({
       anchor_label: anchorLabel,
@@ -43,10 +46,40 @@ async function openCase(anchorLabel: string): Promise<OpenCaseBody> {
   return (await res.json()) as OpenCaseBody;
 }
 
+// Unique user per run so parallel workers opening cases for DEMO_USER_ID
+// don't interleave and break the +1 sequential assertion.
+const SEQ_USER_ID = `abs186-seq-${Date.now()}-${Math.random()
+  .toString(36)
+  .slice(2, 7)}`;
+
+test.beforeAll(() => {
+  const repoRoot = path.resolve(__dirname, "..", "..", "..");
+  const seed = path.join(repoRoot, "scripts", "seed_e2e_user.py");
+  const venvPython = path.join(repoRoot, ".venv", "bin", "python");
+  const pgPort = process.env.PG_PORT || "5432";
+  const databaseUrl =
+    process.env.DATABASE_URL ||
+    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  execSync(
+    `"${venvPython}" "${seed}" --user-id "${SEQ_USER_ID}" ` +
+      `--email "${SEQ_USER_ID}@e2e.test" --credits-per-tier 5`,
+    {
+      env: {
+        ...process.env,
+        DATABASE_URL: databaseUrl,
+        PYTHONPATH: `${path.join(repoRoot, "src")}:${
+          process.env.PYTHONPATH || ""
+        }`,
+      },
+      stdio: "inherit",
+    },
+  );
+});
+
 test("user_case_number is present and sequential across two new cases", async () => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const first = await openCase(`abs186-first-${suffix}`);
-  const second = await openCase(`abs186-second-${suffix}`);
+  const first = await openCase(`abs186-first-${suffix}`, SEQ_USER_ID);
+  const second = await openCase(`abs186-second-${suffix}`, SEQ_USER_ID);
 
   // user_case_number must be a positive integer on each response.
   expect(first.case.user_case_number).toBeGreaterThan(0);
@@ -66,7 +99,7 @@ test("Case #N label in /app header shows user_case_number, not raw DB id", async
   // Open a case via the API and navigate to /app with both case_id and
   // case_number in the URL (the same redirect the case-open form uses).
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const opened = await openCase(`abs186-label-${suffix}`);
+  const opened = await openCase(`abs186-label-${suffix}`, DEMO_USER_ID);
   const { id: caseId, user_case_number: caseNum } = opened.case;
 
   await page.goto(`/app?case_id=${caseId}&case_number=${caseNum}`);

@@ -12,7 +12,7 @@
 // offers only the fixed catalog questions, with no "Other" card and no
 // free-form quote UI reachable from it.
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures/test-env";
 
 test("the question menu offers no off-menu 'Other' option", async ({
   page,
