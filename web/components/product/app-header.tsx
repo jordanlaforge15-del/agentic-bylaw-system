@@ -1,26 +1,30 @@
 // Top bar inside /app. Replaces the marketing TopNav. Carries the
 // hamburger trigger (mobile/tablet), the logo, the current reading's
-// address/zone, the "verified" timestamp, the theme toggle, and an
-// Account button that links to /app/billing.
+// address/zone, the "verified" timestamp, and the shared workspace menu.
 //
 // Responsive contract:
 //   - base (< 640): minimal — hamburger + logo + zone code + accent
-//     dot + theme toggle. Address/verified text move into the address
-//     pill below the header (rendered by the page).
-//   - sm (≥ 640): adds the full READING string and Account button.
-//   - lg (≥ 1024): adds VERIFIED date and theme toggle stays visible.
+//     dot + workspace menu (compact). Address/verified text move into
+//     the address pill below the header (rendered by the page).
+//   - sm (≥ 640): adds the full READING string.
+//   - lg (≥ 1024): adds the VERIFIED date.
 //
 // `onMenuClick` is wired by the parent page; absent on desktop where
 // the sidebar is always visible. The hamburger is rendered up to lg
 // (mobile = drawer, tablet = collapsible rail trigger).
+//
+// ABS-334: the right cluster carries <AccountMenu compact/> — the single
+// authorized nav control — in place of the old ad-hoc theme toggle +
+// "Billing" button. The theme toggle now lives inside that menu, so
+// appearance control is consistent across every authorized surface. The
+// logo routes to /app (the workspace), not the marketing home.
 
 "use client";
 
 import Link from "next/link";
 import { ABSLogo } from "@/components/abs-logo";
-import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { AccountMenu } from "@/components/product/account-menu";
 
 type Props = {
   reading: { addr: string; zone: string };
@@ -44,7 +48,7 @@ export function AppHeader({ reading, onMenuClick }: Props) {
             <span className="w-full h-[1.5px] bg-text" />
           </button>
         )}
-        <Link href="/" aria-label="ABS home" className="flex-shrink-0">
+        <Link href="/app" aria-label="Workspace" className="flex-shrink-0">
           <ABSLogo size={20} />
         </Link>
         <span className="hidden sm:inline-block w-px h-4 bg-hair flex-shrink-0" />
@@ -66,12 +70,7 @@ export function AppHeader({ reading, onMenuClick }: Props) {
         <Mono muted className="hidden lg:inline">
           VERIFIED 2026·05·06
         </Mono>
-        <ThemeToggle size="sm" />
-        <Link href="/app/billing" className="hidden sm:contents">
-          <Btn variant="quiet" size="sm">
-            Billing
-          </Btn>
-        </Link>
+        <AccountMenu compact />
       </div>
     </div>
   );
