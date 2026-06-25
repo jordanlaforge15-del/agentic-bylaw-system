@@ -32,6 +32,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from advisor.billing.client import StripeClient
@@ -569,6 +570,33 @@ def _resolve_run_inputs(purchase: QuestionPurchase) -> tuple[str, int | None]:
     return render_prompt(question, purchase.inputs_json), None
 
 
+def _relax_idle_timeout(db: Session) -> None:
+    """Opt *this request's* transaction out of Postgres'
+    ``idle_in_transaction_session_timeout`` for the duration of the long
+    LLM turn.
+
+    INTERIM (ABS-339) — REMOVE when ABS-338 lands. The buy-an-answer
+    request holds one DB transaction open across the ~84s LLM turn while
+    that transaction is idle; the global cap
+    (``docker-compose.yml`` ``idle_in_transaction_session_timeout``, ABS-100)
+    terminates the idle connection at 60s, so the settling ``UPDATE``
+    raises ``psycopg.errors.IdleInTransactionSessionTimeout`` → a 500.
+
+    ``SET LOCAL`` is *transaction-scoped*: it resets at commit/rollback, so
+    this opt-out can never leak to a pooled connection reused by another
+    request. The global cap (and the wedged-connection / held-lock
+    protection ABS-100 added) therefore stays in force for every other
+    connection — this is the scoped, responsible unblock, not the blunt
+    global override.
+
+    No-op on non-Postgres backends (sqlite unit tests have no such GUC).
+    ``db.execute`` autobegins a transaction if one isn't open yet, so the
+    ``SET LOCAL`` always lands inside a transaction.
+    """
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        db.execute(text("SET LOCAL idle_in_transaction_session_timeout = 0"))
+
+
 async def run_answer(
     db: Session,
     purchase: QuestionPurchase,
@@ -602,6 +630,11 @@ async def run_answer(
         raise PurchaseNotAuthorizedError(
             f"purchase {purchase.id} is {purchase.status!r}, not authorized"
         )
+
+    # ABS-339 (interim; remove under ABS-338): this transaction stays open
+    # and idle across the long LLM turn below — opt it out of the global
+    # idle-in-transaction cap so it isn't killed mid-flight.
+    _relax_idle_timeout(db)
 
     prompt, cumulative_budget = _resolve_run_inputs(purchase)
     purchase.answered_at = utcnow()
@@ -707,6 +740,11 @@ async def run_refinement(
         raise WindowExhaustedError("window_expired")
     if purchase.refinement_count >= MAX_REFINEMENTS:
         raise WindowExhaustedError("refinements_exhausted")
+
+    # ABS-339 (interim; remove under ABS-338): the refinement turn (and the
+    # LLM new-question gate below) holds this transaction open and idle —
+    # opt it out of the global idle-in-transaction cap before either runs.
+    _relax_idle_timeout(db)
 
     # New-question gate: programmatic first (cheap, deterministic), then
     # an optional persona-gated LLM check for ambiguous follow-ups.
