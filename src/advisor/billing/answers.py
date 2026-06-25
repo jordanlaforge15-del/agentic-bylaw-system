@@ -458,15 +458,6 @@ def _answer_text(messages: list[Message]) -> str:
     return ""
 
 
-# NUL-scrub / non-finite-float sanitizers (ABS-332). The implementation now
-# lives in the dependency-free ``advisor.db.jsonsafe`` shared util so the
-# chat-session store (ABS-333) reuses the exact same scrubbing rather than
-# duplicating it. Re-exported under the original private names so existing
-# call sites and tests keep importing them from here.
-_scrub_text = scrub_text
-_json_safe = json_safe
-
-
 def _serialize(messages: list[Message]) -> list:
     return [json_safe(m.model_dump(mode="json")) for m in messages]
 
