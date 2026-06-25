@@ -188,7 +188,7 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
         # (→ transcript_json JSONB); round two answers with a NUL inside the
         # final text (→ answer_text TEXT). Both writes happen in db.flush()
         # OUTSIDE run_answer's engine-error guard, so without the
-        # _scrub_text/_json_safe sanitizers in advisor.billing.answers each
+        # scrub_text/json_safe sanitizers from advisor.db.jsonsafe each
         # raises a DataError → HTTP 500 on a grounded, paid-for answer.
         nul = chr(0)
         if has_prior_tool_use:

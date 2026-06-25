@@ -23,7 +23,8 @@ import math
 from pathlib import Path
 
 from advisor.billing import answers as answer_flow
-from advisor.billing.answers import _json_safe, _scrub_text, _serialize
+from advisor.billing.answers import _serialize
+from advisor.db.jsonsafe import json_safe, scrub_text
 from advisor.db.models import QuestionPurchase, User
 from advisor.llm import Message, TextBlock, ToolResultBlock, ToolUseBlock
 from advisor.llm.base import LLMRole
@@ -44,31 +45,31 @@ class _StubRetrieval:
         return RetrievalResponse(total_matches=1, matches=[], notes=[])
 
 
-# -- _scrub_text -------------------------------------------------------------
+# -- scrub_text -------------------------------------------------------------
 
 
 def test_scrub_text_removes_nul() -> None:
-    assert _scrub_text(f"set{NUL}back") == "setback"
+    assert scrub_text(f"set{NUL}back") == "setback"
 
 
 def test_scrub_text_preserves_ordinary_whitespace() -> None:
     # Only the NUL is illegal in Postgres text/jsonb — tabs and newlines
     # are legal and must survive untouched.
     body = "line one\n\tindented\r\nline two"
-    assert _scrub_text(body) == body
+    assert scrub_text(body) == body
 
 
-# -- _json_safe --------------------------------------------------------------
+# -- json_safe --------------------------------------------------------------
 
 
 def test_json_safe_strips_nul_in_nested_strings_and_keys() -> None:
-    cleaned = _json_safe({f"k{NUL}ey": [f"a{NUL}b", {"deep": f"c{NUL}d"}]})
+    cleaned = json_safe({f"k{NUL}ey": [f"a{NUL}b", {"deep": f"c{NUL}d"}]})
     assert NUL not in json.dumps(cleaned)
     assert cleaned == {"key": ["ab", {"deep": "cd"}]}
 
 
 def test_json_safe_nulls_non_finite_floats() -> None:
-    cleaned = _json_safe(
+    cleaned = json_safe(
         {"ratio": float("nan"), "dist": math.inf, "neg": -math.inf, "ok": 1.5}
     )
     assert cleaned == {"ratio": None, "dist": None, "neg": None, "ok": 1.5}
