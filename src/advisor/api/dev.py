@@ -56,8 +56,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from advisor.api.app import create_app
+from advisor.api.billing_wiring import build_billing_kwargs
 from advisor.auth.clerk import ClerkVerifier
 from advisor.auth.settings import build_verifier as build_clerk_verifier
+from advisor.billing.settings import get_settings as get_billing_settings
 from advisor.llm.registry import build_gateway
 from advisor.logging import CorrelationIdMiddleware, setup_logging
 from layer1.db.session import session_scope
@@ -108,10 +110,32 @@ def build_dev_app() -> FastAPI:
     # the X-Test-User-Id fallback is meaningless without an in-memory
     # store to back it.
     db_session_factory = session_scope if verifier is not None else None
+
+    # ABS-341: honor ADVISOR_BILLING_ENABLED on the dev server the same way
+    # the production entrypoint does, so the buy-an-answer UI (the priced
+    # question menu + checkout CTA on /cases/new) can be exercised locally.
+    # The live billing router requires real Clerk auth, so when billing is
+    # enabled but Clerk isn't wired we log a loud warning and stay dormant
+    # rather than crash the dev server (which also serves chat / cases).
+    billing_settings = get_billing_settings()
+    try:
+        billing_kwargs = build_billing_kwargs(
+            verifier=verifier, billing_settings=billing_settings
+        )
+    except RuntimeError as exc:
+        logger.warning(
+            "ADVISOR_BILLING_ENABLED=true but billing can't be wired on the "
+            "dev server: %s Billing stays DORMANT. Set CLERK_JWKS_URL (and "
+            "CLERK_SECRET_KEY) to exercise the buy-an-answer flow locally.",
+            exc,
+        )
+        billing_kwargs = {}
+
     app = create_app(
         gateway=gateway,
         verifier=verifier,
         db_session_factory=db_session_factory,
+        **billing_kwargs,
     )
     app.add_middleware(CorrelationIdMiddleware)
 

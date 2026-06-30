@@ -46,24 +46,17 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
-from typing import Any
 
 from fastapi import FastAPI
 
 from advisor.api.app import create_app
+from advisor.api.billing_wiring import build_billing_kwargs
 from advisor.api.metrics_middleware import MetricsMiddleware
 from advisor.logging import CorrelationIdMiddleware, setup_logging
-from advisor.api.auth import resolve_or_create_user
 from advisor.api.sentry import init_sentry
 from advisor.auth.clerk import ClerkVerifier
-from advisor.auth.fastapi import clerk_session_dependency
 from advisor.auth.settings import build_verifier as build_clerk_verifier
-from advisor.billing.client import LiveStripeClient, StripeClient
-from advisor.billing.settings import (
-    AdvisorBillingSettings,
-    get_settings as get_billing_settings,
-)
+from advisor.billing.settings import get_settings as get_billing_settings
 from advisor.llm.registry import build_gateway
 from layer1.db.session import session_scope
 
@@ -89,74 +82,6 @@ def _build_verifier_or_none() -> ClerkVerifier | None:
     return build_clerk_verifier()
 
 
-def _build_billing_kwargs(
-    *,
-    verifier: ClerkVerifier | None,
-    billing_settings: AdvisorBillingSettings,
-) -> dict[str, Any]:
-    """Compose the billing kwargs for ``create_app``.
-
-    When billing is disabled we still pass the settings so
-    ``create_app`` can short-circuit to the dormant router. When
-    enabled we additionally wire the Stripe client factory, the user
-    dependency (Clerk session), and the user resolver.
-
-    Raises ``RuntimeError`` when billing is enabled but Clerk isn't
-    wired — the live billing router requires an authenticated caller
-    and we don't allow paid endpoints behind the test-header
-    fallback.
-    """
-    kwargs: dict[str, Any] = {"billing_settings": billing_settings}
-    if not billing_settings.enabled:
-        return kwargs
-
-    if verifier is None:
-        raise RuntimeError(
-            "ADVISOR_BILLING_ENABLED=true requires a Clerk verifier; "
-            "set CLERK_JWKS_URL to enable real auth before enabling "
-            "billing."
-        )
-
-    # ABS-322: the Stripe client is required ONLY when payments are on.
-    # In payments-off / free-trial mode (ADVISOR_PAYMENTS_ENABLED=false,
-    # the go-live default) the buy-an-answer flow consumes free-question
-    # credits and never touches Stripe, so a STRIPE_API_KEY is not
-    # needed — the live router mounts with no client factory.
-    stripe_client_factory: Callable[[], StripeClient] | None = None
-    if billing_settings.payments_enabled:
-        api_key = billing_settings.stripe_api_key
-        if not api_key:
-            raise RuntimeError(
-                "ADVISOR_PAYMENTS_ENABLED=true requires STRIPE_API_KEY."
-            )
-
-        def _stripe_client_factory() -> StripeClient:
-            return LiveStripeClient(api_key=api_key)
-
-        stripe_client_factory = _stripe_client_factory
-
-    require_clerk_session = clerk_session_dependency(verifier)
-
-    def _user_resolver(clerk_session: Any, db: Any) -> Any:
-        user = resolve_or_create_user(db, clerk_session)
-        # The billing router opens its own DB session and reads the
-        # user from it; commit so the row is visible if we just
-        # created it. ``resolve_or_create_user`` deliberately doesn't
-        # commit so it composes inside larger transactions, which is
-        # why we commit here.
-        db.commit()
-        db.refresh(user)
-        return user
-
-    kwargs.update(
-        stripe_client_factory=stripe_client_factory,
-        billing_db_session_factory=session_scope,
-        billing_user_dependency=require_clerk_session,
-        billing_user_resolver=_user_resolver,
-    )
-    return kwargs
-
-
 def build_app() -> FastAPI:
     """Construct the production FastAPI app from environment config.
 
@@ -170,7 +95,7 @@ def build_app() -> FastAPI:
     gateway = build_gateway()
     verifier = _build_verifier_or_none()
     billing_settings = get_billing_settings()
-    billing_kwargs = _build_billing_kwargs(
+    billing_kwargs = build_billing_kwargs(
         verifier=verifier, billing_settings=billing_settings
     )
     webhook_secret = os.environ.get("CLERK_WEBHOOK_SECRET") or None
