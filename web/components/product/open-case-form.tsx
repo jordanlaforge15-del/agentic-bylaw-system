@@ -135,6 +135,14 @@ export function OpenCaseForm({
   // continue-case entry stays hidden until conversation_enabled flips.
   const conversationEnabled = menu?.conversation_enabled ?? false;
 
+  // ABS-348: does unlocking an answer cost real money (Stripe) or a free
+  // credit? Payments-off is the go-live posture — an `available` question is
+  // unlocked by consuming a free-question credit, NOT a paid checkout. The
+  // CTA framing and the completion routing both branch on this, so a
+  // billing-on/payments-off menu (available:true) takes the free-credit path
+  // instead of dead-ending on a Stripe checkout that returns no URL.
+  const paymentsEnabled = menu?.payments_enabled ?? false;
+
   function resetSelectionState() {
     setIntake(null);
     setCollectedInputs({});
@@ -274,10 +282,18 @@ export function OpenCaseForm({
         setAnchorLabel(data.inputs.address);
       }
       if (data.complete) {
-        if (!menu?.enabled) {
-          await startFreeAnswer(selectedQuestion.slug, data.inputs);
-        } else {
+        // ABS-348: route on payments, not the billing master switch. Only a
+        // payments-on, available question goes to Stripe checkout; everything
+        // else (dormant billing, OR billing-on/payments-off go-live) unlocks
+        // via a free credit and lands on the answer view. Keying this on
+        // `menu.enabled` sent the go-live posture to a Stripe checkout that
+        // returns no URL, dead-ending after the credit was already consumed.
+        const paidCheckout =
+          selectedQuestion.available === true && paymentsEnabled;
+        if (paidCheckout) {
           await checkoutQuestion(selectedQuestion.slug, data.inputs);
+        } else {
+          await startFreeAnswer(selectedQuestion.slug, data.inputs);
         }
       }
     } finally {
@@ -317,6 +333,15 @@ export function OpenCaseForm({
       const data = (await r.json()) as QuestionCheckoutResponse & {
         url?: string;
       };
+      // Defensive (ABS-348): a payments-off response carries a purchase_id
+      // and a null URL (free-credit unlock, no Stripe session). Route to the
+      // answer view instead of erroring on the missing checkout URL. With the
+      // payments-aware routing above this branch shouldn't be reached in
+      // payments-off mode, but this keeps checkoutQuestion self-consistent.
+      if (!data.url && data.purchase_id) {
+        router.push(`/app/answers/${data.purchase_id}`);
+        return;
+      }
       goToCheckout(data.url);
     } finally {
       setWorking((w) => (w === "checkout" ? "idle" : w));
@@ -325,23 +350,12 @@ export function OpenCaseForm({
 
   const busy = working !== "idle";
 
-  // The checkout footer's CTA label tracks the working state + billing mode.
-  const ctaLabel =
-    working === "intake"
-      ? "Checking…"
-      : working === "checkout"
-        ? menu?.enabled
-          ? "Opening checkout…"
-          : "Starting…"
-        : selectedQuestion?.available
-          ? `Get answer · ${formatCurrency(
-              selectedQuestion.price_cents,
-              selectedQuestion.currency,
-            )}`
-          : "Get answer (free trial) →";
-
-  // Which checkout affordance applies to the selected question.
-  const canPurchase = selectedQuestion?.available === true;
+  // Which checkout affordance applies to the selected question. ABS-348: a
+  // *paid* purchase requires payments to be ON — in payments-off mode an
+  // `available` question is a free-credit unlock, so it takes the free-trial
+  // affordance (and, if the user's credits are spent, the exhausted notice),
+  // not a "$79" checkout.
+  const canPurchase = selectedQuestion?.available === true && paymentsEnabled;
   const canFreeTrial =
     !canPurchase &&
     freeQuestionsRemaining !== null &&
@@ -350,6 +364,21 @@ export function OpenCaseForm({
     !canPurchase &&
     selectedQuestion !== undefined &&
     freeQuestionsRemaining === 0;
+
+  // The checkout footer's CTA label tracks the working state + unlock mode.
+  const ctaLabel =
+    working === "intake"
+      ? "Checking…"
+      : working === "checkout"
+        ? paymentsEnabled
+          ? "Opening checkout…"
+          : "Starting…"
+        : selectedQuestion && canPurchase
+          ? `Get answer · ${formatCurrency(
+              selectedQuestion.price_cents,
+              selectedQuestion.currency,
+            )}`
+          : "Get answer (free trial) →";
 
   const anchorSummary = (
     anchorLabel ? anchorLabel.toUpperCase() : "NO ADDRESS YET"

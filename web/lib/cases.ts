@@ -129,6 +129,11 @@ export type QuestionMenuItem = {
 
 export type QuestionMenuResponse = {
   enabled: boolean;
+  // ABS-322/348: whether an answer is unlocked by a real Stripe payment
+  // (true) or a free-question credit (false). Payments-off is the go-live
+  // posture — `available` questions unlock via a credit, not a paid
+  // checkout. The entry flow branches its CTA + completion routing on this.
+  payments_enabled?: boolean;
   // ABS-324 launch posture: when false, /cases/new is Answers-only — the
   // continue-existing-case (Conversation /app chat) entry is hidden.
   conversation_enabled?: boolean;
