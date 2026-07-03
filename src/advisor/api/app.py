@@ -165,6 +165,21 @@ class ChatSessionSummary(BaseModel):
     updated_at: str | None = None
     # Numeric case FK. None for legacy / un-cased sessions.
     case_id: int | None = None
+    # ABS-345: discrete pieces of the sidebar row so the frontend can
+    # render the anchor address in bold with the question muted beneath
+    # (rather than re-parsing the composed ``title``) and show the zone
+    # caption. ``kind`` distinguishes conversation rows from the priced
+    # "report" rows the sidebar merges in from the Answers product, so a
+    # single case-aware list can style both. All are optional / defaulted
+    # so older frontends reading only ``title`` keep working.
+    anchor_label: str | None = None
+    anchor_kind: str | None = None
+    zone: str | None = None
+    # First user message — the "question" line rendered muted under the
+    # bold anchor. Mirrors the piece the composed ``title`` already folds
+    # in; surfaced discretely so the two lines can be styled apart.
+    question: str | None = None
+    kind: str = "conversation"
 
 
 class ChatSessionList(BaseModel):
@@ -1065,6 +1080,11 @@ def _summary_from_entry(entry: SessionListEntry) -> ChatSessionSummary:
             else None
         ),
         case_id=entry.case_id,
+        anchor_label=entry.anchor_label,
+        anchor_kind=entry.anchor_kind,
+        zone=entry.zone,
+        question=entry.first_user_message,
+        kind="conversation",
     )
 
 

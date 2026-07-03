@@ -397,6 +397,37 @@ class QuestionPurchaseResponse(BaseModel):
     window_expires_at: str | None = None
 
 
+class ReportSummary(BaseModel):
+    """ABS-345: one priced "report" (Answers purchase) row for the sidebar.
+
+    The product sidebar merges these report rows with conversation
+    (chat-session) rows into a single case-aware list, so a report and a
+    conversation about the same property read side-by-side. Only the
+    fields the sidebar renders are projected — the full answer text and
+    transcript stay on the dedicated ``/app/answers/{id}`` view.
+
+    ``address`` / ``zone`` are pulled from the purchase inputs (an Answers
+    purchase carries its subject in ``inputs``, not a Case anchor); ``zone``
+    is present only for questions that collected it, so the sidebar omits
+    the caption when it is ``None``. ``answer_ready`` is True once the
+    engine has captured a grounded answer — the sidebar uses it to decide
+    whether opening the row lands on a ready answer.
+    """
+
+    id: int
+    question_slug: str
+    title: str
+    status: str
+    address: str | None = None
+    zone: str | None = None
+    answer_ready: bool = False
+    updated_at: str | None = None
+
+
+class ReportListResponse(BaseModel):
+    reports: list[ReportSummary]
+
+
 class TierBalance(BaseModel):
     tier: str
     available: int
@@ -545,6 +576,37 @@ def _question_purchase_response(
         window_expires_at=(
             purchase.window_expires_at.isoformat()
             if purchase.window_expires_at is not None
+            else None
+        ),
+    )
+
+
+def _report_summary(purchase: QuestionPurchase) -> ReportSummary:
+    """Project a ``QuestionPurchase`` into a sidebar ``ReportSummary``.
+
+    The display title is the catalog question's ``display_name`` when the
+    slug is known; off-menu ("other", ABS-316) purchases fall back to the
+    verbatim free-form question text captured in ``inputs['question']``,
+    then to the raw slug. Address / zone come from the collected inputs.
+    """
+    inputs = purchase.inputs_json or {}
+    try:
+        title = question_for(purchase.question_slug).display_name
+    except KeyError:
+        title = str(inputs.get("question") or purchase.question_slug)
+    address = inputs.get("address")
+    zone = inputs.get("zone")
+    return ReportSummary(
+        id=purchase.id,
+        question_slug=purchase.question_slug,
+        title=title,
+        status=purchase.status,
+        address=str(address) if isinstance(address, str) and address else None,
+        zone=str(zone) if isinstance(zone, str) and zone else None,
+        answer_ready=bool(purchase.answer_text),
+        updated_at=(
+            purchase.updated_at.isoformat()
+            if purchase.updated_at is not None
             else None
         ),
     )
@@ -782,6 +844,39 @@ def _mount_answer_delivery_routes(
             response = _question_purchase_response(purchase)
             commit(db)
             return response
+
+    @router.get(
+        "/questions/purchases",
+        response_model=ReportListResponse,
+    )
+    def list_question_purchases(
+        auth_session: Any = Depends(user_dependency),
+    ) -> ReportListResponse:
+        """ABS-345: list the caller's priced "report" purchases, newest-first.
+
+        Feeds the product sidebar, which merges these report rows with the
+        conversation (chat-session) rows into one case-aware list. Read-only
+        and deliberately NOT gated by ``require_enabled``: payments-off
+        deployments still issue free-question ``QuestionPurchase`` rows
+        (ABS-322 free-start), and the user must be able to see them. Rows in
+        the pre-answer ``authorizing`` state are excluded — they have no
+        subject worth showing until checkout completes.
+        """
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            rows = (
+                db.execute(
+                    select(QuestionPurchase)
+                    .where(QuestionPurchase.user_id == user.id)
+                    .where(QuestionPurchase.status != "authorizing")
+                    .order_by(QuestionPurchase.updated_at.desc())
+                )
+                .scalars()
+                .all()
+            )
+            return ReportListResponse(
+                reports=[_report_summary(p) for p in rows]
+            )
 
     @router.get(
         "/questions/purchases/{purchase_id}",

@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from advisor.billing.client import CheckoutSessionResult, MockStripeClient
 from advisor.billing.router import build_billing_router
 from advisor.billing.settings import AdvisorBillingSettings
-from advisor.db.models import User
+from advisor.db.models import QuestionPurchase, User
 from advisor.llm.mock import MockGateway
 from advisor.llm.mock_dispatcher import build_dispatcher
 from bylaw_retrieval.retrieval import RetrievalResponse
@@ -285,6 +285,97 @@ def test_full_other_buy_flow_over_http(tmp_path: Path) -> None:
     assert answered["question_slug"] == "other"
     assert answered["answer"]
     assert [c.action for c in stripe.payment_intent_calls] == ["capture"]
+
+
+# -- Reports list for the case-aware sidebar (ABS-345) ---------------------
+
+
+def test_reports_list_projects_owned_purchases(tmp_path: Path) -> None:
+    """The sidebar's report source lists the caller's captured answers.
+
+    Covers the projection (title from the catalog display name, address /
+    zone from inputs, answer_ready once captured), the newest-first order,
+    the exclusion of pre-checkout ``authorizing`` rows, and per-user
+    scoping.
+    """
+    client, _ = _build_client(tmp_path)
+    # _build_client provisions this same sqlite file; reuse it for the
+    # direct insert below (tables already exist — no create_all here).
+    db_url = f"sqlite:///{tmp_path / 'advisor.db'}"
+
+    # A fully-captured answer for u1 (default header user). The standard
+    # checkout intake only retains the question's declared input fields
+    # (address, proposed_use), so this row carries no zone.
+    res = client.post(
+        "/v1/billing/checkout/question",
+        json={
+            "question_slug": "permitted_use",
+            "inputs": {
+                "address": "5184 Morris St",
+                "proposed_use": "a backyard suite",
+            },
+        },
+    )
+    captured_id = res.json()["purchase_id"]
+    _authorize_via_webhook(client, captured_id)
+    res = client.post(
+        f"/v1/billing/questions/purchases/{captured_id}/answer"
+    )
+    assert res.json()["status"] == "captured"
+
+    # Two direct inserts (the MockStripeClient reuses one checkout-session
+    # id, so a second real checkout would collide on the unique
+    # constraint): one captured row that DOES carry a zone in its inputs
+    # (covers the zone projection), and one still-"authorizing" row that
+    # must be excluded from the list.
+    with session_scope(db_url) as db:
+        owner = db.query(User).filter(User.clerk_user_id == "u1").one()
+        db.add(
+            QuestionPurchase(
+                user_id=owner.id,
+                question_slug="permitted_use",
+                inputs_json={"address": "17 Edward St", "zone": "ER-2"},
+                price_cents=7_900,
+                status="captured",
+                answer_text="Grounded answer text.",
+            )
+        )
+        db.add(
+            QuestionPurchase(
+                user_id=owner.id,
+                question_slug="permitted_use",
+                inputs_json={"address": "9 Hidden Rd"},
+                price_cents=7_900,
+                status="authorizing",
+            )
+        )
+
+    res = client.get("/v1/billing/questions/purchases")
+    assert res.status_code == 200, res.text
+    reports = res.json()["reports"]
+    # Two captured rows appear; the "authorizing" one is excluded.
+    assert len(reports) == 2
+    by_id = {r["id"]: r for r in reports}
+
+    checkout_row = by_id[captured_id]
+    assert checkout_row["question_slug"] == "permitted_use"
+    assert checkout_row["title"] == "Permitted-use check"
+    assert checkout_row["address"] == "5184 Morris St"
+    assert checkout_row["zone"] is None
+    assert checkout_row["answer_ready"] is True
+    assert checkout_row["status"] == "captured"
+
+    zoned_row = next(r for r in reports if r["address"] == "17 Edward St")
+    assert zoned_row["zone"] == "ER-2"
+    assert zoned_row["answer_ready"] is True
+
+    # Scoped per-user: a different user sees none of u1's reports.
+    res = client.get(
+        "/v1/billing/questions/purchases",
+        headers={"X-Test-User-Id": "someone-else"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["reports"] == []
 
 
 def _build_client_other_disabled(tmp_path: Path) -> TestClient:
