@@ -129,10 +129,17 @@ def test_full_buy_answer_flow_over_http(tmp_path: Path) -> None:
     res = client.get(f"/v1/billing/questions/purchases/{purchase_id}")
     assert res.json()["status"] == "authorized"
 
-    # 3. Run the answer → grounded → captured.
+    # 3. Run the answer. ABS-343: the engine now runs as a background job,
+    # so POST returns immediately in `generating`. The TestClient drains the
+    # background task before returning, so the follow-up GET observes the
+    # settled (captured) answer.
     res = client.post(
         f"/v1/billing/questions/purchases/{purchase_id}/answer"
     )
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "generating"
+
+    res = client.get(f"/v1/billing/questions/purchases/{purchase_id}")
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["status"] == "captured"
@@ -217,7 +224,12 @@ def test_void_on_ungroundable_over_http(tmp_path: Path) -> None:
         f"/v1/billing/questions/purchases/{purchase_id}/answer"
     )
     assert res.status_code == 200, res.text
-    body = res.json()
+    # ABS-343: POST dispatches the background job (generating); the ungroundable
+    # question settles to `voided` once the TestClient drains it.
+    assert res.json()["status"] == "generating"
+    body = client.get(
+        f"/v1/billing/questions/purchases/{purchase_id}"
+    ).json()
     assert body["status"] == "voided"
     assert body["failure_reason"] == "zero_evidence"
     assert body["answer"] is None
@@ -275,11 +287,14 @@ def test_full_other_buy_flow_over_http(tmp_path: Path) -> None:
     # 2. Authorize via the webhook.
     _authorize_via_webhook(client, purchase_id)
 
-    # 3. Run the answer → grounded → capture.
+    # 3. Run the answer → background job → GET settles to captured (ABS-343).
     res = client.post(
         f"/v1/billing/questions/purchases/{purchase_id}/answer"
     )
     assert res.status_code == 200, res.text
+    assert res.json()["status"] == "generating"
+
+    res = client.get(f"/v1/billing/questions/purchases/{purchase_id}")
     answered = res.json()
     assert answered["status"] == "captured"
     assert answered["question_slug"] == "other"
@@ -321,7 +336,15 @@ def test_reports_list_projects_owned_purchases(tmp_path: Path) -> None:
     res = client.post(
         f"/v1/billing/questions/purchases/{captured_id}/answer"
     )
-    assert res.json()["status"] == "captured"
+    # ABS-343: POST kicks off the background job; the TestClient drains it,
+    # so the row is captured by the time the list is read below.
+    assert res.json()["status"] == "generating"
+    assert (
+        client.get(f"/v1/billing/questions/purchases/{captured_id}").json()[
+            "status"
+        ]
+        == "captured"
+    )
 
     # Two direct inserts (the MockStripeClient reuses one checkout-session
     # id, so a second real checkout would collide on the unique
@@ -595,10 +618,16 @@ def test_payments_off_checkout_consumes_credit_no_stripe(tmp_path: Path) -> None
     assert body["payments_enabled"] is False
     purchase_id = body["purchase_id"]
 
-    # Answer runs with no Stripe client → grounded → captured.
+    # Answer runs with no Stripe client → background job → captured (ABS-343).
     res = client.post(f"/v1/billing/questions/purchases/{purchase_id}/answer")
     assert res.status_code == 200, res.text
-    assert res.json()["status"] == "captured"
+    assert res.json()["status"] == "generating"
+    assert (
+        client.get(f"/v1/billing/questions/purchases/{purchase_id}").json()[
+            "status"
+        ]
+        == "captured"
+    )
 
     # /me reflects payments-off mode and the consumed credit.
     me = client.get("/v1/billing/me").json()
@@ -632,3 +661,47 @@ def test_payments_off_questions_menu_available_without_price_ids(
     # no Stripe Price IDs configured.
     assert body["questions"]
     assert all(q["available"] for q in body["questions"])
+
+
+# -- Background generation job (ABS-343) -----------------------------------
+
+
+def test_answer_run_is_background_job_and_idempotent(tmp_path: Path) -> None:
+    """POST /answer dispatches a background generation job.
+
+    ABS-343: the endpoint flips ``authorized`` → ``generating`` and returns
+    immediately; the engine settles the row off the request path. A repeat
+    POST on an already-settled purchase is a no-op (returns it as-is) and
+    must NOT fire a second engine run — the single Stripe capture proves it.
+    """
+    client, stripe = _build_client(tmp_path)
+
+    res = client.post(
+        "/v1/billing/checkout/question",
+        json={
+            "question_slug": "permitted_use",
+            "inputs": {"address": "9 Oak St", "proposed_use": "a triplex"},
+        },
+    )
+    purchase_id = res.json()["purchase_id"]
+    _authorize_via_webhook(client, purchase_id)
+
+    # POST returns the in-flight `generating` state, not the finished answer.
+    res = client.post(f"/v1/billing/questions/purchases/{purchase_id}/answer")
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "generating"
+
+    # The TestClient drains the background task, so a GET now sees the
+    # settled answer saved to the purchase (the "leave and return" path).
+    body = client.get(
+        f"/v1/billing/questions/purchases/{purchase_id}"
+    ).json()
+    assert body["status"] == "captured"
+    assert body["answer"]
+    assert [c.action for c in stripe.payment_intent_calls] == ["capture"]
+
+    # A repeat POST on the settled purchase is a no-op — no second capture.
+    res = client.post(f"/v1/billing/questions/purchases/{purchase_id}/answer")
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "captured"
+    assert [c.action for c in stripe.payment_intent_calls] == ["capture"]
