@@ -3,6 +3,8 @@
 // components need the same shapes — keeping them in one place means
 // renaming a field is one edit.
 
+import type { ReportContent } from "@/lib/report";
+
 export type Tier = "quick" | "standard" | "complex";
 export type PackSku = "payg" | "starter" | "pro" | "enterprise";
 export type CaseStatus = "open" | "closed" | "archived";
@@ -155,6 +157,11 @@ export type QuestionPurchaseResponse = {
   price_cents: number;
   currency: string;
   answer: string | null;
+  // ABS-342: the structured report deliverable, present only on a
+  // `captured` purchase. The answer-view renders this through the shared
+  // ReportDocument template; `answer` (raw markdown) is the defensive
+  // fallback when it's absent.
+  report: ReportContent | null;
   failure_reason: string | null;
   refinement_count: number;
   refinements_remaining: number;

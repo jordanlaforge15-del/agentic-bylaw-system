@@ -44,6 +44,7 @@ from advisor.billing.answers import (
     UnknownQuestionError,
     WindowExhaustedError,
 )
+from advisor.billing.report import build_report
 from advisor.billing.checkout import (
     PriceNotConfiguredError,
     UnknownOfferError,
@@ -339,8 +340,49 @@ class RefineRequest(BaseModel):
     )
 
 
+class ReportVerdict(BaseModel):
+    """Determination band — ``status`` drives the client's ``statusInfo()``
+    color/tag (``pass`` → accent; ``fail``/``conditional``/``attention`` →
+    brick); ``label`` is the verdict headline."""
+
+    status: str
+    label: str
+
+
+class ReportContent(BaseModel):
+    """Structured report deliverable (ABS-342).
+
+    The typed schema the ``ReportDocument`` client template renders: a
+    letterhead + title + meta grid + determination band + summary + a typed
+    ``blocks`` array + a verification footer. ``blocks`` is an
+    intentionally-loose list of block dicts (``keyvals | uses | finding |
+    table | flags | prose``) discriminated by each block's ``type`` field
+    and rendered by one shared switch — no per-report layout code. See
+    ``advisor.billing.report`` for the mapper.
+    """
+
+    ref: str
+    report_type: str
+    address: str
+    zone_subtitle: str
+    issued: str
+    prepared_for: str
+    bylaw_version: str
+    price_cents: int
+    currency: str
+    verdict: ReportVerdict
+    summary: str
+    blocks: list[dict]
+    footer: str
+
+
 class QuestionPurchaseResponse(BaseModel):
-    """State of a priced-question purchase + its (raw) answer."""
+    """State of a priced-question purchase + its answer.
+
+    ``answer`` is the raw engine markdown (retained for back-compat and as
+    the client's defensive fallback). ``report`` is the ABS-342 structured
+    deliverable — present only on a ``captured`` purchase — that the
+    ``ReportDocument`` template renders in place of the raw markdown."""
 
     id: int
     question_slug: str
@@ -348,6 +390,7 @@ class QuestionPurchaseResponse(BaseModel):
     price_cents: int
     currency: str
     answer: str | None = None
+    report: ReportContent | None = None
     failure_reason: str | None = None
     refinement_count: int = 0
     refinements_remaining: int = 0
@@ -495,6 +538,7 @@ def _question_purchase_response(
         price_cents=purchase.price_cents,
         currency=purchase.currency,
         answer=purchase.answer_text,
+        report=build_report(purchase),
         failure_reason=purchase.failure_reason,
         refinement_count=purchase.refinement_count,
         refinements_remaining=answer_flow.refinements_remaining(purchase),

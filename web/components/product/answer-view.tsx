@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AgentMarkdown } from "@/components/product/agent-markdown";
+import { ReportDocument } from "@/components/product/report-document";
 import { PaidAnswerDisclaimer } from "@/components/product/paid-answer-disclaimer";
 import { ReadingIndicator } from "@/components/product/reading-indicator";
 import { Btn } from "@/components/btn";
@@ -251,15 +252,25 @@ export function AnswerView({ purchaseId }: { purchaseId: number }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <Header title={title} />
-
-      {/* The grounded answer. */}
-      <article
-        data-testid="answer-body"
-        className="text-[14px] leading-[1.6]"
-      >
-        <AgentMarkdown source={purchase.answer ?? ""} />
-      </article>
+      {/* ABS-342: a captured report renders through the shared
+          ReportDocument template (its own letterhead + title). Falls back
+          to the raw engine markdown under a plain header if the structured
+          report is somehow absent, so the deliverable never breaks. */}
+      {purchase.report ? (
+        <div data-testid="answer-body">
+          <ReportDocument report={purchase.report} />
+        </div>
+      ) : (
+        <>
+          <Header title={title} />
+          <article
+            data-testid="answer-body"
+            className="text-[14px] leading-[1.6]"
+          >
+            <AgentMarkdown source={purchase.answer ?? ""} />
+          </article>
+        </>
+      )}
 
       <PaidAnswerDisclaimer />
 
