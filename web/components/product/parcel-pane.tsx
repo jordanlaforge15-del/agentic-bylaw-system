@@ -31,9 +31,14 @@ type Props = {
   // When `true`, the pane drops its fixed width and left border — the
   // parent (Sheet on mobile, side overlay on tablet) supplies them.
   inSheet?: boolean;
+  // ABS-346: when the workspace has a primary report deliverable, this pane's
+  // export is demoted to the SECONDARY "sources appendix" (the follow-up
+  // conversation + citations). One clear hierarchy: report primary, sources
+  // secondary. On a conversation-only case it stays the primary export.
+  appendix?: boolean;
 };
 
-export function ParcelPane({ parcel, sessionId, caseId, anchorLabel, anchorKind, inSheet }: Props) {
+export function ParcelPane({ parcel, sessionId, caseId, anchorLabel, anchorKind, inSheet, appendix }: Props) {
   const [shareOpen, setShareOpen] = useState(false);
   const [activeCitation, setActiveCitation] = useState<{ citation: string; title: string } | null>(null);
 
@@ -68,15 +73,23 @@ export function ParcelPane({ parcel, sessionId, caseId, anchorLabel, anchorKind,
       )}
 
       <div className="mt-auto border-t border-hair px-5 py-3.5 flex flex-col gap-2">
+        {appendix && (
+          <Mono muted size={9} className="tracking-[0.1em]">
+            SOURCES · SECONDARY TO THE REPORT
+          </Mono>
+        )}
         <Btn
-          variant="primary"
+          // Demoted to ghost when a report is the primary deliverable, so the
+          // report's own "Export PDF" (case toolbar) reads as primary.
+          variant={appendix ? "ghost" : "primary"}
           size="sm"
           className="w-full"
           disabled={!sessionId}
           style={{ opacity: sessionId ? 1 : 0.5 }}
           onClick={handleExport}
+          data-testid="parcel-export"
         >
-          Export reading (PDF)
+          {appendix ? "Export sources (appendix)" : "Export reading (PDF)"}
         </Btn>
         <Btn
           variant="ghost"
