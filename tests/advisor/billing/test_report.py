@@ -101,6 +101,19 @@ def test_parse_table_block_with_per_row_status() -> None:
     assert table["rows"][1]["status"] == "exceeds"
 
 
+def test_parse_finding_block_from_determination_heading() -> None:
+    md = (
+        "Lead.\n\n## Determination\n"
+        "The existing structure sits within the minimum rear-yard setback and "
+        "does not comply.\n"
+    )
+    _, blocks = parse_blocks(md)
+    findings = [b for b in blocks if b["type"] == "finding"]
+    assert findings, blocks
+    assert findings[0]["status"] == "fail"
+    assert findings[0]["title"] == "Determination"
+
+
 def test_heading_less_answer_degrades_to_prose() -> None:
     md = "Just a flat paragraph with no structure at all."
     summary, blocks = parse_blocks(md)

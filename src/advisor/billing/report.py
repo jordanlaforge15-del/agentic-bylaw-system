@@ -136,6 +136,13 @@ _ROW_EXCEEDS = ("exceeds", "better than", "above minimum", "surpasses")
 _ROW_FAIL = ("fail", "exceeds maximum", "does not comply", "over", "non-compliant")
 _FLAG_HEADINGS = ("flag", "non-conform", "concern", "warning", "risk", "issue")
 _USE_HEADINGS = ("use", "permitted", "conditional")
+_FINDING_HEADINGS = (
+    "finding",
+    "determination",
+    "assessment",
+    "conclusion",
+    "verdict",
+)
 
 
 def _strip_inline(text: str) -> str:
@@ -251,8 +258,21 @@ def _parse_section(heading: str | None, lines: list[str]) -> list[dict]:
                 block["title"] = heading
             return [block]
 
-    # Everything else is prose.
+    # A determination-style section (no bullets/table/keyvals) becomes a
+    # highlighted `finding` callout carrying the section's own verdict.
     text = "\n".join(_strip_inline(ln) for ln in body)
+    if any(k in hl for k in _FINDING_HEADINGS):
+        verdict = _classify_verdict(text)
+        return [
+            {
+                "type": "finding",
+                "title": heading,
+                "status": verdict.status,
+                "body": text,
+            }
+        ]
+
+    # Everything else is prose.
     block = {"type": "prose", "text": text}
     if heading:
         block["title"] = heading
