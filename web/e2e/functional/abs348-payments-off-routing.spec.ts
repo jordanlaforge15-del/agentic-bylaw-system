@@ -1,7 +1,7 @@
 // ABS-348: in the go-live posture (ADVISOR_BILLING_ENABLED=true,
 // ADVISOR_PAYMENTS_ENABLED=false) the priced-question menu returns
 // available:true / payments_enabled:false. Completing a question must unlock
-// via a free credit and land on /app/answers/{id} — NOT route to a Stripe
+// via a free credit and land on the report in the /app workspace — NOT a Stripe
 // checkout that returns no URL (the pre-fix dead-end, which silently consumed
 // the credit and then showed "Checkout returned no URL. Try again.").
 //
@@ -96,9 +96,9 @@ test("payments-off: completing a question routes to the answer view via free-sta
     .fill("Is a duplex allowed at 1234 Main St?");
   await cta.click();
 
-  // The fix: land on the dedicated answer view via the free-credit path,
-  // never hitting the Stripe checkout.
-  await page.waitForURL("**/app/answers/4242");
+  // The fix: land on the report via the free-credit path (now the unified
+  // /app workspace, ABS-344), never hitting the Stripe checkout.
+  await page.waitForURL("**/app?report_id=4242");
   expect(
     checkoutHit,
     "payments-off must not hit the Stripe /checkout/question endpoint",
