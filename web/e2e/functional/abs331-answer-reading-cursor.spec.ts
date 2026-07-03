@@ -1,15 +1,14 @@
-// Functional: ABS-331 — the post-purchase answer surface must reinstate
-// the app-page "reading the bylaw" UX while the engine is grounding the
-// answer, instead of the static "Generating your answer" line it had
-// regressed to.
+// Functional: ABS-331 → superseded in-flight UX by ABS-343.
 //
-// What changed: /app/answers/[id]'s answering phase now renders the same
-// animated cursor the /app chat thread uses — the "ABS · READING" badge
-// plus animated-ellipsis dots (.abs-ellipsis-dot), shared via the
-// ReadingIndicator component. This spec drives the real answer view and
-// stubs the priced-question proxy at the network boundary (same approach
-// as abs321), holding the POST /answer open so the answering cursor is
-// observable, then releasing it and asserting the grounded answer renders.
+// ABS-331 originally reinstated the animated "reading the bylaw" cursor
+// while the engine was grounding the answer. ABS-343 replaces that in-flight
+// affordance on this surface with the dedicated generation view (the
+// report's own letterhead + a six-step progress bar), so this spec now
+// asserts THAT view appears while the answer run is in flight, then hands
+// off to the grounded answer. It keeps the original structure — drive the
+// real answer view, stub the proxy at the network boundary (like abs321),
+// hold the POST /answer open so the in-flight view is observable, then
+// release it and assert the grounded answer renders.
 
 import { expect, test } from "../fixtures/test-env";
 import type { Route } from "@playwright/test";
@@ -42,12 +41,12 @@ function json(route: Route, body: unknown, status = 200) {
   });
 }
 
-test("an authorized purchase shows the animated 'reading the bylaw' cursor while answering", async ({
+test("an authorized purchase plays the generation view while answering, then hands off to the answer", async ({
   page,
 }) => {
-  // Gate the POST /answer resolution behind a promise the test controls,
-  // so the answering phase stays on screen long enough to assert the
-  // animated reading cursor before the grounded answer replaces it.
+  // Gate the POST /answer resolution behind a promise the test controls, so
+  // the in-flight generation view stays on screen long enough to assert
+  // before the grounded answer replaces it.
   let releaseAnswer: () => void = () => {};
   const answerGate = new Promise<void>((resolve) => {
     releaseAnswer = resolve;
@@ -69,19 +68,18 @@ test("an authorized purchase shows the animated 'reading the bylaw' cursor while
 
   await page.goto("/app/answers/331");
 
-  // The reinstated app-page reading UX: the "ABS · READING" badge and the
-  // animated-ellipsis dots (NOT a static "Generating your answer" line).
-  await expect(page.getByText("ABS · READING")).toBeVisible({ timeout: 8_000 });
-  await expect(page.locator(".abs-ellipsis-dot").first()).toBeVisible();
-  await expect(page.getByTestId("answer-status")).toContainText(
-    /reading the bylaw/i,
-  );
+  // ABS-343: the in-flight affordance is now the six-step generation view
+  // (letterhead + progress bar), not the "ABS · READING" cursor.
+  await expect(page.getByTestId("report-generating")).toBeVisible({
+    timeout: 8_000,
+  });
+  await expect(page.getByTestId("gen-step")).toHaveCount(6);
+  await expect(page.getByText("ABS · READING")).toHaveCount(0);
 
-  // Release the engine — the grounded answer replaces the cursor.
+  // Release the engine — the grounded answer replaces the generation view.
   releaseAnswer();
   await expect(page.getByTestId("answer-body")).toContainText(
     /Based on the bylaw evidence/i,
   );
-  // The reading cursor is gone once the answer is in.
-  await expect(page.getByText("ABS · READING")).toHaveCount(0);
+  await expect(page.getByTestId("report-generating")).toHaveCount(0);
 });

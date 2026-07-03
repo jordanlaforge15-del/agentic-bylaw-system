@@ -39,6 +39,35 @@ function makeUserId(suffix: string): string {
     .slice(2, 8)}`;
 }
 
+// ABS-343: POST /answer dispatches a background generation job and returns
+// `generating`; poll the purchase until the job settles to `captured`, then
+// return the settled body.
+async function pollUntilCaptured(
+  request: Req,
+  userId: string,
+  purchaseId: number,
+): Promise<{ status: string; answer: string | null }> {
+  let last: { status: string; answer: string | null } = {
+    status: "unknown",
+    answer: null,
+  };
+  await expect
+    .poll(
+      async () => {
+        const r = await request.get(
+          `${E2E_API_URL}/v1/billing/questions/purchases/${purchaseId}`,
+          { headers: { "X-Test-User-Id": userId } },
+        );
+        if (r.status() !== 200) return `http_${r.status()}`;
+        last = await r.json();
+        return last.status;
+      },
+      { timeout: 20_000, intervals: [200, 400, 800] },
+    )
+    .toBe("captured");
+  return last;
+}
+
 function seedUser(userId: string, freeQuestions: number): void {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const seed = path.join(repoRoot, "scripts", "seed_e2e_user.py");
@@ -101,11 +130,8 @@ test("a NUL byte in a grounded answer is scrubbed, not 500'd (real Postgres)", a
     { headers: { "X-Test-User-Id": userId } },
   );
   expect(answerRes.status(), await answerRes.text()).toBe(200);
-  const answer = (await answerRes.json()) as {
-    status: string;
-    answer: string | null;
-  };
-  expect(answer.status).toBe("captured");
+  // ABS-343: the run is a background job now — poll until it settles.
+  const answer = await pollUntilCaptured(request, userId, purchase_id);
   expect(answer.answer).toBeTruthy();
   // The scrubbed NUL leaves the surrounding text intact.
   expect(answer.answer).not.toContain("\u0000");
