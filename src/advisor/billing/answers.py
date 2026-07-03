@@ -626,7 +626,10 @@ async def run_answer(
     """
     if purchase.status in {"captured", "voided", "failed"}:
         return purchase
-    if purchase.status != "authorized":
+    # ABS-343: the answer run is dispatched as a background job that first
+    # flips the purchase to ``generating``; accept that (in-flight) state as
+    # runnable alongside the synchronous ``authorized`` entry.
+    if purchase.status not in {"authorized", "generating"}:
         raise PurchaseNotAuthorizedError(
             f"purchase {purchase.id} is {purchase.status!r}, not authorized"
         )

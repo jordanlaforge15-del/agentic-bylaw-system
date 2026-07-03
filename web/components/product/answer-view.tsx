@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AgentMarkdown } from "@/components/product/agent-markdown";
 import { ReportDocument } from "@/components/product/report-document";
+import { ReportGenerating } from "@/components/product/report-generating";
 import { PaidAnswerDisclaimer } from "@/components/product/paid-answer-disclaimer";
 import { ReadingIndicator } from "@/components/product/reading-indicator";
 import { Btn } from "@/components/btn";
@@ -32,11 +33,37 @@ import {
 
 type LoadState =
   | { phase: "loading" }
-  | { phase: "answering" }
+  // ABS-343: the engine is running as a real background job. Carries the
+  // in-flight purchase (when known) so the generation view can title the
+  // report; `null` in the brief gap right after firing POST /answer.
+  | { phase: "generating"; purchase: QuestionPurchaseResponse | null }
   | { phase: "ready"; purchase: QuestionPurchaseResponse }
   | { phase: "unauthorized" }
   | { phase: "notfound" }
   | { phase: "error"; message: string };
+
+// A purchase in one of these states is settled — nothing left to run.
+const SETTLED = new Set(["captured", "voided", "failed"]);
+
+// ABS-343: while the background generation job runs, the view polls the
+// purchase until it settles. ~1.5s cadence, capped so a wedged job
+// eventually surfaces an error instead of spinning forever (~2 min).
+const POLL_MS = 1500;
+const MAX_POLLS = 80;
+
+// Map a freshly-fetched purchase onto a load state. `generating` (job
+// running) AND `authorized` (job runnable but not yet fired, e.g. a
+// StrictMode double-mount landing here after the POST already went out)
+// both drive the six-step generation view + poll. Everything else —
+// captured / voided / failed and the defensive still-`authorizing` case —
+// routes to the `ready` render, which picks the report, the no-charge card,
+// or the "not ready yet" notice.
+function classify(purchase: QuestionPurchaseResponse): LoadState {
+  if (purchase.status === "generating" || purchase.status === "authorized") {
+    return { phase: "generating", purchase };
+  }
+  return { phase: "ready", purchase };
+}
 
 // A routed refinement guardrail (the upstream 409 bodies). `kind`
 // drives the copy; both kinds terminate the free window.
@@ -79,7 +106,7 @@ export function AnswerView({
   const ranAnswer = useRef(false);
 
   const runAnswer = useCallback(async () => {
-    setState({ phase: "answering" });
+    setState({ phase: "generating", purchase: null });
     const r = await fetch(
       `/api/billing/questions/purchases/${purchaseId}/answer`,
       { method: "POST" },
@@ -92,8 +119,12 @@ export function AnswerView({
         message: `Couldn't run the answer (HTTP ${r.status}).`,
       });
     }
+    // ABS-343: POST now kicks off a background job and returns immediately —
+    // usually with status `generating` (the poll effect below then watches
+    // it settle), but it may already be settled (a stubbed/idempotent
+    // response), so classify either way.
     const purchase = (await r.json()) as QuestionPurchaseResponse;
-    setState({ phase: "ready", purchase });
+    setState(classify(purchase));
   }, [purchaseId]);
 
   // ABS-344: mirror the lifecycle up to an embedding parent. `phase` drives
@@ -120,18 +151,87 @@ export function AnswerView({
         });
       }
       const purchase = (await r.json()) as QuestionPurchaseResponse;
-      // Not yet run → kick off the engine once.
+      // Not yet run → kick off the engine once (fires the background job).
       if (purchase.status === "authorized" && !ranAnswer.current) {
         ranAnswer.current = true;
         await runAnswer();
         return;
       }
-      setState({ phase: "ready", purchase });
+      // `generating` (a job already running — e.g. the user left and came
+      // back) lands on the generation view and the poll effect below takes
+      // over; a settled purchase renders straight away.
+      setState(classify(purchase));
     })();
     return () => {
       cancelled = true;
     };
   }, [purchaseId, runAnswer]);
+
+  // ABS-343: while the background job runs, poll the purchase until it
+  // settles, then swap the generation view for the finished report. The
+  // reveal is driven by the real job state (a `captured`/`voided`/`failed`
+  // poll response), not by the generation view's own step timer.
+  const generating = state.phase === "generating";
+  useEffect(() => {
+    if (!generating) return;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      if (cancelled) return;
+      attempts += 1;
+      let r: Response;
+      try {
+        r = await fetch(`/api/billing/questions/purchases/${purchaseId}`);
+      } catch {
+        // Transient network blip — keep trying until the ceiling.
+        if (attempts >= MAX_POLLS) {
+          return setState({
+            phase: "error",
+            message: "Lost contact while generating your report.",
+          });
+        }
+        timer = setTimeout(poll, POLL_MS);
+        return;
+      }
+      if (cancelled) return;
+      if (r.status === 401) return setState({ phase: "unauthorized" });
+      if (r.status === 404) return setState({ phase: "notfound" });
+      if (!r.ok) {
+        if (attempts >= MAX_POLLS) {
+          return setState({
+            phase: "error",
+            message: `Couldn't load your report (HTTP ${r.status}).`,
+          });
+        }
+        timer = setTimeout(poll, POLL_MS);
+        return;
+      }
+      const purchase = (await r.json()) as QuestionPurchaseResponse;
+      if (cancelled) return;
+      if (SETTLED.has(purchase.status)) {
+        return setState({ phase: "ready", purchase });
+      }
+      if (attempts >= MAX_POLLS) {
+        return setState({
+          phase: "error",
+          message:
+            "Your report is taking longer than expected. Refresh the page " +
+            "to check again — it saves to your case, so nothing is lost.",
+        });
+      }
+      // Keep the in-flight purchase fresh (title/subject) and poll again.
+      setState({ phase: "generating", purchase });
+      timer = setTimeout(poll, POLL_MS);
+    };
+
+    timer = setTimeout(poll, POLL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [generating, purchaseId]);
 
   async function submitRefine() {
     const message = refineText.trim();
@@ -177,22 +277,30 @@ export function AnswerView({
     }
   }
 
-  if (state.phase === "loading" || state.phase === "answering") {
-    // ABS-331: reinstate the app-page reading UX — the animated
-    // "ABS · READING → Reading the bylaw…" cursor (shared with the /app
-    // chat thread) instead of a static "Generating your answer" line.
+  if (state.phase === "loading") {
+    // Brief pre-fetch beat before we know the purchase state — the shared
+    // "ABS · READING" cursor (ABS-331) covers it.
     return (
       <div className="flex flex-col gap-3" data-testid="answer-status">
-        <ReadingIndicator
-          label={
-            state.phase === "answering" ? "Reading the bylaw" : "Loading your answer"
-          }
-        />
+        <ReadingIndicator label="Loading your answer" />
         <div className="pl-7 sm:pl-8 text-text-muted text-[13px]">
-          {state.phase === "answering"
-            ? "The engine is grounding your answer in the bylaw. This can take a few seconds."
-            : "One moment."}
+          One moment.
         </div>
+      </div>
+    );
+  }
+
+  if (state.phase === "generating") {
+    // ABS-343: the dedicated generation view — the report's own letterhead
+    // + a six-step progress bar — plays before the finished ReportDocument.
+    // It stays mounted until the poll effect above sees the background job
+    // settle to `captured`, so the hand-off into the document is continuous.
+    const title = state.purchase
+      ? humanizeQuestionSlug(state.purchase.question_slug)
+      : "Your bylaw report";
+    return (
+      <div data-testid="answer-status">
+        <ReportGenerating title={title} />
       </div>
     );
   }

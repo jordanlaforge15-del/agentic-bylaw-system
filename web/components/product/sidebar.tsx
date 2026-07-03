@@ -74,6 +74,11 @@ type CaseRow = {
   // conversation with at least one message, or a report whose answer
   // has been produced. Empty/pending rows never show a dot.
   hasContent: boolean;
+  // ABS-343: a report whose generation job is still running (or queued).
+  // The row shows a "generating…" affordance instead of the unread dot,
+  // then flips to ready when the answer lands — so a user who left the
+  // generation page can watch the case-list item resolve.
+  generating: boolean;
 };
 
 // localStorage key for the set of rows the user has opened. Bumping the
@@ -147,6 +152,7 @@ function sessionToRow(s: SessionSummary): CaseRow {
     zone: s.zone?.trim() || null,
     updatedAt: s.updated_at,
     hasContent: (s.message_count ?? 0) > 0,
+    generating: false,
   };
 }
 
@@ -162,6 +168,11 @@ function reportToRow(r: ReportSummary): CaseRow {
     zone: r.zone?.trim() || null,
     updatedAt: r.updated_at ?? null,
     hasContent: Boolean(r.answer_ready),
+    // A purchased report is still "generating" while its engine job runs
+    // (`generating`) or is queued (`authorized`) and no answer has landed.
+    generating:
+      !r.answer_ready &&
+      (r.status === "generating" || r.status === "authorized"),
   };
 }
 
@@ -368,7 +379,20 @@ export function Sidebar({
                       Report
                     </span>
                   )}
-                  {unread && (
+                  {row.generating && (
+                    <span
+                      data-testid="row-generating"
+                      className="flex items-center gap-1 font-mono uppercase leading-none"
+                      style={{ fontSize: 8.5, letterSpacing: "0.1em" }}
+                    >
+                      <span
+                        className="abs-pulse-dot bg-accent inline-block"
+                        style={{ width: 5, height: 5, borderRadius: "50%" }}
+                      />
+                      <span className="text-text-muted">generating</span>
+                    </span>
+                  )}
+                  {unread && !row.generating && (
                     <span
                       data-testid="unread-dot"
                       aria-label="Unread"

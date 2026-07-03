@@ -39,6 +39,35 @@ const VALID_INPUTS = {
   proposed_use: "a four-unit dwelling",
 };
 
+// ABS-343: POST /answer dispatches a background generation job and returns
+// `generating`; poll the purchase until the job settles to `captured`.
+async function pollUntilCaptured(
+  request: Req,
+  userId: string,
+  purchaseId: number,
+): Promise<{ status: string; answer: string | null; refinements_remaining: number }> {
+  let last = { status: "unknown", answer: null, refinements_remaining: 0 } as {
+    status: string;
+    answer: string | null;
+    refinements_remaining: number;
+  };
+  await expect
+    .poll(
+      async () => {
+        const r = await request.get(
+          `${E2E_API_URL}/v1/billing/questions/purchases/${purchaseId}`,
+          { headers: { "X-Test-User-Id": userId } },
+        );
+        if (r.status() !== 200) return `http_${r.status()}`;
+        last = await r.json();
+        return last.status;
+      },
+      { timeout: 20_000, intervals: [200, 400, 800] },
+    )
+    .toBe("captured");
+  return last;
+}
+
 function makeUserId(suffix: string): string {
   return `abs324-${suffix}-${Date.now()}-${Math.random()
     .toString(36)
@@ -125,12 +154,10 @@ test("decoupled: free-trial answer is delivered in the Answers flow with zero Ca
     { headers: { "X-Test-User-Id": userId } },
   );
   expect(answerRes.status(), await answerRes.text()).toBe(200);
-  const answer = (await answerRes.json()) as {
-    status: string;
-    answer: string | null;
-    refinements_remaining: number;
-  };
-  expect(answer.status).toBe("captured");
+  // ABS-343: POST returns `generating` and the engine settles off the
+  // request path — poll until the grounded answer is captured.
+  expect((await answerRes.json()).status).toBe("generating");
+  const answer = await pollUntilCaptured(request, userId, start.purchase_id);
   expect(answer.answer).toBeTruthy();
   expect(answer.refinements_remaining).toBe(3);
 

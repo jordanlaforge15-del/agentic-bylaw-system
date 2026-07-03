@@ -87,6 +87,37 @@ test.describe("case-aware sidebar (ABS-345)", () => {
     await expect(reportRow.getByTestId("unread-dot")).toBeVisible();
   });
 
+  test("a still-generating report row shows the generating affordance, not an unread dot (ABS-343)", async ({
+    page,
+  }) => {
+    await stubSidebar(page, {
+      reports: [
+        {
+          ...REPORT,
+          id: 901,
+          status: "generating",
+          answer_ready: false,
+        },
+      ],
+    });
+    await page.goto("/app");
+
+    const sidebar = page.locator("aside").first();
+    const reportRow = sidebar.locator(
+      '[data-testid="case-row"][data-kind="report"]',
+    );
+    await expect(reportRow).toBeVisible({ timeout: 8_000 });
+
+    // The case-list item reflects the in-flight generation job.
+    await expect(reportRow.getByTestId("row-generating")).toContainText(
+      /generating/i,
+    );
+    // A row that is still generating has no deliverable yet → no unread dot.
+    await expect(reportRow.getByTestId("unread-dot")).toHaveCount(0);
+    // It's still a report row (badge unchanged).
+    await expect(reportRow.getByTestId("report-badge")).toHaveText(/report/i);
+  });
+
   test("a conversation row carries no REPORT badge", async ({ page }) => {
     await stubSidebar(page);
     await page.goto("/app");

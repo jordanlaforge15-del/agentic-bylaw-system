@@ -28,7 +28,15 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Header,
+    HTTPException,
+    Request,
+    status,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -747,12 +755,59 @@ def _mount_answer_delivery_routes(
             prompt=result.prompt,
         )
 
+    async def _run_generation_job(purchase_id: int) -> None:
+        """Settle a ``generating`` purchase off the request path (ABS-343).
+
+        The answer engine turn is long (~tens of seconds) and must not be
+        tied to the browser tab that started it. ``post_run_answer`` flips
+        the purchase to ``generating`` and dispatches this as a background
+        task, so the HTTP POST returns immediately and the run continues
+        even if the user leaves — the answer saves to the case regardless.
+
+        Idempotent-by-guard: it only runs a purchase still in
+        ``generating`` (a settled row is skipped). ``run_answer`` itself
+        catches engine failures and voids the hold → ``failed``; the outer
+        ``except`` only guards infra-level errors (DB, Stripe) so a stuck
+        row still resolves to ``failed`` and the client stops polling.
+        """
+        try:
+            with open_db() as db:
+                purchase = db.get(QuestionPurchase, purchase_id)
+                if purchase is None or purchase.status != "generating":
+                    return
+                await answer_flow.run_answer(
+                    db,
+                    purchase,
+                    gateway=answer_gateway,
+                    persona=answer_persona,
+                    retrieval_factory=answer_retrieval_factory,
+                    client=client_factory() if client_factory else None,
+                )
+                commit(db)
+        except Exception:  # noqa: BLE001 — never leave a row wedged in generating
+            logger.exception(
+                "generation job failed for purchase %s", purchase_id
+            )
+            try:
+                with open_db() as db:
+                    purchase = db.get(QuestionPurchase, purchase_id)
+                    if purchase is not None and purchase.status == "generating":
+                        purchase.status = "failed"
+                        purchase.failure_reason = "internal_error"
+                        commit(db)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "could not mark purchase %s failed after job error",
+                    purchase_id,
+                )
+
     @router.post(
         "/questions/purchases/{purchase_id}/answer",
         response_model=QuestionPurchaseResponse,
     )
     async def post_run_answer(
         purchase_id: int,
+        background_tasks: BackgroundTasks,
         auth_session: Any = Depends(user_dependency),
     ) -> QuestionPurchaseResponse:
         _guard()
@@ -769,23 +824,36 @@ def _mount_answer_delivery_routes(
         with open_db() as db:
             user = user_resolver(auth_session, db)
             purchase = _load_owned_purchase(db, purchase_id, user)
-            try:
-                purchase = await answer_flow.run_answer(
-                    db,
-                    purchase,
-                    gateway=answer_gateway,
-                    persona=answer_persona,
-                    retrieval_factory=answer_retrieval_factory,
-                    client=client_factory() if client_factory else None,
-                )
-            except PurchaseNotAuthorizedError as exc:
+            # ABS-343: the engine runs as a background job. A settled OR
+            # already-generating purchase is returned as-is so a repeat POST
+            # (React StrictMode double-mount, a retry, a second tab) never
+            # fires a second engine run.
+            if purchase.status in {
+                "captured",
+                "voided",
+                "failed",
+                "generating",
+            }:
+                return _question_purchase_response(purchase)
+            if purchase.status != "authorized":
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail={"code": "not_authorized", "message": str(exc)},
-                ) from exc
+                    detail={
+                        "code": "not_authorized",
+                        "message": (
+                            f"purchase {purchase.id} is "
+                            f"{purchase.status!r}, not authorized"
+                        ),
+                    },
+                )
+            # Persist ``generating`` BEFORE returning so a poll / the sidebar
+            # / a second tab observe the in-flight state, then hand the run
+            # to a background task that outlives this request.
+            purchase.status = "generating"
             response = _question_purchase_response(purchase)
             commit(db)
-            return response
+        background_tasks.add_task(_run_generation_job, purchase_id)
+        return response
 
     @router.post(
         "/questions/purchases/{purchase_id}/refine",

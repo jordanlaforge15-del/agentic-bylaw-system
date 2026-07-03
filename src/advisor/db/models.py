@@ -442,6 +442,12 @@ class QuestionPurchase(Base):
       ``advisor.billing.answers.start_question_checkout``.
     * ``authorized`` — ``checkout.session.completed`` arrived; the card
       hold exists (manual-capture PaymentIntent) but is uncaptured.
+    * ``generating`` — the answer engine is running (ABS-343). The
+      ``.../answer`` endpoint flips ``authorized`` → ``generating`` and
+      persists it BEFORE the engine run so a poll / the sidebar / a second
+      tab all see the in-flight state, and so the run — dispatched as a
+      background job — survives the user leaving the page. Settles to
+      ``captured``/``voided``/``failed`` when the job completes.
     * ``captured`` — the engine produced a grounded answer and we
       captured the authorization. The customer is charged.
     * ``voided`` — the question failed (ungroundable / zero-evidence /
