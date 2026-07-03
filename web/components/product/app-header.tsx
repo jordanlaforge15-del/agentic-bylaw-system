@@ -29,9 +29,14 @@ import { AccountMenu } from "@/components/product/account-menu";
 type Props = {
   reading: { addr: string; zone: string };
   onMenuClick?: () => void;
+  // ABS-344: the workspace-state label that prefixes the reading string —
+  // "REPORT" / "CONVERSATION" / "GENERATING" so the header tracks which
+  // face of the unified case workspace the center pane is showing. Defaults
+  // to "CONVERSATION" (a plain chat case with no report).
+  label?: string;
 };
 
-export function AppHeader({ reading, onMenuClick }: Props) {
+export function AppHeader({ reading, onMenuClick, label = "CONVERSATION" }: Props) {
   return (
     <div className="border-b border-hair bg-surface flex items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3 safe-pt safe-px gap-2">
       <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
@@ -55,8 +60,12 @@ export function AppHeader({ reading, onMenuClick }: Props) {
         {/* Tablet+ shows the full reading string. Mobile shows just the
          * zone code and accent dot — the full address lives in the
          * AddressPill below the header. */}
-        <Mono muted className="hidden sm:inline truncate min-w-0">
-          READING · {reading.addr.toUpperCase()} · {reading.zone}
+        <Mono
+          muted
+          data-testid="workspace-label"
+          className="hidden sm:inline truncate min-w-0"
+        >
+          {label} · {reading.addr.toUpperCase()} · {reading.zone}
         </Mono>
         <Mono muted className="sm:hidden flex-shrink-0">
           {reading.zone}

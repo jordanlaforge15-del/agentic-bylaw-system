@@ -103,7 +103,8 @@ test.describe("case-aware sidebar (ABS-345)", () => {
 
   test("opening a report row clears its unread dot", async ({ page }) => {
     await stubSidebar(page);
-    // Stub the by-id answer fetch so the /app/answers view renders after nav.
+    // Stub the by-id answer fetch so the in-canvas report view renders after
+    // nav into the unified /app workspace (ABS-344).
     await page.route(/\/api\/billing\/questions\/purchases\/\d+$/, (route) =>
       json(route, {
         id: 900,
@@ -127,7 +128,7 @@ test.describe("case-aware sidebar (ABS-345)", () => {
     await expect(reportRow.getByTestId("unread-dot")).toBeVisible();
 
     await reportRow.click();
-    await expect(page).toHaveURL(/\/app\/answers\/900/, { timeout: 8_000 });
+    await expect(page).toHaveURL(/\/app\?report_id=900/, { timeout: 8_000 });
 
     // Navigate back to /app — the row must now be marked seen (no dot).
     await page.goto("/app");

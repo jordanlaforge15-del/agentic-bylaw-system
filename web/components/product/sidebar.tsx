@@ -5,7 +5,8 @@
 // with the question/title muted beneath, the zone + timestamp in mono,
 // an unread accent dot for rows you haven't opened, and a REPORT badge
 // on report-backed rows. Selecting a conversation row calls
-// `onSelect(id)`; selecting a report row navigates to its answer view.
+// `onSelect(id)`; selecting a report row opens it inside the unified /app
+// workspace via `?report_id=` (ABS-344), keeping the shared panes.
 //
 // `refreshTrigger` is a number the page bumps after each successful
 // chat turn — bumping it triggers a refetch so newly-created sessions
@@ -266,7 +267,10 @@ export function Sidebar({
   const handleActivate = (row: CaseRow) => {
     markSeen(row.key);
     if (row.kind === "report" && row.reportId !== null) {
-      router.push(`/app/answers/${row.reportId}`);
+      // ABS-344: open the report inside the unified /app workspace (shared
+      // sidebar + parcel panes, Report·Conversation toggle) rather than the
+      // standalone answer route.
+      router.push(`/app?report_id=${row.reportId}`);
       return;
     }
     if (row.sessionId) onSelect(row.sessionId);

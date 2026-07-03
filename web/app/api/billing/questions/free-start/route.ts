@@ -5,7 +5,8 @@
 // calls this to start a free-trial answer. The backend consumes one
 // free-question entitlement and opens an Answers `QuestionPurchase` (NOT a
 // Case — no CaseCredit interaction), returning the `purchase_id` so the
-// browser navigates to the dedicated answer view (/app/answers/{id}).
+// browser opens it inside the unified /app workspace (/app?report_id={id},
+// ABS-344).
 //
 // Returns 402 when the user's free-question counter is already 0.
 
