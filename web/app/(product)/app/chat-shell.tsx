@@ -20,6 +20,16 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AppHeader } from "@/components/product/app-header";
 import { Sidebar } from "@/components/product/sidebar";
 import { ChatThread } from "@/components/product/chat-thread";
+import {
+  CaseToolbar,
+  type CaseView,
+} from "@/components/product/case-toolbar";
+import {
+  AnswerView,
+  type AnswerPhase,
+} from "@/components/product/answer-view";
+import { humanizeQuestionSlug, type QuestionPurchaseResponse } from "@/lib/cases";
+import { cn } from "@/lib/cn";
 import type { SavedFeedback } from "@/components/product/message-feedback";
 import { Composer } from "@/components/product/composer";
 import { CaseHeaderStrip } from "@/components/product/case-header-strip";
@@ -140,6 +150,30 @@ function ProductAppPageInner() {
     const n = Number(raw);
     return Number.isInteger(n) && n > 0 ? n : null;
   }, [searchParams]);
+  // ABS-344: a report-backed case opens the SAME /app workspace via
+  // ``?report_id=N``. The center pane then swaps between the purchased
+  // report and a conversation on that case; the sidebar/parcel panes stay
+  // shared. ``view`` is which face the center pane shows; the report's
+  // lifecycle phase + settled purchase (fed up from AnswerView) drive the
+  // header label and the parcel/seed context.
+  const reportIdFromUrl = useMemo(() => {
+    const raw = searchParams.get("report_id");
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }, [searchParams]);
+  const [view, setView] = useState<CaseView>("report");
+  const [reportPhase, setReportPhase] = useState<AnswerPhase | null>(null);
+  const [reportPurchase, setReportPurchase] =
+    useState<QuestionPurchaseResponse | null>(null);
+  // A fresh report_id starts on the report face (spec: generating → report,
+  // then the user may toggle to conversation).
+  useEffect(() => {
+    setView("report");
+    setReportPhase(null);
+    setReportPurchase(null);
+  }, [reportIdFromUrl]);
+
   const [caseId, setCaseId] = useState<number | null>(caseIdFromUrl);
   const caseIdRef = useRef<number | null>(caseIdFromUrl);
   const setCaseIdBoth = (id: number | null) => {
@@ -692,13 +726,83 @@ function ProductAppPageInner() {
     void selectSession(id, { updateUrl: true });
   };
 
+  // ── ABS-344 workspace derivations ──────────────────────────────────────
+  const isReportBacked = reportIdFromUrl !== null;
+  const reportContent = reportPurchase?.report ?? null;
+
+  // Header label tracks which face the workspace is showing. GENERATING
+  // while the engine runs (or before the first phase lands), REPORT once the
+  // report is ready, CONVERSATION whenever the conversation face is up (or
+  // for a plain conversation-only case).
+  const headerLabel =
+    !isReportBacked || view === "conversation"
+      ? "CONVERSATION"
+      : reportPhase === "ready"
+        ? "REPORT"
+        : "GENERATING";
+
+  // Prefer a resolved parcel for the header reading; then the report's own
+  // subject; then the case anchor; finally the static fallback.
+  const headerReading = reportContent
+    ? {
+        addr: reportContent.address,
+        zone: reportContent.zone_subtitle || "—",
+      }
+    : caseAnchor
+      ? { addr: caseAnchor.label, zone: "—" }
+      : READING;
+
+  // Seed a report-backed conversation with a system line noting the report +
+  // parcel are in context, so follow-ups read as grounded in the purchased
+  // answer (spec). Only once the report subject is known.
+  const reportSeed: Message | null = useMemo(() => {
+    if (!isReportBacked || !reportContent || !reportPurchase) return null;
+    const title = humanizeQuestionSlug(reportPurchase.question_slug);
+    const bits = [reportContent.address, reportContent.zone_subtitle].filter(
+      (s): s is string => Boolean(s && s.trim()),
+    );
+    const subject = bits.length ? ` · ${bits.join(" · ")}` : "";
+    return {
+      kind: "system",
+      body: `Report in context · ${title}${subject} · Follow-ups are grounded in your purchased answer.`,
+    };
+  }, [isReportBacked, reportContent, reportPurchase]);
+
+  const conversationMessages = reportSeed
+    ? [reportSeed, ...messages]
+    : messages;
+
+  // The shared parcel pane anchors on the report subject when report-backed,
+  // else the case anchor.
+  const paneAnchorLabel = reportContent?.address ?? caseAnchor?.label;
+  const paneAnchorKind = reportContent ? "address" : caseAnchor?.kind;
+
+  const handleExportReport = () => {
+    if (typeof window !== "undefined") window.print();
+  };
+  const handleShareReport = async () => {
+    try {
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.clipboard &&
+        typeof window !== "undefined"
+      ) {
+        await navigator.clipboard.writeText(window.location.href);
+      }
+    } catch {
+      // Clipboard blocked (permissions / insecure context) — no-op; the
+      // Share affordance is best-effort chrome, not a critical path.
+    }
+  };
+
   return (
     // dvh tracks the iOS dynamic viewport so the composer doesn't
     // disappear behind the URL bar collapse/expand. overflow-hidden
     // keeps the chat thread's scroll contained.
     <div className="h-dvh flex flex-col bg-surface text-text overflow-hidden">
       <AppHeader
-        reading={READING}
+        reading={headerReading}
+        label={headerLabel}
         onMenuClick={() => setSidebarOpen(true)}
       />
       {/* AddressPill is mobile-only; renders nothing once lg or once
@@ -717,35 +821,74 @@ function ProductAppPageInner() {
         </div>
 
         <main className="flex-1 flex flex-col min-w-0 bg-surface">
-          <ChatThread
-            messages={messages}
-            thinking={thinking}
-            thinkLabel={thinkLabel}
-            error={error}
-            sessionId={activeSessionId}
-            feedbackMap={feedbackMap}
-          />
-          {(caseTier || caseId !== null) && (
-            <CaseHeaderStrip
-              caseId={caseId}
-              caseNumber={caseNumber}
-              tier={caseTier}
-              budgetWarning={budgetWarning}
+          {/* ABS-344: the CaseToolbar wraps the center pane on a
+           * report-backed case, swapping report ↔ conversation. Hidden for
+           * a conversation-only case (no report to toggle to). */}
+          {isReportBacked && (
+            <CaseToolbar
+              view={view}
+              onToggle={setView}
+              showToggle
+              onShare={handleShareReport}
+              onExport={handleExportReport}
             />
           )}
-          {upgradeOffer && (
-            <CaseUpgradePrompt
-              offer={upgradeOffer}
-              onClose={() => setUpgradeOffer(null)}
-              onAccepted={(newTier) => {
-                setCaseTier(newTier);
-                setUpgradeOffer(null);
-                setBudgetWarning(null);
-              }}
-            />
+
+          {/* Report face — kept mounted (CSS-hidden when the conversation
+           * face is up) so toggling back doesn't re-run the engine. Owns the
+           * GENERATING → report lifecycle and feeds phase/subject upward. */}
+          {reportIdFromUrl !== null && (
+            <div
+              className={cn(
+                "flex-1 overflow-y-auto",
+                view === "report" ? "" : "hidden",
+              )}
+              data-testid="report-canvas"
+            >
+              <div className="px-5 sm:px-8 py-8 lg:py-10 mx-auto max-w-[820px]">
+                <AnswerView
+                  purchaseId={reportIdFromUrl}
+                  onPhaseChange={setReportPhase}
+                  onPurchaseChange={setReportPurchase}
+                />
+              </div>
+            </div>
           )}
-          <ChatDisclaimerBar />
-          {caseId === null ? (
+
+          {/* Conversation face — the existing chat thread. Shown for a
+           * conversation-only case, or when a report-backed case is toggled
+           * to Conversation. */}
+          {(!isReportBacked || view === "conversation") && (
+            <>
+              <ChatThread
+                messages={conversationMessages}
+                thinking={thinking}
+                thinkLabel={thinkLabel}
+                error={error}
+                sessionId={activeSessionId}
+                feedbackMap={feedbackMap}
+              />
+              {(caseTier || caseId !== null) && (
+                <CaseHeaderStrip
+                  caseId={caseId}
+                  caseNumber={caseNumber}
+                  tier={caseTier}
+                  budgetWarning={budgetWarning}
+                />
+              )}
+              {upgradeOffer && (
+                <CaseUpgradePrompt
+                  offer={upgradeOffer}
+                  onClose={() => setUpgradeOffer(null)}
+                  onAccepted={(newTier) => {
+                    setCaseTier(newTier);
+                    setUpgradeOffer(null);
+                    setBudgetWarning(null);
+                  }}
+                />
+              )}
+              <ChatDisclaimerBar />
+              {caseId === null ? (
             // No active case → /v1/chat would 400 case_id_required.
             // Two sub-states share this gate:
             //   - activeSessionId !== null: a legacy session loaded
@@ -775,8 +918,10 @@ function ProductAppPageInner() {
                 </>
               )}
             </div>
-          ) : (
-            <Composer onSend={send} disabled={thinking} parcel={parcel} />
+              ) : (
+                <Composer onSend={send} disabled={thinking} parcel={parcel} />
+              )}
+            </>
           )}
         </main>
 
@@ -787,8 +932,8 @@ function ProductAppPageInner() {
             parcel={parcel}
             sessionId={activeSessionId}
             caseId={caseId}
-            anchorLabel={caseAnchor?.label}
-            anchorKind={caseAnchor?.kind}
+            anchorLabel={paneAnchorLabel}
+            anchorKind={paneAnchorKind}
           />
         </div>
 
@@ -842,8 +987,8 @@ function ProductAppPageInner() {
             parcel={parcel}
             sessionId={activeSessionId}
             caseId={caseId}
-            anchorLabel={caseAnchor?.label}
-            anchorKind={caseAnchor?.kind}
+            anchorLabel={paneAnchorLabel}
+            anchorKind={paneAnchorKind}
             inSheet
           />
         </Sheet>
@@ -860,8 +1005,8 @@ function ProductAppPageInner() {
             parcel={parcel}
             sessionId={activeSessionId}
             caseId={caseId}
-            anchorLabel={caseAnchor?.label}
-            anchorKind={caseAnchor?.kind}
+            anchorLabel={paneAnchorLabel}
+            anchorKind={paneAnchorKind}
             inSheet
           />
         </Drawer>

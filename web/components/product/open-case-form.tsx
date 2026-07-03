@@ -232,7 +232,7 @@ export function OpenCaseForm({
       }
       const data = (await r.json()) as FreeStartResponse;
       setFreeQuestionsRemaining(data.free_questions_remaining);
-      router.push(`/app/answers/${data.purchase_id}`);
+      router.push(`/app?report_id=${data.purchase_id}`);
     } finally {
       setWorking((w) => (w === "checkout" ? "idle" : w));
     }
@@ -334,12 +334,13 @@ export function OpenCaseForm({
         url?: string;
       };
       // Defensive (ABS-348): a payments-off response carries a purchase_id
-      // and a null URL (free-credit unlock, no Stripe session). Route to the
-      // answer view instead of erroring on the missing checkout URL. With the
-      // payments-aware routing above this branch shouldn't be reached in
-      // payments-off mode, but this keeps checkoutQuestion self-consistent.
+      // and a null URL (free-credit unlock, no Stripe session). Route into the
+      // unified /app workspace (ABS-344) instead of erroring on the missing
+      // checkout URL. With the payments-aware routing above this branch
+      // shouldn't be reached in payments-off mode, but this keeps
+      // checkoutQuestion self-consistent.
       if (!data.url && data.purchase_id) {
-        router.push(`/app/answers/${data.purchase_id}`);
+        router.push(`/app?report_id=${data.purchase_id}`);
         return;
       }
       goToCheckout(data.url);

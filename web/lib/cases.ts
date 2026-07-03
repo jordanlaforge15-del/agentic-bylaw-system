@@ -211,7 +211,8 @@ export type QuoteResponse = {
 // Free-question trial start (POST /api/billing/questions/free-start).
 // Payments-off (ABS-322), decoupled by ABS-324: consumes one free
 // entitlement and opens an Answers `QuestionPurchase` (NOT a Case),
-// returning the purchase_id so the browser routes to /app/answers/{id}.
+// returning the purchase_id so the browser opens it in the unified /app
+// workspace (/app?report_id={id}, ABS-344).
 export type FreeStartResponse = {
   purchase_id: number;
   status: string;
