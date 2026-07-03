@@ -140,6 +140,16 @@ def test_full_buy_answer_flow_over_http(tmp_path: Path) -> None:
     assert body["refinements_remaining"] == 3
     assert [c.action for c in stripe.payment_intent_calls] == ["capture"]
 
+    # ABS-342: a captured purchase also carries the structured report
+    # deliverable (verdict + summary + typed block array + lifted meta),
+    # not only the raw answer markdown.
+    report = body["report"]
+    assert report is not None
+    assert report["ref"].startswith("PU-")
+    assert report["prepared_for"]
+    assert report["verdict"]["status"]
+    assert isinstance(report["blocks"], list) and report["blocks"]
+
     # 4. In-window refinement is served.
     res = client.post(
         f"/v1/billing/questions/purchases/{purchase_id}/refine",
