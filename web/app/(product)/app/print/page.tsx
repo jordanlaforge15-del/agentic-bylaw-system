@@ -1,14 +1,24 @@
-// Print preview for a bylaw reading session. Opens in a new tab via
-// the "Export reading (PDF)" button in the parcel pane; auto-triggers
-// window.print() once the session data has loaded so the user lands
-// directly in the browser's print dialog.
+// Print surface for the /app workspace. Two deliverables share this route,
+// with a clear hierarchy (ABS-346):
 //
-// URL shape: /app/print?session_id=<uuid>
+//   ?report_id=<n>   → the PRIMARY deliverable: the purchased ReportDocument
+//                      (letterhead → findings → verification footer), rendered
+//                      through the same shared template as the in-app report
+//                      view. This is what the case toolbar's "Export PDF"
+//                      opens.
+//   ?session_id=<u>  → the SECONDARY appendix: the follow-up conversation
+//                      transcript + citations, exported from the parcel pane.
+//
+// Both auto-trigger window.print() once their data has loaded so the user
+// lands directly in the browser's print dialog. A report_id takes precedence
+// when both params are present.
 
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { ReportDocument } from "@/components/product/report-document";
+import type { QuestionPurchaseResponse } from "@/lib/cases";
 import {
   extractParcelContext,
   type BackendMessage,
@@ -42,21 +52,143 @@ function extractReadableMessages(msgs: BackendMessage[]): ReadMsg[] {
   return out;
 }
 
-function PrintContent() {
-  const searchParams = useSearchParams();
-  const sessionId = searchParams.get("session_id");
+function useExportDate(): string {
+  // Rendered client-side only (this whole tree is "use client"), so the
+  // per-render Date is fine — there's no SSR to mismatch against.
+  return new Date().toLocaleDateString("en-CA", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
 
+// Auto-open the print dialog once the deliverable's content is ready.
+function useAutoPrint(ready: boolean) {
+  useEffect(() => {
+    if (!ready) return;
+    const t = setTimeout(() => window.print(), 400);
+    return () => clearTimeout(t);
+  }, [ready]);
+}
+
+// ── Report deliverable (primary) ───────────────────────────────────────────
+
+function ReportPrint({ reportId }: { reportId: string }) {
+  const [purchase, setPurchase] = useState<QuestionPurchaseResponse | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // A printed report always renders on the light "Blueprint" palette — the
+  // ReportDocument reads its colours off [data-mode] on <html>; forcing light
+  // here keeps the PDF legible regardless of the user's in-app theme.
+  useEffect(() => {
+    const prev = document.documentElement.getAttribute("data-mode");
+    document.documentElement.setAttribute("data-mode", "light");
+    return () => {
+      if (prev) document.documentElement.setAttribute("data-mode", prev);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/billing/questions/purchases/${encodeURIComponent(reportId)}`, {
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<QuestionPurchaseResponse>;
+      })
+      .then((data) => {
+        if (!cancelled) setPurchase(data);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reportId]);
+
+  const report = purchase?.report ?? null;
+  useAutoPrint(!loading && !error && report !== null);
+
+  if (loading) {
+    return <PrintNotice>Loading report…</PrintNotice>;
+  }
+  if (error) {
+    return <PrintNotice error>Could not load report: {error}</PrintNotice>;
+  }
+  if (!report) {
+    // A captured purchase without a structured report (or a
+    // voided/failed one) has no document to print.
+    return (
+      <PrintNotice error>
+        This purchase has no report document to export.
+      </PrintNotice>
+    );
+  }
+
+  return (
+    <>
+      <PrintFrameStyle />
+      <div className="pf-root" data-testid="report-print">
+        <ReportDocument report={report} />
+      </div>
+    </>
+  );
+}
+
+// A light, letter-width frame around the ReportDocument for print. The
+// document itself owns its chrome; this only supplies page margins and a
+// white backdrop so the export never inherits a dark app surface.
+function PrintFrameStyle() {
+  return (
+    <style>{`
+      @media print {
+        @page { margin: 16mm 16mm; }
+        .no-print { display: none !important; }
+      }
+      body { background: #fff; }
+      .pf-root { max-width: 820px; margin: 0 auto; padding: 32px 20px; }
+    `}</style>
+  );
+}
+
+function PrintNotice({
+  children,
+  error,
+}: {
+  children: React.ReactNode;
+  error?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        padding: 48,
+        fontFamily: "Georgia, serif",
+        color: error ? "#c00" : "#111",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ── Reading transcript (secondary / citations appendix) ────────────────────
+
+function TranscriptPrint({ sessionId }: { sessionId: string }) {
   const [parcel, setParcel] = useState<ParcelContext | null>(null);
   const [messages, setMessages] = useState<ReadMsg[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!sessionId) {
-      setError("No session_id specified.");
-      setLoading(false);
-      return;
-    }
+    let cancelled = false;
     fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, {
       cache: "no-store",
     })
@@ -65,42 +197,30 @@ function PrintContent() {
         return res.json() as Promise<{ messages: BackendMessage[] }>;
       })
       .then((data) => {
+        if (cancelled) return;
         setParcel(extractParcelContext(data.messages));
         setMessages(extractReadableMessages(data.messages));
       })
-      .catch((e: unknown) => setError(String(e)))
-      .finally(() => setLoading(false));
+      .catch((e: unknown) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [sessionId]);
 
-  // Auto-trigger the print dialog once content is ready.
-  useEffect(() => {
-    if (loading || error) return;
-    const t = setTimeout(() => window.print(), 400);
-    return () => clearTimeout(t);
-  }, [loading, error]);
+  useAutoPrint(!loading && !error);
 
-  const exportDate = new Date().toLocaleDateString("en-CA", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  const exportDate = useExportDate();
 
   if (loading) {
-    return (
-      <div style={{ padding: 48, fontFamily: "Georgia, serif" }}>
-        Loading reading…
-      </div>
-    );
+    return <PrintNotice>Loading reading…</PrintNotice>;
   }
-
   if (error) {
-    return (
-      <div
-        style={{ padding: 48, fontFamily: "Georgia, serif", color: "#c00" }}
-      >
-        Could not load reading: {error}
-      </div>
-    );
+    return <PrintNotice error>Could not load reading: {error}</PrintNotice>;
   }
 
   return (
@@ -135,6 +255,15 @@ function PrintContent() {
           font-family: system-ui, sans-serif;
           font-size: 11px;
           color: #666;
+        }
+        .pr-appendix-note {
+          font-family: system-ui, sans-serif;
+          font-size: 11px;
+          color: #666;
+          margin: 0 0 24px;
+          padding: 8px 12px;
+          background: #f4f4f0;
+          border-left: 3px solid #999;
         }
         .pr-section-label {
           font-family: system-ui, sans-serif;
@@ -215,18 +344,25 @@ function PrintContent() {
           color: #888;
         }
       `}</style>
-      <div className="pr-root">
+      <div className="pr-root" data-testid="transcript-print">
         <div className="pr-header">
           <div className="pr-brand">Halifax Bylaw Advisor</div>
           <div className="pr-date">Exported {exportDate}</div>
         </div>
+
+        <p className="pr-appendix-note">
+          Sources appendix — the follow-up conversation and cited clauses for
+          this case. The report document is the primary deliverable.
+        </p>
 
         {parcel && (
           <>
             <div className="pr-section-label">Parcel</div>
             <div className="pr-address">
               {parcel.address.civic_number} {parcel.address.street}
-              <span className="pr-address-sub">, Halifax Regional Municipality</span>
+              <span className="pr-address-sub">
+                , Halifax Regional Municipality
+              </span>
             </div>
             <table className="pr-table">
               <tbody>
@@ -318,15 +454,34 @@ function PrintContent() {
         )}
 
         <div className="pr-footer">
-          For planning guidance only. Not legal advice.
-          Generated by Halifax Bylaw Advisor.
+          For planning guidance only. Not legal advice. Generated by Halifax
+          Bylaw Advisor.
         </div>
       </div>
     </>
   );
 }
 
-export default function PrintReadingPage() {
+function PrintContent() {
+  const searchParams = useSearchParams();
+  const reportId = searchParams.get("report_id");
+  const sessionId = searchParams.get("session_id");
+
+  // A report_id is the primary deliverable and wins when both are present.
+  if (reportId) {
+    return <ReportPrint reportId={reportId} />;
+  }
+  if (sessionId) {
+    return <TranscriptPrint sessionId={sessionId} />;
+  }
+  return (
+    <PrintNotice error>
+      No report_id or session_id specified.
+    </PrintNotice>
+  );
+}
+
+export default function PrintPage() {
   return (
     <Suspense fallback={<div style={{ padding: 48 }}>Loading…</div>}>
       <PrintContent />

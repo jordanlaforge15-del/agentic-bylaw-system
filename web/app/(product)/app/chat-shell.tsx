@@ -777,8 +777,14 @@ function ProductAppPageInner() {
   const paneAnchorLabel = reportContent?.address ?? caseAnchor?.label;
   const paneAnchorKind = reportContent ? "address" : caseAnchor?.kind;
 
+  // ABS-346: the report's "Export PDF" renders the ReportDocument (letterhead
+  // → findings → verification footer) via the dedicated report print surface —
+  // NOT window.print() on the whole workspace (which would capture the chat
+  // chrome/sidebar) and NOT the session transcript. Opens in a new tab so the
+  // export is a clean, self-contained page that auto-triggers the print dialog.
   const handleExportReport = () => {
-    if (typeof window !== "undefined") window.print();
+    if (reportIdFromUrl === null || typeof window === "undefined") return;
+    window.open(`/app/print?report_id=${reportIdFromUrl}`, "_blank");
   };
   const handleShareReport = async () => {
     try {
@@ -829,8 +835,10 @@ function ProductAppPageInner() {
               view={view}
               onToggle={setView}
               showToggle
-              onShare={handleShareReport}
-              onExport={handleExportReport}
+              // Share / Export act on the report document, so they only wire up
+              // once the report has actually rendered (not while GENERATING).
+              onShare={reportContent ? handleShareReport : undefined}
+              onExport={reportContent ? handleExportReport : undefined}
             />
           )}
 
@@ -934,6 +942,7 @@ function ProductAppPageInner() {
             caseId={caseId}
             anchorLabel={paneAnchorLabel}
             anchorKind={paneAnchorKind}
+            appendix={isReportBacked}
           />
         </div>
 
@@ -989,6 +998,7 @@ function ProductAppPageInner() {
             caseId={caseId}
             anchorLabel={paneAnchorLabel}
             anchorKind={paneAnchorKind}
+            appendix={isReportBacked}
             inSheet
           />
         </Sheet>
@@ -1007,6 +1017,7 @@ function ProductAppPageInner() {
             caseId={caseId}
             anchorLabel={paneAnchorLabel}
             anchorKind={paneAnchorKind}
+            appendix={isReportBacked}
             inSheet
           />
         </Drawer>
