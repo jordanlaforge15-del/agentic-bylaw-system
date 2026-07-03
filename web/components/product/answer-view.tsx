@@ -54,7 +54,21 @@ const FAILURE_COPY: Record<string, string> = {
     "Something went wrong while producing this answer, so it wasn't charged.",
 };
 
-export function AnswerView({ purchaseId }: { purchaseId: number }) {
+// ABS-344: the coarse lifecycle phase, surfaced to an embedding parent so
+// the unified case workspace can track the header label (GENERATING while
+// the engine runs, REPORT once it's ready) and pull the report subject
+// (address / zone) for the shared parcel pane + conversation seed.
+export type AnswerPhase = LoadState["phase"];
+
+export function AnswerView({
+  purchaseId,
+  onPhaseChange,
+  onPurchaseChange,
+}: {
+  purchaseId: number;
+  onPhaseChange?: (phase: AnswerPhase) => void;
+  onPurchaseChange?: (purchase: QuestionPurchaseResponse | null) => void;
+}) {
   const [state, setState] = useState<LoadState>({ phase: "loading" });
   const [refineText, setRefineText] = useState("");
   const [refining, setRefining] = useState(false);
@@ -81,6 +95,14 @@ export function AnswerView({ purchaseId }: { purchaseId: number }) {
     const purchase = (await r.json()) as QuestionPurchaseResponse;
     setState({ phase: "ready", purchase });
   }, [purchaseId]);
+
+  // ABS-344: mirror the lifecycle up to an embedding parent. `phase` drives
+  // the workspace header label; `purchase` (when settled) carries the report
+  // subject the shared panes render.
+  useEffect(() => {
+    onPhaseChange?.(state.phase);
+    onPurchaseChange?.(state.phase === "ready" ? state.purchase : null);
+  }, [state, onPhaseChange, onPurchaseChange]);
 
   useEffect(() => {
     let cancelled = false;
