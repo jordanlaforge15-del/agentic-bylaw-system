@@ -385,7 +385,10 @@ export function Sidebar({
               )}
               <div className="flex justify-between items-baseline mt-0.5 gap-2">
                 <Mono muted size={9}>
-                  {row.zone || (row.kind === "report" ? "REPORT" : "CASE")}
+                  {/* Zone when a chat turn has resolved it; a neutral
+                      dash otherwise (the REPORT badge already conveys the
+                      row's kind, so we don't repeat it here). */}
+                  {row.zone || "—"}
                 </Mono>
                 <Mono muted size={9}>
                   {formatRelative(row.updatedAt)}
