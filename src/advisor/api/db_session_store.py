@@ -318,6 +318,16 @@ class DbSessionStore:
                     _scan_db_messages_for_summary(r.messages)
                 )
                 anchor_label = r.case.anchor_label if r.case is not None else None
+                anchor_kind = r.case.anchor_kind if r.case is not None else None
+                # Zone is only known once a chat turn has resolved the
+                # parcel and written it back to the case metadata; absent
+                # cases / un-resolved parcels leave it ``None`` and the
+                # sidebar simply omits the zone caption.
+                zone = (
+                    r.case.metadata_json.get("zone")
+                    if r.case is not None and r.case.metadata_json
+                    else None
+                )
                 entries.append(
                     SessionListEntry(
                         session_id=str(r.id),
@@ -328,6 +338,8 @@ class DbSessionStore:
                         model=ChatSession.__dataclass_fields__["model"].default,
                         first_user_message=first_user,
                         anchor_label=anchor_label,
+                        anchor_kind=anchor_kind,
+                        zone=zone if isinstance(zone, str) and zone else None,
                         case_id=r.case_id,
                         user_message_count=user_count,
                         assistant_text_count=assistant_text_count,

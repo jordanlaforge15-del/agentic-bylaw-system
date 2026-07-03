@@ -56,6 +56,16 @@ class SessionListEntry:
     # text block. Excludes pure tool_use loops with no final answer.
     assistant_text_count: int
     updated_at: datetime | None
+    # ``advisor_case.anchor_kind`` — 'address' | 'project_ref' |
+    # 'development_application'. Lets the sidebar decide how to render
+    # the bold anchor line (an address gets the zone caption beneath it).
+    # ``None`` for legacy / un-cased sessions and the in-memory store.
+    anchor_kind: str | None = None
+    # Resolved zone code for the case's parcel, when known
+    # (``advisor_case.metadata_json['zone']``). ``None`` until a chat
+    # turn has resolved and persisted it — the sidebar renders the zone
+    # caption only when present rather than showing a placeholder.
+    zone: str | None = None
 
 
 class SessionStore(Protocol):
