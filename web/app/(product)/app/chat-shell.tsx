@@ -855,6 +855,7 @@ function ProductAppPageInner() {
             >
               <div className="px-5 sm:px-8 py-8 lg:py-10 mx-auto max-w-[820px]">
                 <AnswerView
+                  key={reportIdFromUrl}
                   purchaseId={reportIdFromUrl}
                   onPhaseChange={setReportPhase}
                   onPurchaseChange={setReportPurchase}
