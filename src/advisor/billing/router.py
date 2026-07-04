@@ -699,6 +699,24 @@ def _mount_answer_delivery_routes(
             require_enabled()
         _require_runner()
 
+    def _settle_if_stale(db: Any, purchase: QuestionPurchase) -> bool:
+        """ABS-354: force-settle a purchase orphaned in ``generating``.
+
+        In-memory ``BackgroundTasks`` (ABS-343) are lost on a server restart,
+        wedging the row in ``generating`` forever. Delegate the staleness
+        rule to ``answer_flow.settle_stale_generating`` — void the Stripe
+        hold (or refund the free credit) and flip to ``failed`` once the row
+        has sat untouched past the cutoff. The client then settles to the
+        error state and can retry instead of polling to its timeout. Does
+        NOT commit; the caller owns that. Returns True if it settled.
+        """
+        client = (
+            client_factory()
+            if payments_enabled and client_factory is not None
+            else None
+        )
+        return answer_flow.settle_stale_generating(db, purchase, client=client)
+
     def _require_gateway() -> None:
         if answer_gateway is None:
             raise HTTPException(
@@ -824,6 +842,12 @@ def _mount_answer_delivery_routes(
         with open_db() as db:
             user = user_resolver(auth_session, db)
             purchase = _load_owned_purchase(db, purchase_id, user)
+            # ABS-354: a POST landing on a row orphaned in ``generating`` by
+            # a server restart force-settles it here too, so a client that
+            # retries via POST (not just GET) also escapes the wedged state.
+            if _settle_if_stale(db, purchase):
+                commit(db)
+                return _question_purchase_response(purchase)
             # ABS-343: the engine runs as a background job. A settled OR
             # already-generating purchase is returned as-is so a repeat POST
             # (React StrictMode double-mount, a retry, a second tab) never
@@ -959,6 +983,13 @@ def _mount_answer_delivery_routes(
         with open_db() as db:
             user = user_resolver(auth_session, db)
             purchase = _load_owned_purchase(db, purchase_id, user)
+            # ABS-354: rescue a purchase orphaned in ``generating`` by a
+            # server restart (in-memory BackgroundTasks are lost on reload).
+            # Past the staleness cutoff the read force-settles it to
+            # ``failed`` and voids any hold, so the polling client stops
+            # looping instead of grinding to its 2-minute timeout.
+            if _settle_if_stale(db, purchase):
+                commit(db)
             return _question_purchase_response(purchase)
 
 

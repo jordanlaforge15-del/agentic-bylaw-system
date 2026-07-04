@@ -56,6 +56,17 @@ logger = logging.getLogger(__name__)
 MAX_REFINEMENTS = 3
 WINDOW_HOURS = 24
 
+# -- Orphaned-generation rescue (ABS-354) ------------------------------------
+# ABS-343 runs the answer engine as an in-memory FastAPI ``BackgroundTasks``
+# job. If the server restarts (deploy, crash, dev reload) while a job is in
+# flight the task is lost and the row is stranded in ``generating`` forever —
+# the client polls to its 2-minute timeout and every refresh repeats the
+# cycle. A ``generating`` row untouched for longer than this threshold is by
+# definition orphaned (a real run finishes in tens of seconds), so a read
+# force-settles it to ``failed`` and voids any Stripe hold. Comfortably longer
+# than the client poll window so a genuinely in-flight run is never killed.
+STALE_GENERATING_AFTER = timedelta(minutes=10)
+
 
 # Tools whose successful (non-error) output grounds an answer in real
 # bylaw evidence. A turn that produces NONE of these is a zero-evidence
@@ -713,6 +724,50 @@ def _void(
     purchase.status = status
     purchase.failure_reason = reason or "unknown"
     purchase.settled_at = utcnow()
+
+
+def settle_stale_generating(
+    db: Session,
+    purchase: QuestionPurchase,
+    *,
+    client: StripeClient | None,
+    now: datetime | None = None,
+) -> bool:
+    """Rescue a purchase wedged in ``generating`` past the staleness cutoff.
+
+    ABS-354: ``BackgroundTasks`` are in-memory (ABS-343). A server restart
+    mid-run orphans the job and leaves the row ``generating`` forever, so the
+    six-step screen polls to its 2-minute timeout and every refresh repeats.
+    When a ``generating`` row has not been touched for longer than
+    ``STALE_GENERATING_AFTER`` its job is orphaned by definition; void any
+    Stripe hold (or refund the free credit) and flip it to
+    ``failed``/``internal_error`` so the client settles to the "wasn't
+    charged" error state and the user can retry.
+
+    Idempotent and cheap: a non-``generating`` or still-fresh row is left
+    untouched and returns ``False``. ``now`` is injectable for tests. The
+    caller owns the commit.
+    """
+    if purchase.status != "generating":
+        return False
+    updated_at = purchase.updated_at
+    if updated_at is None:
+        return False
+    # Postgres stores tz-aware timestamps; sqlite (unit tests) hands them back
+    # naive — normalize to UTC so the comparison never raises.
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    reference = now or utcnow()
+    if reference - updated_at < STALE_GENERATING_AFTER:
+        return False
+    logger.warning(
+        "purchase %s wedged in generating since %s; force-settling to failed",
+        purchase.id,
+        updated_at,
+    )
+    _void(db, client, purchase, reason="internal_error", status="failed")
+    db.flush()
+    return True
 
 
 async def run_refinement(
