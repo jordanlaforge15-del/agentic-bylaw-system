@@ -347,6 +347,92 @@ async def test_run_answer_is_idempotent(tmp_path: Path) -> None:
     assert [c.action for c in client.payment_intent_calls] == ["capture"]
 
 
+# -- Stale-generation rescue (ABS-354) --------------------------------------
+
+
+def _wedge_generating(db, purchase_id: int, *, age: timedelta) -> None:
+    """Strand a purchase in ``generating`` with an aged ``updated_at`` — the
+    shape of a background job (ABS-343) orphaned by a server restart."""
+    p = db.get(QuestionPurchase, purchase_id)
+    p.status = "generating"
+    p.updated_at = utcnow() - age
+    db.flush()
+
+
+async def test_settle_stale_generating_voids_and_fails(tmp_path: Path) -> None:
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase, _ = _start(db, user)
+        pid = purchase.id
+        _authorize(db, pid, uid, "permitted_use")
+        _wedge_generating(db, pid, age=timedelta(minutes=20))
+
+    client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        settled = answer_flow.settle_stale_generating(db, p, client=client)
+        assert settled is True
+        assert p.status == "failed"
+        assert p.failure_reason == "internal_error"
+        assert p.settled_at is not None
+
+    # The orphaned authorization was VOIDED — the customer is never charged.
+    assert [c.action for c in client.payment_intent_calls] == ["cancel"]
+
+
+async def test_settle_stale_generating_leaves_fresh_row(tmp_path: Path) -> None:
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase, _ = _start(db, user)
+        pid = purchase.id
+        _authorize(db, pid, uid, "permitted_use")
+        _wedge_generating(db, pid, age=timedelta(seconds=30))
+
+    client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        settled = answer_flow.settle_stale_generating(db, p, client=client)
+        assert settled is False
+        # A genuinely in-flight run is left alone: status and hold untouched.
+        assert p.status == "generating"
+    assert client.payment_intent_calls == []
+
+
+async def test_settle_stale_generating_ignores_settled_row(tmp_path: Path) -> None:
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase, _ = _start(db, user)
+        pid = purchase.id
+        _authorize(db, pid, uid, "permitted_use")
+        p = db.get(QuestionPurchase, pid)
+        p.status = "captured"
+        p.updated_at = utcnow() - timedelta(hours=2)
+        db.flush()
+
+    client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        # A settled (captured) row is never a rescue candidate, however old.
+        assert answer_flow.settle_stale_generating(db, p, client=client) is False
+        assert p.status == "captured"
+    assert client.payment_intent_calls == []
+
+
 # -- Refinement window ------------------------------------------------------
 
 

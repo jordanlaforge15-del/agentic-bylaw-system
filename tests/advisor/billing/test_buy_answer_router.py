@@ -9,6 +9,7 @@ Stripe, or Anthropic.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, Header
@@ -21,6 +22,7 @@ from advisor.db.models import QuestionPurchase, User
 from advisor.llm.mock import MockGateway
 from advisor.llm.mock_dispatcher import build_dispatcher
 from bylaw_retrieval.retrieval import RetrievalResponse
+from layer1.db.base import utcnow
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
 
@@ -233,6 +235,43 @@ def test_void_on_ungroundable_over_http(tmp_path: Path) -> None:
     assert body["status"] == "voided"
     assert body["failure_reason"] == "zero_evidence"
     assert body["answer"] is None
+    assert [c.action for c in stripe.payment_intent_calls] == ["cancel"]
+
+
+def test_stale_generating_settles_on_read_over_http(tmp_path: Path) -> None:
+    """ABS-354: a purchase orphaned in ``generating`` by a server restart
+    (in-memory BackgroundTasks are lost on reload) must settle to
+    ``failed``/``internal_error`` on read — voiding the hold — instead of
+    staying wedged and polling to the client's 2-minute timeout."""
+    client, stripe = _build_client(tmp_path)
+    db_url = f"sqlite:///{tmp_path / 'advisor.db'}"
+
+    res = client.post(
+        "/v1/billing/checkout/question",
+        json={
+            "question_slug": "permitted_use",
+            "inputs": {"address": "1234 Elm St", "proposed_use": "a duplex"},
+        },
+    )
+    purchase_id = res.json()["purchase_id"]
+    _authorize_via_webhook(client, purchase_id)
+
+    # Simulate the lost background job: flip to `generating` and backdate
+    # `updated_at` past the staleness cutoff, as if the server restarted
+    # mid-run and never settled the row.
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, purchase_id)
+        p.status = "generating"
+        p.updated_at = utcnow() - timedelta(minutes=20)
+
+    # Reading the purchase rescues it: failed + voided, not still generating.
+    body = client.get(
+        f"/v1/billing/questions/purchases/{purchase_id}"
+    ).json()
+    assert body["status"] == "failed"
+    assert body["failure_reason"] == "internal_error"
+    assert body["answer"] is None
+    # The orphaned authorization hold was released — the customer is not charged.
     assert [c.action for c in stripe.payment_intent_calls] == ["cancel"]
 
 

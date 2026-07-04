@@ -11,6 +11,7 @@ retrieval service.
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ from advisor.db.models import QuestionPurchase, User
 from advisor.llm.mock import MockGateway
 from advisor.llm.mock_dispatcher import build_dispatcher
 from bylaw_retrieval.retrieval import RetrievalResponse
+from layer1.db.base import utcnow
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
 
@@ -232,6 +234,39 @@ async def test_refine_served_free_on_credit_purchase(tmp_path: Path) -> None:
         assert p.refinement_count == 1
         # Refinements are free — no extra credit consumed.
         assert db.get(User, uid).free_questions_remaining == 1
+
+
+# -- Stale-generation rescue (ABS-354) --------------------------------------
+
+
+async def test_settle_stale_generating_refunds_free_credit(tmp_path: Path) -> None:
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url, free_questions=2)
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase = answer_flow.start_question_free(
+            db, user, question_slug="permitted_use", inputs=VALID_INPUTS
+        )
+        pid = purchase.id
+        # One credit reserved at checkout.
+        assert db.get(User, uid).free_questions_remaining == 1
+        # A payments-off background job orphaned by a server restart.
+        p = db.get(QuestionPurchase, pid)
+        p.status = "generating"
+        p.updated_at = utcnow() - timedelta(minutes=20)
+        db.flush()
+
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        # Payments-off: no Stripe client to void — the reserved credit is
+        # handed back instead (the void equivalent).
+        settled = answer_flow.settle_stale_generating(db, p, client=None)
+        assert settled is True
+        assert p.status == "failed"
+        assert p.failure_reason == "internal_error"
+        # Failed-question rule: the reserved credit is refunded.
+        assert db.get(User, uid).free_questions_remaining == 2
 
 
 # -- admin grant -------------------------------------------------------------
