@@ -1149,6 +1149,7 @@ class RetrievalService:
     # layer1.datasets.canonical). Order matters: the first matching keyword
     # wins, so the more specific tokens are listed before the generic ones.
     _OVERLAY_ROLE_KEYWORDS: tuple[tuple[str, str], ...] = (
+        ("pedestrian", "pedestrian_street"),
         ("heritage", "heritage"),
         ("bonus", "bonus_zoning"),
         ("shadow", "shadow_impact"),
@@ -1158,6 +1159,17 @@ class RetrievalService:
         ("zoning", "zone"),
         ("zone", "zone"),
     )
+
+    # Overlay roles whose datasets are LINE geometries (street segments) rather
+    # than area polygons, so a resolved point must be tested with the *abuts*
+    # predicate (nearest designated segment within the buffer) instead of
+    # point-in-polygon. Currently just Schedule 7 pedestrian-oriented
+    # commercial streets; add future centreline-keyed overlays here.
+    _ABUTS_OVERLAY_ROLES: frozenset[str] = frozenset({"pedestrian_street"})
+
+    def _predicate_for_role(self, role: str) -> str:
+        """Spatial predicate query_features should use for a given overlay role."""
+        return "abuts" if role in self._ABUTS_OVERLAY_ROLES else "intersects"
 
     def get_address_profile(self, address: str) -> AddressProfile:
         """Resolve an address to its zone + overlay grounding context.
@@ -1414,6 +1426,7 @@ class RetrievalService:
         # a meaningful False rather than an unknown None.
         heritage_available = False
         bonus_available = False
+        pedestrian_available = False
 
         for dataset in self._scoped_linked_datasets():
             role = self._overlay_role(dataset)
@@ -1421,9 +1434,14 @@ class RetrievalService:
                 heritage_available = True
             elif role == "bonus_zoning":
                 bonus_available = True
+            elif role == "pedestrian_street":
+                pedestrian_available = True
 
             matches = query_features(
-                self.session, dataset_id=dataset.id, location=resolved
+                self.session,
+                dataset_id=dataset.id,
+                location=resolved,
+                predicate=self._predicate_for_role(role),
             )
             if not matches:
                 continue
@@ -1454,13 +1472,19 @@ class RetrievalService:
                 profile.heritage = True
             elif role == "bonus_zoning":
                 profile.bonus_zoning_eligible = True
+            elif role == "pedestrian_street":
+                profile.abuts_pedestrian_street = True
 
-        # A checked-but-unmatched heritage / bonus dataset is a definitive
-        # "no", distinct from "no such dataset in scope" (left as None).
+        # A checked-but-unmatched heritage / bonus / pedestrian-street dataset
+        # is a definitive "no", distinct from "no such dataset in scope" (left
+        # as None). For POCS this is the s.38(2)-vs-s.69(d) branch: a confident
+        # False lets the agent apply s.69(d) instead of hedging both scenarios.
         if profile.heritage is None and heritage_available:
             profile.heritage = False
         if profile.bonus_zoning_eligible is None and bonus_available:
             profile.bonus_zoning_eligible = False
+        if profile.abuts_pedestrian_street is None and pedestrian_available:
+            profile.abuts_pedestrian_street = False
 
         profile.overlays = overlays
         profile.citations = citations
@@ -1498,6 +1522,10 @@ class RetrievalService:
             return _first_str(canonical, "district_name", "district_label", "district_code")
         if role == "bonus_zoning":
             return _first_str(canonical, "district_code", "district_name")
+        if role == "pedestrian_street":
+            # The designated street name — cited verbatim ("abuts Quinpool
+            # Road, a pedestrian-oriented commercial street per Schedule 7").
+            return _first_str(canonical, "street_name", "district_name")
         # Generic overlay: any district-ish name, else the feature key.
         return _first_str(
             canonical, "district_name", "district_label", "district_code"
@@ -1665,7 +1693,10 @@ class RetrievalService:
             ):
                 continue
             for match in query_features(
-                self.session, dataset_id=dataset.id, location=location
+                self.session,
+                dataset_id=dataset.id,
+                location=location,
+                predicate=self._predicate_for_role(self._overlay_role(dataset)),
             ):
                 score = (
                     self._SPATIAL_CONTAINS_SCORE
@@ -1840,7 +1871,10 @@ class RetrievalService:
             feature_matches: list[DatasetFeatureMatch] = []
             if resolved_location is not None:
                 for match in query_features(
-                    self.session, dataset_id=dataset.id, location=resolved_location
+                    self.session,
+                    dataset_id=dataset.id,
+                    location=resolved_location,
+                    predicate=self._predicate_for_role(self._overlay_role(dataset)),
                 ):
                     feature_matches.append(
                         DatasetFeatureMatch(
