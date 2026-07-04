@@ -449,7 +449,8 @@ class OverlayRef(BaseModel):
         description=(
             "Coarse overlay class derived from the linked dataset — one of "
             "'zone', 'height_precinct', 'far_precinct', 'heritage', "
-            "'bonus_zoning', 'shadow_impact', or 'overlay' (catch-all)."
+            "'bonus_zoning', 'shadow_impact', 'pedestrian_street', or "
+            "'overlay' (catch-all)."
         ),
     )
     dataset_name: str = Field(..., description="The linked ExternalDataset.name.")
@@ -623,6 +624,19 @@ class AddressProfile(BaseModel):
             "True when the address falls in a bonus/incentive zoning rate "
             "district; False when checked and unmatched; null when no bonus "
             "dataset is in scope."
+        ),
+    )
+    abuts_pedestrian_street: bool | None = Field(
+        default=None,
+        description=(
+            "True when the parcel/point abuts a pedestrian-oriented commercial "
+            "street designated on Schedule 7 of the Regional Centre LUB; False "
+            "when a Schedule 7 dataset was checked and no designated segment "
+            "lies within the abut buffer; null when no Schedule 7 dataset is in "
+            "scope. Decides the ground-floor-use branch: s.38(2) prohibits "
+            "ground-floor office on a POCS street, s.69(d) permits it otherwise. "
+            "Unlike the precinct overlays this is an *abuts* test (nearest "
+            "designated street segment within the buffer), not point-in-polygon."
         ),
     )
     overlays: list[OverlayRef] = Field(
