@@ -548,6 +548,16 @@ class PermittedUseResult(BaseModel):
         default=None,
         description="Human-readable explanation when 'indeterminate' is true.",
     )
+    suggested_uses: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ranked near-miss use-row labels when 'reason_code' is 'unknown_use' "
+            "(ABS-351). The queried term didn't match a matrix row, but these are "
+            "the closest real rows — pick the intended one verbatim and re-issue "
+            "the permitted_use query with it. Do NOT guess further variants. "
+            "Empty when the use resolved or nothing was close enough."
+        ),
+    )
     permission: Literal["permitted", "conditional", "not_permitted"] | None = Field(
         default=None,
         description="The resolved permission; null when indeterminate.",

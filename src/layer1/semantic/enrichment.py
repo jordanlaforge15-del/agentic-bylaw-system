@@ -47,6 +47,7 @@ from layer1.semantic.extractors import (
     use_profile_overlay,
 )
 from layer1.semantic.permission_markers import annotate_value_cells
+from layer1.semantic.use_matching import match_use
 
 EXTRACTOR_VERSION = "semantic-v1"
 REVIEW_AUTO = "auto_accepted"
@@ -1675,6 +1676,88 @@ def _correct_header_bleed(
             )
 
 
+def _use_row_bindings(
+    session: Session, table_id: int
+) -> list[tuple[TableAxisBinding, str]]:
+    """Return ``(binding, canonical_name)`` for every use-row axis binding.
+
+    Section-keyed placeholder rows (ABS-105 — canonical ``"section:..."``) are
+    excluded: they aren't real use classes, so they must never be a fuzzy-match
+    target for a permitted-use query.
+    """
+    rows = (
+        session.query(TableAxisBinding, SemanticEntity.canonical_name)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id == table_id,
+            TableAxisBinding.axis == "row",
+            SemanticEntity.entity_type == "use",
+        )
+        .order_by(TableAxisBinding.confidence.desc())
+        .all()
+    )
+    return [
+        (binding, name)
+        for binding, name in rows
+        if name and not name.startswith("section:")
+    ]
+
+
+def _resolve_use_row_by_key(
+    session: Session, table_id: int, use_name: str
+) -> TableAxisBinding | None:
+    """Resolve a use row by normalized-key equivalence (ABS-351).
+
+    Returns the highest-confidence row binding whose canonical name is a
+    :func:`~layer1.semantic.use_matching.use_match_key` equivalent of
+    ``use_name``, or ``None`` when the match is absent or ambiguous. Only the
+    unambiguous, deterministic key match resolves here — near misses that merely
+    *overlap* several rows are left for the caller to surface as suggestions.
+    """
+    candidates = _use_row_bindings(session, table_id)
+    if not candidates:
+        return None
+    match = match_use(use_name, [name for _binding, name in candidates])
+    if match.resolved is None:
+        return None
+    # Bindings are pre-sorted by descending confidence, so the first match wins.
+    for binding, name in candidates:
+        if name == match.resolved:
+            return binding
+    return None
+
+
+def use_row_labels(session: Session, table_ids: list[int]) -> list[str]:
+    """Distinct human-readable use-row labels across ``table_ids`` (ABS-351).
+
+    Feeds the advisory suggestion ranking when a ``(use, zone)`` query lands on
+    an unknown use: the caller ranks these labels against the query so a failed
+    lookup carries the closest real row names back. Prefers the row's
+    ``raw_label`` (what the bylaw actually prints, e.g. "Multi-unit dwelling
+    use") over the lowercased canonical name, and skips section-keyed
+    placeholders.
+    """
+    if not table_ids:
+        return []
+    rows = (
+        session.query(TableAxisBinding.raw_label, SemanticEntity.canonical_name)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id.in_(table_ids),
+            TableAxisBinding.axis == "row",
+            SemanticEntity.entity_type == "use",
+        )
+        .all()
+    )
+    labels: list[str] = []
+    for raw_label, canonical_name in rows:
+        if not canonical_name or canonical_name.startswith("section:"):
+            continue
+        label = (raw_label or "").strip() or canonical_name
+        labels.append(label)
+    return list(dict.fromkeys(labels))
+
+
 def resolve_permission_cell(
     session: Session,
     *,
@@ -1715,6 +1798,15 @@ def resolve_permission_cell(
         .order_by(TableAxisBinding.confidence.desc())
         .first()
     )
+    # ABS-351: an exact/aliased miss falls back to a normalized-key match against
+    # this matrix's bound use rows, so near-miss phrasings ("Multiple-unit
+    # dwelling", "multi unit dwelling") resolve to their canonical row
+    # ("Multi-unit dwelling use") without the caller burning a tool iteration
+    # guessing the spelling. This resolves ONLY on a deterministic key
+    # equivalence (see ``use_match_key``); genuinely ambiguous terms are left for
+    # the caller to surface as advisory suggestions rather than picked here.
+    if row_binding is None:
+        row_binding = _resolve_use_row_by_key(session, table_id, use_name)
     col_binding = (
         session.query(TableAxisBinding)
         .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
