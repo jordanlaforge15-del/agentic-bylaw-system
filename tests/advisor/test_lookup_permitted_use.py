@@ -43,6 +43,7 @@ MATRIX = [
     ["Use", "DD", "DH", "COR"],
     ["Restaurant use", "●", "③", ""],
     ["Office use", "●", "●", "●"],
+    ["Multi-unit dwelling use", "●", "●", ""],
 ]
 
 CONDITION_TEXT = (
@@ -186,6 +187,94 @@ def test_ac4_unknown_zone_is_typed_indeterminate(matrix_db):
     assert result.permission is None
     assert result.reason_code == "unknown_zone"
     assert result.reason
+
+
+# --------------------------------------------------------------------------
+# ABS-351 — near-miss use terms resolve or suggest, never silently mis-pick
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "use",
+    ["Multiple-unit dwelling", "multi unit dwelling", "Multi-Unit Dwelling"],
+)
+def test_abs351_near_miss_use_resolves_to_canonical_row(matrix_db, use):
+    """A deterministic-key near miss addresses the "Multi-unit dwelling use" row
+    directly — no wasted guess call — for CEN-2-style (use, DD)."""
+    with session_scope(matrix_db["db_url"]) as session:
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(use=use, zone="DD")
+
+    assert result.indeterminate is False
+    assert result.permission == "permitted"
+    assert result.citation is not None
+
+
+def test_abs351_ambiguous_use_suggests_ranked_rows(matrix_db):
+    """"Dwelling unit" overlaps several rows, so the resolver stays indeterminate
+    (unknown_use) but ships ranked suggestions rather than picking a row."""
+    with session_scope(matrix_db["db_url"]) as session:
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(use="Dwelling unit", zone="DD")
+
+    assert result.indeterminate is True
+    assert result.reason_code == "unknown_use"
+    assert result.permission is None
+    # The intended canonical row is present in the advisory list, spelled as the
+    # bylaw prints it so it can be re-issued verbatim.
+    assert "Multi-unit dwelling use" in result.suggested_uses
+
+
+def test_abs351_suggestion_reissue_resolves_in_one_more_call(matrix_db):
+    """Transcript-replay contract: the first miss carries a suggestion; feeding
+    it straight back resolves. So use-row resolution costs at most one wasted
+    call, not the three the ABS-351 transcript burned."""
+    with session_scope(matrix_db["db_url"]) as session:
+        service = RetrievalService(session)
+        first = service.lookup_permitted_use(use="Dwelling unit", zone="DD")
+        assert first.indeterminate is True
+        assert first.suggested_uses  # the self-correction hint
+        second = service.lookup_permitted_use(use=first.suggested_uses[0], zone="DD")
+
+    assert second.indeterminate is False
+    assert second.permission == "permitted"
+
+
+def test_abs351_unrelated_use_has_no_misleading_suggestions(matrix_db):
+    """A token-poor unknown use ("Brewery use") stays a clean unknown_use with no
+    coincidental suggestions — better an empty list than a wrong row."""
+    with session_scope(matrix_db["db_url"]) as session:
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(use="Brewery use", zone="DD")
+
+    assert result.indeterminate is True
+    assert result.reason_code == "unknown_use"
+    assert result.suggested_uses == []
+
+
+@pytest.mark.asyncio
+async def test_abs351_tool_dispatch_surfaces_suggestions_and_instruction(matrix_db):
+    """Through the advisor tool handler, an unknown-use miss ships suggested_uses
+    plus a next-action instruction in the compact tool_result."""
+    with session_scope(matrix_db["db_url"]) as session:
+        service = RetrievalService(session)
+        _, handlers = build_bylaw_tools(service)
+        output = await handlers["lookup_citation"](
+            {
+                "structured": {
+                    "kind": "permitted_use",
+                    "use": "Dwelling unit",
+                    "zone": "DD",
+                },
+                "document_id": matrix_db["document_id"],
+            }
+        )
+
+    parsed = json.loads(output)["permitted_use"]
+    assert parsed["indeterminate"] is True
+    assert parsed["reason_code"] == "unknown_use"
+    assert "Multi-unit dwelling use" in parsed["suggested_uses"]
+    assert "suggested_uses" in parsed["instruction"]
 
 
 def test_no_permission_matrix_in_scope_is_typed_indeterminate(matrix_db):

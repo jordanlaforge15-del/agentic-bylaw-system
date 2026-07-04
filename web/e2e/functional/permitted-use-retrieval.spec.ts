@@ -128,3 +128,37 @@ test("AC4: an unknown zone returns a typed indeterminate result with a reason", 
   expect(result.reason_code).toBe("unknown_zone");
   expect(result.reason.length).toBeGreaterThan(0);
 });
+
+// ABS-351 — near-miss residential use terms resolve to (or suggest) the canonical
+// "Multi-unit dwelling use" matrix row instead of returning a blind unknown_use.
+
+for (const nearMiss of ["Multiple-unit dwelling", "multi unit dwelling"]) {
+  test(`ABS-351: "${nearMiss}" resolves to the Multi-unit dwelling row`, async ({
+    request,
+  }) => {
+    const result = await lookupPermittedUse(request, documentId, nearMiss, "DD");
+    expect(result.indeterminate).toBeFalsy();
+    expect(result.permission).toBe("permitted");
+    expect(result.citation).toBeTruthy();
+  });
+}
+
+test('ABS-351: "Dwelling unit" is indeterminate but suggests the canonical row', async ({
+  request,
+}) => {
+  const result = await lookupPermittedUse(request, documentId, "Dwelling unit", "DD");
+  expect(result.indeterminate).toBe(true);
+  expect(result.reason_code).toBe("unknown_use");
+  expect(result.permission ?? null).toBeNull();
+  expect(result.suggested_uses).toContain("Multi-unit dwelling use");
+});
+
+test("ABS-351: a suggested row, re-issued verbatim, resolves in one more call", async ({
+  request,
+}) => {
+  const first = await lookupPermittedUse(request, documentId, "Dwelling unit", "DD");
+  expect(first.suggested_uses.length).toBeGreaterThan(0);
+  const second = await lookupPermittedUse(request, documentId, first.suggested_uses[0], "DD");
+  expect(second.indeterminate).toBeFalsy();
+  expect(second.permission).toBe("permitted");
+});

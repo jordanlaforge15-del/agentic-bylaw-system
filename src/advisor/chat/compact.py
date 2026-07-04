@@ -272,6 +272,17 @@ def compact_permitted_use(result: PermittedUseResult) -> dict[str, Any]:
             out["reason_code"] = result.reason_code
         if result.reason is not None:
             out["reason"] = result.reason
+        # ABS-351: an unknown-use miss ships the closest real matrix rows plus an
+        # inline next-action so the model re-issues with the intended row rather
+        # than guessing spellings (the ABS-261 anti-thrash pattern, applied to
+        # the permitted-use axis).
+        if result.suggested_uses:
+            out["suggested_uses"] = list(result.suggested_uses)
+            out["instruction"] = (
+                "No matrix row matched this use. Re-issue the permitted_use "
+                "query with the closest label from suggested_uses verbatim; do "
+                "NOT guess further use variants."
+            )
         return out
 
     out["permission"] = result.permission

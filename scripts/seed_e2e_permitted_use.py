@@ -8,6 +8,9 @@ class the Phase-3 resolver must surface:
 * (Restaurant use, DH)  → ``③``  conditional, joined to a footnote fragment
 * (Restaurant use, COR) → ``""`` blank → not_permitted
 * (Office use, *)       → ``●``  permitted (a second clean use row)
+* (Multi-unit dwelling use, DD/DH) → ``●`` permitted (ABS-351: the residential
+  row a near-miss use term — "Multiple-unit dwelling", "Dwelling unit" — must
+  resolve to or be suggested for)
 
 A FOOTNOTE fragment carrying the ③ glyph supplies the condition text the
 conditional cell joins to.
@@ -54,6 +57,12 @@ TABLE_CELLS = [
     (2, 1, "●", "Office use", "DD"),
     (2, 2, "●", "Office use", "DH"),
     (2, 3, "●", "Office use", "COR"),
+    # ABS-351: a residential row whose canonical spelling ("Multi-unit dwelling
+    # use") differs from the human-style near misses an agent types.
+    (3, 0, "Multi-unit dwelling use", "Multi-unit dwelling use", None),
+    (3, 1, "●", "Multi-unit dwelling use", "DD"),
+    (3, 2, "●", "Multi-unit dwelling use", "DH"),
+    (3, 3, "", "Multi-unit dwelling use", "COR"),
 ]
 
 FOOTNOTE_TEXT = (

@@ -72,8 +72,10 @@ from layer1.models.enums import FragmentType
 from layer1.semantic.enrichment import (
     resolve_mainland_permitted_use,
     resolve_permission_cell,
+    use_row_labels,
 )
 from layer1.semantic.extractors import normalize_use, normalize_zone
+from layer1.semantic.use_matching import match_use
 from layer1.semantic.permission_markers import (
     PERMISSION_MATRIX_PROFILE,
     classify_permission_marker,
@@ -742,12 +744,20 @@ class RetrievalService:
                 "matrix binds both axes to an addressable cell (low-confidence "
                 "or cross-table binding)."
             )
+        # ABS-351: when the *use* axis is what failed, surface the closest real
+        # matrix rows so one missed lookup is self-correcting instead of a blind
+        # retry. Advisory only — the caller re-issues with the intended row; the
+        # server never picks one for it.
+        suggested_uses: list[str] = []
+        if code in ("unknown_use", "unknown_use_and_zone"):
+            suggested_uses = match_use(use, use_row_labels(self.session, table_ids)).suggestions
         return PermittedUseResult(
             use=use,
             zone=zone,
             indeterminate=True,
             reason_code=code,
             reason=reason,
+            suggested_uses=suggested_uses,
         )
 
     def _axis_entity_exists(
