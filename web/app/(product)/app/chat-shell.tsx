@@ -683,6 +683,7 @@ function ProductAppPageInner() {
         const params = new URLSearchParams(searchParams.toString());
         params.set("case_id", String(newCaseId));
         params.delete("case_number");
+        params.delete("report_id");
         router.replace(`${pathname}?${params.toString()}`);
       }
     } catch (e) {
