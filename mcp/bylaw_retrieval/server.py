@@ -73,9 +73,7 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             "When a case-bound conversation opens on a specific address, "
             "parcel, or named place, call get_address_profile(address) FIRST. "
             "It resolves the address and returns the zone, overlay precincts "
-            "(height, FAR), heritage status, bonus-zoning eligibility, whether "
-            "the lot abuts a Schedule 7 pedestrian-oriented commercial street "
-            "(the s.38(2)-vs-s.69(d) ground-floor-use branch), and "
+            "(height, FAR), heritage status, bonus-zoning eligibility, and "
             "citations in a single call — collapsing what would otherwise be "
             "several search_bylaw_evidence round-trips into one. Spend the "
             "rest of the tool budget on the actual question. If the profile "
@@ -275,11 +273,7 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         ("100 Robie Street") or a parcel id ("PID 00012345"). The tool
         resolves the address spatially, then composes the zone plus every
         linked overlay (height precinct, FAR precinct, heritage district,
-        bonus zoning, Schedule 7 pedestrian-oriented commercial street) into a
-        single ``AddressProfile``. ``abuts_pedestrian_street`` is a definitive
-        true/false (not just null) whenever a Schedule 7 dataset is in scope,
-        so the ground-floor-use answer can pick s.38(2) or s.69(d) without
-        hedging both scenarios.
+        bonus zoning) into a single ``AddressProfile``.
 
         If the address can't be resolved, the response carries
         ``unresolvable: true`` with empty citations rather than an error —
