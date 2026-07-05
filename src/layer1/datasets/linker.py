@@ -69,29 +69,38 @@ def link_dataset_to_bylaw(session: Session, dataset_id: int) -> LinkResult:
             "no_document",
             f"no document matching municipality={municipality!r} bylaw_name={bylaw_name!r}",
         )
+    def _matching_fragments(document_id: int) -> list[SourceFragment]:
+        return list(
+            session.execute(
+                select(SourceFragment).where(
+                    SourceFragment.document_id == document_id,
+                    SourceFragment.citation_label == citation,
+                )
+            )
+            .scalars()
+            .all()
+        )
+
     if len(documents) > 1:
         # Multiple matching documents (different file_hash, same name) - prefer
-        # the most recently ingested. This keeps the dataset live but flags it
-        # for review via the link metadata.
+        # the most recently ingested one that actually CONTAINS the cited
+        # fragment. Picking blindly by recency and then reporting no_fragment
+        # spuriously orphans the dataset whenever the newest same-named
+        # document lacks the schedule but an older sibling carries it (e.g. two
+        # synthetic bylaws colliding on name in the shared e2e DB). Fall back to
+        # most-recent overall when none contain it, preserving no_fragment.
         documents.sort(key=lambda d: d.ingestion_timestamp, reverse=True)
+        with_fragment = [d for d in documents if _matching_fragments(d.id)]
+        document = with_fragment[0] if with_fragment else documents[0]
         ambiguous_detail = (
             f"{len(documents)} documents matched; linked to most recent "
-            f"(id={documents[0].id})"
+            f"(id={document.id})"
         )
     else:
+        document = documents[0]
         ambiguous_detail = ""
 
-    document = documents[0]
-    fragments = (
-        session.execute(
-            select(SourceFragment).where(
-                SourceFragment.document_id == document.id,
-                SourceFragment.citation_label == citation,
-            )
-        )
-        .scalars()
-        .all()
-    )
+    fragments = _matching_fragments(document.id)
     if not fragments:
         return _record_link(
             session,
