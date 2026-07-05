@@ -200,6 +200,34 @@ def test_multiple_documents_picks_most_recent(tmp_path: Path):
         assert "most recent" in result.link_result.detail
 
 
+def test_multiple_documents_prefers_the_one_carrying_the_fragment(tmp_path: Path):
+    # When several documents share (municipality, bylaw_name) but only an
+    # OLDER one contains the cited schedule, the linker must bind to that older
+    # document rather than picking the newest by recency and orphaning the
+    # dataset as no_fragment. This is the shared-e2e-DB collision that regressed
+    # the ABS-349 address-profile zone link: a Schedule-7-only bylaw shadowed
+    # the Zoning-Schedule-bearing address-profile document under the same name.
+    db_url = _setup_db(tmp_path)
+    cfg_path = _write_config(tmp_path)  # requires "Schedule 15"
+
+    # Older document that DOES carry Schedule 15:
+    with session_scope(db_url) as session:
+        old_doc, old_frag = _seed_synthetic_bylaw(session)
+        old_doc.ingestion_timestamp = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        session.flush()
+        old_frag_id = old_frag.id
+
+    # Newer same-named document that lacks Schedule 15 (carries only Schedule 22):
+    with session_scope(db_url) as session:
+        _seed_synthetic_bylaw(session, schedule_label="Schedule 22")
+
+    with session_scope(db_url) as session:
+        result = ingest_geo_dataset(session, cfg_path)
+        assert result.link_result.status == "linked"
+        assert result.link_result.fragment_id == old_frag_id
+        assert result.dataset.linked_fragment_id == old_frag_id
+
+
 def test_direct_link_function_handles_unknown_dataset_id(tmp_path: Path):
     db_url = _setup_db(tmp_path)
     with session_scope(db_url) as session:
