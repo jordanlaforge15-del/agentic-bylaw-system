@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 import hashlib
 
 from layer1.config import get_settings
+from layer1.datasets.linker import relink_superseded_datasets
 from layer1.db.base import (
     CrossReference,
     Document,
@@ -97,6 +98,19 @@ def ingest_file(
             else IngestionStatus.COMPLETED
         )
         run.completed_at = datetime.now(timezone.utc)
+
+        # Amendment support (ABS-355): re-ingesting an amended bylaw under the
+        # same (municipality, bylaw_name) makes every geo layer pinned to the
+        # prior version silently fall out of retrieval scope, since scoping only
+        # surfaces layers on the newest document per bylaw. Re-point those
+        # layers onto this fresh version (or flag them as orphans if the cited
+        # schedule was dropped) so the map layers survive the amendment. No-op
+        # when this is the first ingest of the bylaw. Only runs when the run
+        # didn't hard-fail — a failed parse yields no usable fragments to bind.
+        if run.status != IngestionStatus.FAILED:
+            relink_superseded_datasets(session, document)
+            session.flush()
+
         return document, run
     except Exception as exc:
         run.status = IngestionStatus.FAILED
