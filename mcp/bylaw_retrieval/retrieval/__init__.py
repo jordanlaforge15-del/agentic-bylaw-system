@@ -1,3 +1,8 @@
+from bylaw_retrieval.retrieval.coherence_audit import (
+    DEFAULT_DATASET_CONFIG_DIR,
+    audit_corpus_coherence,
+    load_overlay_declarations,
+)
 from bylaw_retrieval.retrieval.schemas import (
     ATTRIBUTE_VOCABULARY,
     BYLAW_INTENTS,
@@ -9,11 +14,14 @@ from bylaw_retrieval.retrieval.schemas import (
     CitationRef,
     ConformanceAttribute,
     ConformanceCheck,
+    CorpusCoherenceReport,
     DatasetFeatureMatch,
     DocumentOutlineResponse,
     DocumentSummary,
     LinkedDataset,
     LocationSlot,
+    MissingOverlayRole,
+    OverlayDeclaration,
     OverlayRef,
     RetrievalMatch,
     RetrievalRequest,
@@ -27,15 +35,20 @@ from bylaw_retrieval.retrieval.schemas import (
     ZoneUses,
 )
 from bylaw_retrieval.retrieval.service import (
+    OVERLAY_ROLE_KEYWORDS,
     DocumentIdResolver,
     RetrievalService,
     latest_document_id_resolver,
     latest_per_bylaw_resolver,
+    overlay_role_for_name,
+    scoped_linked_datasets,
 )
 
 __all__ = [
     "ATTRIBUTE_VOCABULARY",
     "BYLAW_INTENTS",
+    "DEFAULT_DATASET_CONFIG_DIR",
+    "OVERLAY_ROLE_KEYWORDS",
     "AddressProfile",
     "BylawIntent",
     "BylawQueryResponse",
@@ -44,12 +57,15 @@ __all__ = [
     "CitationRef",
     "ConformanceAttribute",
     "ConformanceCheck",
+    "CorpusCoherenceReport",
     "DatasetFeatureMatch",
     "DocumentIdResolver",
     "DocumentOutlineResponse",
     "DocumentSummary",
     "LinkedDataset",
     "LocationSlot",
+    "MissingOverlayRole",
+    "OverlayDeclaration",
     "OverlayRef",
     "RetrievalMatch",
     "RetrievalRequest",
@@ -62,7 +78,11 @@ __all__ = [
     "ZoneParking",
     "ZoneProfile",
     "ZoneUses",
+    "audit_corpus_coherence",
     "latest_document_id_resolver",
     "latest_per_bylaw_resolver",
+    "load_overlay_declarations",
+    "overlay_role_for_name",
+    "scoped_linked_datasets",
 ]
 

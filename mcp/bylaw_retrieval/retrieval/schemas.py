@@ -910,3 +910,54 @@ class BylawQueryResponse(BaseModel):
         default_factory=list,
         description="Thin tools to fall back to when the intent is unrecognised (FR-4.2).",
     )
+
+
+class OverlayDeclaration(BaseModel):
+    """A single "this bylaw's dataset config declares this overlay" fact.
+
+    Normalized projection of a ``layer1.datasets.config.DatasetConfig``'s
+    ``links_to`` block, decoupled from reading YAML off disk so the
+    corpus-coherence audit (ABS-356) can be driven either by the real
+    ``src/layer1/datasets/`` directory (CLI / ops surface) or by an explicit
+    list supplied in-process (tests, the e2e test-only endpoint).
+    """
+
+    dataset_name: str = Field(..., description="The dataset config's declared name.")
+    municipality: str = Field(..., description="links_to.document_match.municipality")
+    bylaw_name: str = Field(..., description="links_to.document_match.bylaw_name")
+    fragment_citation: str = Field(..., description="links_to.fragment_citation")
+
+
+class MissingOverlayRole(BaseModel):
+    """One overlay role a dataset config declares that isn't visible in scope."""
+
+    role: str = Field(..., description="Overlay role classified from dataset_name (see overlay_role_for_name).")
+    dataset_name: str
+    municipality: str
+    bylaw_name: str
+    fragment_citation: str
+    reason: Literal["unlinked", "orphaned", "evicted"] = Field(
+        ...,
+        description=(
+            "unlinked: no dataset with this name was ever ingested. "
+            "orphaned: the dataset exists but the linker never resolved it to a fragment. "
+            "evicted: the dataset is linked, but its document fell outside the active "
+            "retrieval scope (e.g. superseded by a newer ingest of the same bylaw)."
+        ),
+    )
+    detail: str = Field(..., description="Human-readable explanation for a log line or CLI error.")
+
+
+class CorpusCoherenceReport(BaseModel):
+    """Result of auditing every declared overlay role against retrieval scope (ABS-356).
+
+    ``coherent`` is the loud/quiet signal: True means every overlay role any
+    checked dataset config declares is actually visible through
+    ``scoped_linked_datasets`` for its bylaw; False means at least one
+    silently degraded (see ``missing`` for which role, and why).
+    """
+
+    coherent: bool
+    checked_roles: int = Field(..., description="Number of overlay-role dataset configs evaluated.")
+    bylaws_checked: int = Field(..., description="Number of distinct (municipality, bylaw_name) pairs evaluated.")
+    missing: list[MissingOverlayRole] = Field(default_factory=list)

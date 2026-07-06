@@ -317,6 +317,25 @@ class _PruneSupersededBody(BaseModel):
     dry_run: bool = True
 
 
+class _CorpusCoherenceOverlayDeclaration(BaseModel):
+    dataset_name: str
+    municipality: str
+    bylaw_name: str
+    fragment_citation: str
+
+
+class _CorpusCoherenceBody(BaseModel):
+    overlay_declarations: list[_CorpusCoherenceOverlayDeclaration] = Field(
+        default_factory=list,
+        description=(
+            "The overlay roles a spec's seed script declares (test-scoped, "
+            "not the real src/layer1/datasets/ configs, so this endpoint "
+            "never expects the beta-hardening real corpus's bonus_zoning / "
+            "shadow_impact overlays that an isolated e2e bylaw never seeds)."
+        ),
+    )
+
+
 def _mount_test_router(app: FastAPI) -> None:
     """Wire the ``/v1/_test/...`` lifecycle endpoints onto ``app``."""
 
@@ -1086,6 +1105,40 @@ def _mount_test_router(app: FastAPI) -> None:
                 )
                 report.comparison = compare_coverage_reports(old_report, report)
             return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/corpus-coherence")
+    async def corpus_coherence(body: _CorpusCoherenceBody) -> dict[str, object]:
+        """Run the corpus-coherence audit (ABS-356) against the current DB state.
+
+        Mirrors the CLI (``scripts/corpus_coherence_audit.py``) and the
+        ``/v1/monitoring/corpus-coherence`` ops endpoint: scopes with
+        ``latest_per_bylaw_resolver`` — the same resolver production wires
+        into ``RetrievalService`` — so a Playwright spec can seed a coherent
+        corpus, assert the audit passes, break one link, and assert it fails
+        naming the missing role exactly as a real deployment would see it.
+        """
+        from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+            OverlayDeclaration,
+            audit_corpus_coherence,
+            latest_per_bylaw_resolver,
+        )
+
+        declarations = [
+            OverlayDeclaration(
+                dataset_name=d.dataset_name,
+                municipality=d.municipality,
+                bylaw_name=d.bylaw_name,
+                fragment_citation=d.fragment_citation,
+            )
+            for d in body.overlay_declarations
+        ]
+        with session_scope() as session:
+            report = audit_corpus_coherence(
+                session,
+                overlay_declarations=declarations,
+                default_document_id_resolver=latest_per_bylaw_resolver,
+            )
+        return report.model_dump(mode="json")
 
     @app.post("/v1/_test/lookup-citation")
     async def test_lookup_citation(body: CitationLookupRequest) -> dict[str, object]:

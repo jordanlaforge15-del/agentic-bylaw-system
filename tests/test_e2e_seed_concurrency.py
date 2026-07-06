@@ -34,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     "seed_e2e_abs270_structured.py",
     "seed_e2e_address_profile.py",
+    "seed_e2e_corpus_coherence.py",
     "seed_e2e_evaluator_bylaws.py",
     "seed_e2e_groundtruth_bylaws.py",
     "seed_e2e_mainland_permitted_use.py",
