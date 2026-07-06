@@ -77,7 +77,10 @@ async function postProfile(
   request: import("@playwright/test").APIRequestContext,
   address: string,
 ): Promise<AddressProfile> {
-  const response = await request.post(`${E2E_API_URL}/v1/_test/address-profile`, {
+  // The *scoped* endpoint applies production latest-per-bylaw scoping, so a
+  // layer still pinned to the superseded document version would fall out of
+  // scope and resolve to null — the real eviction this fix prevents.
+  const response = await request.post(`${E2E_API_URL}/v1/_test/address-profile-scoped`, {
     headers: { "Content-Type": "application/json" },
     data: { address },
   });

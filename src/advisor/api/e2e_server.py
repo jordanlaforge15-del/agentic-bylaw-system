@@ -486,6 +486,28 @@ def _mount_test_router(app: FastAPI) -> None:
             service = RetrievalService(session)
             return service.get_address_profile(body.address).model_dump(mode="json")
 
+    @app.post("/v1/_test/address-profile-scoped")
+    async def address_profile_scoped(body: _AddressProfileBody) -> dict[str, object]:
+        """Resolve an address under the *production* latest-per-bylaw scoping.
+
+        The plain ``/address-profile`` endpoint deliberately runs with no
+        default-document resolver so it sees the full corpus regardless of
+        same-name collisions in the shared e2e DB (the ABS-349/350 concern).
+        This variant instead wires ``latest_per_bylaw_resolver`` — exactly what
+        ``advisor.api.app`` and the MCP ``server`` use in production — so the
+        ABS-355 spec reproduces the real amendment eviction: a layer still
+        pinned to the superseded document version falls out of scope and the
+        zone resolves to null. With the re-link fix in place the layer follows
+        the amendment onto the new version and the zone resolves again.
+        """
+        from bylaw_retrieval.retrieval import latest_per_bylaw_resolver  # noqa: PLC0415
+
+        with session_scope() as session:
+            service = RetrievalService(
+                session, default_document_id_resolver=latest_per_bylaw_resolver
+            )
+            return service.get_address_profile(body.address).model_dump(mode="json")
+
     @app.post("/v1/_test/search-tables")
     async def search_tables(body: _SearchTablesBody) -> dict[str, object]:
         """Search for permission-table cells matching a use name.
