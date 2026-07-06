@@ -220,24 +220,33 @@ def relink_superseded_datasets(session: Session, document: Document) -> list[Lin
     leaving it pinned to a document that ``latest_per_bylaw_resolver`` excludes
     — the exact silent strand this pass exists to prevent.
 
-    Idempotent and a no-op when ``document`` has no older siblings: a second
-    pass finds every dataset already pinned to ``document`` (not an older
-    sibling), so there is nothing to move.
+    Only fires when ``document`` is the newest version of its bylaw (matching
+    the resolver's ``(ingestion_timestamp desc, id desc)`` ordering): a
+    backfill re-ingest of an *older* version must not evict datasets that are
+    correctly pinned to the current latest. Idempotent — a second pass finds
+    every dataset already pinned to ``document`` (no longer on an older
+    sibling), so there is nothing left to move — and a no-op when ``document``
+    has no siblings.
     """
-    older_sibling_ids = (
+    siblings = (
         session.execute(
-            select(Document.id).where(
+            select(Document).where(
                 Document.municipality == document.municipality,
                 Document.bylaw_name == document.bylaw_name,
-                Document.id != document.id,
             )
         )
         .scalars()
         .all()
     )
-    if not older_sibling_ids:
+    if len(siblings) <= 1:
         return []
 
+    # ``document`` only supersedes the others when it is the resolver-latest.
+    latest = max(siblings, key=lambda d: (_as_aware(d.ingestion_timestamp), d.id))
+    if latest.id != document.id:
+        return []
+
+    older_sibling_ids = [d.id for d in siblings if d.id != document.id]
     datasets = (
         session.execute(
             select(ExternalDataset).where(

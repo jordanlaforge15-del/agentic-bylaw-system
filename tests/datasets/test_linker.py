@@ -342,6 +342,38 @@ def test_relink_superseded_is_idempotent(tmp_path: Path):
         assert dataset.linked_fragment_id == v2_frag_id
 
 
+def test_relink_superseded_skips_backfill_of_older_version(tmp_path: Path):
+    # Re-ingesting an OLDER version (e.g. backfilling history) must not evict a
+    # dataset correctly pinned to the current latest — the relink pass only
+    # fires when the ingested document is itself the newest version.
+    db_url = _setup_db(tmp_path)
+    cfg_path = _write_config(tmp_path)
+
+    # v2 is the current latest, carrying Schedule 15; the dataset pins to it.
+    with session_scope(db_url) as session:
+        v2_doc, v2_frag = _seed_synthetic_bylaw(session)
+        v2_doc.ingestion_timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        session.flush()
+        v2_frag_id = v2_frag.id
+
+    with session_scope(db_url) as session:
+        result = ingest_geo_dataset(session, cfg_path)
+        assert result.dataset.linked_fragment_id == v2_frag_id
+        dataset_id = result.dataset.id
+
+    # Backfill an older v1 and run the relink pass for it.
+    with session_scope(db_url) as session:
+        v1_doc, _ = _seed_synthetic_bylaw(session)
+        v1_doc.ingestion_timestamp = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        session.flush()
+        assert relink_superseded_datasets(session, v1_doc) == []
+
+    # The dataset stays pinned to the current latest v2, not the backfilled v1.
+    with session_scope(db_url) as session:
+        dataset = session.get(ExternalDataset, dataset_id)
+        assert dataset.linked_fragment_id == v2_frag_id
+
+
 def test_direct_link_function_handles_unknown_dataset_id(tmp_path: Path):
     db_url = _setup_db(tmp_path)
     with session_scope(db_url) as session:
