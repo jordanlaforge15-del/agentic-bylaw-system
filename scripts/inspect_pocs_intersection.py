@@ -19,7 +19,8 @@ Emits one JSON object on stdout::
 Usage::
 
     DATABASE_URL=... .venv/bin/python scripts/inspect_pocs_intersection.py \\
-        --address "6184 Quinpool Road" --dataset-name e2e_pocs_schedule7
+        --address "6184 Quinpool Road" \\
+        --dataset-name e2e_pedestrian_oriented_commercial_streets
 """
 from __future__ import annotations
 
@@ -82,7 +83,14 @@ def _resolve_point(session, address: str) -> dict | None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--address", required=True)
-    parser.add_argument("--dataset-name", default="e2e_pocs_schedule7")
+    # ABS-350 reconciliation: the shared seed renamed the POCS dataset so its
+    # name contains "pedestrian" (RetrievalService._overlay_role maps that to the
+    # pedestrian_street overlay role). Default to the current name so this probe —
+    # and ABS-349's schedule7-pocs-intersection.spec.ts, which calls it with no
+    # --dataset-name — resolves the same dataset the seed ingests.
+    parser.add_argument(
+        "--dataset-name", default="e2e_pedestrian_oriented_commercial_streets"
+    )
     parser.add_argument("--buffer-m", type=float, default=15.0)
     args = parser.parse_args()
 

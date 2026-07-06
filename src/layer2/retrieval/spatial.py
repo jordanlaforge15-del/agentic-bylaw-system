@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from math import cos, radians
 from typing import Any, Literal
 
 from shapely.geometry import shape as shapely_shape
+from shapely.ops import transform as shapely_transform
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -17,6 +19,25 @@ from layer2.models.schemas import CandidateFragment
 # the three primitive shapes; Phase E layers civic-address resolution on top
 # without changing the spatial query interface.
 ResolvedLocationKind = Literal["point", "shape", "parcel"]
+
+# Spatial predicate a query_features call evaluates:
+#   "intersects" — point-in-polygon / geometric intersection (the precinct
+#      overlays: zoning, height, FAR, heritage). A non-match is a definitive
+#      negative because the point is either inside a polygon or it isn't.
+#   "abuts" — nearest designated feature lies within ``abut_distance_m`` of the
+#      location. This is the right test for LINE datasets (Schedule 7
+#      pedestrian-oriented commercial streets): a geocoded point never falls
+#      exactly on a street centreline, so ST_Intersects would report a
+#      spurious negative for every address. Buffering the point against the
+#      nearest segment answers "does this lot abut a designated street".
+SpatialPredicate = Literal["intersects", "abuts"]
+
+# Default abut buffer. A geocoded civic point sits at the building/parcel
+# centroid, typically 10–25 m off the street centreline; 30 m comfortably
+# spans a parcel + right-of-way half-width without bleeding onto the parallel
+# street one block over. Matches the 30 m distance the ABS-350 dataset
+# verification used against 6184 Quinpool Rd.
+DEFAULT_ABUT_DISTANCE_M = 30.0
 
 
 @dataclass(frozen=True)
@@ -48,8 +69,10 @@ def query_features(
     *,
     dataset_id: int,
     location: ResolvedLocation,
+    predicate: SpatialPredicate = "intersects",
+    abut_distance_m: float = DEFAULT_ABUT_DISTANCE_M,
 ) -> list[FeatureMatch]:
-    """Intersect a resolved location against an external dataset's features.
+    """Intersect (or abut) a resolved location against a dataset's features.
 
     PostgreSQL/PostGIS path: spatial filter at the SQL layer using
     ``ST_Intersects`` against the GiST-indexed ``geometry`` column.
@@ -58,6 +81,14 @@ def query_features(
     matched ORM rows in one bulk query. At Halifax scale (~11k zoning
     polygons + smaller schedules) this drops query_features from the
     sequential-scan cost of ~2.6 s to a few ms.
+
+    ``predicate="abuts"`` switches to a distance test (``ST_DWithin`` on
+    geography, so ``abut_distance_m`` is real metres) for LINE datasets whose
+    features a geocoded point never lands exactly on — Schedule 7
+    pedestrian-oriented commercial streets. Matches sort nearest-first and
+    every abut match reports ``contains_input=True`` (a within-buffer hit is
+    the definitive positive for the abuts semantics; there is no weaker
+    partial-overlap tier).
 
     SQLite path (test suite): falls back to the legacy shapely loop
     so behaviour tests keep working without PostGIS.
@@ -71,10 +102,18 @@ def query_features(
 
     if session.bind is not None and session.bind.dialect.name == "postgresql":
         return _query_features_postgis(
-            session, dataset_id=dataset_id, location_geom=location_geom
+            session,
+            dataset_id=dataset_id,
+            location_geom=location_geom,
+            predicate=predicate,
+            abut_distance_m=abut_distance_m,
         )
     return _query_features_shapely(
-        session, dataset_id=dataset_id, location_geom=location_geom
+        session,
+        dataset_id=dataset_id,
+        location_geom=location_geom,
+        predicate=predicate,
+        abut_distance_m=abut_distance_m,
     )
 
 
@@ -83,7 +122,16 @@ def _query_features_postgis(
     *,
     dataset_id: int,
     location_geom: Any,
+    predicate: SpatialPredicate = "intersects",
+    abut_distance_m: float = DEFAULT_ABUT_DISTANCE_M,
 ) -> list[FeatureMatch]:
+    if predicate == "abuts":
+        return _query_features_postgis_abuts(
+            session,
+            dataset_id=dataset_id,
+            location_geom=location_geom,
+            abut_distance_m=abut_distance_m,
+        )
     # Pass the geometry as GeoJSON text — ST_GeomFromGeoJSON is the
     # cleanest round-trip for any shapely geometry type and avoids the
     # WKT-vs-EWKT SRID dance. We supply the geometry once via CTE so
@@ -144,15 +192,91 @@ def _query_features_postgis(
     return matches
 
 
+def _query_features_postgis_abuts(
+    session: Session,
+    *,
+    dataset_id: int,
+    location_geom: Any,
+    abut_distance_m: float,
+) -> list[FeatureMatch]:
+    # Distance-based ``abuts`` predicate for LINE datasets (Schedule 7). Cast
+    # both geometries to ``geography`` so ST_DWithin / ST_Distance measure in
+    # metres regardless of the 4326 degree units, and let the GiST index on
+    # the geography-cast still prefilter via ST_DWithin. ``proximity`` is a
+    # monotone-decreasing-in-distance score (nearest ~ 1.0) so the caller's
+    # "strongest match wins" ordering keeps working — matches[0] is the
+    # closest designated segment, whose street name we cite.
+    geojson = json.dumps(location_geom.__geo_interface__)
+    sql = text(
+        """
+        WITH input_geom AS (
+          SELECT ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326) AS g
+        )
+        SELECT
+          edf.id AS feature_id,
+          ST_Distance(edf.geometry::geography, ig.g::geography) AS distance_m,
+          1.0 / (1.0 + ST_Distance(edf.geometry::geography, ig.g::geography))
+            AS proximity
+        FROM external_dataset_feature edf
+        CROSS JOIN input_geom ig
+        WHERE edf.external_dataset_id = :ds_id
+          AND edf.geometry IS NOT NULL
+          AND ST_DWithin(edf.geometry::geography, ig.g::geography, :dist_m)
+        ORDER BY distance_m ASC
+        """
+    )
+    rows = session.execute(
+        sql, {"geojson": geojson, "ds_id": dataset_id, "dist_m": abut_distance_m}
+    ).all()
+    if not rows:
+        return []
+    ids = [r.feature_id for r in rows]
+    features = (
+        session.execute(
+            select(ExternalDatasetFeature).where(
+                ExternalDatasetFeature.id.in_(ids)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_id = {f.id: f for f in features}
+    matches: list[FeatureMatch] = []
+    for r in rows:
+        feature = by_id.get(r.feature_id)
+        if feature is None:
+            continue
+        matches.append(
+            FeatureMatch(
+                feature=feature,
+                overlap_area=float(r.proximity or 0.0),
+                # A within-buffer hit is the definitive abut positive — there
+                # is no weaker overlap tier for a line, so flag every match as
+                # a strong (contains) hit for scoring parity with polygons.
+                contains_input=True,
+            )
+        )
+    return matches
+
+
 def _query_features_shapely(
     session: Session,
     *,
     dataset_id: int,
     location_geom: Any,
+    predicate: SpatialPredicate = "intersects",
+    abut_distance_m: float = DEFAULT_ABUT_DISTANCE_M,
 ) -> list[FeatureMatch]:
     # Legacy fallback for the sqlite test path. Keep the original
     # bbox-prefilter + shapely-intersect loop; the prod call site
     # routes to ``_query_features_postgis`` above.
+    if predicate == "abuts":
+        return _query_features_shapely_abuts(
+            session,
+            dataset_id=dataset_id,
+            location_geom=location_geom,
+            abut_distance_m=abut_distance_m,
+        )
     minx, miny, maxx, maxy = location_geom.bounds
     features = (
         session.execute(
@@ -193,6 +317,60 @@ def _query_features_shapely(
             )
         )
     matches.sort(key=lambda m: (-m.overlap_area, not m.contains_input))
+    return matches
+
+
+def _query_features_shapely_abuts(
+    session: Session,
+    *,
+    dataset_id: int,
+    location_geom: Any,
+    abut_distance_m: float,
+) -> list[FeatureMatch]:
+    # SQLite/shapely abuts fallback. Shapely measures distance in the raw
+    # 4326 degree plane, which is anisotropic (a degree of longitude is
+    # shorter than a degree of latitude away from the equator), so project
+    # both geometries into a local equirectangular metre frame centred on the
+    # location before measuring. That keeps ``abut_distance_m`` a real-metre
+    # threshold and matches the PostGIS geography path closely enough that the
+    # unit tests exercise the same predicate the prod stack runs.
+    origin = location_geom.representative_point()
+    lat0, lon0 = origin.y, origin.x
+    m_per_deg_lat = 111_320.0
+    m_per_deg_lon = 111_320.0 * cos(radians(lat0))
+
+    def to_metres(x: Any, y: Any, z: Any = None) -> tuple[Any, Any]:
+        return ((x - lon0) * m_per_deg_lon, (y - lat0) * m_per_deg_lat)
+
+    location_m = shapely_transform(to_metres, location_geom)
+    features = (
+        session.execute(
+            select(ExternalDatasetFeature).where(
+                ExternalDatasetFeature.external_dataset_id == dataset_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    matches: list[FeatureMatch] = []
+    for feature in features:
+        try:
+            feature_geom = shapely_shape(feature.geometry_geojson)
+        except (ValueError, TypeError, KeyError):
+            continue
+        if not feature_geom.is_valid or feature_geom.is_empty:
+            continue
+        distance_m = shapely_transform(to_metres, feature_geom).distance(location_m)
+        if distance_m > abut_distance_m:
+            continue
+        matches.append(
+            FeatureMatch(
+                feature=feature,
+                overlap_area=1.0 / (1.0 + distance_m),
+                contains_input=True,
+            )
+        )
+    matches.sort(key=lambda m: -m.overlap_area)
     return matches
 
 
