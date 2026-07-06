@@ -96,6 +96,80 @@ TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 # returning a list pins to the union of those documents.
 DocumentIdResolver = Callable[[Session], int | list[int] | None]
 
+# Maps a linked dataset to the AddressProfile facet it populates. Keyed on a
+# lowercase substring of the dataset name — the same disambiguation
+# convention the rest of the retrieval surface uses ("the dataset name makes
+# it clear which 'district' the field describes", see
+# layer1.datasets.canonical). Order matters: the first matching keyword
+# wins, so the more specific tokens are listed before the generic ones.
+#
+# Module-level (rather than a RetrievalService class attribute) so the
+# corpus-coherence audit (ABS-356) can classify a dataset config's declared
+# role from its ``name:`` field the exact same way ``get_address_profile``
+# classifies the persisted ``ExternalDataset.name`` — one source of truth for
+# "what role does this dataset name imply", not two that could drift apart.
+OVERLAY_ROLE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("pedestrian", "pedestrian_street"),
+    ("heritage", "heritage"),
+    ("bonus", "bonus_zoning"),
+    ("shadow", "shadow_impact"),
+    ("far", "far_precinct"),
+    ("floor_area", "far_precinct"),
+    ("height", "height_precinct"),
+    ("zoning", "zone"),
+    ("zone", "zone"),
+)
+
+
+def overlay_role_for_name(name: str | None) -> str:
+    """Classify a dataset name into its overlay role via keyword match.
+
+    Falls back to the generic ``"overlay"`` bucket when no keyword matches.
+    """
+    lowered = (name or "").lower()
+    for keyword, role in OVERLAY_ROLE_KEYWORDS:
+        if keyword in lowered:
+            return role
+    return "overlay"
+
+
+def scoped_linked_datasets(
+    session: Session,
+    *,
+    default_document_id_resolver: DocumentIdResolver | None = None,
+    document_id: int | None = None,
+    municipality: str | None = None,
+    bylaw_name: str | None = None,
+) -> list[ExternalDataset]:
+    """Return every linked geo dataset visible under the active scope.
+
+    Module-level twin of ``RetrievalService._scoped_linked_datasets`` (which
+    delegates here with ``self.session`` / ``self._default_document_id_resolver``)
+    so callers without a live ``RetrievalService`` instance — notably the
+    corpus-coherence audit (ABS-356), which runs from a CLI/ops context, not
+    a request — see exactly the same "is this overlay visible right now" view
+    the thick tools use, rather than re-deriving the scoping rule and risking
+    divergence.
+    """
+    dataset_stmt = (
+        select(ExternalDataset)
+        .join(SourceFragment, SourceFragment.id == ExternalDataset.linked_fragment_id)
+        .join(Document, Document.id == SourceFragment.document_id)
+        .where(ExternalDataset.linked_fragment_id.is_not(None))
+    )
+    if default_document_id_resolver is not None:
+        result = default_document_id_resolver(session)
+        if result is not None:
+            default_ids = [result] if isinstance(result, int) else result
+            dataset_stmt = dataset_stmt.where(SourceFragment.document_id.in_(default_ids))
+    if document_id is not None:
+        dataset_stmt = dataset_stmt.where(SourceFragment.document_id == document_id)
+    if municipality:
+        dataset_stmt = dataset_stmt.where(Document.municipality.ilike(f"%{municipality}%"))
+    if bylaw_name:
+        dataset_stmt = dataset_stmt.where(Document.bylaw_name.ilike(f"%{bylaw_name}%"))
+    return list(session.execute(dataset_stmt).scalars().all())
+
 
 def latest_document_id_resolver(session: Session) -> int | None:
     """Return the id of the most recently ingested document, or None.
@@ -1130,46 +1204,23 @@ class RetrievalService:
         place is what FR-3.3 means by "reuse the spatial-join code": the
         profile composes the established scoping rather than re-deriving them
         and risking divergence from the evaluator's view of the corpus.
+
+        Delegates to the module-level :func:`scoped_linked_datasets` so the
+        corpus-coherence audit (ABS-356) can call the identical query outside
+        a live service instance.
         """
-        dataset_stmt = (
-            select(ExternalDataset)
-            .join(SourceFragment, SourceFragment.id == ExternalDataset.linked_fragment_id)
-            .join(Document, Document.id == SourceFragment.document_id)
-            .where(ExternalDataset.linked_fragment_id.is_not(None))
+        return scoped_linked_datasets(
+            self.session,
+            default_document_id_resolver=self._default_document_id_resolver,
+            document_id=document_id,
+            municipality=municipality,
+            bylaw_name=bylaw_name,
         )
-        default_ids = self._resolve_default_document_ids()
-        if default_ids is not None:
-            dataset_stmt = dataset_stmt.where(SourceFragment.document_id.in_(default_ids))
-        if document_id is not None:
-            dataset_stmt = dataset_stmt.where(SourceFragment.document_id == document_id)
-        if municipality:
-            dataset_stmt = dataset_stmt.where(Document.municipality.ilike(f"%{municipality}%"))
-        if bylaw_name:
-            dataset_stmt = dataset_stmt.where(Document.bylaw_name.ilike(f"%{bylaw_name}%"))
-        return list(self.session.execute(dataset_stmt).scalars().all())
 
     # ------------------------------------------------------------------
     # Thick tool: get_address_profile (ABS-273 / Phase 3)
     # ------------------------------------------------------------------
     #
-    # Maps a linked dataset to the AddressProfile facet it populates. Keyed
-    # on a lowercase substring of the dataset name — the same disambiguation
-    # convention the rest of the retrieval surface uses ("the dataset name
-    # makes it clear which 'district' the field describes", see
-    # layer1.datasets.canonical). Order matters: the first matching keyword
-    # wins, so the more specific tokens are listed before the generic ones.
-    _OVERLAY_ROLE_KEYWORDS: tuple[tuple[str, str], ...] = (
-        ("pedestrian", "pedestrian_street"),
-        ("heritage", "heritage"),
-        ("bonus", "bonus_zoning"),
-        ("shadow", "shadow_impact"),
-        ("far", "far_precinct"),
-        ("floor_area", "far_precinct"),
-        ("height", "height_precinct"),
-        ("zoning", "zone"),
-        ("zone", "zone"),
-    )
-
     # Overlay roles whose datasets are LINE geometries (street segments) rather
     # than area polygons, so a resolved point must be tested with the *abuts*
     # predicate (nearest designated segment within the buffer) instead of
@@ -1411,11 +1462,7 @@ class RetrievalService:
         return ConformanceCheck(zone=zone, results=results, overall=overall)
 
     def _overlay_role(self, dataset: ExternalDataset) -> str:
-        name = (dataset.name or "").lower()
-        for keyword, role in self._OVERLAY_ROLE_KEYWORDS:
-            if keyword in name:
-                return role
-        return "overlay"
+        return overlay_role_for_name(dataset.name)
 
     def _build_address_profile(
         self,
