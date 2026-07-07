@@ -4,9 +4,12 @@
 // coexist legibly (ABS-345). Each row shows the anchor address in bold
 // with the question/title muted beneath, the zone + timestamp in mono,
 // an unread accent dot for rows you haven't opened, and a REPORT badge
-// on report-backed rows. Selecting a conversation row calls
-// `onSelect(id)`; selecting a report row opens it inside the unified /app
-// workspace via `?report_id=` (ABS-344), keeping the shared panes.
+// on report-backed rows. A report that settled without an answer
+// (voided/failed — ABS-367) instead shows a FAILED tag in place of the
+// generating pill / unread dot, so a failed purchase is visible without
+// opening it. Selecting a conversation row calls `onSelect(id)`;
+// selecting a report row opens it inside the unified /app workspace via
+// `?report_id=` (ABS-344), keeping the shared panes.
 //
 // `refreshTrigger` is a number the page bumps after each successful
 // chat turn — bumping it triggers a refetch so newly-created sessions
@@ -79,6 +82,13 @@ type CaseRow = {
   // then flips to ready when the answer lands — so a user who left the
   // generation page can watch the case-list item resolve.
   generating: boolean;
+  // ABS-367: a report that settled without an answer (`voided` — couldn't
+  // be grounded — or `failed` — internal error), so the purchase wasn't
+  // charged. Both render the same "couldn't be answered" card in the
+  // detail view (answer-view.tsx), so the list treats them the same way:
+  // a FAILED tag in place of the generating pill / unread dot, so a
+  // failed report is visible without opening it.
+  failed: boolean;
 };
 
 // localStorage key for the set of rows the user has opened. Bumping the
@@ -153,6 +163,7 @@ function sessionToRow(s: SessionSummary): CaseRow {
     updatedAt: s.updated_at,
     hasContent: (s.message_count ?? 0) > 0,
     generating: false,
+    failed: false,
   };
 }
 
@@ -173,6 +184,7 @@ function reportToRow(r: ReportSummary): CaseRow {
     generating:
       !r.answer_ready &&
       (r.status === "generating" || r.status === "authorized"),
+    failed: r.status === "voided" || r.status === "failed",
   };
 }
 
@@ -379,7 +391,21 @@ export function Sidebar({
                       Report
                     </span>
                   )}
-                  {row.generating && (
+                  {row.failed && (
+                    <span
+                      data-testid="row-failed"
+                      className="font-mono uppercase leading-none px-1 py-[3px]"
+                      style={{
+                        fontSize: 8.5,
+                        letterSpacing: "0.12em",
+                        color: "var(--on-accent)",
+                        background: "var(--brick)",
+                      }}
+                    >
+                      Failed
+                    </span>
+                  )}
+                  {row.generating && !row.failed && (
                     <span
                       data-testid="row-generating"
                       className="flex items-center gap-1 font-mono uppercase leading-none"
@@ -392,7 +418,7 @@ export function Sidebar({
                       <span className="text-text-muted">generating</span>
                     </span>
                   )}
-                  {unread && !row.generating && (
+                  {unread && !row.generating && !row.failed && (
                     <span
                       data-testid="unread-dot"
                       aria-label="Unread"

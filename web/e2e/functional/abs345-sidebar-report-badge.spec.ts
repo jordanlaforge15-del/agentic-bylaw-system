@@ -11,7 +11,10 @@
 //   - a report-backed row renders the accent REPORT badge;
 //   - rows show the anchor address (bold) + zone;
 //   - an unopened report shows the unread accent dot;
-//   - a conversation row carries neither badge.
+//   - a conversation row carries neither badge;
+//   - a settled-failed report (status `failed` or `voided`) shows a
+//     distinct FAILED tag instead of the generating pill / unread dot,
+//     so it's spottable in the list without opening it (ABS-367).
 
 import { expect, test } from "../fixtures/test-env";
 import type { Page, Route } from "@playwright/test";
@@ -116,6 +119,43 @@ test.describe("case-aware sidebar (ABS-345)", () => {
     await expect(reportRow.getByTestId("unread-dot")).toHaveCount(0);
     // It's still a report row (badge unchanged).
     await expect(reportRow.getByTestId("report-badge")).toHaveText(/report/i);
+  });
+
+  test.describe("a failed report shows a FAILED tag instead of the generating pill / unread dot (ABS-367)", () => {
+    for (const status of ["failed", "voided"] as const) {
+      test(`status=${status}`, async ({ page }) => {
+        await stubSidebar(page, {
+          reports: [
+            {
+              ...REPORT,
+              id: 902,
+              status,
+              answer_ready: false,
+            },
+          ],
+        });
+        await page.goto("/app");
+
+        const sidebar = page.locator("aside").first();
+        const reportRow = sidebar.locator(
+          '[data-testid="case-row"][data-kind="report"]',
+        );
+        await expect(reportRow).toBeVisible({ timeout: 8_000 });
+
+        // The case-list item carries a distinct FAILED tag — spottable
+        // without opening the report.
+        await expect(reportRow.getByTestId("row-failed")).toContainText(
+          /failed/i,
+        );
+        // No generating pill and no unread dot on a settled-failed row.
+        await expect(reportRow.getByTestId("row-generating")).toHaveCount(0);
+        await expect(reportRow.getByTestId("unread-dot")).toHaveCount(0);
+        // It's still a report row (REPORT badge unchanged).
+        await expect(reportRow.getByTestId("report-badge")).toHaveText(
+          /report/i,
+        );
+      });
+    }
   });
 
   test("a conversation row carries no REPORT badge", async ({ page }) => {
