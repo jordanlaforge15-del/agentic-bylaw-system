@@ -193,6 +193,67 @@ def _classify_verdict(answer: str, question_slug: str | None = None) -> _Verdict
 # -- Markdown → block parsing -----------------------------------------------
 
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*\S)\s*$")
+# A markdown horizontal rule on its own line: `---`, `***`, `___`, or their
+# spaced variants (`- - -`). The engine emits these both as the fence
+# between its planning monologue and the report proper, and as decorative
+# dividers between sections. This renderer has no "rule" block, so a stray
+# rule can only leak as literal `---` text in a summary/prose block — noise
+# on a paid, exportable deliverable (ABS-359).
+_HRULE_RE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
+
+# First-person planning language the agent emits while "thinking out loud"
+# before it writes the report ("I have gathered the key provisions … Let me
+# compile the findings:"). Chain-of-thought like this destroys the formal-
+# report credibility the deliverable sells, so it is scrubbed from the lead
+# even when no horizontal rule fenced it off (ABS-359).
+_PREAMBLE_SIGNALS = (
+    "let me compile",
+    "compile the findings",
+    "i have gathered",
+    "i have enough",
+    "i now have",
+    "i have sufficient",
+    "sufficient information",
+    "let me prepare",
+    "let me put together",
+    "let me lay out",
+    "now i have",
+    "here is the report",
+    "here's the report",
+)
+
+
+def _is_hrule(line: str) -> bool:
+    return bool(_HRULE_RE.match(line))
+
+
+def _looks_like_monologue(text: str) -> bool:
+    """True when a lead paragraph reads as the agent's planning monologue."""
+    lowered = text.lower()
+    return any(sig in lowered for sig in _PREAMBLE_SIGNALS)
+
+
+def _strip_preamble(lines: list[str]) -> list[str]:
+    """Drop the agent's opening monologue and its separating horizontal rule.
+
+    The engine fences its planning monologue off from the report proper with
+    a horizontal rule that sits *before the first heading*
+    (``… Let me compile the findings:`` → ``---`` → ``# Variance …``). If such
+    a rule exists ahead of the first heading, everything up to and including
+    it is scaffolding — the report starts after it. A well-formed report's
+    lead paragraph flows straight into its first heading with no rule between,
+    so this never eats real summary text.
+    """
+    first_heading = next(
+        (i for i, ln in enumerate(lines) if _HEADING_RE.match(ln)), len(lines)
+    )
+    last_rule = None
+    for i in range(first_heading):
+        if _is_hrule(lines[i]):
+            last_rule = i
+    if last_rule is not None:
+        return lines[last_rule + 1 :]
+    return lines
 _TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.*\S)\s*$")
@@ -382,6 +443,11 @@ def parse_blocks(answer: str) -> tuple[str, list[dict]]:
     always valid.
     """
     lines = answer.replace("\r\n", "\n").split("\n")
+    # Strip the agent's opening monologue (fenced by a leading horizontal
+    # rule), then drop every remaining stray rule so no `---` survives into a
+    # summary or prose block (ABS-359).
+    lines = _strip_preamble(lines)
+    lines = [ln for ln in lines if not _is_hrule(ln)]
 
     # Lead paragraph → summary (until the first heading or blank-line break).
     summary_lines: list[str] = []
@@ -395,6 +461,10 @@ def parse_blocks(answer: str) -> tuple[str, list[dict]]:
             summary_lines.append(lines[idx])
         idx += 1
     summary = _strip_inline(" ".join(summary_lines)).strip()
+    # Second-line defence: even with no fencing rule, a lead that reads as the
+    # agent's planning monologue is not a summary — drop it (ABS-359).
+    if _looks_like_monologue(summary):
+        summary = ""
 
     # Sections keyed by heading.
     blocks: list[dict] = []
@@ -415,14 +485,29 @@ def parse_blocks(answer: str) -> tuple[str, list[dict]]:
             buf.append(ln)
     flush()
 
+    # If the report opens straight into its title heading with no lead
+    # paragraph before it, the intro paragraph of that first section IS the
+    # lead — promote it so the deliverable always leads with a clean sentence
+    # rather than an empty gap (ABS-359).
+    if not summary and blocks and blocks[0].get("type") == "prose":
+        summary = blocks[0].get("text", "")
+        blocks = blocks[1:]
+
     if not summary and not blocks:
-        summary = _strip_inline(answer).strip()
+        # Nothing parsed — fall back to the cleaned remaining text (preamble
+        # and rules already removed) rather than the raw answer, so no
+        # scaffolding re-enters the deliverable.
+        remainder = _strip_inline(
+            " ".join(ln for ln in lines if ln.strip())
+        ).strip()
+        if not _looks_like_monologue(remainder):
+            summary = remainder
     if not blocks and answer.strip():
-        # No sections parsed — carry the whole answer as prose so the
-        # deliverable never falls below raw markdown.
-        remainder = answer.strip()
-        if remainder and remainder != summary:
-            blocks.append({"type": "prose", "text": _strip_inline(remainder)})
+        # No sections parsed — carry the cleaned remainder as prose so the
+        # deliverable never falls below raw markdown (minus the scaffolding).
+        remainder = _strip_inline("\n".join(lines)).strip()
+        if remainder and remainder != summary and not _looks_like_monologue(remainder):
+            blocks.append({"type": "prose", "text": remainder})
     return summary, blocks
 
 
