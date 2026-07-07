@@ -67,7 +67,7 @@ export default async function AnswerPage({
               <div className="font-semibold mb-2">Invalid answer link</div>
               <div className="text-text-muted text-[13.5px]">
                 That purchase id isn&apos;t valid. Head back to{" "}
-                <Link href="/pricing" className="underline text-text">
+                <Link href="/cases/new" className="underline text-text">
                   the question menu
                 </Link>{" "}
                 to buy an answer.

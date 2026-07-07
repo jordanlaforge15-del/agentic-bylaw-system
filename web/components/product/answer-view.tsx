@@ -8,7 +8,8 @@
 //   2. "captured" → render the raw engine answer (markdown) with the
 //      ABS-313 disclaimer, plus the refinement composer.
 //   3. "voided"/"failed" → the question couldn't be grounded; no charge.
-//      Surface the reason and route back to the question menu.
+//      Surface the reason and route back to the in-app question menu
+//      (/cases/new) — not the marketing /pricing page.
 //
 // Refinement (ABS-312/317): a free, in-window follow-up. The upstream
 // 409 guardrails are routed inline — a materially different question
@@ -321,7 +322,7 @@ export function AnswerView({
     return (
       <Notice title="Answer not found">
         We couldn&apos;t find that purchase on your account. Head back to{" "}
-        <Link href="/pricing" className="underline text-text">
+        <Link href="/cases/new" className="underline text-text">
           the question menu
         </Link>{" "}
         to buy an answer.
@@ -355,7 +356,7 @@ export function AnswerView({
             not charged.
           </div>
           <div className="mt-4">
-            <Link href="/pricing">
+            <Link href="/cases/new">
               <Btn variant="primary" size="sm">
                 Back to the question menu
               </Btn>
@@ -455,7 +456,7 @@ export function AnswerView({
             {windowClosed
               ? "The refinement window for this answer is closed."
               : "You've used all the follow-ups on this answer."}{" "}
-            <Link href="/pricing" className="underline text-text">
+            <Link href="/cases/new" className="underline text-text">
               Buy a new answer
             </Link>{" "}
             to keep going.
@@ -479,7 +480,7 @@ function RefineNoticeCard({ notice }: { notice: RefineNotice }) {
         <div className="text-text-muted">
           Answering it would be a separate bylaw report. Purchase a new
           question from{" "}
-          <Link href="/pricing" className="underline text-text">
+          <Link href="/cases/new" className="underline text-text">
             the question menu
           </Link>{" "}
           to get a grounded answer for it.
@@ -496,7 +497,7 @@ function RefineNoticeCard({ notice }: { notice: RefineNotice }) {
         <div className="font-semibold mb-1">Refinement window closed</div>
         <div className="text-text-muted">
           This answer&apos;s follow-up window is spent.{" "}
-          <Link href="/pricing" className="underline text-text">
+          <Link href="/cases/new" className="underline text-text">
             Buy a new answer
           </Link>{" "}
           to ask more.
