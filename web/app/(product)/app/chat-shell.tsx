@@ -174,6 +174,20 @@ function ProductAppPageInner() {
     setReportPurchase(null);
   }, [reportIdFromUrl]);
 
+  // ABS-363: AnswerView (below) settles a report — success or failure — by
+  // transitioning its own phase to "ready" (the coarse name covers
+  // captured/voided/failed alike, see answer-view.tsx's classify()). That
+  // phase already bubbles up to `reportPhase` via onPhaseChange, but nothing
+  // previously told the sidebar to refetch, so a report that finished while
+  // the user watched it generate kept showing the GENERATING pill in the
+  // case list until a full reload. Bumping sidebarRefresh here re-runs the
+  // sidebar's fetch so the badge flips live.
+  useEffect(() => {
+    if (reportPhase === "ready") {
+      setSidebarRefresh((n) => n + 1);
+    }
+  }, [reportPhase]);
+
   const [caseId, setCaseId] = useState<number | null>(caseIdFromUrl);
   const caseIdRef = useRef<number | null>(caseIdFromUrl);
   const setCaseIdBoth = (id: number | null) => {
