@@ -133,6 +133,75 @@ def test_parse_finding_block_from_determination_heading() -> None:
     assert findings[0]["title"] == "Determination"
 
 
+def test_strips_agent_monologue_preamble_fenced_by_rule() -> None:
+    """ABS-359: the engine fences its planning monologue off from the report
+    with a leading horizontal rule. Neither the monologue nor the rule is
+    report content — the summary must be the report's own lead."""
+    md = (
+        "I have gathered the key provisions. Now I have sufficient information "
+        "to prepare the variance justification package. Let me compile the "
+        "findings:\n\n---\n\n"
+        "The requested rear-yard variance is supportable on all three tests.\n\n"
+        "## Statutory Test 1\nThe variance is minor in nature.\n"
+    )
+    summary, blocks = parse_blocks(md)
+    assert "compile the findings" not in summary.lower()
+    assert "gathered the key provisions" not in summary.lower()
+    assert "---" not in summary
+    assert summary == "The requested rear-yard variance is supportable on all three tests."
+    assert all("---" not in (b.get("text") or "") for b in blocks)
+
+
+def test_strips_monologue_when_no_rule_fences_it() -> None:
+    """The monologue is scrubbed even when the engine emits no separating
+    rule — a lead that reads as chain-of-thought is never a summary."""
+    md = "Let me compile the findings.\n\n## Determination\nThe use is permitted.\n"
+    summary, _ = parse_blocks(md)
+    assert summary == ""
+
+
+def test_bare_address_preamble_before_rule_is_dropped() -> None:
+    """ABS-359 (woodlawn repro): a bare address followed by a rule rendered
+    as "address + ---" with no lead. The address (already in the letterhead)
+    and the rule are scaffolding — the summary comes from the report body."""
+    md = "1967 Woodlawn Terrace\n\n---\n\n## Zoning\n- **Zone:** ER-1\n"
+    summary, blocks = parse_blocks(md)
+    assert "1967 Woodlawn Terrace" not in summary
+    assert "---" not in summary
+    kv = [b for b in blocks if b["type"] == "keyvals"]
+    assert kv, blocks
+
+
+def test_promotes_title_section_intro_to_summary_when_no_lead() -> None:
+    """When a report opens straight into its title heading, the intro
+    paragraph of that first section becomes the clean lead summary."""
+    md = (
+        "---\n\n# Variance Justification Package\n\n"
+        "This package supports the requested rear-yard variance.\n\n"
+        "## Statutory Test 1\nThe variance is minor.\n"
+    )
+    summary, blocks = parse_blocks(md)
+    assert summary == "This package supports the requested rear-yard variance."
+    # The promoted intro is not also left behind as a duplicate block.
+    assert all(
+        b.get("text") != "This package supports the requested rear-yard variance."
+        for b in blocks
+    )
+
+
+def test_strips_horizontal_rules_between_sections() -> None:
+    """Decorative `---` dividers between sections must never leak into a
+    prose block as literal text."""
+    md = (
+        "A clean lead.\n\n## Option 1\nHome office is permitted.\n\n"
+        "---\n\n## Option 2\nHome occupation requires approval.\n"
+    )
+    summary, blocks = parse_blocks(md)
+    assert summary == "A clean lead."
+    assert all("---" not in (b.get("text") or "") for b in blocks)
+    assert all("---" not in (b.get("body") or "") for b in blocks)
+
+
 def test_heading_less_answer_degrades_to_prose() -> None:
     md = "Just a flat paragraph with no structure at all."
     summary, blocks = parse_blocks(md)
