@@ -293,6 +293,168 @@ def test_zone_subtitle_can_be_lifted_from_metadata() -> None:
     assert rep["zone_subtitle"] == "Downtown Core"
 
 
+# -- Zone subtitle from the engine transcript (ABS-362 re-test) -------------
+# The re-test proved the block-parse fix was insufficient: real answers state
+# the zone free-form (often inline prose block parsing can't lift), so the
+# letterhead fell back to the hardcoded default while the body clearly showed
+# the resolved zone. The authoritative source is the engine's own spatial
+# resolution — the grounding tool results in ``transcript_json``.
+
+
+def _tool_use(block_id: str, name: str, tool_input: dict) -> dict:
+    return {"type": "tool_use", "id": block_id, "name": name, "input": tool_input}
+
+
+def _tool_result(block_id: str, payload: dict) -> dict:
+    import json
+
+    return {
+        "type": "tool_result",
+        "tool_use_id": block_id,
+        "content": json.dumps(payload),
+    }
+
+
+def _transcript(*rounds) -> list:
+    """Build a serialized tool loop: each round is (tool_use, tool_result)."""
+    messages: list = []
+    for use, result in rounds:
+        messages.append({"role": "assistant", "content": [use]})
+        messages.append({"role": "user", "content": [result]})
+    return messages
+
+
+def test_zone_subtitle_from_transcript_zone_profile() -> None:
+    """The re-test scenario: the answer states the zone only in prose (which
+    block parsing can't lift), but the letterhead still resolves it from the
+    engine's ``get_zone_profile`` result rather than the hardcoded default."""
+    p = _purchase(
+        answer_text=(
+            "The property at 5184 Morris St sits in the DH-1 (Downtown "
+            "Halifax - 1) zone. The proposed use is permitted as-of-right."
+        ),
+        transcript_json=_transcript(
+            (
+                _tool_use("t1", "get_zone_profile", {"zone": "DH-1"}),
+                _tool_result(
+                    "t1",
+                    {"zone": "DH-1", "zone_full_name": "Downtown Halifax - 1"},
+                ),
+            ),
+        ),
+    )
+    rep = build_report(p)
+    assert rep is not None
+    assert rep["zone_subtitle"] == "DH-1 · Downtown Halifax - 1"
+    assert rep["zone_subtitle"] != report_mod.DEFAULT_ZONE_SUBTITLE
+
+
+def test_zone_subtitle_from_transcript_search_linked_datasets() -> None:
+    """The zoning overlay on a ``search_bylaw_evidence`` hit is the same
+    source the parcel pane reads — mine it when no zone profile ran."""
+    p = _purchase(
+        answer_text="A determination stated entirely in prose, no Zone row.",
+        transcript_json=_transcript(
+            (
+                _tool_use(
+                    "s1",
+                    "search_bylaw_evidence",
+                    {"query": "use", "location": {"civic_number": "5686", "street": "Spring Garden Rd"}},
+                ),
+                _tool_result(
+                    "s1",
+                    {
+                        "matches": [
+                            {
+                                "linked_datasets": [
+                                    {
+                                        "name": "halifax_zoning_boundaries",
+                                        "feature_matches": [
+                                            {
+                                                "canonical_attributes": {
+                                                    "zone_code": "DH",
+                                                    "zone_description": "Downtown Halifax",
+                                                }
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                ),
+            ),
+        ),
+    )
+    rep = build_report(p)
+    assert rep is not None
+    assert rep["zone_subtitle"] == "DH · Downtown Halifax"
+
+
+def test_zone_subtitle_prefers_transcript_over_block_parse() -> None:
+    """A code+name from the transcript wins over a bare code the block parser
+    might otherwise surface, and always over the hardcoded default."""
+    p = _purchase(
+        answer_text="An answer with no zoning section at all.",
+        transcript_json=_transcript(
+            (
+                _tool_use("a1", "get_address_profile", {"address": "5184 Morris St"}),
+                _tool_result("a1", {"address": "5184 Morris St", "zone": "DH-1"}),
+            ),
+        ),
+    )
+    rep = build_report(p)
+    assert rep is not None
+    # Address-profile carries only the code, but it still beats the default.
+    assert rep["zone_subtitle"] == "DH-1"
+
+
+def test_zone_subtitle_from_transcript_tool_input_fallback() -> None:
+    """When a compaction pass has summarised the zone-profile result body away,
+    the ``get_zone_profile`` call *input* still preserves the code."""
+    p = _purchase(
+        answer_text="A determination stated entirely in prose, no Zone row.",
+        transcript_json=[
+            {
+                "role": "assistant",
+                "content": [
+                    _tool_use("z1", "get_zone_profile", {"zone": "DH-2"}),
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "z1",
+                        "content": "[get_zone_profile: keys=zone,zone_full_name]",
+                    }
+                ],
+            },
+        ],
+    )
+    rep = build_report(p)
+    assert rep is not None
+    assert rep["zone_subtitle"] == "DH-2"
+
+
+def test_zone_subtitle_metadata_wins_over_transcript() -> None:
+    """An explicit metadata override still trumps the resolved transcript zone."""
+    p = _purchase(
+        answer_text="Prose only.",
+        metadata_json={"zone_subtitle": "Downtown Core"},
+        transcript_json=_transcript(
+            (
+                _tool_use("t1", "get_zone_profile", {"zone": "DH-1"}),
+                _tool_result("t1", {"zone": "DH-1", "zone_full_name": "Downtown Halifax"}),
+            ),
+        ),
+    )
+    rep = build_report(p)
+    assert rep is not None
+    assert rep["zone_subtitle"] == "Downtown Core"
+
+
 def test_prepared_for_falls_back_to_email() -> None:
     p = _purchase()
     p.user.full_name = None

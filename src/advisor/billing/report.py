@@ -22,6 +22,7 @@ text carries no determination signal.
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -583,6 +584,162 @@ def _zone_subtitle_from_blocks(blocks: list[dict]) -> str | None:
     return None
 
 
+# -- Resolved zone from the engine transcript -------------------------------
+# The answer markdown is the WEAKEST zone source: the engine states the zone
+# free-form, so a parcel's zone can land in a table row, a keyval, or plain
+# prose — and only the first two survive block parsing (ABS-362 re-test: an
+# inline-prose zone left the letterhead on the hardcoded default while the
+# body clearly showed the resolved DH-1). The *authoritative* source is the
+# spatial resolution the engine ran to ground the answer — the same
+# ``get_zone_profile`` / ``get_address_profile`` / ``search_bylaw_evidence``
+# tool results the parcel pane reads (web/lib/parcel.ts). Those live in
+# ``purchase.transcript_json`` (the serialized tool loop), so we mine them
+# here for a deterministic zone that can never contradict the body.
+_ZONING_DATASET = "halifax_zoning_boundaries"
+
+
+def _tool_result_payload(content: object) -> dict | None:
+    """Parse a serialized ``tool_result`` block's content into its dict.
+
+    Each grounding tool returns ``json.dumps(compact_*(...))`` (advisor.chat
+    .tools), so the content is a JSON string — or, in the block-list form,
+    text blocks carrying that JSON. Anything else (a compaction summary, an
+    error string) fails to parse and is skipped.
+    """
+    text: str | None = None
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts = [
+            b["text"]
+            for b in content
+            if isinstance(b, dict)
+            and b.get("type") == "text"
+            and isinstance(b.get("text"), str)
+        ]
+        text = "".join(parts)
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _zone_from_tool_payload(name: str, payload: dict) -> str | None:
+    """Extract a ``CODE`` / ``CODE · Full name`` subtitle from one tool result.
+
+    Preference is for a code *with* a human name (``get_zone_profile`` and the
+    zoning-boundaries overlay carry both); ``get_address_profile`` yields only
+    the code, which still beats the hardcoded default.
+    """
+    if name == "get_zone_profile":
+        if payload.get("unknown_zone"):
+            return None
+        code = str(payload.get("zone") or "").strip()
+        if code:
+            full = str(payload.get("zone_full_name") or "").strip()
+            return f"{code} · {full}" if full else code
+    elif name == "get_address_profile":
+        if payload.get("unresolvable"):
+            return None
+        code = str(payload.get("zone") or "").strip()
+        if code:
+            return code
+    elif name == "bylaw_query":
+        nested = payload.get("zone_profile")
+        if isinstance(nested, dict):
+            resolved = _zone_from_tool_payload("get_zone_profile", nested)
+            if resolved:
+                return resolved
+        nested = payload.get("address_profile")
+        if isinstance(nested, dict):
+            resolved = _zone_from_tool_payload("get_address_profile", nested)
+            if resolved:
+                return resolved
+    elif name == "search_bylaw_evidence":
+        for match in payload.get("matches") or []:
+            if not isinstance(match, dict):
+                continue
+            for ds in match.get("linked_datasets") or []:
+                if not isinstance(ds, dict) or ds.get("name") != _ZONING_DATASET:
+                    continue
+                features = ds.get("feature_matches") or []
+                if not features or not isinstance(features[0], dict):
+                    continue
+                attrs = features[0].get("canonical_attributes") or {}
+                if not isinstance(attrs, dict):
+                    continue
+                code = str(attrs.get("zone_code") or "").strip()
+                if code:
+                    desc = str(attrs.get("zone_description") or "").strip()
+                    return f"{code} · {desc}" if desc else code
+    return None
+
+
+def _zone_subtitle_from_transcript(transcript: list | None) -> str | None:
+    """Lift the resolved zone off the engine's grounding tool results.
+
+    Walks the serialized tool loop, pairing each ``tool_result`` with the
+    ``tool_use`` that produced it, and returns the best zone subtitle found —
+    preferring a code+name (``DH-1 · Downtown Halifax``) over a bare code. The
+    tool-call *input* is a last resort: ``get_zone_profile``'s ``zone`` slot
+    preserves the code even when a later compaction pass has summarised the
+    result body away.
+    """
+    if not transcript:
+        return None
+
+    names: dict[str, str] = {}
+    for message in transcript:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                block_id = block.get("id")
+                name = block.get("name")
+                if isinstance(block_id, str) and isinstance(name, str):
+                    names[block_id] = name
+
+    code_only: str | None = None
+    input_fallback: str | None = None
+    for message in transcript:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "tool_use" and block.get("name") == "get_zone_profile":
+                zone = block.get("input")
+                if isinstance(zone, dict):
+                    code = str(zone.get("zone") or "").strip()
+                    if code and input_fallback is None:
+                        input_fallback = code
+            elif btype == "tool_result":
+                name = names.get(block.get("tool_use_id", ""))
+                if not name:
+                    continue
+                payload = _tool_result_payload(block.get("content"))
+                if payload is None:
+                    continue
+                resolved = _zone_from_tool_payload(name, payload)
+                if not resolved:
+                    continue
+                if "·" in resolved:
+                    return resolved
+                if code_only is None:
+                    code_only = resolved
+    return code_only or input_fallback
+
+
 def build_report(purchase: QuestionPurchase) -> dict | None:
     """Map a captured purchase into the typed ``ReportContent`` schema.
 
@@ -612,8 +769,15 @@ def build_report(purchase: QuestionPurchase) -> dict | None:
         bylaw_version=BYLAW_VERSION, ref=ref, issued=issued or "—"
     )
 
+    # Zone subtitle, most-authoritative source first: an explicit metadata
+    # override → the zone the engine actually resolved spatially (transcript)
+    # → whatever Zone the answer body itself shows → the hardcoded literal as
+    # a last resort. The transcript sits above block parsing because the
+    # engine states the zone free-form, so a real answer's Zone often lives in
+    # inline prose that block parsing can't lift — the ABS-362 re-test failure.
     zone_subtitle = (
         meta.get("zone_subtitle")
+        or _zone_subtitle_from_transcript(purchase.transcript_json)
         or _zone_subtitle_from_blocks(blocks)
         or DEFAULT_ZONE_SUBTITLE
     )

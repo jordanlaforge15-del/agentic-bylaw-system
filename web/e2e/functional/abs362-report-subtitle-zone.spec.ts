@@ -1,72 +1,66 @@
-// Functional: ABS-362 — the report letterhead subtitle must match the
-// resolved zone, not a hardcoded literal.
+// Functional: ABS-362 — every surface that shows the report's zone must show
+// the RESOLVED zone, not a hardcoded literal.
 //
-// The bug: build_report (advisor.billing.report) always fell back to the
-// hardcoded DEFAULT_ZONE_SUBTITLE ("Established Residential, Type 1") since
-// nothing ever populated purchase.metadata_json["zone_subtitle"] — every
-// report's letterhead + title-block subtitle read that literal regardless of
-// the parcel's actual zone, contradicting the body's own Zone row (e.g.
-// DH-1 for 5184 Morris St).
+// The bug: build_report (advisor.billing.report) fell back to the hardcoded
+// DEFAULT_ZONE_SUBTITLE ("Established Residential, Type 1") for every report,
+// because nothing reliably populated the zone. The first fix only mined the
+// answer *markdown* blocks — but real answers state the zone free-form (often
+// in inline prose block parsing can't lift), so the re-test found the literal
+// STILL on the letterhead AND the top nav bar while the body clearly showed
+// the resolved DH-1 zone.
 //
-// The fix: build_report now derives zone_subtitle from the report's own
-// parsed Zone value (keyvals or table row) when present, falling back to
-// the literal only when the body carries no Zone at all. See
-// tests/advisor/billing/test_report.py for the derivation unit tests.
+// The real fix derives zone_subtitle from the engine's own spatial resolution
+// (the get_zone_profile / search_bylaw_evidence tool results in the purchase
+// transcript — the same source the parcel pane reads), so the resolved value
+// travels in the report envelope to EVERY surface that renders it:
+//   - the letterhead title-block subtitle (report-zone)
+//   - the top nav bar reading string (workspace-label)
+//   - the body Zone row
+// See tests/advisor/billing/test_report.py for the derivation unit tests.
 //
-// This spec drives the real /app/answers view (same stub-at-the-network-
-// boundary pattern as the ABS-342/365/366 report specs) with a report whose
-// zone_subtitle is a resolved DH-1 zone — matching its own body Zone row —
-// and asserts the letterhead subtitle renders that resolved value, not the
-// old literal.
+// This spec drives the real /app workspace (same stub-at-the-network-boundary
+// pattern as the ABS-361 report specs) with a report whose resolved DH-1 zone
+// matches its own body Zone row, and asserts all three surfaces render that
+// resolved value — never the old literal.
 
 import { expect, test } from "../fixtures/test-env";
 import type { Page, Route } from "@playwright/test";
 
 type Report = Record<string, unknown>;
 
+const REPORT_ID = 6201;
+const ADDRESS = "5184 Morris St";
+const RESOLVED_ZONE = "DH-1 · Downtown Halifax - 1";
+const BODY_ZONE = "DH-1 (Downtown Halifax - 1)";
+
 function dhZoneReport(): Report {
   return {
-    ref: "PU-000362",
+    ref: "PU-006201",
     report_type: "Permitted-use determination",
-    address: "5184 Morris St",
-    zone_subtitle: "DH-1 · Downtown Halifax - 1",
+    address: ADDRESS,
+    // The backend-derived subtitle — the resolved zone, not the ER-1 default.
+    zone_subtitle: RESOLVED_ZONE,
     issued: "2026-07-07",
     prepared_for: "Jordan Buyer",
     bylaw_version: "HRM Regional Centre Land Use By-law — 2024 consolidation",
     price_cents: 9900,
     currency: "CAD",
     verdict: { status: "pass", label: "Permitted as-of-right" },
-    summary: "The proposed use is permitted as-of-right at 5184 Morris St.",
+    summary: `The proposed use is permitted as-of-right at ${ADDRESS}.`,
     blocks: [
       {
         type: "table",
         title: "Property Summary",
         columns: ["Field", "Value"],
-        rows: [
-          { cells: ["Zone", "DH-1 (Downtown Halifax - 1)"], status: null },
-        ],
+        rows: [{ cells: ["Zone", BODY_ZONE], status: null }],
       },
     ],
   };
 }
 
-type Purchase = {
-  id: number;
-  question_slug: string;
-  status: string;
-  price_cents: number;
-  currency: string;
-  answer: string | null;
-  report: Report | null;
-  failure_reason: string | null;
-  refinement_count: number;
-  refinements_remaining: number;
-  window_expires_at: string | null;
-};
-
-function purchase(overrides: Partial<Purchase> = {}): Purchase {
+function purchase(): Report {
   return {
-    id: 362,
+    id: REPORT_ID,
     question_slug: "permitted_use",
     status: "captured",
     price_cents: 9900,
@@ -77,9 +71,19 @@ function purchase(overrides: Partial<Purchase> = {}): Purchase {
     refinement_count: 0,
     refinements_remaining: 3,
     window_expires_at: "2026-12-31T00:00:00Z",
-    ...overrides,
   };
 }
+
+const SIDEBAR_ROW = {
+  id: REPORT_ID,
+  question_slug: "permitted_use",
+  title: "Permitted-use check",
+  status: "captured",
+  address: ADDRESS,
+  zone: "DH-1",
+  answer_ready: true,
+  updated_at: "2026-07-07T09:00:00Z",
+};
 
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
@@ -89,31 +93,50 @@ function json(route: Route, body: unknown, status = 200) {
   });
 }
 
-async function stubPurchase(page: Page, get: () => unknown) {
+async function stubWorkspace(page: Page) {
+  await page.route(/\/api\/chat\/sessions(\?.*)?$/, (route) =>
+    json(route, { sessions: [] }),
+  );
+  await page.route(/\/api\/billing\/questions\/purchases$/, (route) =>
+    json(route, { reports: [SIDEBAR_ROW] }),
+  );
   await page.route(
     /\/api\/billing\/questions\/purchases\/\d+(\/(answer|refine))?$/,
-    (route) => json(route, get()),
+    (route) => json(route, purchase()),
   );
 }
 
-test.describe("report subtitle matches the resolved zone (ABS-362)", () => {
-  test("title-block subtitle shows the resolved DH-1 zone, matching the body, not the ER-1 default", async ({
+test.describe("report zone subtitle matches the resolved zone (ABS-362)", () => {
+  test("letterhead, top nav bar, and body all show the resolved DH-1 zone — never the ER-1 default", async ({
     page,
   }) => {
-    await stubPurchase(page, () => purchase());
-    await page.goto("/app/answers/362");
+    await stubWorkspace(page);
+    await page.goto("/app");
+
+    // Open the report from the sidebar (the surface the re-test exercised).
+    await page
+      .locator("aside")
+      .first()
+      .getByTestId("case-row")
+      .filter({ hasText: ADDRESS })
+      .click();
 
     const doc = page.getByTestId("report-document");
     await expect(doc).toBeVisible();
 
-    // Body Zone row (Property Summary table).
-    const table = page.getByTestId("block-table");
-    await expect(table).toContainText("DH-1 (Downtown Halifax - 1)");
+    // Body Zone row (Property Summary table) — the source of truth.
+    await expect(page.getByTestId("block-table")).toContainText(BODY_ZONE);
 
-    // Title-block subtitle must match the body's zone, not the hardcoded
-    // "Established Residential, Type 1" literal.
+    // Letterhead title-block subtitle must match the body's zone, not the
+    // hardcoded "Established Residential, Type 1" literal.
     const subtitle = page.getByTestId("report-zone");
-    await expect(subtitle).toHaveText("DH-1 · Downtown Halifax - 1");
+    await expect(subtitle).toHaveText(RESOLVED_ZONE);
     await expect(subtitle).not.toHaveText(/Established Residential/i);
+
+    // The re-test flagged the top nav bar carrying the same hardcoded string.
+    // It reads the same resolved zone subtitle, so it must show DH-1 too.
+    const workspaceLabel = page.getByTestId("workspace-label");
+    await expect(workspaceLabel).toContainText(RESOLVED_ZONE);
+    await expect(workspaceLabel).not.toContainText(/Established Residential/i);
   });
 });
