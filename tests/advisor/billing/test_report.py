@@ -196,6 +196,64 @@ def test_verdict_pass_vs_fail_vs_conditional() -> None:
     ]["status"] == "attention"
 
 
+def test_verdict_label_tailored_to_report_type() -> None:
+    """ABS-365: the same content-derived status carries a label phrased in
+    the report type's own frame — a variance package concludes on statutory-
+    test supportability, not use-permission."""
+    # A conditional variance package concludes on supportability, not
+    # "Permitted with conditions".
+    variance = build_report(
+        _purchase(
+            question_slug="variance_justification",
+            answer_text="The variance is supportable, subject to conditions.",
+        )
+    )["verdict"]
+    assert variance["status"] == "conditional"
+    assert variance["label"] == "Supportable with conditions"
+
+    # A clean-pass variance uses the design's three-statutory-tests wording.
+    variance_pass = build_report(
+        _purchase(
+            question_slug="variance_justification",
+            answer_text="The requested variance is permitted as-of-right on its merits.",
+        )
+    )["verdict"]
+    assert variance_pass["status"] == "pass"
+    assert variance_pass["label"] == "Supportable on all three statutory tests"
+
+    # Development-standards concludes on compliance.
+    standards = build_report(
+        _purchase(
+            question_slug="development_standards",
+            answer_text="The proposal does not comply with the rear-yard setback.",
+        )
+    )["verdict"]
+    assert standards["status"] == "fail"
+    assert standards["label"] == "Does not comply"
+
+    # Permitted-use keeps the use-permission frame.
+    use = build_report(
+        _purchase(
+            question_slug="permitted_use",
+            answer_text="The use is permitted as-of-right.",
+        )
+    )["verdict"]
+    assert use["status"] == "pass"
+    assert use["label"] == "Permitted as-of-right"
+
+
+def test_verdict_label_falls_back_for_unknown_report_type() -> None:
+    """An off-menu / unknown slug keeps the neutral use-permission wording."""
+    v = build_report(
+        _purchase(
+            question_slug="other",
+            answer_text="Permitted, subject to a development permit.",
+        )
+    )["verdict"]
+    assert v["status"] == "conditional"
+    assert v["label"] == "Permitted with conditions"
+
+
 def test_ref_prefix_per_question() -> None:
     assert build_report(_purchase(question_slug="development_standards"))["ref"].startswith(
         "DS-"
