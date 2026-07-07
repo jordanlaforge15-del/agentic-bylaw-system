@@ -566,10 +566,13 @@ def _resolve_run_inputs(purchase: QuestionPurchase) -> tuple[str, int | None]:
     """Return ``(prompt, cumulative_token_budget)`` for a purchase.
 
     Catalog questions render their ``prompt_template`` from the collected
-    inputs and run under the session's default ABS-305 ceiling
-    (``None``). The off-menu "Other" path (ABS-316) runs the user's raw
-    free-form question text under the quote's envelope, persisted on
-    ``metadata_json`` at checkout.
+    inputs and run under the question's own ABS-305 ceiling — its
+    ``cumulative_token_budget`` when set (grounding-heavy questions like
+    ``development_standards`` carry a larger, margin-safe ceiling so a
+    routine input doesn't trip the breaker before it can ground, ABS-360),
+    otherwise ``None`` for the session default. The off-menu "Other" path
+    (ABS-316) runs the user's raw free-form question text under the
+    quote's envelope, persisted on ``metadata_json`` at checkout.
     """
     if purchase.question_slug == OTHER_QUESTION_SLUG:
         question_text = str(
@@ -578,7 +581,10 @@ def _resolve_run_inputs(purchase: QuestionPurchase) -> tuple[str, int | None]:
         budget = (purchase.metadata_json or {}).get("cumulative_token_budget")
         return question_text, (int(budget) if budget else None)
     question = question_for(purchase.question_slug)
-    return render_prompt(question, purchase.inputs_json), None
+    return (
+        render_prompt(question, purchase.inputs_json),
+        question.cumulative_token_budget,
+    )
 
 
 def _relax_idle_timeout(db: Session) -> None:

@@ -28,11 +28,13 @@ from advisor.billing.client import (
     MockStripeClient,
     StripeEvent,
 )
+from advisor.billing.questions import question_for
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.billing.webhooks import handle_event
 from advisor.db.models import QuestionPurchase, User
-from advisor.llm.mock import MockGateway
-from advisor.llm.mock_dispatcher import build_dispatcher
+from advisor.llm.budget import default_cumulative_token_budget
+from advisor.llm.mock import MockGateway, text_response, tool_use_response
+from advisor.llm.mock_dispatcher import _count_search_rounds, build_dispatcher
 from bylaw_retrieval.retrieval import RetrievalResponse
 from layer1.db.base import utcnow
 from layer1.db.init_db import create_all
@@ -296,6 +298,217 @@ async def test_run_answer_ungroundable_voids(tmp_path: Path) -> None:
     # The authorization was VOIDED (released), never captured.
     actions = [c.action for c in void_client.payment_intent_calls]
     assert actions == ["cancel"]
+
+
+# -- ABS-360: per-question reasoning budget ---------------------------------
+
+# A routine dev-standards input (address + project_details); the flagship
+# $149 question requires both.
+DEV_STANDARDS_INPUTS = {
+    "address": "1250 Robie St, Halifax",
+    "project_details": (
+        "4-storey multi-unit residential: 14.5 m height, 12 units, front "
+        "setback 3.0 m, rear 5.0 m, side 1.5 m each, lot coverage 48%, "
+        "8 parking spaces."
+    ),
+}
+
+
+def _start_uniq(db, user, *, slug, inputs, session_id):
+    """Like ``_start`` but with a caller-supplied Stripe session id, so a
+    single test can open more than one purchase without colliding on the
+    UNIQUE ``stripe_checkout_session_id`` column."""
+    client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id=session_id, url="u")
+    )
+    purchase, _url = answer_flow.start_question_checkout(
+        db, user, question_slug=slug, inputs=inputs,
+        client=client, settings=_settings(),
+    )
+    return purchase
+
+
+def _heavy_grounding_gateway(*, searches: int, preamble_chars: int = 30_000):
+    """A gateway that grounds every round with a big filler preamble.
+
+    Each search round carries ``preamble_chars`` of full-price text, so the
+    turn's cumulative billed-equivalent estimate climbs round over round —
+    the same mechanism as ``MOCK_CUMULATIVE_TRIP`` — until, after
+    ``searches`` grounded rounds, it emits the final answer. Whether the run
+    grounds or trips the ABS-305 cumulative breaker is therefore decided
+    purely by the cumulative budget in force. Calibrated so ``searches=7``
+    (~214k billed-equivalent) trips the 165k default but grounds under the
+    260k dev-standards ceiling.
+    """
+    filler = "H" * preamble_chars
+
+    def _dispatch(request):  # noqa: ANN001, ANN202
+        # Tools stripped → the forced-synthesis / final-answer turn.
+        if not request.tools:
+            return text_response(
+                "Compliance evaluation complete; grounded in RC-LUB.",
+                stop_reason="end_turn",
+            )
+        done = _count_search_rounds(request)
+        if done < searches:
+            return tool_use_response(
+                tool_id=f"t-devstd-{done + 1}",
+                tool_name="search_bylaw_evidence",
+                tool_input={"query": f"development standard {done + 1}"},
+                preamble=filler,
+            )
+        return text_response(
+            "Compliance evaluation complete; grounded in RC-LUB.",
+            stop_reason="end_turn",
+        )
+
+    return MockGateway(callable_=_dispatch)
+
+
+def test_dev_standards_resolves_to_its_elevated_budget() -> None:
+    # The catalog question's per-question ceiling is what the run uses;
+    # a question with no override defers to the session default (None).
+    from advisor.billing.answers import _resolve_run_inputs
+
+    dev = QuestionPurchase(
+        question_slug="development_standards", inputs_json=DEV_STANDARDS_INPUTS
+    )
+    _prompt, budget = _resolve_run_inputs(dev)
+    assert budget == question_for("development_standards").cumulative_token_budget
+    assert budget == 260_000
+
+    permitted = QuestionPurchase(
+        question_slug="permitted_use",
+        inputs_json={"address": "1234 Elm St", "proposed_use": "a duplex"},
+    )
+    _p2, budget2 = _resolve_run_inputs(permitted)
+    assert budget2 is None  # defers to default_cumulative_token_budget()
+
+
+async def test_run_answer_threads_per_question_budget_into_the_turn(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The elevated ceiling must actually reach the tool loop, not just sit
+    # on the catalog. Spy on run_turn (mirrors test_buy_other) and assert
+    # the budget it receives per question.
+    captured: dict = {}
+
+    async def _spy_run_turn(*, cumulative_token_budget=None, **kwargs):  # noqa: ANN001, ANN202
+        captured["budget"] = cumulative_token_budget
+        return answer_flow.TurnOutcome(
+            answer_text="ok",
+            grounded=True,
+            failure_reason=None,
+            terminated_reason="end_turn",
+            messages=[],
+        )
+
+    monkeypatch.setattr(answer_flow, "run_turn", _spy_run_turn)
+
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+    client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs", url="u")
+    )
+
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase = _start_uniq(
+            db, user, slug="development_standards",
+            inputs=DEV_STANDARDS_INPUTS, session_id="cs_devstd_spy",
+        )
+        pid = purchase.id
+        _authorize(db, pid, uid, "development_standards")
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        await answer_flow.run_answer(
+            db, p, gateway=_gateway(), persona=PERSONA,
+            retrieval_factory=_StubRetrieval(), client=client,
+        )
+    assert captured["budget"] == 260_000
+
+    # A question with no override threads None (session default).
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase = _start_uniq(
+            db, user, slug="permitted_use",
+            inputs={"address": "1234 Elm St", "proposed_use": "a duplex"},
+            session_id="cs_permitted_spy",
+        )
+        pid2 = purchase.id
+        _authorize(db, pid2, uid, "permitted_use")
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid2)
+        await answer_flow.run_answer(
+            db, p, gateway=_gateway(), persona=PERSONA,
+            retrieval_factory=_StubRetrieval(), client=client,
+        )
+    assert captured["budget"] is None
+
+
+async def test_dev_standards_grounds_where_the_default_budget_would_void(
+    tmp_path: Path,
+) -> None:
+    # The behavioural heart of ABS-360: the SAME grounding-heavy run that
+    # trips the flat default (and would settle voided/"cost_ceiling") now
+    # completes and captures under the dev-standards ceiling. Calibrated so
+    # 7 grounded rounds land between the 165k default and the 260k ceiling.
+    assert default_cumulative_token_budget() == 165_000
+    assert question_for("development_standards").cumulative_token_budget == 260_000
+
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+
+    # development_standards → runs under 260k → grounds → captures.
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase = _start_uniq(
+            db, user, slug="development_standards",
+            inputs=DEV_STANDARDS_INPUTS, session_id="cs_devstd_ground",
+        )
+        pid = purchase.id
+        _authorize(db, pid, uid, "development_standards")
+    capture_client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        p = await answer_flow.run_answer(
+            db, p, gateway=_heavy_grounding_gateway(searches=7),
+            persona=PERSONA, retrieval_factory=_StubRetrieval(),
+            client=capture_client,
+        )
+        assert p.status == "captured"
+        assert p.failure_reason is None
+        assert p.answer_text
+    assert [c.action for c in capture_client.payment_intent_calls] == ["capture"]
+
+    # Same load under the default budget (permitted_use, no override) →
+    # trips the cumulative breaker → voided as "cost_ceiling", no charge.
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase = _start_uniq(
+            db, user, slug="permitted_use",
+            inputs={"address": "1234 Elm St", "proposed_use": "a duplex"},
+            session_id="cs_permitted_void",
+        )  # permitted_use → default 165k
+        pid2 = purchase.id
+        _authorize(db, pid2, uid, "permitted_use")
+    void_client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs2", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid2)
+        p = await answer_flow.run_answer(
+            db, p, gateway=_heavy_grounding_gateway(searches=7),
+            persona=PERSONA, retrieval_factory=_StubRetrieval(),
+            client=void_client,
+        )
+        assert p.status == "voided"
+        assert p.failure_reason == "cost_ceiling"
+    assert [c.action for c in void_client.payment_intent_calls] == ["cancel"]
 
 
 async def test_run_answer_requires_authorization(tmp_path: Path) -> None:

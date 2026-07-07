@@ -107,6 +107,17 @@ class Question:
         catalog_anchor: Provenance — which productization-catalog item
             and consultant proxy price this question maps to. Kept so the
             price's justification travels with the definition.
+        cumulative_token_budget: Optional per-question override for the
+            ABS-305 cumulative per-turn cost ceiling (billed-equivalent
+            input tokens) the answer runs under. ``None`` uses the global
+            ``default_cumulative_token_budget()`` (165k). Some catalog
+            questions are grounding-heavy enough that the flat default
+            trips the cumulative breaker mid-run — a hard failure on a
+            routine input (ABS-360) — so they carry a larger, still-
+            margin-safe ceiling here, mirroring how the off-menu "Other"
+            flow scales its budget by difficulty tier (``quote.py``). The
+            ceiling still bounds the served cost to a small fraction of
+            the price, preserving the catalog's gross margin.
     """
 
     slug: str
@@ -117,6 +128,7 @@ class Question:
     required_inputs: tuple[InputField, ...]
     prompt_template: str
     catalog_anchor: str
+    cumulative_token_budget: int | None = None
 
     @property
     def stripe_price_env_var(self) -> str:
@@ -205,6 +217,20 @@ QUESTION_DEVELOPMENT_STANDARDS_DEF = Question(
         "Catalog item 6 / Stage-1 #4 — as-of-right compliance check "
         "($149 band)."
     ),
+    # ABS-360: the flagship $149 report evaluates every submitted
+    # dimension (height, four setbacks, lot coverage, FAR, parking)
+    # against the zone's standards — get_zone_profile returns the full
+    # standards table and evaluate_submission_against_bylaws grounds each
+    # standard in turn, so a routine multi-standard input reliably out-
+    # grows the flat 165k default and trips the ABS-305 cumulative breaker
+    # BEFORE it can ground (the "ran past its reasoning budget" hard
+    # failure on the highest-intent purchase path). 260k matches the
+    # off-menu "complex" tier (quote.py) — this question reasons like a
+    # complex analysis even though it is priced mid-band. At Opus input
+    # rates ~260k billed-equivalent tokens ≈ $3.90, still <3% of the $149
+    # price, so the >97% gross margin and the failed-question cost bound
+    # are both preserved.
+    cumulative_token_budget=260_000,
 )
 
 QUESTION_DUE_DILIGENCE_DEF = Question(

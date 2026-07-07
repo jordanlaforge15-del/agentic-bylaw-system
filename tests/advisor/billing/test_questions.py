@@ -45,6 +45,36 @@ def test_launch_prices_match_the_decision() -> None:
     assert QUESTIONS[QUESTION_VARIANCE_JUSTIFICATION].price_cents == 29_900
 
 
+def test_development_standards_carries_an_elevated_reasoning_budget() -> None:
+    # ABS-360: the flagship $149 multi-standard report reliably out-grows
+    # the flat default cumulative budget and tripped the ABS-305 breaker
+    # before it could ground ("ran past its reasoning budget"). It now
+    # carries a larger, margin-safe per-question ceiling so a routine
+    # input completes.
+    from advisor.llm.budget import default_cumulative_token_budget
+
+    dev = QUESTIONS[QUESTION_DEVELOPMENT_STANDARDS]
+    assert dev.cumulative_token_budget == 260_000
+    # Strictly above the session default — that gap is the fix.
+    assert dev.cumulative_token_budget > default_cumulative_token_budget()
+
+
+def test_only_grounding_heavy_questions_override_the_budget() -> None:
+    # Everything else runs under the shared default (``None`` = defer to
+    # ``default_cumulative_token_budget``); only questions we've found to
+    # trip the flat default carry an explicit override.
+    overridden = {
+        q.slug for q in all_questions() if q.cumulative_token_budget is not None
+    }
+    assert overridden == {QUESTION_DEVELOPMENT_STANDARDS}
+    # Any override that IS set stays within the off-menu tier ladder's top
+    # (``exceptional`` = 330k, quote.py) so a catalog question can never be
+    # granted more reasoning headroom than the most expensive off-menu band.
+    for q in all_questions():
+        if q.cumulative_token_budget is not None:
+            assert 0 < q.cumulative_token_budget <= 330_000
+
+
 def test_all_questions_returns_menu_order() -> None:
     questions = all_questions()
     assert [q.slug for q in questions] == list(QUESTION_ORDER)
