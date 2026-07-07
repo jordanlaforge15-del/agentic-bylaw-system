@@ -745,16 +745,25 @@ function ProductAppPageInner() {
   const isReportBacked = reportIdFromUrl !== null;
   const reportContent = reportPurchase?.report ?? null;
 
-  // Header label tracks which face the workspace is showing. GENERATING
-  // while the engine runs (or before the first phase lands), REPORT once the
-  // report is ready, CONVERSATION whenever the conversation face is up (or
-  // for a plain conversation-only case).
+  // Header label tracks which face the workspace is showing. CONVERSATION
+  // whenever the conversation face is up (or a plain conversation-only case);
+  // GENERATING only while the engine is *actually* running; REPORT otherwise.
+  //
+  // ABS-361: "REPORT" is the default for a report-backed workspace — including
+  // the brief `loading`/`null` phase right after switching to a different
+  // report, while its GET is in flight. Previously anything that wasn't yet
+  // "ready" fell through to "GENERATING", so switching between two ALREADY
+  // COMPLETED reports flashed a stale "GENERATING …" in the status bar (the
+  // freshly-remounted <AnswerView> resets reportPhase to null before its
+  // purchase GET resolves to "ready"). That read like the report was
+  // regenerating/re-charging. Only a real `generating` phase — a report whose
+  // background engine job is running — should say GENERATING now.
   const headerLabel =
     !isReportBacked || view === "conversation"
       ? "CONVERSATION"
-      : reportPhase === "ready"
-        ? "REPORT"
-        : "GENERATING";
+      : reportPhase === "generating"
+        ? "GENERATING"
+        : "REPORT";
 
   // Prefer a resolved parcel for the header reading; then the report's own
   // subject; then the case anchor; finally the static fallback.

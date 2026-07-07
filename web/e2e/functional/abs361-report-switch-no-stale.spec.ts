@@ -220,4 +220,71 @@ test.describe("switching reports in the sidebar (ABS-361)", () => {
       { timeout: 10_000 },
     );
   });
+
+  test("switching between two completed reports never flashes GENERATING in the status bar", async ({
+    page,
+  }) => {
+    // Both reports are `captured` (complete), so a switch only re-fetches the
+    // document — nothing is generating. The status-bar label must reflect that:
+    // it should read REPORT throughout, never the alarming "GENERATING …" that
+    // implies the report is being regenerated/re-charged. Regression guard for
+    // the ABS-361 re-test residual: the freshly-remounted <AnswerView> resets
+    // reportPhase to null while its GET is in flight, and the header used to
+    // map every non-"ready" phase to GENERATING.
+    let releaseB = () => {};
+    const bGate = new Promise<void>((resolve) => {
+      releaseB = resolve;
+    });
+
+    await page.route(
+      /\/api\/billing\/questions\/purchases\/(\d+)(\/(answer|refine))?$/,
+      async (route) => {
+        const url = route.request().url();
+        const id = Number(url.match(/purchases\/(\d+)/)?.[1]);
+        if (id === REPORT_B.id) {
+          await bGate; // hold B's fetch open so the loading beat is observable
+          return json(route, purchase(id, REPORT_B.address));
+        }
+        return json(route, purchase(id, REPORT_A.address));
+      },
+    );
+    await stubSidebar(page, [REPORT_A, REPORT_B]);
+
+    await page.goto("/app");
+    const sidebar = page.locator("aside").first();
+    const label = page.getByTestId("workspace-label");
+
+    // Open report A — a completed report reads REPORT, not GENERATING.
+    await sidebar
+      .getByTestId("case-row")
+      .filter({ hasText: REPORT_A.address })
+      .click();
+    await expect(page.getByTestId("report-address")).toHaveText(
+      REPORT_A.address,
+    );
+    await expect(label).toContainText("REPORT");
+    await expect(label).not.toContainText("GENERATING");
+
+    // Click B. Its GET is gated, so the pane is mid-load (loading spinner up,
+    // report document unmounted). Even in that intermediate state the status
+    // bar must NOT claim GENERATING — report B is already complete.
+    await sidebar
+      .getByTestId("case-row")
+      .filter({ hasText: REPORT_B.address })
+      .click();
+    await expect(page).toHaveURL(/report_id=6102/);
+    await expect(page.getByTestId("answer-status")).toBeVisible();
+    await expect(page.getByTestId("report-document")).toHaveCount(0);
+    await expect(label).not.toContainText("GENERATING");
+    await expect(label).toContainText("REPORT");
+
+    // Release B — its document renders and the label still reads REPORT.
+    releaseB();
+    await expect(page.getByTestId("report-address")).toHaveText(
+      REPORT_B.address,
+      { timeout: 10_000 },
+    );
+    await expect(label).toContainText("REPORT");
+    await expect(label).not.toContainText("GENERATING");
+  });
 });
