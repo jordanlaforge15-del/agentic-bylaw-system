@@ -837,6 +837,7 @@ function ProductAppPageInner() {
             onNew={onNew}
             onSelect={(id) => selectSession(id, { updateUrl: true })}
             activeSessionId={activeSessionId}
+            activeReportId={reportIdFromUrl}
             refreshTrigger={sidebarRefresh}
           />
         </div>
@@ -982,6 +983,7 @@ function ProductAppPageInner() {
             onNew={onNew}
             onSelect={onSelectFromDrawer}
             activeSessionId={activeSessionId}
+            activeReportId={reportIdFromUrl}
             refreshTrigger={sidebarRefresh}
             inDrawer
           />

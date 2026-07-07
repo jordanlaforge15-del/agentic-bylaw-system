@@ -19,7 +19,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
@@ -192,6 +191,10 @@ type Props = {
   onNew: () => void;
   onSelect: (id: string) => void;
   activeSessionId: string | null;
+  // ABS-361: the report currently open in the center pane (from
+  // ?report_id=). Report rows highlight against this so a click reflects
+  // instantly, mirroring the conversation-row active state.
+  activeReportId?: number | null;
   refreshTrigger: number;
   // When `true`, the sidebar drops the fixed width and right border —
   // the parent (Drawer) supplies them. Mobile uses this; desktop
@@ -203,10 +206,10 @@ export function Sidebar({
   onNew,
   onSelect,
   activeSessionId,
+  activeReportId,
   refreshTrigger,
   inDrawer,
 }: Props) {
-  const router = useRouter();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [q, setQ] = useState("");
@@ -293,7 +296,20 @@ export function Sidebar({
       // ABS-344: open the report inside the unified /app workspace (shared
       // sidebar + parcel panes, Report·Conversation toggle) rather than the
       // standalone answer route.
-      router.push(`/app?report_id=${row.reportId}`);
+      //
+      // ABS-361: switch reports with the native History API rather than
+      // `router.push`. The /app route is a `force-dynamic` server component
+      // (a terms-acceptance GET runs on every render), so `router.push` to a
+      // new ?report_id= is a soft nav that re-runs that server round-trip
+      // before `useSearchParams` — and thus the keyed <AnswerView> — sees the
+      // new id. That left the center pane rendering the PREVIOUS report for
+      // the ~2s round-trip (stale), and concurrent soft navs got coalesced so
+      // the first click sometimes registered as a no-op. `history.pushState`
+      // integrates with the Next router and updates `useSearchParams`
+      // synchronously on the client with no server round-trip, so the report
+      // swaps immediately (a brief AnswerView loading spinner at most).
+      if (row.reportId === activeReportId) return; // already open — no-op
+      window.history.pushState(null, "", `/app?report_id=${row.reportId}`);
       return;
     }
     if (row.sessionId) onSelect(row.sessionId);
@@ -342,7 +358,10 @@ export function Sidebar({
         )}
         {filtered.map((row) => {
           const active =
-            row.kind === "conversation" && row.sessionId === activeSessionId;
+            (row.kind === "conversation" && row.sessionId === activeSessionId) ||
+            (row.kind === "report" &&
+              activeReportId != null &&
+              row.reportId === activeReportId);
           const unread = row.hasContent && !active && !seen.has(row.key);
           const boldLine = row.address || row.title || "New reading";
           const mutedLine = row.address ? row.title : null;
@@ -352,6 +371,7 @@ export function Sidebar({
               type="button"
               data-testid="case-row"
               data-kind={row.kind}
+              data-active={active ? "true" : "false"}
               onClick={() => handleActivate(row)}
               className={cn(
                 "text-left flex flex-col gap-1 cursor-pointer text-text font-sans",
