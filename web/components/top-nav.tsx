@@ -105,7 +105,7 @@ export function TopNav() {
       </nav>
 
       <div className="flex items-center gap-2 sm:gap-3">
-        <ThemeToggle />
+        {showSignedInCtas && <ThemeToggle />}
         {/* Signed-in: "Open app →" + UserButton (avatar with menu).
             Signed-out: "Log in" link + "Get an invite" CTA (private
             beta — self-serve signup is intentionally not offered).
