@@ -210,6 +210,78 @@ def test_heading_less_answer_degrades_to_prose() -> None:
     assert all(b["type"] != "prose" or b["text"] != md for b in blocks)
 
 
+def test_strips_based_on_my_research_preamble_without_fence() -> None:
+    """ABS-359 re-test (PU-000011): an unfenced "Based on my research, I can
+    now provide you with a complete answer:" lead was not in the old signal
+    allowlist, so it leaked into the summary. The section intro is the lead."""
+    md = (
+        "Based on my research, I can now provide you with a complete answer:\n\n"
+        "# Permitted Use Report\n\n"
+        "The property at 5184 Morris St is in the DH-1 zone.\n\n"
+        "## Conclusion\nResidential use is permitted.\n"
+    )
+    summary, blocks = parse_blocks(md)
+    assert "based on my research" not in summary.lower()
+    assert "complete answer" not in summary.lower()
+    assert summary == "The property at 5184 Morris St is in the DH-1 zone."
+
+
+def test_strips_trailing_signoff_from_finding_body() -> None:
+    """ABS-359 re-test: the engine tacks a conversational sign-off ("I
+    apologize that I cannot provide … Would you like me to research a different
+    property?") onto its final section. It rides into the block body, not the
+    lead, so lead-only stripping missed it."""
+    md = (
+        "# Variance Justification Package\n\n"
+        "This package assesses the request against the three statutory tests.\n\n"
+        "## Conclusion\n"
+        "The variance is supportable.\n"
+        "I apologize that I cannot provide a definitive citation-grounded "
+        "answer for this specific query. Would you like me to research a "
+        "different property or provision?\n"
+    )
+    summary, blocks = parse_blocks(md)
+    finding = [b for b in blocks if b["type"] == "finding"]
+    assert finding, blocks
+    body = finding[0]["body"]
+    assert "apologize" not in body.lower()
+    assert "would you like" not in body.lower()
+    assert body == "The variance is supportable."
+    # Nothing in any block leaks the sign-off.
+    assert "apologize" not in str(blocks).lower()
+
+
+def test_scrub_keeps_real_prose_beside_signoff() -> None:
+    """Scrubbing is sentence-level: a real sentence sitting on the same line as
+    chatter survives while only the chatter is dropped."""
+    md = (
+        "A clean lead paragraph.\n\n"
+        "## Setback\n"
+        "The setback is 3 metres. Feel free to reach out with questions.\n"
+    )
+    _, blocks = parse_blocks(md)
+    prose = [b for b in blocks if b["type"] == "prose"]
+    assert prose, blocks
+    assert prose[0]["text"] == "The setback is 3 metres."
+
+
+def test_wholly_monologue_trailing_block_is_dropped() -> None:
+    """A trailing section that is entirely a sign-off collapses to nothing —
+    no empty block survives into the deliverable."""
+    md = (
+        "# Report\n\n"
+        "The use is permitted as-of-right.\n\n"
+        "## Next Steps\n"
+        "I hope this helps. Would you like me to look at another property?\n"
+    )
+    _, blocks = parse_blocks(md)
+    assert "hope this helps" not in str(blocks).lower()
+    assert "would you like" not in str(blocks).lower()
+    assert all(
+        (b.get("text") or b.get("body") or "").strip() for b in blocks
+    ), "an empty block leaked through"
+
+
 # -- Envelope ---------------------------------------------------------------
 
 

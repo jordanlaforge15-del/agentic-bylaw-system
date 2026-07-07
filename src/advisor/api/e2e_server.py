@@ -1712,12 +1712,19 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
             db.flush()
         return user
 
+    from advisor.billing.report import build_report  # noqa: PLC0415
+
     def _state(purchase: _QP) -> dict[str, object]:
         return {
             "purchase_id": purchase.id,
             "question_slug": purchase.question_slug,
             "status": purchase.status,
             "answer": purchase.answer_text,
+            # ABS-359: the structured report the product surface renders,
+            # built by the REAL parser from this purchase's captured answer —
+            # so an e2e can assert the deliverable is monologue-free end-to-end
+            # rather than stubbing already-clean data at the network boundary.
+            "report": build_report(purchase),
             "failure_reason": purchase.failure_reason,
             "refinement_count": purchase.refinement_count,
             "refinements_remaining": answer_flow.refinements_remaining(purchase),
