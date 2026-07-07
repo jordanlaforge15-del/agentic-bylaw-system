@@ -160,14 +160,65 @@ def test_build_report_envelope_fields() -> None:
     assert rep["address"] == "1234 Elm Street"
     assert rep["issued"] == "2026-07-03"
     assert rep["prepared_for"] == "Jordan Buyer"
-    assert rep["zone_subtitle"] == report_mod.DEFAULT_ZONE_SUBTITLE
+    assert rep["zone_subtitle"] == "ER-1"
     assert rep["bylaw_version"] == report_mod.BYLAW_VERSION
     assert rep["price_cents"] == 19_900
     assert "DD-000321" in rep["footer"]
 
 
+def test_zone_subtitle_falls_back_to_default_when_body_has_no_zone() -> None:
+    """ABS-362: the hardcoded literal is a last resort, not the norm — it
+    only surfaces when the body genuinely carries no Zone row."""
+    p = _purchase(answer_text="An answer with no zoning section at all.")
+    rep = build_report(p)
+    assert rep is not None
+    assert rep["zone_subtitle"] == report_mod.DEFAULT_ZONE_SUBTITLE
+
+
+def test_zone_subtitle_matches_body_zone_keyval() -> None:
+    """ABS-362: the letterhead subtitle must never contradict the body's
+    own Zone row — it derives from the same value, code-then-name."""
+    p = _purchase(
+        answer_text=(
+            "A permitted-use check.\n\n## Property Summary\n"
+            "- **Zone:** DH-1 (Downtown Halifax - 1)\n"
+        )
+    )
+    rep = build_report(p)
+    assert rep is not None
+    assert rep["zone_subtitle"] == "DH-1 · Downtown Halifax - 1"
+    zone_kv = next(
+        item
+        for block in rep["blocks"]
+        if block["type"] == "keyvals"
+        for item in block["items"]
+        if item["k"] == "Zone"
+    )
+    assert zone_kv["v"] == "DH-1 (Downtown Halifax - 1)"
+
+
+def test_zone_subtitle_matches_body_zone_table_row() -> None:
+    """The Property Summary section often renders as a Field/Value table
+    rather than bullets — the subtitle must derive from that shape too."""
+    p = _purchase(
+        answer_text=(
+            "A due-diligence summary.\n\n## Property Summary\n"
+            "| Field | Value |\n"
+            "| --- | --- |\n"
+            "| Zone | DH (Downtown Halifax) |\n"
+        )
+    )
+    rep = build_report(p)
+    assert rep is not None
+    assert rep["zone_subtitle"] == "DH · Downtown Halifax"
+
+
 def test_zone_subtitle_can_be_lifted_from_metadata() -> None:
-    p = _purchase(metadata_json={"zone_subtitle": "Downtown Core"})
+    """Explicit metadata still wins over body-derivation when present."""
+    p = _purchase(
+        answer_text="A due-diligence summary.\n\n## Zoning\n- **Zone:** ER-1\n",
+        metadata_json={"zone_subtitle": "Downtown Core"},
+    )
     rep = build_report(p)
     assert rep is not None
     assert rep["zone_subtitle"] == "Downtown Core"
