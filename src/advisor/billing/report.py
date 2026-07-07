@@ -202,26 +202,66 @@ _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*\S)\s*$")
 # on a paid, exportable deliverable (ABS-359).
 _HRULE_RE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
 
-# First-person planning language the agent emits while "thinking out loud"
-# before it writes the report ("I have gathered the key provisions … Let me
-# compile the findings:"). Chain-of-thought like this destroys the formal-
-# report credibility the deliverable sells, so it is scrubbed from the lead
-# even when no horizontal rule fenced it off (ABS-359).
-_PREAMBLE_SIGNALS = (
+# First-person conversational chatter the agent emits around the report — the
+# planning monologue it "thinks out loud" before writing ("I have gathered the
+# key provisions … Let me compile the findings:", "Based on my research, I can
+# now provide you with a complete answer:") and the sign-off it tacks on after
+# ("I apologize that I cannot provide … Would you like me to research a
+# different property?"). None of it belongs in a formal, paid deliverable, so
+# it is scrubbed from the lead AND the body — leading, trailing, or fenced by a
+# stray horizontal rule (ABS-359). A closed allowlist of phrasings was too
+# brittle (it missed "Based on my research …"); this set targets the
+# first-person meta-talk a report written in the impersonal third person never
+# contains.
+_MONOLOGUE_SIGNALS = (
+    # Planning / "I now have what I need" preambles.
     "let me compile",
     "compile the findings",
+    "compile the answer",
     "i have gathered",
     "i have enough",
     "i now have",
     "i have sufficient",
     "sufficient information",
+    "have the full picture",
+    "have the complete picture",
     "let me prepare",
     "let me put together",
     "let me lay out",
+    "let me answer",
     "now i have",
     "here is the report",
     "here's the report",
+    "here is my",
+    "here's my",
+    # "Based on my research I can now answer" transitions into the report.
+    "based on my research",
+    "based on my analysis",
+    "i can now provide",
+    "i can now answer",
+    "provide you with a complete answer",
+    "provide you with an answer",
+    "provide you with a definitive",
+    "i need to flag",
+    # Conversational sign-offs / apologies tacked on after the report.
+    "i apologize",
+    "i cannot provide",
+    "i'm unable to",
+    "i am unable to",
+    "would you like me to",
+    "would you like",
+    "let me know if",
+    "feel free to",
+    "if you'd like",
+    "if you would like",
+    "happy to help",
+    "hope this helps",
+    "hope that helps",
 )
+
+# Split prose into sentences on terminal punctuation (incl. the trailing colon
+# the agent uses to introduce a report: "… Let me compile the findings:").
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?:])\s+")
 
 
 def _is_hrule(line: str) -> bool:
@@ -229,9 +269,29 @@ def _is_hrule(line: str) -> bool:
 
 
 def _looks_like_monologue(text: str) -> bool:
-    """True when a lead paragraph reads as the agent's planning monologue."""
+    """True when a paragraph reads as the agent's conversational chatter."""
     lowered = text.lower()
-    return any(sig in lowered for sig in _PREAMBLE_SIGNALS)
+    return any(sig in lowered for sig in _MONOLOGUE_SIGNALS)
+
+
+def _scrub_monologue(text: str) -> str:
+    """Drop agent chatter sentence-by-sentence, keeping real report prose.
+
+    Monologue rides in as whole sentences ("I apologize that I cannot provide
+    a definitive citation-grounded answer.") that sit beside legitimate report
+    text ("The variance is supportable."), sometimes on the same line. Working
+    per line, then per sentence, lets us keep the substance and drop only the
+    chatter — a paragraph that is entirely monologue collapses to "".
+    """
+    kept_lines: list[str] = []
+    for line in text.split("\n"):
+        sentences = _SENTENCE_SPLIT_RE.split(line)
+        kept = [
+            s for s in sentences if s.strip() and not _looks_like_monologue(s)
+        ]
+        if kept:
+            kept_lines.append(" ".join(kept))
+    return "\n".join(kept_lines).strip()
 
 
 def _strip_preamble(lines: list[str]) -> list[str]:
@@ -461,11 +521,11 @@ def parse_blocks(answer: str) -> tuple[str, list[dict]]:
         if lines[idx].strip():
             summary_lines.append(lines[idx])
         idx += 1
-    summary = _strip_inline(" ".join(summary_lines)).strip()
-    # Second-line defence: even with no fencing rule, a lead that reads as the
-    # agent's planning monologue is not a summary — drop it (ABS-359).
-    if _looks_like_monologue(summary):
-        summary = ""
+    # Second-line defence: even with no fencing rule, a lead carrying the
+    # agent's chatter ("Based on my research, I can now provide …") is not a
+    # summary — scrub the chatter sentence-by-sentence, keeping any real lead
+    # text and collapsing a pure-monologue lead to "" (ABS-359).
+    summary = _scrub_monologue(_strip_inline(" ".join(summary_lines)).strip())
 
     # Sections keyed by heading.
     blocks: list[dict] = []
@@ -486,6 +546,27 @@ def parse_blocks(answer: str) -> tuple[str, list[dict]]:
             buf.append(ln)
     flush()
 
+    # Scrub agent chatter out of every prose payload — the sign-off the engine
+    # tacks onto its final section ("I apologize that I cannot provide … Would
+    # you like me to research a different property?") rides into a prose or
+    # finding block's body, not just the lead. A block whose body is entirely
+    # chatter is dropped; a finding's status is re-derived from the kept text
+    # so a scrubbed apology can't skew the callout's colour (ABS-359).
+    scrubbed: list[dict] = []
+    for block in blocks:
+        if block.get("type") == "prose":
+            text = _scrub_monologue(block.get("text", ""))
+            if not text:
+                continue
+            block = {**block, "text": text}
+        elif block.get("type") == "finding":
+            body = _scrub_monologue(block.get("body", ""))
+            if not body:
+                continue
+            block = {**block, "body": body, "status": _classify_status(body)}
+        scrubbed.append(block)
+    blocks = scrubbed
+
     # If the report opens straight into its title heading with no lead
     # paragraph before it, the intro paragraph of that first section IS the
     # lead — promote it so the deliverable always leads with a clean sentence
@@ -498,16 +579,16 @@ def parse_blocks(answer: str) -> tuple[str, list[dict]]:
         # Nothing parsed — fall back to the cleaned remaining text (preamble
         # and rules already removed) rather than the raw answer, so no
         # scaffolding re-enters the deliverable.
-        remainder = _strip_inline(
-            " ".join(ln for ln in lines if ln.strip())
-        ).strip()
-        if not _looks_like_monologue(remainder):
+        remainder = _scrub_monologue(
+            _strip_inline(" ".join(ln for ln in lines if ln.strip())).strip()
+        )
+        if remainder:
             summary = remainder
     if not blocks and answer.strip():
         # No sections parsed — carry the cleaned remainder as prose so the
         # deliverable never falls below raw markdown (minus the scaffolding).
-        remainder = _strip_inline("\n".join(lines)).strip()
-        if remainder and remainder != summary and not _looks_like_monologue(remainder):
+        remainder = _scrub_monologue(_strip_inline("\n".join(lines)).strip())
+        if remainder and remainder != summary:
             blocks.append({"type": "prose", "text": remainder})
     return summary, blocks
 
