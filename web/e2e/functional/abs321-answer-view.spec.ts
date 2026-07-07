@@ -269,5 +269,13 @@ test.describe("post-purchase answer view (ABS-321)", () => {
     const failed = page.getByTestId("answer-failed");
     await expect(failed).toContainText(/couldn.t be answered/i);
     await expect(failed).toContainText(/not charged/i);
+
+    // ABS-364: recovery from a failed report must return to the in-app
+    // question menu (/cases/new), not the marketing /pricing page — the
+    // marketing page dead-ends the user's post-purchase recovery path.
+    const backLink = failed.getByRole("link", {
+      name: /back to the question menu/i,
+    });
+    await expect(backLink).toHaveAttribute("href", "/cases/new");
   });
 });
