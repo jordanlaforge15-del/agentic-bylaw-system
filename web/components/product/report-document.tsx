@@ -112,16 +112,49 @@ export function ReportDocument({ report }: { report: ReportContent }) {
           ))}
         </div>
 
-        {/* Verification footer. */}
+        {/* Verification footer — traceability note + signature line, plus
+            the rotated "VERIFIED" stamp that sells the deliverable as a
+            formal, verifiable artifact (ABS-368). */}
         <footer
-          className="border-t border-hair pt-5 text-text-muted text-[12px] leading-[1.55]"
+          className="border-t border-hair pt-5 flex flex-col-reverse sm:flex-row sm:items-start gap-4"
           data-testid="report-footer"
         >
-          {report.footer}
+          <div className="flex-1 flex flex-col gap-2">
+            <p
+              className="text-text-muted text-[12px] leading-[1.55] m-0"
+              data-testid="report-footer-note"
+            >
+              {report.footer}
+            </p>
+            <Mono muted size={10} data-testid="report-signature">
+              ABS AGENT · AUTOMATED
+            </Mono>
+          </div>
+          <div
+            className="shrink-0 self-center sm:self-start border-2 border-text px-3 py-2 text-center"
+            style={{ transform: "rotate(-6deg)" }}
+            data-testid="report-verified-stamp"
+          >
+            <div
+              className="font-mono font-bold uppercase text-[11px] tracking-[0.18em]"
+            >
+              Verified
+            </div>
+            <div className="font-mono uppercase text-[9px] tracking-[0.14em]">
+              ABS · {stampYear(report.issued)}
+            </div>
+          </div>
         </footer>
       </div>
     </article>
   );
+}
+
+// The stamp's year tracks the report's own issued date (not "today") so a
+// reprinted or archived report always shows the year it was actually issued.
+function stampYear(issued: string): string {
+  const year = issued.slice(0, 4);
+  return /^\d{4}$/.test(year) ? year : new Date().getFullYear().toString();
 }
 
 function MetaCell({ label, value }: { label: string; value: string }) {
