@@ -448,6 +448,56 @@ def _issued(purchase: QuestionPurchase) -> str:
     return ""
 
 
+_ZONE_PAREN_RE = re.compile(r"^(\S+)\s*\((.+)\)$")
+
+
+def _format_zone_value(value: str) -> str:
+    """Render a raw "Zone" cell as a letterhead subtitle.
+
+    The body already renders the zone as ``CODE (Full Name)`` (from the
+    engine's own markdown); the letterhead just swaps the separator so the
+    subtitle reads as a title-block line rather than a table cell.
+    """
+    value = value.strip()
+    m = _ZONE_PAREN_RE.match(value)
+    if m:
+        return f"{m.group(1)} · {m.group(2)}"
+    return value
+
+
+def _zone_subtitle_from_blocks(blocks: list[dict]) -> str | None:
+    """Lift the letterhead zone subtitle off the report's own Zone row.
+
+    The subtitle must never contradict the body (ABS-362) — the safest
+    source of truth is whatever zone value the body itself already shows,
+    whether that landed in a ``keyvals`` block (``**Zone:** ER-1``) or a
+    two-column ``table`` block (a ``Field | Value`` property summary).
+    """
+    for block in blocks:
+        if block.get("type") == "keyvals":
+            for item in block.get("items", []):
+                if item.get("k", "").strip().lower() == "zone" and item.get("v", "").strip():
+                    return _format_zone_value(item["v"])
+        elif block.get("type") == "table":
+            columns = [c.strip().lower() for c in block.get("columns", [])]
+            if "zone" in columns:
+                idx = columns.index("zone")
+                for row in block.get("rows", []):
+                    cells = row.get("cells", [])
+                    if idx < len(cells) and cells[idx].strip():
+                        return _format_zone_value(cells[idx])
+            elif len(columns) == 2:
+                for row in block.get("rows", []):
+                    cells = row.get("cells", [])
+                    if (
+                        len(cells) > 1
+                        and cells[0].strip().lower() == "zone"
+                        and cells[1].strip()
+                    ):
+                        return _format_zone_value(cells[1])
+    return None
+
+
 def build_report(purchase: QuestionPurchase) -> dict | None:
     """Map a captured purchase into the typed ``ReportContent`` schema.
 
@@ -477,11 +527,17 @@ def build_report(purchase: QuestionPurchase) -> dict | None:
         bylaw_version=BYLAW_VERSION, ref=ref, issued=issued or "—"
     )
 
+    zone_subtitle = (
+        meta.get("zone_subtitle")
+        or _zone_subtitle_from_blocks(blocks)
+        or DEFAULT_ZONE_SUBTITLE
+    )
+
     return {
         "ref": ref,
         "report_type": _report_type(purchase),
         "address": str(inputs.get("address", "")).strip(),
-        "zone_subtitle": str(meta.get("zone_subtitle") or DEFAULT_ZONE_SUBTITLE),
+        "zone_subtitle": str(zone_subtitle),
         "issued": issued,
         "prepared_for": prepared_for,
         "bylaw_version": BYLAW_VERSION,
