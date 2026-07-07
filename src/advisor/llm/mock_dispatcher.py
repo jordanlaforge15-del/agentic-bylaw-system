@@ -37,6 +37,13 @@ Scenario keywords in the user message override the default rules:
 * ``"MOCK_EMPTY_TURN"`` — the assistant returns an empty text block
   with no tool_use, exercising the "non-qualifying turn" refund path.
 
+* ``"MOCK_MONOLOGUE_REPORT"`` (ABS-359) — grounds once, then answers with
+  the exact chain-of-thought shape a report SKU produces: a first-person
+  planning monologue fenced off by a ``---`` rule, decorative ``---``
+  between sections, and a conversational apology/sign-off on the final
+  section. ``build_report`` must scrub all of it. Drive it via a report
+  question's free-form input so the sentinel rides the rendered prompt.
+
 * ``"MOCK_FEASIBILITY"`` — the final answer is a feasibility-grade reply
   that stacks several built-form dimensions (height, FAR, coverage,
   setback, parking) with no hedging language. The ABS-263 hedge injector
@@ -202,6 +209,50 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
             tool_name="search_bylaw_evidence",
             tool_input={"query": f"permitted use{nul} setback"},
             preamble="Looking up the bylaw evidence.",
+            usage=TokenUsage(input_tokens=40, output_tokens=12),
+        )
+
+    if "MOCK_MONOLOGUE_REPORT" in user_text:
+        # ABS-359: emit the exact chain-of-thought shape the real engine
+        # produces for a report SKU — a first-person planning monologue
+        # fenced off from the report by a `---` rule, decorative `---`
+        # dividers between sections, and a conversational apology/sign-off
+        # tacked onto the final section. Round one grounds (a search
+        # tool_use) so the answer path runs the full loop; round two writes
+        # this monologue-laden markdown as the captured answer. build_report
+        # (advisor.billing.report.parse_blocks) must scrub ALL of it — the
+        # bug was chain-of-thought surfacing in the paid, exportable
+        # deliverable. Exercised end-to-end by abs359-report-parser.spec.ts.
+        if has_prior_tool_use:
+            body = (
+                "I have gathered the key provisions. Now I have sufficient "
+                "information to prepare the variance justification package. "
+                "Let me compile the findings:\n\n"
+                "---\n\n"
+                "# Variance Justification Package\n\n"
+                "The requested rear-yard variance is supportable on all three "
+                "statutory tests.\n\n"
+                "## Statutory Test 1 — Minor in nature\n\n"
+                "The 0.4 m encroachment is minor relative to the required "
+                "setback.\n\n"
+                "---\n\n"
+                "## Conclusion\n\n"
+                "The variance is supportable, subject to conditions.\n\n"
+                "I apologize that I cannot provide a definitive citation-"
+                "grounded answer for this specific query. Would you like me to "
+                "research a different property or provision?\n\n"
+                f"Source: {_DEFAULT_CITATION}"
+            )
+            return text_response(
+                body,
+                usage=TokenUsage(input_tokens=140, output_tokens=90),
+                stop_reason="end_turn",
+            )
+        return tool_use_response(
+            tool_id="t-monologue-1",
+            tool_name="search_bylaw_evidence",
+            tool_input={"query": "variance statutory criteria setback"},
+            preamble="Looking up the variance provisions.",
             usage=TokenUsage(input_tokens=40, output_tokens=12),
         )
 
