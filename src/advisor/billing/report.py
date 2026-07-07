@@ -60,6 +60,15 @@ _REF_PREFIX = {
 # choosing WHICH status a report carries. `pass` is the only "green"
 # (accent) determination; everything adverse (fail / conditional /
 # attention) renders in brick.
+#
+# The *status* (pass / conditional / fail / attention) is content-derived
+# and shared across report types — it drives colour. The *label* is the
+# headline verdict line, and a permitted-use frame ("Permitted with
+# conditions") reads as a template artifact on a report that concludes on
+# something else (a variance package concludes on statutory-test
+# *supportability*, not use-permission). So the label is tailored per
+# report type's question below, keyed by the same content-derived status
+# (ABS-365).
 _FAIL_SIGNALS = (
     "not permitted",
     "prohibited",
@@ -95,8 +104,57 @@ class _Verdict:
     label: str
 
 
-def _classify_verdict(answer: str) -> _Verdict:
-    """Derive the determination band from the answer text.
+# Per-report-type headline labels, keyed by content-derived status. Each
+# question concludes on its *own* question ("is the use permitted?" vs "does
+# it comply?" vs "is the variance supportable?"), so the four status bands
+# get a label phrased in that report's own frame. The status polarity is
+# constant — `pass` is the favourable outcome for the report, `fail` the
+# adverse one, `conditional` the qualified one, `attention` the neutral
+# "no clear determination" band — only the wording changes.
+_VERDICT_LABELS: dict[str, dict[str, str]] = {
+    "permitted_use": {
+        "pass": "Permitted as-of-right",
+        "conditional": "Permitted with conditions",
+        "fail": "Not permitted",
+        "attention": "Review required",
+    },
+    "development_standards": {
+        "pass": "Complies with all standards",
+        "conditional": "Complies subject to conditions",
+        "fail": "Does not comply",
+        "attention": "Review required",
+    },
+    "due_diligence": {
+        "pass": "No material issues identified",
+        "conditional": "Proceed with conditions",
+        "fail": "Material concerns identified",
+        "attention": "Review required",
+    },
+    "legal_nonconforming": {
+        "pass": "Legally non-conforming (protected)",
+        "conditional": "Protected, subject to conditions",
+        "fail": "Not protected — non-compliant",
+        "attention": "Review required",
+    },
+    "variance_justification": {
+        "pass": "Supportable on all three statutory tests",
+        "conditional": "Supportable with conditions",
+        "fail": "Not supportable",
+        "attention": "Supportability unclear",
+    },
+}
+# Neutral fallback frame for any unknown / off-menu ("other") report type —
+# the pre-ABS-365 use-permission wording, which is a safe generic default.
+_DEFAULT_VERDICT_LABELS: dict[str, str] = {
+    "pass": "Permitted as-of-right",
+    "conditional": "Permitted with conditions",
+    "fail": "Does not comply",
+    "attention": "Review required",
+}
+
+
+def _classify_status(answer: str) -> str:
+    """Derive the determination *status* (colour band) from the answer text.
 
     Adverse signals win over favourable ones (a report that says "permitted
     but the rear setback fails" is not a clean pass). Falls back to a
@@ -106,12 +164,30 @@ def _classify_verdict(answer: str) -> _Verdict:
     """
     lowered = answer.lower()
     if any(sig in lowered for sig in _FAIL_SIGNALS):
-        return _Verdict("fail", "Does not comply")
+        return "fail"
     if any(sig in lowered for sig in _CONDITIONAL_SIGNALS):
-        return _Verdict("conditional", "Permitted with conditions")
+        return "conditional"
     if any(sig in lowered for sig in _PASS_SIGNALS):
-        return _Verdict("pass", "Permitted as-of-right")
-    return _Verdict("attention", "Review required")
+        return "pass"
+    return "attention"
+
+
+def _label_for(status: str, question_slug: str | None) -> str:
+    """Tailor the headline verdict label to the report type's question."""
+    labels = _VERDICT_LABELS.get(question_slug or "", _DEFAULT_VERDICT_LABELS)
+    return labels.get(status, _DEFAULT_VERDICT_LABELS[status])
+
+
+def _classify_verdict(answer: str, question_slug: str | None = None) -> _Verdict:
+    """Derive the determination band (status + report-typed label).
+
+    The status is content-derived and shared across report types; the label
+    is phrased in the report's own frame (ABS-365). ``question_slug=None``
+    (e.g. a within-report ``finding`` callout, which uses only the status)
+    falls back to the neutral use-permission wording.
+    """
+    status = _classify_status(answer)
+    return _Verdict(status, _label_for(status, question_slug))
 
 
 # -- Markdown → block parsing -----------------------------------------------
@@ -280,12 +356,11 @@ def _parse_section(heading: str | None, lines: list[str]) -> list[dict]:
     # highlighted `finding` callout carrying the section's own verdict.
     text = "\n".join(_strip_inline(ln) for ln in body)
     if any(k in hl for k in _FINDING_HEADINGS):
-        verdict = _classify_verdict(text)
         return [
             {
                 "type": "finding",
                 "title": heading,
-                "status": verdict.status,
+                "status": _classify_status(text),
                 "body": text,
             }
         ]
@@ -386,7 +461,7 @@ def build_report(purchase: QuestionPurchase) -> dict | None:
         return None
 
     summary, blocks = parse_blocks(purchase.answer_text)
-    verdict = _classify_verdict(purchase.answer_text)
+    verdict = _classify_verdict(purchase.answer_text, purchase.question_slug)
     ref = _ref_for(purchase)
     issued = _issued(purchase)
 
