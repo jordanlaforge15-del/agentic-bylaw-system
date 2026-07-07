@@ -101,6 +101,25 @@ def test_parse_table_block_with_per_row_status() -> None:
     assert table["rows"][1]["status"] == "exceeds"
 
 
+def test_property_summary_table_carries_no_row_status() -> None:
+    """ABS-366: a plain field/value table has no evaluation column, so a
+    row like "Governing By-law" must never pick up a stray PASS/FAIL pill
+    (the row label "Governing" contains the substring "over", which used
+    to false-positive against the FAIL signal list)."""
+    md = (
+        "Lead.\n\n## Property Summary\n"
+        "| Field | Value |\n"
+        "| --- | --- |\n"
+        "| Zone | ER-1 |\n"
+        "| Governing By-law | Regional Centre Land Use By-law |\n"
+    )
+    _, blocks = parse_blocks(md)
+    tables = [b for b in blocks if b["type"] == "table"]
+    assert tables, blocks
+    table = tables[0]
+    assert all(row["status"] is None for row in table["rows"])
+
+
 def test_parse_finding_block_from_determination_heading() -> None:
     md = (
         "Lead.\n\n## Determination\n"

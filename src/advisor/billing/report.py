@@ -134,6 +134,20 @@ _USE_STATUS = {
 _ROW_PASS = ("pass", "complies", "meets", "conforms")
 _ROW_EXCEEDS = ("exceeds", "better than", "above minimum", "surpasses")
 _ROW_FAIL = ("fail", "exceeds maximum", "does not comply", "over", "non-compliant")
+# A table only carries per-row PASS/FAIL semantics if its header names an
+# actual evaluation column (e.g. the development-standards "Result" column).
+# Without this gate, `_row_status` scans every cell of every table — including
+# plain field/value property-summary tables — and false-positives on
+# ordinary label text (e.g. "over" inside "Governing By-law") (ABS-366).
+_STATUS_COLUMN_SIGNALS = (
+    "result",
+    "status",
+    "compliance",
+    "verdict",
+    "determination",
+    "outcome",
+    "pass/fail",
+)
 _FLAG_HEADINGS = ("flag", "non-conform", "concern", "warning", "risk", "issue")
 _USE_HEADINGS = ("use", "permitted", "conditional")
 _FINDING_HEADINGS = (
@@ -188,11 +202,15 @@ def _parse_table(lines: list[str]) -> dict | None:
         return [_strip_inline(c) for c in inner.split("|")]
 
     header = cells(rows[0])
+    is_evaluation_table = any(
+        sig in h.lower() for h in header for sig in _STATUS_COLUMN_SIGNALS
+    )
     body = [r for r in rows[1:] if not _TABLE_SEP_RE.match(r)]
     out_rows = []
     for r in body:
         cvals = cells(r)
-        out_rows.append({"cells": cvals, "status": _row_status(cvals)})
+        status = _row_status(cvals) if is_evaluation_table else None
+        out_rows.append({"cells": cvals, "status": status})
     if not out_rows:
         return None
     return {"type": "table", "columns": header, "rows": out_rows}
