@@ -104,6 +104,42 @@ function developmentStandardsReport(): Report {
   };
 }
 
+// ABS-366 repro shape: the backend now classifies a plain field/value
+// table (no evaluation/standards column in its header) with `status: null`
+// on every row — this is what a fixed `build_report` emits for a
+// Property Summary section that happens to be authored as a markdown
+// table. The "Governing By-law" row has no pass/fail semantics and must
+// not render a status pill.
+function propertySummaryReport(): Report {
+  return {
+    ref: "PU-000366",
+    report_type: "Permitted-use determination",
+    address: "5184 Morris St",
+    zone_subtitle: "Established Residential, Type 1",
+    issued: "2026-07-03",
+    prepared_for: "Jordan Buyer",
+    bylaw_version: "HRM Regional Centre Land Use By-law — 2024 consolidation",
+    price_cents: 9900,
+    currency: "CAD",
+    verdict: { status: "pass", label: "Permitted as-of-right" },
+    summary: "The proposed use is permitted as-of-right at 5184 Morris St.",
+    blocks: [
+      {
+        type: "table",
+        title: "Property Summary",
+        columns: ["Field", "Value"],
+        rows: [
+          { cells: ["Zone", "ER-1"], status: null },
+          {
+            cells: ["Governing By-law", "Regional Centre Land Use By-Law"],
+            status: null,
+          },
+        ],
+      },
+    ],
+  };
+}
+
 type Purchase = {
   id: number;
   question_slug: string;
@@ -248,6 +284,29 @@ test.describe("structured report deliverable (ABS-342)", () => {
 
     // A clean compliance report carries the favourable (accent) verdict.
     await expect(page.getByTestId("report-verdict-chip")).toHaveText("PASS");
+  });
+
+  test("ABS-366: a property-summary table with no evaluation column renders no stray status pill", async ({
+    page,
+  }) => {
+    await stubPurchase(page, () =>
+      purchase({
+        id: 366,
+        question_slug: "permitted_use",
+        price_cents: 9900,
+        report: propertySummaryReport(),
+      }),
+    );
+    await page.goto("/app/answers/366");
+
+    const table = page.getByTestId("block-table");
+    await expect(table).toBeVisible();
+    await expect(table).toContainText("Governing By-law");
+    await expect(table).toContainText("Regional Centre Land Use By-Law");
+
+    // Non-status rows (Zone, Governing By-law) must never carry a pill.
+    await expect(page.getByTestId("row-status")).toHaveCount(0);
+    await expect(table).not.toContainText("FAIL");
   });
 
   test("falls back to raw markdown when no structured report is present", async ({
