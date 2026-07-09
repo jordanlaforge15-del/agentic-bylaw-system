@@ -120,6 +120,49 @@ def test_property_summary_table_carries_no_row_status() -> None:
     assert all(row["status"] is None for row in table["rows"])
 
 
+def test_na_verdict_rows_render_no_status_pill() -> None:
+    """ABS-373: a row whose verdict is N/A / not-regulated / uncertain must
+    carry no status, even inside an evaluation table. The Lot Coverage row
+    regressed because "Lot Coverage" contains the substring "over" (a FAIL
+    signal); the FAR row with the same "N/A (no limit)" verdict correctly had
+    no pill, so the derivation was inconsistent. PASS/FAIL/EXCEEDS verdicts
+    still produce their pills."""
+    md = (
+        "Lead.\n\n## Built-form standards\n"
+        "| Standard | Required | Proposed | Result |\n"
+        "| --- | --- | --- | --- |\n"
+        "| Lot Coverage | — | 42% | N/A — no maximum in INS zone |\n"
+        "| FAR | — | 1.4 | N/A (no limit) |\n"
+        "| Density | not regulated | 30 u/ha | not regulated |\n"
+        "| Parking | uncertain | 12 | UNCERTAIN |\n"
+        "| Height | 11 m max | 10.5 m | PASS |\n"
+        "| Front setback | 6 m min | 7.5 m | EXCEEDS |\n"
+        "| Rear setback | 8 m min | 4 m | FAIL |\n"
+    )
+    _, blocks = parse_blocks(md)
+    tables = [b for b in blocks if b["type"] == "table"]
+    assert tables, blocks
+    rows = tables[0]["rows"]
+    assert rows[0]["status"] is None, "Lot Coverage N/A row must have no pill"
+    assert rows[1]["status"] is None, "FAR N/A row must have no pill"
+    assert rows[2]["status"] is None, "not-regulated row must have no pill"
+    assert rows[3]["status"] is None, "UNCERTAIN row must have no pill"
+    assert rows[4]["status"] == "pass"
+    assert rows[5]["status"] == "exceeds"
+    assert rows[6]["status"] == "fail"
+
+
+def test_row_status_helper_neutral_verdicts() -> None:
+    """ABS-373: unit-level guard on the pill-derivation helper itself."""
+    assert report_mod._row_status(["Lot Coverage", "42%", "N/A — no maximum"]) is None
+    assert report_mod._row_status(["FAR", "1.4", "N/A (no limit)"]) is None
+    assert report_mod._row_status(["Density", "not regulated"]) is None
+    assert report_mod._row_status(["Parking", "UNCERTAIN"]) is None
+    assert report_mod._row_status(["Height", "10.5 m", "PASS"]) == "pass"
+    assert report_mod._row_status(["Setback", "7.5 m", "EXCEEDS"]) == "exceeds"
+    assert report_mod._row_status(["Rear yard", "4 m", "FAIL"]) == "fail"
+
+
 def test_parse_finding_block_from_determination_heading() -> None:
     md = (
         "Lead.\n\n## Determination\n"

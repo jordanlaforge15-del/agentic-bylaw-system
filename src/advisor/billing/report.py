@@ -332,6 +332,20 @@ _USE_STATUS = {
 _ROW_PASS = ("pass", "complies", "meets", "conforms")
 _ROW_EXCEEDS = ("exceeds", "better than", "above minimum", "surpasses")
 _ROW_FAIL = ("fail", "exceeds maximum", "does not comply", "over", "non-compliant")
+# A row whose verdict is N/A / not-regulated / uncertain carries NO
+# determination, so it renders no pill. These are checked before the
+# PASS/EXCEEDS/FAIL signals so a neutral verdict can't false-positive on a
+# status substring — e.g. "Lot Coverage" contains "over" (a _ROW_FAIL
+# signal), which used to paint a contradictory FAIL pill next to a
+# "N/A — no maximum" verdict (ABS-373). The FAR row ("N/A (no limit)") had no
+# such substring, so the derivation was inconsistent, not just lenient.
+_ROW_NEUTRAL = (
+    "not regulated",
+    "no maximum",
+    "no limit",
+    "not applicable",
+    "uncertain",
+)
 # A table only carries per-row PASS/FAIL semantics if its header names an
 # actual evaluation column (e.g. the development-standards "Result" column).
 # Without this gate, `_row_status` scans every cell of every table — including
@@ -372,6 +386,13 @@ def _row_status(cells: list[str]) -> str | None:
     column can sit anywhere.
     """
     joined = " ".join(cells).lower()
+    # N/A / not-regulated / uncertain rows carry no determination (ABS-373).
+    # Checked first: a cell whose verdict starts with "N/A", or names a
+    # not-regulated standard, must never inherit a PASS/FAIL pill.
+    if any(cell.strip().lower().startswith("n/a") for cell in cells):
+        return None
+    if any(sig in joined for sig in _ROW_NEUTRAL):
+        return None
     if any(sig in joined for sig in _ROW_EXCEEDS):
         return "exceeds"
     if any(sig in joined for sig in _ROW_FAIL):
