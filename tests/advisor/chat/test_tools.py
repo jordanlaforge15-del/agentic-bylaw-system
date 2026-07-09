@@ -70,6 +70,7 @@ def test_build_bylaw_tools_returns_full_tool_set(seeded_service):
         "lookup_citation",
         "search_bylaw_evidence",
         "get_address_profile",
+        "get_adjacent_zoning",
         "get_zone_profile",
         "evaluate_submission_against_bylaws",
         "bylaw_query",
@@ -162,6 +163,22 @@ async def test_get_address_profile_handler_returns_json(seeded_service):
     service, _ = seeded_service
     _, handlers = build_bylaw_tools(service)
     raw = await handlers["get_address_profile"]({"address": "100 Robie Street"})
+    parsed = json.loads(raw)
+    assert parsed["address"]
+    assert parsed["unresolvable"] is True
+    assert "instruction" in parsed
+
+
+@pytest.mark.asyncio
+async def test_get_adjacent_zoning_handler_returns_json(seeded_service):
+    """The get_adjacent_zoning handler (ABS-375) round-trips through the
+    service and emits the compact projection. The seed corpus has no
+    geocode cache, so a free-text address resolves to the graceful
+    unresolvable shape (never an exception) with the fall-back instruction.
+    """
+    service, _ = seeded_service
+    _, handlers = build_bylaw_tools(service)
+    raw = await handlers["get_adjacent_zoning"]({"address": "1250 Robie Street"})
     parsed = json.loads(raw)
     assert parsed["address"]
     assert parsed["unresolvable"] is True

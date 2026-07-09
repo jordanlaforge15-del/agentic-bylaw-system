@@ -35,6 +35,7 @@ from typing import Any
 
 from advisor.chat.compact import (
     compact_address_profile,
+    compact_adjacent_zoning,
     compact_bylaw_query,
     compact_citation_lookup,
     compact_document_list,
@@ -368,6 +369,54 @@ _SCHEMA_GET_ADDRESS_PROFILE: dict[str, Any] = {
             "description": (
                 "Free-text address, parcel id, or named place to ground the "
                 "case on, e.g. '100 Robie Street' or 'PID 00012345'."
+            ),
+        },
+    },
+    "required": ["address"],
+    "additionalProperties": False,
+}
+
+
+# --- get_adjacent_zoning (ABS-375) ---------------------------------------
+#
+# Resolves the zone of the parcels ABUTTING a subject address's parcel.
+# Development-standards and variance reports punt rear/side setback verdicts
+# to the customer ("UNCERTAIN — depends on adjacent zoning") because the
+# governing setback is conditional on the neighbouring lot's zone, and the
+# agent had no mid-run way to resolve it. This tool closes that gap so the
+# report can give a definitive PASS/FAIL and a variance writer can pin the
+# governing setback provision instead of adopting the applicant's figure.
+# Description mirrored in mcp/bylaw_retrieval/server.py — keep in sync.
+_DESC_GET_ADJACENT_ZONING = (
+    "Use this when a setback (or any standard) is conditional on the ZONE OF "
+    "AN ABUTTING PROPERTY — e.g. a Downtown (DH) lot whose required side yard "
+    "is 0.0 m where it abuts another DH lot but greater where it abuts a "
+    "residential zone. Returns the subject parcel's own zone plus every "
+    "abutting parcel's zone (with a coarse compass direction), so you can "
+    "resolve the governing setback row and give a DEFINITIVE pass/fail "
+    "instead of deferring the abutting-zone question to the customer.\n\n"
+    "The 'address' argument is free text in the same shape the "
+    "search_bylaw_evidence 'location' slot accepts — a civic address "
+    "(\"1250 Robie Street\") or a parcel id (\"PID 00012345\").\n\n"
+    "Reading the response: 'distinct_neighbour_zones' is the set of zones "
+    "among the neighbours — a single-element list means every abutting lot "
+    "shares one zone, so the abutting-zone condition is unambiguous. A "
+    "neighbour whose 'zone' is null abuts but its centroid matched no zone "
+    "polygon (sliver / right-of-way) — treat it as non-determinative rather "
+    "than a residential abutment. If the address can't be resolved or no "
+    "parcels dataset is ingested, the response carries 'unresolvable': true "
+    "or a 'note' — fall back to search_bylaw_evidence in that case."
+)
+
+_SCHEMA_GET_ADJACENT_ZONING: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "address": {
+            "type": "string",
+            "description": (
+                "Free-text address or parcel id whose abutting parcels' "
+                "zoning to resolve, e.g. '1250 Robie Street' or "
+                "'PID 00012345'."
             ),
         },
     },
@@ -793,6 +842,18 @@ def build_bylaw_tools(
             profile = service.get_address_profile(address)
             return json.dumps(compact_address_profile(profile))
 
+    async def get_adjacent_zoning_handler(payload: dict[str, Any]) -> str:
+        """Resolve the zoning of the parcels abutting an address's parcel.
+
+        Returns the compact projection so the replayed-every-turn tool_result
+        stays small; the unresolvable / no-parcels case carries an explicit
+        fall-back instruction the model can act on (ABS-375).
+        """
+        address = str(payload.get("address") or "")
+        with _resolve_cm() as service:
+            profile = service.get_adjacent_zoning(address)
+            return json.dumps(compact_adjacent_zoning(profile))
+
     async def get_zone_profile_handler(payload: dict[str, Any]) -> str:
         # ABS-272 thick tool. ``zone`` is required; ``include`` filters
         # which sections are populated. An unknown zone returns a DTO
@@ -936,6 +997,11 @@ def build_bylaw_tools(
             input_schema=_SCHEMA_GET_ADDRESS_PROFILE,
         ),
         ToolDefinition(
+            name="get_adjacent_zoning",
+            description=_DESC_GET_ADJACENT_ZONING,
+            input_schema=_SCHEMA_GET_ADJACENT_ZONING,
+        ),
+        ToolDefinition(
             name="get_zone_profile",
             description=_DESC_GET_ZONE_PROFILE,
             input_schema=_SCHEMA_GET_ZONE_PROFILE,
@@ -965,6 +1031,7 @@ def build_bylaw_tools(
         "lookup_citation": lookup_citation_handler,
         "search_bylaw_evidence": search_bylaw_evidence_handler,
         "get_address_profile": get_address_profile_handler,
+        "get_adjacent_zoning": get_adjacent_zoning_handler,
         "get_zone_profile": get_zone_profile_handler,
         "evaluate_submission_against_bylaws": evaluate_submission_handler,
         "bylaw_query": bylaw_query_handler,

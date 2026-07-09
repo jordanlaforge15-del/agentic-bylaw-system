@@ -259,6 +259,80 @@ async def test_run_answer_grounded_captures(tmp_path: Path) -> None:
     assert capture_client.payment_intent_calls[0].payment_intent_id == f"pi_{pid}"
 
 
+class _StubRetrievalWithAdjacent(_StubRetrieval):
+    """Stub that also answers ``get_adjacent_zoning`` (ABS-375) so a turn
+    grounded only through the new tool is recorded as non-error evidence."""
+
+    def get_adjacent_zoning(self, address):  # noqa: ANN001
+        from bylaw_retrieval.retrieval.schemas import (  # noqa: PLC0415
+            AdjacentZoningProfile,
+            NeighbourZone,
+        )
+
+        return AdjacentZoningProfile(
+            address=address,
+            subject_zone="DH-1",
+            neighbours=[NeighbourZone(pid="000021", zone="DH-1", direction="E")],
+            distinct_neighbour_zones=["DH-1"],
+        )
+
+
+async def test_run_answer_grounds_via_adjacent_zoning(tmp_path: Path) -> None:
+    """ABS-375: a variance turn that grounds ONLY through the new
+    get_adjacent_zoning tool captures and returns a definitive verdict —
+    the report path that used to punt the abutting-zone setback."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        # MOCK_ADJACENT_ZONING rides the requested_variance slot → the mock
+        # calls get_adjacent_zoning (round 1) then answers definitively.
+        purchase, _ = _start(
+            db,
+            user,
+            slug="variance_justification",
+            inputs={
+                "address": "1250 Robie St",
+                "requested_variance": (
+                    "reduce the side-yard setback from 2.5 m to 0.0 m "
+                    "MOCK_ADJACENT_ZONING"
+                ),
+                "hardship_rationale": "abuts another downtown lot",
+            },
+        )
+        pid = purchase.id
+        _authorize(db, pid, uid, "variance_justification")
+
+    client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        p = await answer_flow.run_answer(
+            db,
+            p,
+            gateway=_gateway(),
+            persona=PERSONA,
+            retrieval_factory=_StubRetrievalWithAdjacent(),
+            client=client,
+        )
+        # Grounded through get_adjacent_zoning (a GROUNDING_TOOL) → captured.
+        assert p.status == "captured"
+        assert p.failure_reason is None
+        assert p.answer_text is not None
+        # The answer is definitive and cites the resolved abutting zone.
+        assert "DH-1" in p.answer_text
+        assert "no variance is required" in p.answer_text.lower()
+        assert "depends on adjacent zoning" not in p.answer_text.lower()
+        # The new tool actually fired (recorded in the persisted transcript).
+        import json  # noqa: PLC0415
+
+        assert "get_adjacent_zoning" in json.dumps(p.transcript_json)
+
+    assert [c.action for c in client.payment_intent_calls] == ["capture"]
+
+
 async def test_run_answer_ungroundable_voids(tmp_path: Path) -> None:
     db_url = _db_url(tmp_path)
     create_all(db_url)

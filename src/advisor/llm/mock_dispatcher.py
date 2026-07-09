@@ -51,6 +51,15 @@ Scenario keywords in the user message override the default rules:
   before the SSE stream is built, so tests can assert the hedge appears
   without depending on live-model phrasing.
 
+* ``"MOCK_ADJACENT_ZONING"`` (ABS-375) — round one calls the new
+  ``get_adjacent_zoning`` tool (instead of ``search_bylaw_evidence``);
+  round two answers with a DEFINITIVE side/rear setback verdict that
+  cites the resolved abutting zone, exercising the adjacent-parcel
+  zoning lookup plumbing end-to-end (tool → grounding → captured answer).
+  ``get_adjacent_zoning`` is in ``GROUNDING_TOOLS``, so a turn that only
+  calls it still commits the reserved credit. Drive it via a report
+  question's free-form input so the sentinel rides the rendered prompt.
+
 * ``"MOCK_WITH_LOCATION"`` — the ``search_bylaw_evidence`` call
   includes a ``location`` slot (``civic_number="1234"``,
   ``street="Elm St"``) so the parcel pane renders with zone data and
@@ -279,6 +288,33 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
             tool_name="search_bylaw_evidence",
             tool_input={"query": "variance statutory criteria setback"},
             preamble="Looking up the variance provisions.",
+            usage=TokenUsage(input_tokens=40, output_tokens=12),
+        )
+
+    if "MOCK_ADJACENT_ZONING" in user_text:
+        # ABS-375: exercise the get_adjacent_zoning grounding tool. Round one
+        # calls it; round two answers with a DEFINITIVE setback verdict that
+        # names the resolved abutting zone — the shape a report should now
+        # produce instead of "uncertain — depends on adjacent zoning".
+        if has_prior_tool_use:
+            body = (
+                "The side-yard setback is definitively resolved. The abutting "
+                "parcel to the east is zoned DH-1 (Downtown), so under the "
+                "shared-downtown-abutment rule the required side yard is "
+                "0.0 m — the proposed 0.0 m side setback PASSES, and no "
+                "variance is required.\n\n"
+                f"Source: {_DEFAULT_CITATION}"
+            )
+            return text_response(
+                body,
+                usage=TokenUsage(input_tokens=140, output_tokens=90),
+                stop_reason="end_turn",
+            )
+        return tool_use_response(
+            tool_id="t-adjzone-1",
+            tool_name="get_adjacent_zoning",
+            tool_input={"address": "1250 Robie Street"},
+            preamble="Resolving the zoning of the abutting parcels.",
             usage=TokenUsage(input_tokens=40, output_tokens=12),
         )
 

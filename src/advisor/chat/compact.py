@@ -49,6 +49,7 @@ from typing import Any
 
 from bylaw_retrieval.retrieval.schemas import (
     AddressProfile,
+    AdjacentZoningProfile,
     AncestorFragment,
     BylawQueryResponse,
     CitationLookupResponse,
@@ -518,6 +519,60 @@ def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
             }
             for c in profile.citations
         ]
+    return out
+
+
+def compact_adjacent_zoning(profile: AdjacentZoningProfile) -> dict[str, Any]:
+    """Project ``AdjacentZoningProfile`` to the fields the LLM grounds on (ABS-375).
+
+    Keeps the subject zone, the per-neighbour (pid, zone, direction), the
+    distinct-zone summary, and one citation. Elides null fields so the
+    replayed-every-turn tool_result stays small.
+    """
+    out: dict[str, Any] = {"address": profile.address}
+    if profile.unresolvable:
+        out["unresolvable"] = True
+        out["instruction"] = (
+            "Address could not be resolved spatially, so abutting parcels "
+            "could not be found. Fall back to search_bylaw_evidence or ask "
+            "the user to verify the address."
+        )
+        return out
+    if profile.subject_pid is not None:
+        out["subject_pid"] = profile.subject_pid
+    if profile.subject_zone is not None:
+        out["subject_zone"] = profile.subject_zone
+    if profile.neighbours:
+        out["neighbours"] = [
+            {
+                k: v
+                for k, v in {
+                    "pid": n.pid,
+                    "zone": n.zone,
+                    "direction": n.direction,
+                }.items()
+                if v is not None
+            }
+            for n in profile.neighbours
+        ]
+    if profile.distinct_neighbour_zones:
+        out["distinct_neighbour_zones"] = profile.distinct_neighbour_zones
+    if profile.citation is not None:
+        c = profile.citation
+        out["citation"] = {
+            k: v
+            for k, v in {
+                "backs": c.backs,
+                "citation_path": c.citation_path,
+                "citation_label": c.citation_label,
+                "document_id": c.document_id,
+                "municipality": c.municipality,
+                "bylaw_name": c.bylaw_name,
+            }.items()
+            if v is not None
+        }
+    if profile.note is not None:
+        out["note"] = profile.note
     return out
 
 

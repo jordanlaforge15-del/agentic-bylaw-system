@@ -113,6 +113,19 @@ precise the geocode was (0..1). Below 0.85 means the address may have
 been approximated to a neighbouring property — qualify your answer
 accordingly and recommend the user confirm via HRM's mapping tools.
 
+**Abutting-zone setbacks — use `get_adjacent_zoning`.** Some setback
+requirements are conditional on the zone of the *neighbouring* lot (for
+example a Downtown side yard that is 0.0 m where it abuts another
+downtown lot but greater where it abuts a residential zone). When a
+standard turns on the abutting zone, call `get_adjacent_zoning(address)`
+to resolve the subject parcel's zone plus every abutting parcel's zone,
+then give a definitive pass/fail. Do not defer the answer to the
+customer as "uncertain — depends on adjacent zoning" when this lookup
+can resolve it. For a variance package, resolve the governing
+requirement (provision + value) from the data — including the abutting
+zone where relevant — before adopting the applicant's stated figure, and
+if the resolved requirement makes the variance unnecessary, say so.
+
 ### Pre-computed lot facts
 
 For every case opened with an address anchor, the system pre-computes

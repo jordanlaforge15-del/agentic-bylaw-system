@@ -104,6 +104,7 @@ GROUNDING_TOOLS = frozenset(
     {
         "search_bylaw_evidence",
         "get_address_profile",
+        "get_adjacent_zoning",
         "get_zone_profile",
         "evaluate_submission_against_bylaws",
         "lookup_citation",

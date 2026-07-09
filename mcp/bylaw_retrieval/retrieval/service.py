@@ -20,11 +20,13 @@ from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, JSONB
 from sqlalchemy.orm import Session
 
 from rapidfuzz import fuzz, process
+from shapely.geometry import shape as shapely_shape
 
 from bylaw_retrieval.retrieval.schemas import (
     ATTRIBUTE_VOCABULARY,
     BYLAW_INTENTS,
     AddressProfile,
+    AdjacentZoningProfile,
     AncestorFragment,
     BylawIntent,
     BylawQueryResponse,
@@ -40,6 +42,7 @@ from bylaw_retrieval.retrieval.schemas import (
     DocumentSummary,
     LinkedDataset,
     LocationSlot,
+    NeighbourZone,
     OverlayRef,
     PermittedUseQuery,
     PermittedUseResult,
@@ -84,7 +87,12 @@ from layer1.semantic.permission_markers import (
 from layer2.retrieval.datasets import _summarize_dataset
 from layer2.retrieval.geocode import resolve_location_with_detail
 from layer2.retrieval.location import LocationReference, RegexLocationExtractor
-from layer2.retrieval.spatial import ResolvedLocation, query_features
+from layer2.retrieval.spatial import (
+    ResolvedLocation,
+    find_abutting_features,
+    find_containing_feature,
+    query_features,
+)
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
@@ -1263,6 +1271,198 @@ class RetrievalService:
                 unresolvable=True,
             )
         return self._build_address_profile(canonical_address, ref, resolved)
+
+    # -- ABS-375: adjacent-parcel zoning lookup ---------------------------
+    #
+    # Role marker for the base parcel geography, matching the case-open
+    # spatial extractor (``layer2.spatial.extractor.PARCELS_ROLE``) and the
+    # ``role: property_parcels`` tag on ``halifax_property_parcels.yaml``.
+    _PARCELS_ROLE = "property_parcels"
+
+    def get_adjacent_zoning(self, address: str) -> AdjacentZoningProfile:
+        """Resolve the zoning of the parcels abutting an address's parcel.
+
+        The report agent needs this to give a *definitive* rear/side setback
+        verdict when the requirement is conditional on the abutting zone
+        (ABS-375). It geocodes the address, finds the containing parcel,
+        enumerates every parcel touching it, and resolves each neighbour's
+        zone by intersecting the neighbour's centroid against the zoning
+        overlay — the same intersection ``get_address_profile`` uses for the
+        subject parcel.
+
+        Never raises (mirrors ``get_address_profile``). An un-geocodable
+        address returns ``unresolvable=True``; a missing parcels dataset or a
+        point outside every parcel returns an empty ``neighbours`` list with a
+        populated ``note`` so the agent can fall back to text retrieval.
+        """
+        refs = RegexLocationExtractor().extract(address)
+        if not refs:
+            return AdjacentZoningProfile(address=address, unresolvable=True)
+        ref = refs[0]
+        resolved, _detail = resolve_location_with_detail(self.session, ref)
+        canonical_address = ref.raw_text or address
+        if resolved is None:
+            return AdjacentZoningProfile(
+                address=canonical_address, unresolvable=True
+            )
+
+        parcels_ids = self._parcels_dataset_ids()
+        if not parcels_ids:
+            return AdjacentZoningProfile(
+                address=canonical_address,
+                note=(
+                    "No property-parcels dataset is ingested, so abutting "
+                    "parcels cannot be enumerated. Ingest the parcels dataset "
+                    "or resolve the abutting zone from the zoning schedule map."
+                ),
+            )
+
+        try:
+            point = shapely_shape(resolved.geometry)
+        except (TypeError, ValueError, KeyError):
+            return AdjacentZoningProfile(
+                address=canonical_address, unresolvable=True
+            )
+        if point.geom_type != "Point":
+            point = point.representative_point()
+
+        subject = find_containing_feature(
+            self.session, dataset_ids=parcels_ids, point=point
+        )
+        if subject is None:
+            return AdjacentZoningProfile(
+                address=canonical_address,
+                note=(
+                    "The geocoded point did not fall inside any parcel "
+                    "polygon, so the subject parcel could not be identified."
+                ),
+            )
+
+        subject_centroid = self._feature_centroid(subject)
+        subject_zone, _ = self._resolve_zone_at_point(subject_centroid or point)
+
+        neighbours_features = find_abutting_features(
+            self.session, dataset_ids=parcels_ids, subject=subject
+        )
+        neighbours: list[NeighbourZone] = []
+        citation: CitationRef | None = None
+        for feature in neighbours_features:
+            centroid = self._feature_centroid(feature)
+            if centroid is None:
+                continue
+            zone, zone_dataset = self._resolve_zone_at_point(centroid)
+            if citation is None and zone_dataset is not None:
+                citation = self._citation_ref_for_dataset(
+                    zone_dataset, source="zone"
+                )
+            neighbours.append(
+                NeighbourZone(
+                    pid=(feature.canonical_attributes_json or {}).get(
+                        "parcel_id"
+                    ),
+                    zone=zone,
+                    direction=(
+                        self._bearing(subject_centroid, centroid)
+                        if subject_centroid is not None
+                        else None
+                    ),
+                )
+            )
+
+        distinct = sorted({n.zone for n in neighbours if n.zone})
+        note = None
+        if not neighbours:
+            note = (
+                "No parcels abut the subject parcel in the ingested fabric "
+                "(the parcel may front only streets/rights-of-way)."
+            )
+        return AdjacentZoningProfile(
+            address=canonical_address,
+            subject_pid=(subject.canonical_attributes_json or {}).get(
+                "parcel_id"
+            ),
+            subject_zone=subject_zone,
+            neighbours=neighbours,
+            distinct_neighbour_zones=distinct,
+            citation=citation,
+            note=note,
+        )
+
+    def _parcels_dataset_ids(self) -> list[int]:
+        """Return dataset ids tagged ``role=property_parcels`` in metadata.
+
+        Parcels are base geography, not a bylaw-linked overlay, so they are
+        found by their ``metadata_json.role`` tag rather than through
+        ``_scoped_linked_datasets`` (which only sees linked overlays).
+        """
+        rows = self.session.execute(
+            select(ExternalDataset.id, ExternalDataset.metadata_json).order_by(
+                ExternalDataset.id
+            )
+        ).all()
+        return [
+            int(row.id)
+            for row in rows
+            if (row.metadata_json or {}).get("role") == self._PARCELS_ROLE
+        ]
+
+    def _feature_centroid(self, feature: ExternalDatasetFeature):
+        """Return a shapely Point at the feature's centroid, or None."""
+        try:
+            geom = shapely_shape(feature.geometry_geojson)
+        except (TypeError, ValueError, KeyError):
+            return None
+        if geom.is_empty or not geom.is_valid:
+            return None
+        centroid = geom.centroid
+        return None if centroid.is_empty else centroid
+
+    def _resolve_zone_at_point(
+        self, point
+    ) -> tuple[str | None, ExternalDataset | None]:
+        """Resolve the zone code covering ``point`` (a shapely Point).
+
+        Intersects the point against every in-scope zoning overlay and
+        returns the strongest match's ``zone_code`` plus its dataset (for
+        citation). Returns ``(None, None)`` when no zone polygon covers the
+        point or no zoning dataset is in scope.
+        """
+        location = ResolvedLocation(
+            kind="point", geometry=point.__geo_interface__, source="parcel_centroid"
+        )
+        for dataset in self._scoped_linked_datasets():
+            if self._overlay_role(dataset) != "zone":
+                continue
+            matches = query_features(
+                self.session, dataset_id=dataset.id, location=location
+            )
+            if not matches:
+                continue
+            canonical = matches[0].feature.canonical_attributes_json or {}
+            zone = canonical.get("zone_code")
+            if zone:
+                return str(zone), dataset
+        return None, None
+
+    @staticmethod
+    def _bearing(origin, target) -> str | None:
+        """Coarse 8-point compass bearing from ``origin`` to ``target``.
+
+        Both are shapely Points in 4326. Longitude deltas are scaled by
+        cos(lat) so the bearing reflects real east/west distance rather than
+        raw degrees. Returns None when the points coincide.
+        """
+        if origin is None or target is None:
+            return None
+        from math import atan2, cos, degrees, radians  # noqa: PLC0415
+
+        dx = (target.x - origin.x) * cos(radians(origin.y))
+        dy = target.y - origin.y
+        if dx == 0 and dy == 0:
+            return None
+        angle = (degrees(atan2(dx, dy)) + 360.0) % 360.0
+        dirs = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+        return dirs[int((angle + 22.5) % 360.0 // 45.0)]
 
     # -- Phase 4 (ABS-274): intent-routed bylaw_query mega-tool -----------
     #

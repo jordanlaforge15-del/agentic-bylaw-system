@@ -188,7 +188,11 @@ QUESTION_DEVELOPMENT_STANDARDS_DEF = Question(
         "ratio, and parking? We evaluate the supplied dimensions against the "
         "zone's standards and flag every non-conformity."
     ),
-    backing_calls=("get_zone_profile", "evaluate_submission_against_bylaws"),
+    backing_calls=(
+        "get_zone_profile",
+        "get_adjacent_zoning",
+        "evaluate_submission_against_bylaws",
+    ),
     required_inputs=(
         InputField(
             name="address",
@@ -211,7 +215,14 @@ QUESTION_DEVELOPMENT_STANDARDS_DEF = Question(
         "development standards of its zone (height, setbacks, lot coverage, "
         "FAR, parking). Project details: {project_details}. List each "
         "standard, the proposed value, and pass/fail with the governing "
-        "by-law provision."
+        "by-law provision. Where a side or rear setback requirement is "
+        "conditional on the zone of an abutting property, call "
+        "get_adjacent_zoning to resolve the neighbouring parcels' zoning and "
+        "give a DEFINITIVE pass/fail for that standard — do not leave it as "
+        "'uncertain — depends on adjacent zoning'. If a governing figure "
+        "genuinely cannot be resolved from the data, name the specific "
+        "schedule or dataset that would contain it rather than defaulting the "
+        "verdict to 'verify with HRM'."
     ),
     catalog_anchor=(
         "Catalog item 6 / Stage-1 #4 — as-of-right compliance check "
@@ -353,7 +364,10 @@ QUESTION_VARIANCE_JUSTIFICATION_DEF = Question(
         "application creates undue hardship, and the variance is desirable "
         "and consistent with the intent of the by-law and plan)."
     ),
-    backing_calls=("evaluate_submission_against_bylaws",),
+    backing_calls=(
+        "evaluate_submission_against_bylaws",
+        "get_adjacent_zoning",
+    ),
     required_inputs=(
         InputField(
             name="address",
@@ -383,10 +397,19 @@ QUESTION_VARIANCE_JUSTIFICATION_DEF = Question(
     prompt_template=(
         "Prepare a variance justification package for {address}. Requested "
         "variance: {requested_variance}. Hardship context: "
-        "{hardship_rationale}. Address each of the three statutory criteria "
-        "(minor in nature; undue hardship from strict application; "
-        "desirable and consistent with the intent of the by-law and plan), "
-        "grounded in the applicable provisions."
+        "{hardship_rationale}. FIRST resolve the governing requirement you "
+        "are arguing against from the by-law/zone data — state the provision "
+        "and its numeric value — rather than adopting the applicant's stated "
+        "requirement. Where that requirement is conditional on the zone of an "
+        "abutting property (e.g. a Downtown side-yard that is 0.0 m against "
+        "another downtown lot), call get_adjacent_zoning to resolve the "
+        "abutting zone and pin the applicable row. If the requirement "
+        "resolved from the data makes the requested variance unnecessary, say "
+        "so explicitly instead of justifying a variance that may not be "
+        "needed. Then address each of the three statutory criteria (minor in "
+        "nature; undue hardship from strict application; desirable and "
+        "consistent with the intent of the by-law and plan), grounded in the "
+        "applicable provisions."
     ),
     catalog_anchor=(
         "Catalog item 1 — variance justification package (consultant proxy "
