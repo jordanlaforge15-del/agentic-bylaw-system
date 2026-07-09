@@ -514,6 +514,107 @@ class CitationRef(BaseModel):
     )
 
 
+class NeighbourZone(BaseModel):
+    """The zone of a single parcel abutting the subject parcel.
+
+    Produced by ``get_adjacent_zoning`` for every parcel that touches (or
+    lies within the abut buffer of) the subject parcel. ``zone`` is the
+    neighbour parcel's zone code resolved by intersecting its centroid
+    against the zoning overlay; ``pid`` echoes the neighbour's parcel id
+    when the parcels dataset carries one. ``zone`` is null when a parcel
+    abuts but its centroid did not fall inside any zoning polygon (an edge
+    case for slivers/rights-of-way) — a typed absence, never a silent drop.
+    """
+
+    pid: str | None = Field(
+        default=None, description="Neighbour parcel identifier, when available."
+    )
+    zone: str | None = Field(
+        default=None,
+        description=(
+            "Neighbour parcel's zone code (e.g. 'DH-1'), resolved by "
+            "intersecting the neighbour's centroid against the zoning "
+            "overlay. Null when the neighbour centroid matched no zone "
+            "polygon."
+        ),
+    )
+    direction: str | None = Field(
+        default=None,
+        description=(
+            "Coarse compass bearing of the neighbour relative to the subject "
+            "parcel centroid — one of 'N', 'NE', 'E', 'SE', 'S', 'SW', 'W', "
+            "'NW'. Lets a report say 'the parcel to the east is zoned DH-1' "
+            "so the setback that depends on the abutting zone can be pinned "
+            "to the correct lot line."
+        ),
+    )
+
+
+class AdjacentZoningProfile(BaseModel):
+    """Zoning of the parcels abutting an address's parcel (ABS-375).
+
+    Development-standards and variance reports repeatedly punt rear/side
+    setback verdicts to the customer because the requirement is conditional
+    on the *abutting* parcel's zone (e.g. a Downtown DH zone permits a 0.0 m
+    side setback where it abuts another DH lot but requires a metre-plus
+    setback where it abuts a residential lot). The chat/report agent had no
+    way to resolve the neighbour's zone mid-run — ``get_address_profile``
+    only resolves the *subject* parcel. This DTO is the one-call answer:
+    the subject zone plus every abutting parcel's zone, so the agent can
+    give a definitive PASS/FAIL instead of "UNCERTAIN — depends on adjacent
+    zoning", and a variance writer can resolve the governing setback row
+    rather than adopting the applicant's asserted figure.
+
+    Never raises for an unresolvable address or an un-ingested parcels
+    dataset — the method returns ``unresolvable=True`` (bad address) or an
+    empty ``neighbours`` list with a populated ``note`` so the calling
+    agent can fall back cleanly.
+    """
+
+    address: str = Field(
+        ..., description="The address echoed back (canonical form when resolved)."
+    )
+    subject_pid: str | None = Field(
+        default=None, description="The subject parcel's identifier, when resolved."
+    )
+    subject_zone: str | None = Field(
+        default=None,
+        description="The subject parcel's own zone code (for cross-checking).",
+    )
+    neighbours: list[NeighbourZone] = Field(
+        default_factory=list,
+        description="One entry per parcel abutting the subject parcel.",
+    )
+    distinct_neighbour_zones: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The distinct zone codes among the neighbours, sorted. A "
+            "single-element list means every abutting lot shares one zone — "
+            "the setback that depends on the abutting zone is then "
+            "unambiguous."
+        ),
+    )
+    citation: "CitationRef | None" = Field(
+        default=None,
+        description=(
+            "Citation back to the zoning schedule the neighbour zones were "
+            "read from, so a grounded answer can cite the source."
+        ),
+    )
+    unresolvable: bool = Field(
+        default=False,
+        description="True when the address could not be geocoded/matched.",
+    )
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Human-readable advisory when the lookup could not fully resolve "
+            "— e.g. no parcels dataset ingested, or the geocoded point fell "
+            "outside every parcel polygon. Null on a clean resolution."
+        ),
+    )
+
+
 class PermittedUseResult(BaseModel):
     """Resolved permitted-use matrix cell for a single ``(use, zone)`` pair.
 

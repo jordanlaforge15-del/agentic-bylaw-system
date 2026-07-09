@@ -374,6 +374,180 @@ def _query_features_shapely_abuts(
     return matches
 
 
+# Default abut buffer for parcel-to-parcel adjacency (ABS-375). HRM's parcel
+# fabric is topologically clean along shared lot lines, but reprojection to
+# 4326 and the source's coordinate precision leave sub-metre slivers between
+# nominally-touching parcels, so a strict ST_Touches misses real neighbours.
+# 1 m closes those slivers without reaching across a right-of-way to the lot on
+# the far side of a lane (Halifax rear lanes are ~6 m). The subject parcel
+# itself is always excluded from the result regardless of buffer.
+DEFAULT_PARCEL_ABUT_BUFFER_M = 1.0
+
+
+def find_containing_feature(
+    session: Session,
+    *,
+    dataset_ids: list[int],
+    point: Any,
+) -> ExternalDatasetFeature | None:
+    """Return the feature (across ``dataset_ids``) whose polygon contains ``point``.
+
+    ``point`` is a shapely geometry in EPSG:4326. Used to resolve the
+    subject parcel for the adjacent-zoning lookup (ABS-375). PostGIS uses
+    ``ST_Contains``; SQLite falls back to a bbox-prefilter + shapely loop so
+    the unit tests exercise the same contract without PostGIS.
+    """
+    if not dataset_ids:
+        return None
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        geojson = json.dumps(point.__geo_interface__)
+        sql = text(
+            """
+            SELECT edf.id AS feature_id
+            FROM external_dataset_feature edf
+            WHERE edf.external_dataset_id = ANY(:ds_ids)
+              AND edf.geometry IS NOT NULL
+              AND ST_Contains(
+                  edf.geometry,
+                  ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326)
+              )
+            LIMIT 1
+            """
+        )
+        row = session.execute(
+            sql, {"geojson": geojson, "ds_ids": list(dataset_ids)}
+        ).first()
+        if row is None:
+            return None
+        return session.get(ExternalDatasetFeature, int(row.feature_id))
+
+    px, py = point.x, point.y
+    features = (
+        session.execute(
+            select(ExternalDatasetFeature).where(
+                ExternalDatasetFeature.external_dataset_id.in_(dataset_ids)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for feature in features:
+        bbox = feature.geometry_bbox_json or {}
+        if (
+            bbox.get("minx", float("-inf")) > px
+            or bbox.get("maxx", float("inf")) < px
+            or bbox.get("miny", float("-inf")) > py
+            or bbox.get("maxy", float("inf")) < py
+        ):
+            continue
+        try:
+            geom = shapely_shape(feature.geometry_geojson)
+        except (TypeError, ValueError, KeyError):
+            continue
+        if geom.is_valid and geom.contains(point):
+            return feature
+    return None
+
+
+def find_abutting_features(
+    session: Session,
+    *,
+    dataset_ids: list[int],
+    subject: ExternalDatasetFeature,
+    buffer_m: float = DEFAULT_PARCEL_ABUT_BUFFER_M,
+) -> list[ExternalDatasetFeature]:
+    """Return every feature that touches (or lies within ``buffer_m`` of) ``subject``.
+
+    Excludes ``subject`` itself. Used to enumerate the parcels abutting the
+    subject parcel for the adjacent-zoning lookup (ABS-375). PostGIS uses a
+    geography ``ST_DWithin`` so ``buffer_m`` is real metres; SQLite projects
+    into a local metre frame and measures shapely distance, matching the
+    PostGIS predicate closely enough for the unit tests.
+    """
+    if not dataset_ids:
+        return []
+    try:
+        subject_geom = shapely_shape(subject.geometry_geojson)
+    except (TypeError, ValueError, KeyError):
+        return []
+    if not subject_geom.is_valid or subject_geom.is_empty:
+        return []
+
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        geojson = json.dumps(subject_geom.__geo_interface__)
+        sql = text(
+            """
+            WITH input_geom AS (
+              SELECT ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326) AS g
+            )
+            SELECT edf.id AS feature_id
+            FROM external_dataset_feature edf
+            CROSS JOIN input_geom ig
+            WHERE edf.external_dataset_id = ANY(:ds_ids)
+              AND edf.id <> :subject_id
+              AND edf.geometry IS NOT NULL
+              AND ST_DWithin(edf.geometry::geography, ig.g::geography, :buf_m)
+            """
+        )
+        rows = session.execute(
+            sql,
+            {
+                "geojson": geojson,
+                "ds_ids": list(dataset_ids),
+                "subject_id": subject.id,
+                "buf_m": buffer_m,
+            },
+        ).all()
+        if not rows:
+            return []
+        ids = [r.feature_id for r in rows]
+        features = (
+            session.execute(
+                select(ExternalDatasetFeature).where(
+                    ExternalDatasetFeature.id.in_(ids)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return list(features)
+
+    # SQLite/shapely fallback — project into a local metre frame so the
+    # buffer threshold is real metres, mirroring the PostGIS geography path.
+    origin = subject_geom.representative_point()
+    lat0, lon0 = origin.y, origin.x
+    m_per_deg_lat = 111_320.0
+    m_per_deg_lon = 111_320.0 * cos(radians(lat0))
+
+    def to_metres(x: Any, y: Any, z: Any = None) -> tuple[Any, Any]:
+        return ((x - lon0) * m_per_deg_lon, (y - lat0) * m_per_deg_lat)
+
+    subject_m = shapely_transform(to_metres, subject_geom)
+    features = (
+        session.execute(
+            select(ExternalDatasetFeature).where(
+                ExternalDatasetFeature.external_dataset_id.in_(dataset_ids)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out: list[ExternalDatasetFeature] = []
+    for feature in features:
+        if feature.id == subject.id:
+            continue
+        try:
+            geom = shapely_shape(feature.geometry_geojson)
+        except (TypeError, ValueError, KeyError):
+            continue
+        if not geom.is_valid or geom.is_empty:
+            continue
+        distance_m = shapely_transform(to_metres, geom).distance(subject_m)
+        if distance_m <= buffer_m:
+            out.append(feature)
+    return out
+
+
 def expand_spatial(
     session: Session,
     candidates: list[CandidateFragment],
