@@ -125,6 +125,7 @@ def test_each_question_binds_to_existing_engine_tools() -> None:
     # that names a non-existent tool is ungroundable.
     valid_tools = {
         "get_address_profile",
+        "get_adjacent_zoning",
         "get_zone_profile",
         "evaluate_submission_against_bylaws",
         "search_bylaw_evidence",
