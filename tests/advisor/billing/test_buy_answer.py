@@ -601,6 +601,174 @@ async def test_grounding_heavy_skus_ground_where_the_default_would_void(
     assert [c.action for c in capture_client.payment_intent_calls] == ["capture"]
 
 
+# -- ABS-372: retry a nondeterministic cost_ceiling trip before voiding ------
+
+
+def _outcome(*, grounded: bool, failure_reason: str | None) -> "answer_flow.TurnOutcome":
+    """A minimal ``TurnOutcome`` for driving ``run_answer``'s retry loop.
+
+    A grounded outcome carries answer text (captured); a failed one carries
+    none. The transcript is a single assistant text message so
+    ``_serialize`` has something to persist without exercising the real
+    tool loop.
+    """
+    from advisor.llm import Message, TextBlock
+
+    text = "Grounded in RC-LUB." if grounded else ""
+    return answer_flow.TurnOutcome(
+        answer_text=text,
+        grounded=grounded,
+        failure_reason=failure_reason,
+        terminated_reason="end_turn" if grounded else "cumulative_cost_trip",
+        messages=[Message(role="assistant", content=[TextBlock(text=text)])],
+    )
+
+
+def _scripted_run_turn(monkeypatch, outcomes: list) -> dict:
+    """Replace ``answer_flow.run_turn`` with one that returns ``outcomes`` in
+    order, recording the per-attempt cumulative budget it was handed.
+
+    Returns a mutable ``calls`` dict the test can assert on (``count`` and the
+    list of ``budgets`` seen). Each attempt pops the next scripted outcome, so
+    a list of ``[trip, trip, grounded]`` models a run that grounds on the
+    third independent draw.
+    """
+    calls = {"count": 0, "budgets": []}
+    pending = list(outcomes)
+
+    async def _fake_run_turn(*, cumulative_token_budget=None, **_kwargs):  # noqa: ANN001, ANN202
+        calls["count"] += 1
+        calls["budgets"].append(cumulative_token_budget)
+        return pending.pop(0)
+
+    monkeypatch.setattr(answer_flow, "run_turn", _fake_run_turn)
+    return calls
+
+
+async def test_cost_ceiling_retry_captures_after_a_transient_trip(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # ABS-372: the flagship failure mode. The first draw trips the cumulative
+    # breaker (cost_ceiling); the retry grounds. The purchase must CAPTURE and
+    # the customer must be charged EXACTLY ONCE — the tripped attempt captures
+    # nothing.
+    calls = _scripted_run_turn(
+        monkeypatch,
+        [
+            _outcome(grounded=False, failure_reason="cost_ceiling"),
+            _outcome(grounded=True, failure_reason=None),
+        ],
+    )
+
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase = _start_uniq(
+            db, user, slug="variance_justification",
+            inputs=VARIANCE_INPUTS, session_id="cs_var_retry_ok",
+        )
+        pid = purchase.id
+        _authorize(db, pid, uid, "variance_justification")
+    client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        p = await answer_flow.run_answer(
+            db, p, gateway=_gateway(), persona=PERSONA,
+            retrieval_factory=_StubRetrieval(), client=client,
+        )
+        assert p.status == "captured"
+        assert p.failure_reason is None
+        assert p.answer_text
+        assert p.window_expires_at is not None
+
+    assert calls["count"] == 2  # tripped once, retried, grounded
+    # Each attempt ran under the variance SKU's own 260k ceiling.
+    assert calls["budgets"] == [260_000, 260_000]
+    # Charged exactly once, on the grounded attempt — never voided.
+    assert [c.action for c in client.payment_intent_calls] == ["capture"]
+
+
+async def test_cost_ceiling_retry_exhausts_then_voids_without_charge(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A genuinely over-budget input trips on every independent draw. After
+    # COST_CEILING_MAX_ATTEMPTS the trip is allowed to stand: the purchase
+    # voids as cost_ceiling and the hold is released — the customer is never
+    # charged for an answer we couldn't deliver.
+    attempts = answer_flow.COST_CEILING_MAX_ATTEMPTS
+    calls = _scripted_run_turn(
+        monkeypatch,
+        [_outcome(grounded=False, failure_reason="cost_ceiling")] * attempts,
+    )
+
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase = _start_uniq(
+            db, user, slug="variance_justification",
+            inputs=VARIANCE_INPUTS, session_id="cs_var_retry_void",
+        )
+        pid = purchase.id
+        _authorize(db, pid, uid, "variance_justification")
+    client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs2", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        p = await answer_flow.run_answer(
+            db, p, gateway=_gateway(), persona=PERSONA,
+            retrieval_factory=_StubRetrieval(), client=client,
+        )
+        assert p.status == "voided"
+        assert p.failure_reason == "cost_ceiling"
+        assert p.answer_text is None
+
+    assert calls["count"] == attempts  # every attempt exhausted
+    # Held authorization released once; never captured.
+    assert [c.action for c in client.payment_intent_calls] == ["cancel"]
+
+
+async def test_zero_evidence_is_not_retried(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Only cost_ceiling is a draw of the dice. A zero-evidence (ungroundable)
+    # result is deterministic w.r.t. the input, so re-running can't help —
+    # run_answer must void it on the FIRST attempt, no wasted reruns.
+    calls = _scripted_run_turn(
+        monkeypatch,
+        [_outcome(grounded=False, failure_reason="zero_evidence")],
+    )
+
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase, _ = _start(db, user)
+        pid = purchase.id
+        _authorize(db, pid, uid, "permitted_use")
+    client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        p = await answer_flow.run_answer(
+            db, p, gateway=_gateway(), persona=PERSONA,
+            retrieval_factory=_StubRetrieval(), client=client,
+        )
+        assert p.status == "voided"
+        assert p.failure_reason == "zero_evidence"
+
+    assert calls["count"] == 1  # no retry for a deterministic failure
+    assert [c.action for c in client.payment_intent_calls] == ["cancel"]
+
+
 async def test_run_answer_requires_authorization(tmp_path: Path) -> None:
     db_url = _db_url(tmp_path)
     create_all(db_url)

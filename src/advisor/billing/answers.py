@@ -56,6 +56,33 @@ logger = logging.getLogger(__name__)
 MAX_REFINEMENTS = 3
 WINDOW_HOURS = 24
 
+# -- cost_ceiling retry-before-void (ABS-372) --------------------------------
+# A ``cost_ceiling`` void is a draw of the token-usage dice, not a property
+# of the question. ABS-370/371 raised the grounding-heavy SKUs' cumulative
+# budgets to 260k, yet a routine Variance ($299) input still voided on ~1 of
+# 2 runs: replaying the ABS-305 estimator over real transcripts of the SAME
+# input showed one run grounding at 131k and its sibling tripping past the
+# ceiling while citation-verifying. Budget headroom alone can't fix a
+# distribution with a tail past any fixed ceiling without also inflating the
+# cost of every routine run.
+#
+# The structural fix is to retry the trip. Each ``run_turn`` builds a fresh
+# ``ChatSession`` with a fresh cumulative counter, so a retry is an
+# INDEPENDENT draw from that distribution — an unlucky first draw no longer
+# fails the paid question. Only ``cost_ceiling`` is retried: ``zero_evidence``
+# (a genuinely ungroundable question) and ``internal_error`` are deterministic
+# with respect to the input, so re-running can't change them. The customer is
+# charged exactly once — capture happens only on the attempt that grounds; a
+# tripped attempt captures nothing and its transcript is discarded.
+#
+# Cost bound: a tripped attempt is capped by the same per-turn budget as the
+# first (~260k billed-equivalent ≈ $3.90 at Opus rates), so the worst case of
+# every attempt tripping is ``COST_CEILING_MAX_ATTEMPTS`` × that — ~$11.70
+# against the $299 Variance SKU (~4%), and the terminal void still charges
+# nothing. In practice the retry lands well before the cap.
+COST_CEILING_MAX_ATTEMPTS = 3
+
+
 # -- Orphaned-generation rescue (ABS-354) ------------------------------------
 # ABS-343 runs the answer engine as an in-memory FastAPI ``BackgroundTasks``
 # job. If the server restarts (deploy, crash, dev reload) while a job is in
@@ -538,6 +565,57 @@ async def run_turn(
     )
 
 
+async def _run_answer_turn_with_retry(
+    *,
+    gateway: LLMGateway,
+    persona: str,
+    retrieval_factory,
+    user_text: str,
+    model: str | None,
+    cumulative_token_budget: int | None,
+    purchase_id: int | None,
+) -> TurnOutcome:
+    """Run the answer turn, retrying a ``cost_ceiling`` trip before voiding.
+
+    ABS-372: a ``cost_ceiling`` void is nondeterministic — the same routine
+    input can trip the cumulative breaker on one draw and ground on the next.
+    Each attempt is a fresh ``run_turn`` (new ``ChatSession``, new cumulative
+    counter), so a retry is an independent draw; up to
+    ``COST_CEILING_MAX_ATTEMPTS`` are made before a trip is allowed to stand.
+    Only ``cost_ceiling`` is retried — any other outcome (grounded,
+    ``zero_evidence``) is deterministic w.r.t. the input and returned as-is on
+    the first attempt. Returns the last attempt's outcome; the caller settles
+    it (capture on grounded, void on a persistent trip). Exceptions propagate
+    to ``run_answer``'s engine-error guard unchanged.
+    """
+    outcome: TurnOutcome | None = None
+    for attempt in range(1, COST_CEILING_MAX_ATTEMPTS + 1):
+        outcome = await run_turn(
+            gateway=gateway,
+            persona=persona,
+            retrieval_factory=retrieval_factory,
+            user_text=user_text,
+            model=model,
+            cumulative_token_budget=cumulative_token_budget,
+        )
+        if outcome.failure_reason != "cost_ceiling":
+            return outcome
+        if attempt < COST_CEILING_MAX_ATTEMPTS:
+            logger.warning(
+                "purchase %s tripped cost_ceiling on attempt %d/%d; retrying "
+                "on a fresh turn before voiding",
+                purchase_id,
+                attempt,
+                COST_CEILING_MAX_ATTEMPTS,
+            )
+    logger.warning(
+        "purchase %s tripped cost_ceiling on all %d attempts; voiding",
+        purchase_id,
+        COST_CEILING_MAX_ATTEMPTS,
+    )
+    return outcome  # type: ignore[return-value]  # loop runs at least once
+
+
 def _classify(metrics) -> tuple[bool, str | None]:
     """Decide grounded-vs-failed from the tool-loop metrics.
 
@@ -660,13 +738,17 @@ async def run_answer(
     purchase.answered_at = utcnow()
 
     try:
-        outcome = await run_turn(
+        # ABS-372: retry a nondeterministic cost_ceiling trip on a fresh
+        # turn before voiding, so a single unlucky token-usage draw doesn't
+        # fail a routine paid question.
+        outcome = await _run_answer_turn_with_retry(
             gateway=gateway,
             persona=persona,
             retrieval_factory=retrieval_factory,
             user_text=prompt,
             model=model,
             cumulative_token_budget=cumulative_budget,
+            purchase_id=purchase.id,
         )
     except Exception:  # noqa: BLE001 — never leave a hold uncaptured
         logger.exception(
