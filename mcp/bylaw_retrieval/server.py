@@ -290,6 +290,33 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             return service.get_address_profile(address).model_dump(mode="json")
 
     @mcp.tool()
+    def get_adjacent_zoning(address: str) -> dict:
+        """Use this when a setback (or any standard) is conditional on the zone of an ABUTTING property.
+
+        Returns the subject parcel's own zone plus every abutting parcel's
+        zone (with a coarse compass direction), so you can resolve the
+        governing setback row and give a DEFINITIVE pass/fail instead of
+        deferring the abutting-zone question to the customer — e.g. a Downtown
+        (DH) lot whose required side yard is 0.0 m where it abuts another DH
+        lot but greater where it abuts a residential zone.
+
+        The ``address`` argument is free text in the same shape the
+        ``search_bylaw_evidence`` ``location`` slot accepts — a civic address
+        ("1250 Robie Street") or a parcel id ("PID 00012345").
+
+        ``distinct_neighbour_zones`` is the set of zones among the neighbours:
+        a single-element list means every abutting lot shares one zone, so the
+        abutting-zone condition is unambiguous. A neighbour whose ``zone`` is
+        null abuts but its centroid matched no zone polygon (sliver /
+        right-of-way). If the address can't be resolved or no parcels dataset
+        is ingested, the response carries ``unresolvable: true`` or a ``note``
+        — fall back to ``search_bylaw_evidence`` in that case.
+        """
+        with session_scope(db_url) as session:
+            service = _service(session)
+            return service.get_adjacent_zoning(address).model_dump(mode="json")
+
+    @mcp.tool()
     def get_zone_profile(
         zone: str,
         include: list[str] | None = None,
