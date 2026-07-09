@@ -511,9 +511,9 @@ async def test_dev_standards_grounds_where_the_default_budget_would_void(
     assert [c.action for c in void_client.payment_intent_calls] == ["cancel"]
 
 
-# -- ABS-370: Variance ($299) and Zoning due-diligence ($199) budgets --------
+# -- ABS-370/ABS-371: per-SKU budgets for the grounding-heavy catalog --------
 
-# Routine inputs for the two SKUs that were voiding on cost_ceiling.
+# Routine inputs for the SKUs that were voiding on cost_ceiling.
 VARIANCE_INPUTS = {
     "address": "6242 North St, Halifax",
     "requested_variance": (
@@ -524,15 +524,26 @@ VARIANCE_INPUTS = {
 
 DUE_DILIGENCE_INPUTS = {"address": "2367 Brunswick St, Halifax"}
 
+LEGAL_NONCONFORMING_INPUTS = {
+    "address": "6184 Quinpool Rd, Halifax",
+    "existing_use_or_structure": (
+        "a corner grocery store occupying the ground floor of a "
+        "residential building"
+    ),
+    "establishment_date": "approximately 1978",
+}
 
-def test_variance_and_due_diligence_resolve_to_elevated_budgets() -> None:
-    # ABS-370: both SKUs' ceilings must reach the run, mirroring the
-    # dev-standards threading above.
+
+def test_grounding_heavy_skus_resolve_to_elevated_budgets() -> None:
+    # ABS-370 (variance, due-diligence) + ABS-371 (legal non-conforming):
+    # each SKU's ceiling must reach the run, mirroring the dev-standards
+    # threading above.
     from advisor.billing.answers import _resolve_run_inputs
 
     for slug, inputs in (
         ("variance_justification", VARIANCE_INPUTS),
         ("due_diligence", DUE_DILIGENCE_INPUTS),
+        ("legal_nonconforming", LEGAL_NONCONFORMING_INPUTS),
     ):
         purchase = QuestionPurchase(question_slug=slug, inputs_json=inputs)
         _prompt, budget = _resolve_run_inputs(purchase)
@@ -545,19 +556,21 @@ def test_variance_and_due_diligence_resolve_to_elevated_budgets() -> None:
     [
         ("variance_justification", VARIANCE_INPUTS, "cs_var_ground"),
         ("due_diligence", DUE_DILIGENCE_INPUTS, "cs_dd_ground"),
+        ("legal_nonconforming", LEGAL_NONCONFORMING_INPUTS, "cs_lnc_ground"),
     ],
 )
-async def test_variance_and_due_diligence_ground_where_the_default_would_void(
+async def test_grounding_heavy_skus_ground_where_the_default_would_void(
     tmp_path: Path, slug: str, inputs: dict, session_id: str
 ) -> None:
-    # The behavioural heart of ABS-370, mirroring the ABS-360 guard above:
-    # the SAME grounding-heavy load that trips the flat 165k default (see
-    # the permitted_use control in
+    # The behavioural heart of ABS-370 and ABS-371, mirroring the ABS-360
+    # guard above: the SAME grounding-heavy load that trips the flat 165k
+    # default (see the permitted_use control in
     # test_dev_standards_grounds_where_the_default_budget_would_void)
     # completes and captures under the per-SKU 260k ceiling. Measured
     # basis: real transcripts showed variance runs needing up to 171.6k
-    # and due-diligence up to 193.0k — both past the default, both under
-    # 260k. Reverting either budget bump turns this red.
+    # and due-diligence up to 193.0k, and a live instrumented
+    # legal-non-conforming run grounded at 176.0k — all past the default,
+    # all under 260k. Reverting any budget bump turns this red.
     assert default_cumulative_token_budget() == 165_000
     assert question_for(slug).cumulative_token_budget == 260_000
 
