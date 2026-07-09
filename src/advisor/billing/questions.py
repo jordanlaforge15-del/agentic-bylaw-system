@@ -261,6 +261,19 @@ QUESTION_DUE_DILIGENCE_DEF = Question(
         "Catalog item 3 — zoning due-diligence summary (consultant proxy "
         "$1,500+)."
     ),
+    # ABS-370: the due-diligence summary sweeps the whole regulatory
+    # picture for an address (zone, uses, overlays, non-conformity flags),
+    # so its evidence load is broad rather than deep — and measurably
+    # straddles the flat 165k default. Replaying the ABS-305 estimator
+    # over real run transcripts: a captured run needed 158.8k (4% under
+    # the default ceiling); its voided sibling tripped at 193.0k while
+    # citation-verifying — a >20% nondeterministic spread on routine
+    # inputs. 260k (the off-menu "complex" tier, quote.py, same ceiling
+    # as development_standards) gives ~35% headroom over the worst
+    # measured 10-iteration path; the 210k "involved" tier would leave
+    # under 9%, inside the observed drift. At Opus input rates ~260k
+    # billed-equivalent tokens ≈ $3.90, ~2% of the $199 price.
+    cumulative_token_budget=260_000,
 )
 
 QUESTION_LEGAL_NONCONFORMING_DEF = Question(
@@ -365,6 +378,18 @@ QUESTION_VARIANCE_JUSTIFICATION_DEF = Question(
         "Catalog item 1 — variance justification package (consultant proxy "
         "$800-$5,000)."
     ),
+    # ABS-370: the variance package grounds all three statutory criteria
+    # in turn, and its routine runs measurably straddle the flat 165k
+    # default. Replaying the ABS-305 estimator over real run transcripts:
+    # a captured run finished at 131.3k; its voided sibling tripped at
+    # 171.6k on the SAME code and budget while citation-verifying —
+    # genuine nondeterministic drift right at the ceiling. 260k is the
+    # off-menu "complex" tier (quote.py), which is itself anchored to
+    # this very question ("Variance justification package ($299 band)"),
+    # so the catalog and off-menu paths now agree. ~51% headroom over the
+    # worst measured need; at Opus input rates ~260k billed-equivalent
+    # tokens ≈ $3.90, ~1.3% of the $299 price.
+    cumulative_token_budget=260_000,
 )
 
 

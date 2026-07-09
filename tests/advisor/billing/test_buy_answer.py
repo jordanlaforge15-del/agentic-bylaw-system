@@ -511,6 +511,83 @@ async def test_dev_standards_grounds_where_the_default_budget_would_void(
     assert [c.action for c in void_client.payment_intent_calls] == ["cancel"]
 
 
+# -- ABS-370: Variance ($299) and Zoning due-diligence ($199) budgets --------
+
+# Routine inputs for the two SKUs that were voiding on cost_ceiling.
+VARIANCE_INPUTS = {
+    "address": "6242 North St, Halifax",
+    "requested_variance": (
+        "reduce the required rear-yard setback from 7.5 m to 5.0 m"
+    ),
+    "hardship_rationale": "irregular pie-shaped lot with a steep rear grade",
+}
+
+DUE_DILIGENCE_INPUTS = {"address": "2367 Brunswick St, Halifax"}
+
+
+def test_variance_and_due_diligence_resolve_to_elevated_budgets() -> None:
+    # ABS-370: both SKUs' ceilings must reach the run, mirroring the
+    # dev-standards threading above.
+    from advisor.billing.answers import _resolve_run_inputs
+
+    for slug, inputs in (
+        ("variance_justification", VARIANCE_INPUTS),
+        ("due_diligence", DUE_DILIGENCE_INPUTS),
+    ):
+        purchase = QuestionPurchase(question_slug=slug, inputs_json=inputs)
+        _prompt, budget = _resolve_run_inputs(purchase)
+        assert budget == question_for(slug).cumulative_token_budget
+        assert budget == 260_000
+
+
+@pytest.mark.parametrize(
+    ("slug", "inputs", "session_id"),
+    [
+        ("variance_justification", VARIANCE_INPUTS, "cs_var_ground"),
+        ("due_diligence", DUE_DILIGENCE_INPUTS, "cs_dd_ground"),
+    ],
+)
+async def test_variance_and_due_diligence_ground_where_the_default_would_void(
+    tmp_path: Path, slug: str, inputs: dict, session_id: str
+) -> None:
+    # The behavioural heart of ABS-370, mirroring the ABS-360 guard above:
+    # the SAME grounding-heavy load that trips the flat 165k default (see
+    # the permitted_use control in
+    # test_dev_standards_grounds_where_the_default_budget_would_void)
+    # completes and captures under the per-SKU 260k ceiling. Measured
+    # basis: real transcripts showed variance runs needing up to 171.6k
+    # and due-diligence up to 193.0k — both past the default, both under
+    # 260k. Reverting either budget bump turns this red.
+    assert default_cumulative_token_budget() == 165_000
+    assert question_for(slug).cumulative_token_budget == 260_000
+
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase = _start_uniq(
+            db, user, slug=slug, inputs=inputs, session_id=session_id,
+        )
+        pid = purchase.id
+        _authorize(db, pid, uid, slug)
+    capture_client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        p = await answer_flow.run_answer(
+            db, p, gateway=_heavy_grounding_gateway(searches=7),
+            persona=PERSONA, retrieval_factory=_StubRetrieval(),
+            client=capture_client,
+        )
+        assert p.status == "captured"
+        assert p.failure_reason is None
+        assert p.answer_text
+    assert [c.action for c in capture_client.payment_intent_calls] == ["capture"]
+
+
 async def test_run_answer_requires_authorization(tmp_path: Path) -> None:
     db_url = _db_url(tmp_path)
     create_all(db_url)
