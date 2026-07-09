@@ -59,6 +59,22 @@ def test_development_standards_carries_an_elevated_reasoning_budget() -> None:
     assert dev.cumulative_token_budget > default_cumulative_token_budget()
 
 
+def test_variance_and_due_diligence_carry_elevated_reasoning_budgets() -> None:
+    # ABS-370: sibling fix to ABS-360. Replaying the ABS-305 estimator over
+    # real run transcripts showed both SKUs' routine runs straddle the flat
+    # 165k default (variance: captured at 131k / voided at 171.6k on the
+    # same code; due-diligence: captured at 158.8k / voided at 193.0k), so
+    # each now carries the same margin-safe 260k ceiling as the
+    # development-standards report.
+    from advisor.llm.budget import default_cumulative_token_budget
+
+    for slug in (QUESTION_VARIANCE_JUSTIFICATION, QUESTION_DUE_DILIGENCE):
+        q = QUESTIONS[slug]
+        assert q.cumulative_token_budget == 260_000
+        # Strictly above the session default — that gap is the fix.
+        assert q.cumulative_token_budget > default_cumulative_token_budget()
+
+
 def test_only_grounding_heavy_questions_override_the_budget() -> None:
     # Everything else runs under the shared default (``None`` = defer to
     # ``default_cumulative_token_budget``); only questions we've found to
@@ -66,7 +82,11 @@ def test_only_grounding_heavy_questions_override_the_budget() -> None:
     overridden = {
         q.slug for q in all_questions() if q.cumulative_token_budget is not None
     }
-    assert overridden == {QUESTION_DEVELOPMENT_STANDARDS}
+    assert overridden == {
+        QUESTION_DEVELOPMENT_STANDARDS,
+        QUESTION_DUE_DILIGENCE,
+        QUESTION_VARIANCE_JUSTIFICATION,
+    }
     # Any override that IS set stays within the off-menu tier ladder's top
     # (``exceptional`` = 330k, quote.py) so a catalog question can never be
     # granted more reasoning headroom than the most expensive off-menu band.
