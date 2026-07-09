@@ -140,6 +140,57 @@ function propertySummaryReport(): Report {
   };
 }
 
+// ABS-373 repro shape: a development-standards evaluation table (its header
+// names a "Result" column, so per-row status derivation is ON) whose Lot
+// Coverage and FAR rows are N/A / not-regulated. The fixed `build_report`
+// emits `status: null` on those rows — even though "Lot Coverage" contains
+// the substring "over" (a FAIL signal) — while a genuinely failing row keeps
+// its "fail" status. A paid report must never show a FAIL pill next to a
+// "not regulated / no maximum" verdict.
+function naVerdictReport(): Report {
+  return {
+    ref: "DS-000373",
+    report_type: "Development-standards compliance check",
+    address: "1250 Robie St",
+    zone_subtitle: "Institutional (INS)",
+    issued: "2026-07-09",
+    prepared_for: "Jordan Buyer",
+    bylaw_version: "HRM Regional Centre Land Use By-law — 2024 consolidation",
+    price_cents: 14900,
+    currency: "CAD",
+    verdict: { status: "pass", label: "Complies with as-of-right standards" },
+    summary: "The proposal complies with the zone's as-of-right standards.",
+    blocks: [
+      {
+        type: "table",
+        title: "Built-form standards",
+        columns: ["Standard", "Required", "Proposed", "Result"],
+        rows: [
+          {
+            cells: ["Lot Coverage", "—", "42%", "N/A — no maximum in INS zone"],
+            status: null,
+          },
+          { cells: ["FAR", "—", "1.4", "N/A (no limit)"], status: null },
+          { cells: ["Height", "20 m max", "18 m", "PASS"], status: "pass" },
+          {
+            cells: ["Rear setback", "8 m min", "4 m", "FAIL"],
+            status: "fail",
+          },
+        ],
+      },
+      {
+        type: "table",
+        title: "Summary",
+        columns: ["Standard", "Result"],
+        rows: [
+          { cells: ["Lot Coverage", "N/A (no limit)"], status: null },
+          { cells: ["FAR", "N/A (no limit)"], status: null },
+        ],
+      },
+    ],
+  };
+}
+
 type Purchase = {
   id: number;
   question_slug: string;
@@ -307,6 +358,51 @@ test.describe("structured report deliverable (ABS-342)", () => {
     // Non-status rows (Zone, Governing By-law) must never carry a pill.
     await expect(page.getByTestId("row-status")).toHaveCount(0);
     await expect(table).not.toContainText("FAIL");
+  });
+
+  test("ABS-373: N/A / not-regulated rows in an evaluation table render no pill, genuine FAIL stays", async ({
+    page,
+  }) => {
+    await stubPurchase(page, () =>
+      purchase({
+        id: 373,
+        question_slug: "development_standards",
+        price_cents: 14900,
+        report: naVerdictReport(),
+      }),
+    );
+    await page.goto("/app/answers/373");
+
+    await expect(page.getByTestId("report-document")).toBeVisible();
+
+    // Both the built-form table and the summary table carry Lot Coverage /
+    // FAR rows whose verdict is N/A. Neither may render a status pill — even
+    // though "Lot Coverage" contains the substring "over".
+    const rows = page.getByTestId("table-row");
+    const lotCoverageRows = rows.filter({ hasText: "Lot Coverage" });
+    await expect(lotCoverageRows).toHaveCount(2);
+    for (let i = 0; i < 2; i++) {
+      await expect(
+        lotCoverageRows.nth(i).getByTestId("row-status"),
+      ).toHaveCount(0);
+      await expect(lotCoverageRows.nth(i)).not.toContainText("FAIL");
+    }
+
+    // The FAR rows (same N/A verdict) are likewise pill-free.
+    const farRows = rows.filter({ hasText: "FAR" });
+    await expect(farRows).toHaveCount(2);
+    for (let i = 0; i < 2; i++) {
+      await expect(farRows.nth(i).getByTestId("row-status")).toHaveCount(0);
+    }
+
+    // A genuinely failing row still shows its FAIL pill — the fix is targeted,
+    // not a blanket suppression of all row status.
+    const failRow = rows.filter({ hasText: "Rear setback" });
+    await expect(failRow.getByTestId("row-status")).toHaveText("FAIL");
+
+    // Exactly two pills total across the report: the PASS (Height) and the
+    // FAIL (Rear setback) rows — the four N/A rows contribute none.
+    await expect(page.getByTestId("row-status")).toHaveCount(2);
   });
 
   test("falls back to raw markdown when no structured report is present", async ({
