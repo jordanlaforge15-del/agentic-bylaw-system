@@ -103,6 +103,7 @@ tests.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 
 from advisor.llm.base import (
@@ -137,6 +138,31 @@ _CUMULATIVE_TRIP_PREAMBLE_CHARS = 80_000
 # Hard stop so a regression that disables the breaker surfaces as a
 # normal answer (visible test failure) rather than an unbounded loop.
 _CUMULATIVE_TRIP_MAX_ROUNDS = 40
+
+# ABS-372: retry-a-cost_ceiling-trip scenario (``MOCK_COST_CEILING_ONCE``).
+# The buy-an-answer engine retries a nondeterministic cost_ceiling trip on a
+# fresh turn before voiding (advisor.billing.answers). This mock reproduces
+# exactly one such trip: the FIRST attempt piles on heavy grounded rounds
+# until the ABS-305 cumulative breaker forces synthesis (a cost_ceiling
+# void), and every RETRY grounds cheaply and answers (a captured deliverable).
+# It therefore drives the whole retry-then-capture path end-to-end.
+#
+# Attempts are counted per test via a nonce carried in the sentinel
+# (``MOCK_COST_CEILING_ONCE[<nonce>]``), because the e2e server shares one
+# dispatcher across every request for the process' lifetime. run_answer
+# builds a fresh ChatSession per attempt, so attempt N's ONLY round-0 request
+# (no prior assistant tool_use) marks the start of that attempt — that is
+# where we increment. Later rounds within the attempt, and the tools-less
+# forced-synthesis call, never touch the counter.
+_COST_CEILING_ONCE_ATTEMPTS: dict[str, int] = {}
+_COST_CEILING_ONCE_NONCE_RE = re.compile(r"MOCK_COST_CEILING_ONCE\[([^\]]+)\]")
+
+
+def _cost_ceiling_once_nonce(user_text: str) -> str:
+    """The per-test nonce embedded in a ``MOCK_COST_CEILING_ONCE[<nonce>]``
+    sentinel, or a shared default when the bare sentinel is used."""
+    match = _COST_CEILING_ONCE_NONCE_RE.search(user_text)
+    return match.group(1) if match else "_default"
 
 
 def build_dispatcher() -> Callable[[CompletionRequest], CompletionResponse]:
@@ -276,6 +302,42 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
             )
         return _final_answer_response(user_text)
 
+    if "MOCK_COST_CEILING_ONCE" in user_text:
+        # ABS-372: exactly one cost_ceiling trip, then success on retry —
+        # exercises run_answer's retry-before-void path end-to-end.
+        nonce = _cost_ceiling_once_nonce(user_text)
+        if not has_prior_tool_use:
+            # Round 0 of a fresh turn = the start of a new attempt (a new
+            # ChatSession per attempt). Count it here and nowhere else.
+            _COST_CEILING_ONCE_ATTEMPTS[nonce] = (
+                _COST_CEILING_ONCE_ATTEMPTS.get(nonce, 0) + 1
+            )
+        attempt = _COST_CEILING_ONCE_ATTEMPTS.get(nonce, 1)
+        if attempt <= 1:
+            # First attempt: heap on grounded rounds with a big filler
+            # preamble until the ABS-305 cumulative breaker forces synthesis
+            # (terminated_reason == cumulative_cost_trip → cost_ceiling void).
+            rounds_done = _count_search_rounds(request)
+            if rounds_done < _CUMULATIVE_TRIP_MAX_ROUNDS:
+                return tool_use_response(
+                    tool_id=f"t-ceilonce-{rounds_done + 1}",
+                    tool_name="search_bylaw_evidence",
+                    tool_input={"query": f"ceiling round {rounds_done + 1}"},
+                    preamble="C" * _CUMULATIVE_TRIP_PREAMBLE_CHARS,
+                    usage=TokenUsage(input_tokens=80, output_tokens=24),
+                )
+            return _final_answer_response(user_text)
+        # Retry (attempt ≥ 2): ground once cheaply, then answer → captures.
+        if has_prior_tool_use:
+            return _final_answer_response(user_text)
+        return tool_use_response(
+            tool_id="t-ceilonce-retry",
+            tool_name="search_bylaw_evidence",
+            tool_input={"query": "ceiling retry grounding"},
+            preamble="Searching the bylaw for relevant passages.",
+            usage=TokenUsage(input_tokens=80, output_tokens=24),
+        )
+
     if "MOCK_CUMULATIVE_TRIP" in user_text:
         # Keep issuing search rounds with a big filler preamble so the
         # turn's cumulative billed-equivalent estimate climbs until the
@@ -403,8 +465,6 @@ def _intake_verdict(classify_text: str) -> dict[str, object]:
     decides completeness from the schema. Absent any sentinel, nothing is
     extracted (the module asks for everything required).
     """
-    import re  # noqa: PLC0415
-
     extracted = {
         m.group(1): m.group(2).strip()
         for m in re.finditer(r"MOCK_INPUT\[([a-z_]+)\]=([^|]*)\|", classify_text)

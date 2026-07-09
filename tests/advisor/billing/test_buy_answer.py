@@ -769,6 +769,58 @@ async def test_zero_evidence_is_not_retried(
     assert [c.action for c in client.payment_intent_calls] == ["cancel"]
 
 
+async def test_cost_ceiling_retry_recovers_through_the_real_tool_loop(
+    tmp_path: Path,
+) -> None:
+    # End-to-end over the REAL MockGateway + tool loop + ABS-305 breaker (no
+    # monkeypatching of run_turn): the MOCK_COST_CEILING_ONCE sentinel makes
+    # the first attempt pile on grounded rounds until the cumulative breaker
+    # actually fires (a real cost_ceiling on iteration 6, past the SKU's own
+    # 260k ceiling), then grounds cheaply on the retry. run_answer must
+    # recover that into a captured answer, charged once — the exact
+    # first-attempt-voided-then-captured story the ticket documents. This is
+    # the same mock keyword the e2e spec drives through the HTTP path, on the
+    # ticket's own repro input.
+    nonce = "utest-recover"
+    inputs = {
+        "address": "5686 Spring Garden Rd",
+        "requested_variance": (
+            "reduce the required side-yard setback from 2.5 m to 1.8 m for a "
+            "rear addition"
+        ),
+        "hardship_rationale": (
+            "the addition aligns with the existing wall on a 12.2 m frontage "
+            f"MOCK_COST_CEILING_ONCE[{nonce}]"
+        ),
+    }
+
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase = _start_uniq(
+            db, user, slug="variance_justification", inputs=inputs,
+            session_id="cs_ceil_once_real",
+        )
+        pid = purchase.id
+        _authorize(db, pid, uid, "variance_justification")
+    client = MockStripeClient(
+        checkout_result=CheckoutSessionResult(session_id="cs", url="u")
+    )
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        p = await answer_flow.run_answer(
+            db, p, gateway=_gateway(), persona=PERSONA,
+            retrieval_factory=_StubRetrieval(), client=client,
+        )
+        # The first draw tripped cost_ceiling; the retry grounded → captured.
+        assert p.status == "captured"
+        assert p.failure_reason is None
+        assert p.answer_text
+    assert [c.action for c in client.payment_intent_calls] == ["capture"]
+
+
 async def test_run_answer_requires_authorization(tmp_path: Path) -> None:
     db_url = _db_url(tmp_path)
     create_all(db_url)
