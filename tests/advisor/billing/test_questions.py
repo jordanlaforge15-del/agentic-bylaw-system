@@ -75,6 +75,22 @@ def test_variance_and_due_diligence_carry_elevated_reasoning_budgets() -> None:
         assert q.cumulative_token_budget > default_cumulative_token_budget()
 
 
+def test_legal_nonconforming_carries_an_elevated_reasoning_budget() -> None:
+    # ABS-371: the last grounding-heavy SKU left on the flat default. No
+    # historical transcripts existed, so a single representative case was
+    # run live with the ABS-305 estimator instrumented in place: a routine
+    # determination grounded in 10 iterations at 176.0k billed-equivalent
+    # tokens — past the 165k default outright, before applying ABS-370's
+    # observed >20% sibling drift. Same margin-safe 260k ceiling as the
+    # other three grounding-heavy SKUs.
+    from advisor.llm.budget import default_cumulative_token_budget
+
+    q = QUESTIONS[QUESTION_LEGAL_NONCONFORMING]
+    assert q.cumulative_token_budget == 260_000
+    # Strictly above the session default — that gap is the fix.
+    assert q.cumulative_token_budget > default_cumulative_token_budget()
+
+
 def test_only_grounding_heavy_questions_override_the_budget() -> None:
     # Everything else runs under the shared default (``None`` = defer to
     # ``default_cumulative_token_budget``); only questions we've found to
@@ -85,6 +101,7 @@ def test_only_grounding_heavy_questions_override_the_budget() -> None:
     assert overridden == {
         QUESTION_DEVELOPMENT_STANDARDS,
         QUESTION_DUE_DILIGENCE,
+        QUESTION_LEGAL_NONCONFORMING,
         QUESTION_VARIANCE_JUSTIFICATION,
     }
     # Any override that IS set stays within the off-menu tier ladder's top

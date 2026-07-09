@@ -27,7 +27,9 @@
 //   default would void) is a token-heuristic property the MockGateway
 //   can't reproduce faithfully end-to-end, so it is pinned in the Python
 //   unit test tests/advisor/billing/test_buy_answer.py
-//   ::test_variance_and_due_diligence_ground_where_the_default_would_void
+//   ::test_grounding_heavy_skus_ground_where_the_default_would_void
+//   (renamed from ..._variance_and_due_diligence_... when ABS-371 added
+//   legal_nonconforming to the same parametrized guard)
 //   — the same split as abs360 (heavy-budget math in Python, path
 //   guarded end-to-end here). Reverting either budget bump turns that
 //   Python test red.

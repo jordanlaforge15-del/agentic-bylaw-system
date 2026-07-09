@@ -327,6 +327,20 @@ QUESTION_LEGAL_NONCONFORMING_DEF = Question(
         "Catalog item 8 — legal non-conforming determination (consultant "
         "proxy $800-$2,500)."
     ),
+    # ABS-371: the determination grounds the existing situation against
+    # the current standards AND the non-conforming provisions — the same
+    # heavy-evidence shape (evaluate + search) as the three SKUs that
+    # measurably voided on cost_ceiling. No historical transcripts existed
+    # for this SKU, so a single representative case was run live with the
+    # ABS-305 estimator instrumented in place: a routine corner-store
+    # determination grounded in 10 iterations at 176.0k billed-equivalent
+    # tokens — already 6.7% PAST the flat 165k default, i.e. the default
+    # voids it outright, before applying ABS-370's observed >20% sibling
+    # drift. 260k (the off-menu "complex" tier, quote.py, same ceiling as
+    # the other three grounding-heavy SKUs) leaves ~32% headroom over the
+    # measured need. At Opus input rates ~260k billed-equivalent tokens
+    # ≈ $3.90, ~2% of the $199 price.
+    cumulative_token_budget=260_000,
 )
 
 QUESTION_VARIANCE_JUSTIFICATION_DEF = Question(
