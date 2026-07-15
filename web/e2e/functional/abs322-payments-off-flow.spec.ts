@@ -1,15 +1,21 @@
-// Functional: ABS-322 payments-off / free-trial buy-an-answer flow.
+// Functional: ABS-390 — the payments-OFF (trial-only) billing posture.
 //
-// The go-live config: ADVISOR_PAYMENTS_ENABLED=false. An answer is
-// unlocked by consuming a free-question credit (ABS-314), NOT a Stripe
-// charge — no checkout session, no bank account. This spec drives the
-// real advisor.billing.answers service through the /v1/_test/buy-answer/*
-// harness (sqlite-free: real test Postgres + MockGateway), exercising:
+// Reconciled from the old ABS-322 free-question buy-answer flow to the beta
+// pivot posture (docs/decisions/2026-07-beta-pivot-turn-wallet-gated-reports.md,
+// D4/D8): billing is ON, payments are OFF, and the token wallet is funded by
+// the one-time signup grant. In that posture:
 //
-//   signup grant → pick question → answer → refine → exhaustion
+//   * the wallet reports payments_enabled=false (no paid top-ups);
+//   * POST /v1/billing/checkout/topup answers 503 payments_disabled — the
+//     "paid top-ups coming soon" state, never a dead checkout;
+//   * the retired case-credit pack checkout answers 410 packs_retired — a
+//     permanent, explicit retirement, not a transient 503.
 //
-// plus the failed-question refund rule (an ungroundable question hands
-// the reserved credit back, so the trial user is no worse off).
+// The e2e stack runs billing DORMANT (payments_enabled=false), which is the
+// payments-off posture at the HTTP boundary, so these assertions run against
+// the real advisor process. Calls FastAPI directly via X-Test-User-Id (the
+// Next proxy binds the upstream user id to ADVISOR_DEMO_USER_ID at process
+// start, so per-user API tests bypass it).
 
 import { expect, test } from "@playwright/test";
 
@@ -21,135 +27,56 @@ function uniqueUser(tag: string): string {
     .slice(2, 8)}`;
 }
 
-const VALID_INPUTS = {
-  address: "1234 Elm St",
-  proposed_use: "a four-unit dwelling",
-};
-
-type Req = import("@playwright/test").APIRequestContext;
-
-async function grantFree(request: Req, userId: string, quantity: number) {
-  const res = await request.post(
-    `${E2E_API_URL}/v1/_test/buy-answer/grant-free-questions`,
-    { data: { user_id: userId, quantity } },
-  );
-  expect(res.status(), await res.text()).toBe(200);
-  return res.json();
-}
-
-async function freeBalance(request: Req, userId: string): Promise<number> {
-  const res = await request.post(
-    `${E2E_API_URL}/v1/_test/buy-answer/free-balance`,
-    { data: { user_id: userId } },
-  );
-  expect(res.status(), await res.text()).toBe(200);
-  return (await res.json()).free_questions_remaining as number;
-}
-
-async function checkoutFree(
-  request: Req,
-  userId: string,
-  inputs: Record<string, string>,
-  slug = "permitted_use",
-) {
-  const res = await request.post(
-    `${E2E_API_URL}/v1/_test/buy-answer/checkout-free`,
-    { data: { user_id: userId, question_slug: slug, inputs } },
-  );
-  expect(res.status(), await res.text()).toBe(200);
-  return res.json();
-}
-
-async function runAnswer(request: Req, purchaseId: number) {
-  const res = await request.post(
-    `${E2E_API_URL}/v1/_test/buy-answer/answer`,
-    { data: { purchase_id: purchaseId } },
-  );
-  expect(res.status(), await res.text()).toBe(200);
-  return res.json();
-}
-
-async function refine(request: Req, purchaseId: number, message: string) {
-  const res = await request.post(
-    `${E2E_API_URL}/v1/_test/buy-answer/refine`,
-    { data: { purchase_id: purchaseId, message } },
-  );
-  expect(res.status(), await res.text()).toBe(200);
-  return res.json();
-}
-
-test("free-trial: grant → answer → refine, consuming one credit", async ({
+test("payments off: the wallet advertises payments_enabled=false", async ({
   request,
 }) => {
-  const userId = uniqueUser("happy");
-  // Signup-equivalent grant of 2 free questions.
-  const granted = await grantFree(request, userId, 2);
-  expect(granted.free_questions_remaining).toBe(2);
-
-  // Pick a question — consumes one credit, lands authorized with NO Stripe.
-  const created = await checkoutFree(request, userId, VALID_INPUTS);
-  expect(created.ok).toBe(true);
-  expect(created.status).toBe("authorized");
-  expect(created.free_questions_remaining).toBe(1);
-
-  // Run the answer → grounded → captured (no charge, credit stays spent).
-  const answered = await runAnswer(request, created.purchase_id);
-  expect(answered.status).toBe("captured");
-  expect(answered.answer).toBeTruthy();
-  expect(answered.refinements_remaining).toBe(3);
-
-  // A refinement is served free under the same purchase — no extra credit.
-  const refined = await refine(
-    request,
-    created.purchase_id,
-    "Summarize the answer in three bullet points.",
-  );
-  expect(refined.ok).toBe(true);
-  expect(refined.refinement_count).toBe(1);
-  expect(await freeBalance(request, userId)).toBe(1);
-});
-
-test("free-trial: exhaustion shows the 'coming soon' state", async ({
-  request,
-}) => {
-  const userId = uniqueUser("exhaust");
-  // Exactly one free question.
-  await grantFree(request, userId, 1);
-
-  // Spend it on a grounded answer.
-  const created = await checkoutFree(request, userId, VALID_INPUTS);
-  expect(created.ok).toBe(true);
-  const answered = await runAnswer(request, created.purchase_id);
-  expect(answered.status).toBe("captured");
-  expect(await freeBalance(request, userId)).toBe(0);
-
-  // Next checkout has no credit → exhaustion state (not a dead checkout).
-  const exhausted = await checkoutFree(request, userId, VALID_INPUTS);
-  expect(exhausted.ok).toBe(false);
-  expect(exhausted.code).toBe("free_questions_exhausted");
-  expect(exhausted.free_questions_remaining).toBe(0);
-});
-
-test("failed-question rule: an ungroundable answer refunds the credit", async ({
-  request,
-}) => {
-  const userId = uniqueUser("refund");
-  await grantFree(request, userId, 1);
-
-  // MOCK_UNGROUNDABLE flows into the prompt → zero grounding tool calls.
-  const created = await checkoutFree(request, userId, {
-    address: "1234 Elm St",
-    proposed_use: "a four-unit dwelling MOCK_UNGROUNDABLE",
+  const userId = uniqueUser("wallet");
+  const res = await request.get(`${E2E_API_URL}/v1/billing/wallet`, {
+    headers: { "X-Test-User-Id": userId },
   });
-  expect(created.ok).toBe(true);
-  // The credit is reserved while the question runs.
-  expect(created.free_questions_remaining).toBe(0);
+  expect(res.status(), await res.text()).toBe(200);
+  const body = (await res.json()) as {
+    payments_enabled: boolean;
+    tokens_per_turn: number;
+  };
+  // Trial-only posture: no paid top-ups.
+  expect(body.payments_enabled).toBe(false);
+  // Turns conversion is backend-owned and always present.
+  expect(body.tokens_per_turn).toBeGreaterThan(0);
+});
 
-  const answered = await runAnswer(request, created.purchase_id);
-  expect(answered.status).toBe("voided");
-  expect(answered.failure_reason).toBe("zero_evidence");
-  expect(answered.answer).toBeNull();
+test("payments off: paid top-ups are refused with 503 payments_disabled", async ({
+  request,
+}) => {
+  const userId = uniqueUser("topup");
+  const res = await request.post(
+    `${E2E_API_URL}/v1/billing/checkout/topup`,
+    {
+      headers: { "X-Test-User-Id": userId },
+      data: { sku: "small" },
+    },
+  );
+  // The "paid top-ups coming soon" state — a clean refusal, not a dead
+  // checkout that returns no URL.
+  expect(res.status(), await res.text()).toBe(503);
+  const body = (await res.json()) as { detail: { code: string } };
+  expect(body.detail.code).toBe("payments_disabled");
+});
 
-  // Reserved credit is handed back — the trial user is no worse off.
-  expect(await freeBalance(request, userId)).toBe(1);
+test("retired: the legacy pack checkout answers 410 packs_retired", async ({
+  request,
+}) => {
+  const userId = uniqueUser("pack");
+  const res = await request.post(
+    `${E2E_API_URL}/v1/billing/checkout/pack`,
+    {
+      headers: { "X-Test-User-Id": userId },
+      data: { tier: "standard", pack_sku: "starter" },
+    },
+  );
+  // The beta pivot retired the case-credit tier×pack catalog product-wide;
+  // the endpoint answers a permanent 410 Gone, not a transient 503.
+  expect(res.status(), await res.text()).toBe(410);
+  const body = (await res.json()) as { detail: { code: string } };
+  expect(body.detail.code).toBe("packs_retired");
 });

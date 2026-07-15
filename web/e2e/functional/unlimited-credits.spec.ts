@@ -1,9 +1,21 @@
-// Functional: ABS-12 unlimited-credits mode for test users.
+// Functional: ABS-390 — token-wallet balance bypass for unlimited users.
 //
-// Verifies that a user with `unlimited_credits=True` can open cases
-// and chat without pre-granted credits, while a normal user (zero
-// credits) still gets 402. Uses a dedicated per-run user id so it
-// doesn't interfere with the shared demo user's credit pool.
+// Reconciled from the old ABS-12 unlimited-CaseCredit spec to the beta pivot
+// (docs/decisions/2026-07-beta-pivot-turn-wallet-gated-reports.md, D3): chat is
+// billed per turn out of the token wallet and refused pre-flight at balance ≤
+// floor (402 insufficient_tokens) — EXCEPT for `unlimited_credits` users, who
+// bypass the floor entirely and are exempt from the per-turn burn.
+//
+// This spec verifies the bypass by contrast:
+//   * a normal user drained below the floor (via MOCK_BURN_ALL, which overdraws
+//     the signup grant in one turn) is refused on the next turn (402);
+//   * an unlimited_credits user, hit by the same drain, is NEVER refused and
+//     NEVER burns — the wallet reports chat_enabled=true at any balance.
+//   * opening a case stays free for both (ABS-382), no CaseCredit reserved.
+//
+// Per-run user ids so nothing races the shared demo user. Calls FastAPI
+// directly (X-Test-User-Id): the Next proxy binds the upstream user id to
+// ADVISOR_DEMO_USER_ID at process start, so per-user API tests bypass it.
 
 import { execSync } from "node:child_process";
 import * as path from "node:path";
@@ -15,10 +27,11 @@ import { E2E_API_URL } from "../fixtures/test-env";
 const UNLIMITED_USER = `unlimited-${Date.now()}-${Math.random()
   .toString(36)
   .slice(2, 8)}`;
-
-const NO_CREDITS_USER = `nocred-${Date.now()}-${Math.random()
+const NORMAL_USER = `normal-${Date.now()}-${Math.random()
   .toString(36)
   .slice(2, 8)}`;
+
+type Req = import("@playwright/test").APIRequestContext;
 
 test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
@@ -28,128 +41,142 @@ test.beforeAll(() => {
   const databaseUrl =
     process.env.DATABASE_URL ||
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
-
   const seedEnv = {
     ...process.env,
     DATABASE_URL: databaseUrl,
-    PYTHONPATH: `${path.join(repoRoot, "src")}:${
-      process.env.PYTHONPATH || ""
-    }`,
+    PYTHONPATH: `${path.join(repoRoot, "src")}:${process.env.PYTHONPATH || ""}`,
   };
 
-  // Unlimited user: zero pre-granted credits, unlimited_credits=True.
+  // Unlimited user: unlimited_credits=True. --token-balance 0 leaves the
+  // wallet untouched by the seed so the one-time signup grant is the only
+  // funding — proving the bypass is the flag, not a stockpile.
   execSync(
     `"${venvPython}" "${seed}" --user-id "${UNLIMITED_USER}" ` +
-      `--email "${UNLIMITED_USER}@e2e.test" --credits-per-tier 0 --unlimited`,
+      `--email "${UNLIMITED_USER}@e2e.test" --token-balance 0 --unlimited`,
     { env: seedEnv, stdio: "inherit" },
   );
-
-  // Normal user: zero credits, unlimited_credits=False (default).
+  // Normal user: default posture, wallet funded only by the signup grant.
   execSync(
-    `"${venvPython}" "${seed}" --user-id "${NO_CREDITS_USER}" ` +
-      `--email "${NO_CREDITS_USER}@e2e.test" --credits-per-tier 0`,
+    `"${venvPython}" "${seed}" --user-id "${NORMAL_USER}" ` +
+      `--email "${NORMAL_USER}@e2e.test" --token-balance 0`,
     { env: seedEnv, stdio: "inherit" },
   );
 });
 
-test("any user can open a case without pre-granted credits (free open)", async ({
-  request,
-}) => {
-  // ABS-382: opening a case is free — no CaseCredit is reserved, so
-  // `credit_id` is null regardless of the user's credit posture.
+async function openCase(request: Req, userId: string): Promise<number> {
   const res = await request.post(`${E2E_API_URL}/v1/cases`, {
-    headers: { "X-Test-User-Id": UNLIMITED_USER },
+    headers: { "X-Test-User-Id": userId },
     data: {
-      anchor_label: "unlimited-test-addr-1",
+      anchor_label: `bypass-${userId}-${Date.now()}`,
       anchor_kind: "address",
       tier: "standard",
     },
   });
-  expect(
-    res.status(),
-    `expected 200 but got ${res.status()}: ${await res.text()}`,
-  ).toBe(200);
+  expect(res.status(), `open_case: ${res.status()} ${await res.text()}`).toBe(
+    200,
+  );
   const body = (await res.json()) as {
     credit_id: number | null;
-    case: { current_tier: string | null };
+    case: { id: number };
   };
+  // ABS-382: opening a case is free — no CaseCredit reserved for anyone.
   expect(body.credit_id).toBeNull();
-  expect(body.case.current_tier).toBeNull();
-});
+  return body.case.id;
+}
 
-test("unlimited-credits user can open multiple cases consecutively", async ({
-  request,
-}) => {
-  for (let i = 0; i < 3; i++) {
-    const res = await request.post(`${E2E_API_URL}/v1/cases`, {
-      headers: { "X-Test-User-Id": UNLIMITED_USER },
-      data: {
-        anchor_label: `unlimited-multi-${i}-${Date.now()}`,
-        anchor_kind: "address",
-        tier: "standard",
-      },
-    });
-    expect(
-      res.status(),
-      `case ${i} failed: ${res.status()} ${await res.text()}`,
-    ).toBe(200);
-  }
-});
-
-test("normal user with zero credits still opens a case free (no 402)", async ({
-  request,
-}) => {
-  // ABS-382: the case-open credit gate is retired. A zero-credit user
-  // used to get 402 no_available_credit; opening is now free for everyone.
-  const res = await request.post(`${E2E_API_URL}/v1/cases`, {
-    headers: { "X-Test-User-Id": NO_CREDITS_USER },
-    data: {
-      anchor_label: "no-credits-test",
-      anchor_kind: "address",
-      tier: "standard",
-    },
-  });
-  expect(
-    res.status(),
-    `expected 200 but got ${res.status()}: ${await res.text()}`,
-  ).toBe(200);
-  const body = (await res.json()) as { credit_id: number | null };
-  expect(body.credit_id).toBeNull();
-});
-
-test("unlimited-credits user can chat after opening a case", async ({
-  request,
-}) => {
-  const openRes = await request.post(`${E2E_API_URL}/v1/cases`, {
-    headers: { "X-Test-User-Id": UNLIMITED_USER },
-    data: {
-      anchor_label: `unlimited-chat-${Date.now()}`,
-      anchor_kind: "address",
-      tier: "standard",
-    },
-  });
-  expect(openRes.status()).toBe(200);
-  const openBody = (await openRes.json()) as { case: { id: number } };
-  const caseId = openBody.case.id;
-
-  const chatRes = await request.post(`${E2E_API_URL}/v1/chat`, {
+async function chat(
+  request: Req,
+  userId: string,
+  caseId: number,
+  message: string,
+) {
+  return request.post(`${E2E_API_URL}/v1/chat`, {
     headers: {
-      "X-Test-User-Id": UNLIMITED_USER,
+      "X-Test-User-Id": userId,
       "Content-Type": "application/json",
       Accept: "text/event-stream",
     },
-    data: {
-      message: "What is the minimum front yard setback?",
-      case_id: caseId,
-      session_id: null,
-    },
+    data: { message, case_id: caseId, session_id: null },
     timeout: 15_000,
   });
+}
 
-  const chatBody = await chatRes.text();
+async function wallet(request: Req, userId: string) {
+  const res = await request.get(`${E2E_API_URL}/v1/billing/wallet`, {
+    headers: { "X-Test-User-Id": userId },
+  });
+  expect(res.status(), await res.text()).toBe(200);
+  return res.json() as Promise<{
+    balance_tokens: number;
+    chat_enabled: boolean;
+    low_balance: boolean;
+  }>;
+}
+
+test("normal user drained below the floor is refused on the next turn (402)", async ({
+  request,
+}) => {
+  const caseId = await openCase(request, NORMAL_USER);
+
+  // First turn passes pre-flight (25k grant > floor) and overdraws the wallet.
+  const drain = await chat(
+    request,
+    NORMAL_USER,
+    caseId,
+    "MOCK_BURN_ALL — drain the wallet",
+  );
+  expect(drain.status(), await drain.text()).toBe(200);
+
+  // The wallet is now below the floor: chat is refused pre-flight.
+  const after = await wallet(request, NORMAL_USER);
+  expect(after.chat_enabled).toBe(false);
+
+  const refused = await chat(
+    request,
+    NORMAL_USER,
+    caseId,
+    "What is the minimum front yard setback?",
+  );
+  expect(refused.status(), await refused.text()).toBe(402);
+  const body = (await refused.json()) as { detail: { code: string } };
+  expect(body.detail.code).toBe("insufficient_tokens");
+});
+
+test("unlimited_credits user bypasses the floor — chats freely, never burns", async ({
+  request,
+}) => {
+  const caseId = await openCase(request, UNLIMITED_USER);
+
+  const before = await wallet(request, UNLIMITED_USER);
+  expect(before.chat_enabled).toBe(true);
+  expect(before.low_balance).toBe(false);
+
+  // The same MOCK_BURN_ALL turn that overdraws a normal user does not touch an
+  // unlimited user's balance (exempt from the burn).
+  const burn = await chat(
+    request,
+    UNLIMITED_USER,
+    caseId,
+    "MOCK_BURN_ALL — would drain a normal wallet",
+  );
+  expect(burn.status(), await burn.text()).toBe(200);
+
+  const after = await wallet(request, UNLIMITED_USER);
   expect(
-    chatRes.status(),
-    `chat failed: ${chatRes.status()} ${chatBody.slice(0, 400)}`,
-  ).toBe(200);
-  expect(chatBody).toMatch(/text_delta/);
+    after.balance_tokens,
+    "unlimited users are exempt from the per-turn burn",
+  ).toBe(before.balance_tokens);
+  expect(after.chat_enabled).toBe(true);
+  expect(after.low_balance).toBe(false);
+
+  // And a follow-up turn still streams — never refused regardless of balance.
+  const again = await chat(
+    request,
+    UNLIMITED_USER,
+    caseId,
+    "What is the minimum front yard setback?",
+  );
+  const againBody = await again.text();
+  expect(again.status(), againBody.slice(0, 300)).toBe(200);
+  expect(againBody).toMatch(/text_delta/);
 });

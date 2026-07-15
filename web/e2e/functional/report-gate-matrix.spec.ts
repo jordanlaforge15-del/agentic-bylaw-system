@@ -13,7 +13,7 @@
 // proxied menu response (the server env is fixed for the run), proving the
 // case-open menu faithfully renders whatever subset the gate advertises.
 
-import { expect, test } from "../fixtures/test-env";
+import { E2E_API_URL, expect, test } from "../fixtures/test-env";
 
 const LAUNCH_SLUGS = [
   "permitted_use",
@@ -151,5 +151,84 @@ test.describe("pricing reports section reflects the gate (ABS-387)", () => {
     await expect(page.getByTestId("trial-card")).toBeVisible();
     await expect(page.getByTestId("reports-section")).toHaveCount(0);
     await expect(page.getByTestId("report-contact-card")).toBeVisible();
+  });
+});
+
+// ABS-390 (folded in from the retired ABS-324 spec): a report purchase is
+// DECOUPLED from the conversation product. Ordering a gated report (free-start
+// in the payments-off posture) opens an Answers `QuestionPurchase`, NOT a Case,
+// and never reserves or consumes a CaseCredit from the conversation ledger.
+// This is the decoupling that lets a report slug be gated independently of the
+// turn-based chat. Drives the REAL dormant billing router (no stubs).
+test.describe("report purchase is decoupled from the conversation ledger (ABS-390)", () => {
+  const VALID_INPUTS = {
+    address: "1234 Elm St, Halifax",
+    proposed_use: "a four-unit dwelling",
+  };
+
+  test("free-start opens an Answers purchase with zero CaseCredit and no Case", async ({
+    request,
+  }) => {
+    const userId = `abs390dec-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+
+    // Grant one free-question entitlement (the payments-off report unlock) via
+    // the test harness — the token wallet is a separate ledger.
+    const grant = await request.post(
+      `${E2E_API_URL}/v1/_test/buy-answer/grant-free-questions`,
+      { data: { user_id: userId, quantity: 1 } },
+    );
+    expect(grant.status(), await grant.text()).toBe(200);
+
+    // free-start unlocks the report → an Answers QuestionPurchase, not a Case.
+    const startRes = await request.post(
+      `${E2E_API_URL}/v1/billing/questions/free-start`,
+      {
+        headers: { "X-Test-User-Id": userId },
+        data: {
+          question_slug: "permitted_use",
+          inputs: VALID_INPUTS,
+          anchor_label: VALID_INPUTS.address,
+          anchor_kind: "address",
+        },
+      },
+    );
+    expect(startRes.status(), await startRes.text()).toBe(200);
+    const start = (await startRes.json()) as {
+      purchase_id: number;
+      status: string;
+      case_id?: number;
+      free_questions_remaining: number;
+    };
+    expect(start.purchase_id).toBeGreaterThan(0);
+    expect(start.status).toBe("authorized");
+    // The decoupling: no Case identifier is handed back.
+    expect(start.case_id).toBeUndefined();
+    expect(start.free_questions_remaining).toBe(0);
+
+    // The conversation ledger is untouched: no CaseCredit reserved/consumed.
+    const meRes = await request.get(`${E2E_API_URL}/v1/billing/me`, {
+      headers: { "X-Test-User-Id": userId },
+    });
+    expect(meRes.status(), await meRes.text()).toBe(200);
+    const me = (await meRes.json()) as {
+      tier_balances: { reserved: number; consumed: number }[];
+    };
+    const reserved = me.tier_balances.reduce((s, b) => s + b.reserved, 0);
+    const consumed = me.tier_balances.reduce((s, b) => s + b.consumed, 0);
+    expect(reserved, "the Answers path reserves no CaseCredit").toBe(0);
+    expect(consumed, "the Answers path consumes no CaseCredit").toBe(0);
+
+    // And no Case was opened for the subject address.
+    const matchRes = await request.get(
+      `${E2E_API_URL}/v1/cases/match?anchor_label=${encodeURIComponent(
+        VALID_INPUTS.address,
+      )}&anchor_kind=address`,
+      { headers: { "X-Test-User-Id": userId } },
+    );
+    expect(matchRes.status(), await matchRes.text()).toBe(200);
+    const match = (await matchRes.json()) as { case: unknown | null };
+    expect(match.case, "the Answers path must not open a Case").toBeNull();
   });
 });
