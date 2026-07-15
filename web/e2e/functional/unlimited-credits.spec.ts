@@ -52,9 +52,11 @@ test.beforeAll(() => {
   );
 });
 
-test("unlimited-credits user can open a case without pre-granted credits", async ({
+test("any user can open a case without pre-granted credits (free open)", async ({
   request,
 }) => {
+  // ABS-382: opening a case is free — no CaseCredit is reserved, so
+  // `credit_id` is null regardless of the user's credit posture.
   const res = await request.post(`${E2E_API_URL}/v1/cases`, {
     headers: { "X-Test-User-Id": UNLIMITED_USER },
     data: {
@@ -67,8 +69,12 @@ test("unlimited-credits user can open a case without pre-granted credits", async
     res.status(),
     `expected 200 but got ${res.status()}: ${await res.text()}`,
   ).toBe(200);
-  const body = (await res.json()) as { credit_id: number };
-  expect(body.credit_id).toBeGreaterThan(0);
+  const body = (await res.json()) as {
+    credit_id: number | null;
+    case: { current_tier: string | null };
+  };
+  expect(body.credit_id).toBeNull();
+  expect(body.case.current_tier).toBeNull();
 });
 
 test("unlimited-credits user can open multiple cases consecutively", async ({
@@ -90,7 +96,11 @@ test("unlimited-credits user can open multiple cases consecutively", async ({
   }
 });
 
-test("normal user with zero credits gets 402", async ({ request }) => {
+test("normal user with zero credits still opens a case free (no 402)", async ({
+  request,
+}) => {
+  // ABS-382: the case-open credit gate is retired. A zero-credit user
+  // used to get 402 no_available_credit; opening is now free for everyone.
   const res = await request.post(`${E2E_API_URL}/v1/cases`, {
     headers: { "X-Test-User-Id": NO_CREDITS_USER },
     data: {
@@ -99,9 +109,12 @@ test("normal user with zero credits gets 402", async ({ request }) => {
       tier: "standard",
     },
   });
-  expect(res.status()).toBe(402);
-  const body = (await res.json()) as { detail: { code: string } };
-  expect(body.detail.code).toBe("no_available_credit");
+  expect(
+    res.status(),
+    `expected 200 but got ${res.status()}: ${await res.text()}`,
+  ).toBe(200);
+  const body = (await res.json()) as { credit_id: number | null };
+  expect(body.credit_id).toBeNull();
 });
 
 test("unlimited-credits user can chat after opening a case", async ({
