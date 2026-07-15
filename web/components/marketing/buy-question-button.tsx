@@ -38,11 +38,18 @@ export function BuyQuestionButton({ questionSlug, available }: Props) {
       }
       if (!r.ok) {
         const detail = await r.json().catch(() => null);
-        const code =
+        const inner =
           detail && typeof detail === "object" && "detail" in detail
-            ? (detail.detail as { message?: string })?.message
+            ? (detail.detail as { code?: string; message?: string })
             : undefined;
-        setError(code || `Checkout failed (${r.status}).`);
+        // ABS-384/387: the report slug was toggled off between page load and
+        // checkout — surface a friendly, report-specific message rather than
+        // the raw operator string or a bare status code.
+        if (r.status === 503 && inner?.code === "question_disabled") {
+          setError("This report isn't currently available.");
+          return;
+        }
+        setError(inner?.message || `Checkout failed (${r.status}).`);
         return;
       }
       const data = (await r.json()) as { url?: string };

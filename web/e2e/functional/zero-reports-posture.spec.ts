@@ -33,9 +33,11 @@ test("zero enabled reports: no reports section, contact card present", async ({
   await expect(page.getByTestId("trial-card")).toBeVisible();
   await expect(page.getByTestId("topup-card-small")).toBeVisible();
 
-  // No written-reports section at all.
+  // No written-reports section at all (the "WRITTEN REPORTS · N AVAILABLE"
+  // section heading is absent — the contact card's prose copy may still
+  // mention "written reports", so match the heading shape specifically).
   await expect(page.getByTestId("reports-section")).toHaveCount(0);
-  await expect(page.locator("body")).not.toContainText(/WRITTEN REPORTS/i);
+  await expect(page.locator("body")).not.toContainText(/WRITTEN REPORTS ·/i);
   for (const slug of [
     "permitted_use",
     "development_standards",
