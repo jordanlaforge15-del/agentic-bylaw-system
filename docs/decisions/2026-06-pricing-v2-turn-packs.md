@@ -1,8 +1,12 @@
 # Pricing v2 — One Product: Turn Packs
 
-**Date:** 2026-06-11 · **Updated:** 2026-06-12 · **Status:** ACCEPTED
-(structure decided 2026-06-12; implementation tracked in the Linear issues
-listed at the bottom)
+**Date:** 2026-06-11 · **Updated:** 2026-06-12 · **Status:** SUPERSEDED
+(2026-07-14) by [`2026-07-beta-pivot-turn-wallet-gated-reports.md`](2026-07-beta-pivot-turn-wallet-gated-reports.md)
+— the beta pivot replaces turn *packs* with a prepaid *token wallet*
+(pure burn-down, presented to users as turns). This ADR's turn-as-unit and
+free-open-case decisions carry forward; the pack ladder and credit model do not.
+(Structure decided 2026-06-12; implementation tracked in the Linear issues
+listed at the bottom.)
 **Grounding:** `docs/COST_MODEL.md` (measured $0.99 USD mean/turn, ABS-303 N=8)
 
 ## Problem
