@@ -20,21 +20,22 @@ Dispatch rules:
   gateway again.
 
 * **Chat requests, prior tool_use seen** (follow-up turn) — return a
-  final text answer mentioning the tool result.
+  final text answer mentioning the tool result. This is the
+  "qualifying" turn that commits the reserved credit
+  (see ``_turn_was_qualifying`` in ``advisor.api.app``).
 
 Scenario keywords in the user message override the default rules:
 
-* ``"MOCK_BUDGET_NEAR_END"`` — final text is large (a long answer). The
-  per-case budget-warning SSE it once drove is retired (ABS-383), so this
-  now just exercises a large-usage turn.
+* ``"MOCK_BUDGET_NEAR_END"`` — final text is large enough that the
+  post-stream settlement emits ``case_budget_warning`` on the SSE
+  stream (provided the chat session was opened on a small budget).
 
-* ``"MOCK_BURN_ALL"`` (ABS-383) — the assistant answers directly with a
-  usage large enough to overdraw the signup token grant in one turn, so
-  the NEXT turn trips the pre-flight ``insufficient_tokens`` wallet floor.
-  Drives the out-of-tokens 402 e2e.
+* ``"MOCK_REQUEST_UPGRADE"`` — the first tool_use response calls
+  ``request_tier_upgrade`` instead of ``search_bylaw_evidence``,
+  giving the UI a ``case_upgrade_offer`` SSE event to render.
 
 * ``"MOCK_EMPTY_TURN"`` — the assistant returns an empty text block
-  with no tool_use (a turn that produces no answer).
+  with no tool_use, exercising the "non-qualifying turn" refund path.
 
 * ``"MOCK_MONOLOGUE_REPORT"`` (ABS-359) — grounds once, then answers with
   the exact chain-of-thought shape a report SKU produces: a first-person
@@ -443,15 +444,18 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
             usage=TokenUsage(input_tokens=80, output_tokens=24),
         )
 
-    if "MOCK_BURN_ALL" in user_text:
-        # ABS-383: drive the wallet negative in a single turn so the NEXT
-        # turn trips the pre-flight ``insufficient_tokens`` floor. Answers
-        # directly (no grounding tool) with a usage large enough to overdraw
-        # the signup grant. Used by the out-of-tokens e2e.
-        return text_response(
-            "Draining the wallet for the out-of-tokens scenario.",
-            usage=TokenUsage(input_tokens=30_000, output_tokens=0),
-            stop_reason="end_turn",
+    if "MOCK_REQUEST_UPGRADE" in user_text:
+        return tool_use_response(
+            tool_id="t-upgrade",
+            tool_name="request_tier_upgrade",
+            tool_input={
+                "recommended_tier": "complex",
+                "reason": (
+                    "Question requires cross-bylaw reasoning beyond the "
+                    "current tier's depth."
+                ),
+            },
+            preamble="One moment — flagging a tier upgrade.",
         )
 
     tool_input: dict = {
