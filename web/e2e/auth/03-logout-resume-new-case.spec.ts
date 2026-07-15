@@ -35,9 +35,10 @@ test("logout / login + open a second case shows both on /cases", async ({
   await approveInviteForEmail(context, {
     email: identity.email,
     name: identity.fullName,
-    // Need at least two credits — one for each case we'll open.
-    starter_credits: 3,
-    starter_tier: "standard",
+    // Zero tier credits: both cases open free post-pivot. If case open
+    // still gated on a credit this would 402 the second open — proving
+    // the free-open path end-to-end across a logout/login.
+    starter_credits: 0,
   });
 
   // First login + first case.

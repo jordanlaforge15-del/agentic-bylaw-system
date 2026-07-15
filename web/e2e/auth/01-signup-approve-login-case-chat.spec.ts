@@ -10,15 +10,18 @@
 //   * The user lands a sign-in session with a fresh identity. On
 //     first request the e2e user-dependency JIT-creates the
 //     advisor_user row, matches the approved invite by email, and
-//     gifts the starter credits we set on approval. Without those
-//     credits, the case-open flow that follows would 402.
-//   * The user opens a case and gets a streamed SSE answer.
+//     grants the free trial token wallet (ADVISOR_SIGNUP_TOKEN_GRANT,
+//     ~25k tokens). That wallet — NOT any tier credit — is what funds
+//     the first chat turn under the beta turn-based model.
+//   * The user opens a case (FREE post-pivot: no tier, no credit
+//     consumed) and gets a streamed SSE answer.
 //
 // Why this is the load-bearing spec of the suite: it asserts that
 // the *post-Clerk* code path (resolve_or_create_user mirror + invite
-// redemption + starter_credit gift) is reachable end-to-end and that
-// a brand-new user can finish the first chat turn. Flows 2 and 3
-// build on the identity this one mints.
+// redemption + signup token grant) is reachable end-to-end and that a
+// brand-new user with ZERO tier credits can open a free case and
+// finish the first chat turn on their trial token balance. Flows 2
+// and 3 build on the identity this one mints.
 
 import {
   acceptCurrentTermsAs,
@@ -46,13 +49,14 @@ test("sign-up → approve → login → case → chat", async ({
     page,
   });
 
-  // 2. Admin approval — gift two starter standard credits so the
-  //    first case-open below has a credit to consume.
+  // 2. Admin approval — grant ZERO tier credits. Post-pivot a case is
+  //    free to open and chat bills the trial token wallet, so no tier
+  //    credit is needed anywhere in this flow. Passing 0 makes the
+  //    "free open + wallet-funded chat" contract explicit.
   await approveInviteForEmail(context, {
     email: identity.email,
     name: identity.fullName,
-    starter_credits: 2,
-    starter_tier: "standard",
+    starter_credits: 0,
   });
 
   // 3. First sign-in for this identity. signInAs mints the password
@@ -76,8 +80,8 @@ test("sign-up → approve → login → case → chat", async ({
   await page.goto("/cases/new");
   await expect(page.getByTestId("question-menu")).toBeVisible();
 
-  // A case is a free container; opening one consumes a starter credit and
-  // exercises the post-Clerk identity path. We open it via the
+  // A case is a free container; opening one is free (no tier, no credit)
+  // and exercises the post-Clerk identity path. We open it via the
   // authenticated API (the form sells answers rather than minting the
   // container) and jump into the chat product with the case bound.
   const anchor = `Signup Flow ${identity.subUserId}`;
