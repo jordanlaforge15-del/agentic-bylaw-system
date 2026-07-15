@@ -79,8 +79,10 @@ test.describe("per-report gate matrix (ABS-384)", () => {
     });
 
     await page.goto("/cases/new");
-    // The menu container still renders; it simply carries no options.
-    await expect(page.getByTestId("question-menu")).toBeVisible();
+    // The menu container still renders in the DOM; it simply carries no
+    // options, so it collapses to zero height (Playwright reports an empty
+    // container as hidden). Assert it is attached rather than visible.
+    await expect(page.getByTestId("question-menu")).toBeAttached();
     for (const slug of LAUNCH_SLUGS) {
       await expect(
         page.getByTestId(`question-option-${slug}`),
