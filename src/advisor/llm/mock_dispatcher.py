@@ -43,6 +43,12 @@ Scenario keywords in the user message override the default rules:
   section. ``build_report`` must scrub all of it. Drive it via a report
   question's free-form input so the sentinel rides the rendered prompt.
 
+* ``"MOCK_DANGLING_LIST_REPORT"`` (ABS-374) — grounds once, then answers with
+  a section that announces a list ("The complete list is:") but emits no
+  items, so the colon sentence dangles into the conclusion. ``build_report``
+  must drop the dangling announcement while keeping the real prose either
+  side. Drive it via a report question's free-form input.
+
 * ``"MOCK_FEASIBILITY"`` — the final answer is a feasibility-grade reply
   that stacks several built-form dimensions (height, FAR, coverage,
   setback, parking) with no hedging language. The ABS-263 hedge injector
@@ -287,6 +293,43 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
             tool_name="search_bylaw_evidence",
             tool_input={"query": "variance statutory criteria setback"},
             preamble="Looking up the variance provisions.",
+            usage=TokenUsage(input_tokens=40, output_tokens=12),
+        )
+
+    if "MOCK_DANGLING_LIST_REPORT" in user_text:
+        # ABS-374: reproduce the retest bug where a section announces a list
+        # ("The complete list is:") and then emits no items — the agent wrote
+        # the preamble but never produced the enumeration, so the colon
+        # sentence dangles straight into the conclusion. Round one grounds;
+        # round two writes the PU-000019 shape (Section 51 home-occupation
+        # uses). build_report (advisor.billing.report.parse_blocks) must drop
+        # the dangling announcement while keeping the real prose either side.
+        # Exercised end-to-end by abs374-dangling-list.spec.ts.
+        if has_prior_tool_use:
+            body = (
+                "# Permitted Use Report\n\n"
+                "A permitted-use determination for a home-based daycare at "
+                "5184 Morris St.\n\n"
+                "## 1. Zoning\n\n"
+                "The property is in the DH-1 (Downtown Halifax - 1) zone.\n\n"
+                "## 2. Home Occupation Uses\n\n"
+                "Section 51 lists the permitted home occupation uses. The "
+                "complete list is:\n\n"
+                "Child daycare is not listed among the permitted home "
+                "occupation uses, so the proposed use is not permitted as a "
+                "home occupation.\n\n"
+                f"Source: {_DEFAULT_CITATION}"
+            )
+            return text_response(
+                body,
+                usage=TokenUsage(input_tokens=140, output_tokens=90),
+                stop_reason="end_turn",
+            )
+        return tool_use_response(
+            tool_id="t-danglist-1",
+            tool_name="search_bylaw_evidence",
+            tool_input={"query": "home occupation permitted uses section 51"},
+            preamble="Looking up the home occupation provisions.",
             usage=TokenUsage(input_tokens=40, output_tokens=12),
         )
 

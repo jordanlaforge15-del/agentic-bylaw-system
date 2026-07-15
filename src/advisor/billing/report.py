@@ -350,8 +350,86 @@ def _strip_preamble(lines: list[str]) -> list[str]:
 _TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.*\S)\s*$")
+# A numbered list item (`1. Foo`, `2) Bar`). Not a report list block on its
+# own, but it still counts as "a list follows" when deciding whether a
+# colon-terminated preamble is dangling (ABS-374).
+_NUMBERED_RE = re.compile(r"^\s*\d+[.)]\s+\S")
 # `**Label:** value` or `- **Label:** value`
 _KEYVAL_RE = re.compile(r"^\s*(?:[-*]\s+)?\*\*(.+?)\*\*\s*:?\s*(.*)$")
+
+
+def _is_list_item(line: str) -> bool:
+    return bool(_BULLET_RE.match(line) or _NUMBERED_RE.match(line))
+
+
+# A sentence that announces a forthcoming enumeration and ends in a colon —
+# "The complete list is:", "Key uncertainties include:". When the promised
+# list never materialises (the agent wrote the preamble but no items, or a
+# compaction pass dropped them), the dangling colon sentence reads as broken
+# text in a paid, exportable deliverable (ABS-374). The signals are matched at
+# the END of the sentence so an inline colon ("Section 52(1): …", "Note: see
+# below") — which carries its own content after the colon — is never mistaken
+# for a dangling announcement.
+_LIST_PREAMBLE_SIGNALS = (
+    "list is:",
+    "list are:",
+    "the list:",
+    "as follows:",
+    "the following:",
+    "following are:",
+    "following is:",
+    "include:",
+    "includes:",
+    "including:",
+    "are:",
+    "comprises:",
+    "comprise:",
+    "consist of:",
+    "consists of:",
+    "such as:",
+)
+
+
+def _looks_like_list_preamble(sentence: str) -> bool:
+    """True when a sentence announces a list it expects to be followed by."""
+    lowered = sentence.strip().lower()
+    return lowered.endswith(":") and any(
+        lowered.endswith(sig) for sig in _LIST_PREAMBLE_SIGNALS
+    )
+
+
+def _drop_dangling_list_preamble(lines: list[str]) -> list[str]:
+    """Drop a list-announcing sentence that no list actually follows.
+
+    The engine sometimes writes a preamble promising an enumeration
+    ("The complete list is:", "Key uncertainties include:") and then emits no
+    list — the items never came, or a compaction pass dropped them. That
+    dangling colon sentence reads as broken text in a paid deliverable
+    (ABS-374). When the announced list IS present (a bullet or numbered item
+    follows in the same section), the preamble is kept and its items render.
+    Only the dangling announcement sentence is dropped; real prose sharing its
+    line survives ("Section 51 lists the uses. The complete list is:" keeps the
+    first sentence), and a line that is nothing but the preamble is removed.
+
+    ``lines`` are the section's non-blank lines, so adjacency is exact — the
+    line after a preamble is the list's first item when a list is present.
+    """
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        if _is_list_item(line):
+            out.append(line)
+            continue
+        next_is_list = i + 1 < len(lines) and _is_list_item(lines[i + 1])
+        if not next_is_list:
+            sentences = _SENTENCE_SPLIT_RE.split(line)
+            if sentences and _looks_like_list_preamble(sentences[-1]):
+                kept = [s for s in sentences[:-1] if s.strip()]
+                if kept:
+                    out.append(" ".join(kept))
+                # else: the whole line was the dangling preamble → drop it.
+                continue
+        out.append(line)
+    return out
 
 _USE_STATUS = {
     "permitted": ("permitted", "pass"),
@@ -473,6 +551,14 @@ def _parse_section(heading: str | None, lines: list[str]) -> list[dict]:
     if not body:
         return []
 
+    # Drop a colon-terminated list-announcing sentence whose list never came
+    # ("… The complete list is:" with no items, "Key uncertainties include:"
+    # before the next heading). When the list IS present the preamble stays and
+    # its items render below (ABS-374).
+    body = _drop_dangling_list_preamble(body)
+    if not body:
+        return []
+
     # A markdown table anywhere in the section becomes a table block; the
     # surrounding prose (if any) is emitted around it in order.
     if any(_TABLE_ROW_RE.match(ln) and "|" in ln for ln in body):
@@ -574,6 +660,10 @@ def parse_blocks(answer: str) -> tuple[str, list[dict]]:
         if lines[idx].strip():
             summary_lines.append(lines[idx])
         idx += 1
+    # A lead that announces a list the report never delivers ("The complete
+    # list is:" straight into the first heading) is a dangling preamble too —
+    # drop it before scrubbing (ABS-374).
+    summary_lines = _drop_dangling_list_preamble(summary_lines)
     # Second-line defence: even with no fencing rule, a lead carrying the
     # agent's chatter ("Based on my research, I can now provide …") is not a
     # summary — scrub the chatter sentence-by-sentence, keeping any real lead

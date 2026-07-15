@@ -149,7 +149,36 @@ ensure_postgres() {
     return 0
   fi
   log "Starting Postgres container on :${PG_PORT}"
-  docker_compose up -d postgres
+  # `docker compose up` creates a per-project bridge network. On a machine
+  # running many parallel worktree stacks, Docker's default address pool can
+  # become fully subnetted, and compose aborts with:
+  #   "all predefined address pools have been fully subnetted"
+  # Orphaned networks left behind by torn-down sibling worktrees are the usual
+  # cause (each `nm-abs-NNN_default` eats a subnet until pruned). Detect that
+  # signature, prune unused networks (safe: `docker network prune` only removes
+  # networks that no container is attached to, so live sibling stacks survive),
+  # and retry once before giving up with an actionable message. Without this the
+  # reviewer sees a bare `make: *** [e2e-up] Error 1`, indistinguishable from a
+  # code failure.
+  local up_out
+  if ! up_out="$(docker_compose up -d postgres 2>&1)"; then
+    if printf '%s' "$up_out" | grep -qi 'address pools have been fully subnetted'; then
+      log "Docker address pool exhausted — pruning orphaned networks and retrying"
+      docker network prune -f >/dev/null 2>&1 || true
+      if ! up_out="$(docker_compose up -d postgres 2>&1)"; then
+        echo "error: could not start Postgres container after pruning networks" >&2
+        echo "$up_out" >&2
+        echo "       Docker predefined address pools are exhausted. Reclaim network" >&2
+        echo "       space with: docker network prune -f (and docker system prune" >&2
+        echo "       if needed), then retry." >&2
+        exit 1
+      fi
+    else
+      echo "error: could not start Postgres container" >&2
+      echo "$up_out" >&2
+      exit 1
+    fi
+  fi
   local last_err=""
   for _ in $(seq 1 60); do
     last_err=$(docker_compose exec -T postgres pg_isready -U "$PG_USER" -d postgres 2>&1) && return 0

@@ -119,3 +119,65 @@ async def test_built_report_scrubs_agent_monologue_end_to_end(tmp_path: Path) ->
 
         # The fix strips chatter, it does not gut the report.
         assert "statutory" in blob
+
+
+async def test_built_report_drops_dangling_list_preamble_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """ABS-374: a section that announces a list ("The complete list is:") and
+    then emits no items must not leave the dangling colon sentence in the paid
+    deliverable. Runs the REAL run_answer loop against the MockGateway (which
+    emits the PU-000019 shape via MOCK_DANGLING_LIST_REPORT), then builds the
+    report the product surface renders and asserts the announcement is gone
+    while the real prose either side survives. The rendered contract is guarded
+    end-to-end over Postgres in
+    ``web/e2e/functional/abs374-dangling-list.spec.ts``; the parser units live
+    in ``tests/advisor/billing/test_report.py``."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    uid = _seed_user(db_url)
+
+    with session_scope(db_url) as db:
+        user = db.get(User, uid)
+        purchase = answer_flow.start_question_free(
+            db,
+            user,
+            question_slug="permitted_use",
+            # The sentinel rides the free-form proposed_use into the rendered
+            # prompt, steering the mock to the dangling-list shape.
+            inputs={
+                "address": "5184 Morris St",
+                "proposed_use": "a home-based child daycare. MOCK_DANGLING_LIST_REPORT",
+            },
+        )
+        pid = purchase.id
+
+    with session_scope(db_url) as db:
+        p = db.get(QuestionPurchase, pid)
+        p = await answer_flow.run_answer(
+            db,
+            p,
+            gateway=MockGateway(callable_=build_dispatcher()),
+            persona=PERSONA,
+            retrieval_factory=_StubRetrieval(),
+            client=None,
+        )
+        assert p.status == "captured"
+        # The RAW captured answer really does carry the dangling announcement —
+        # proof the mock drove the broken shape, not a pre-cleaned fixture.
+        assert "The complete list is:" in p.answer_text
+
+        report = build_report(p)
+        assert report is not None
+
+        blob = json.dumps(report)
+        # The dangling announcement is gone everywhere in the deliverable.
+        assert "complete list is" not in blob, "report leaks the dangling preamble"
+        # No block (or the summary) dangles on a bare colon.
+        for block in report["blocks"]:
+            text = (block.get("text") or block.get("body") or "").strip()
+            assert not text.endswith(":"), f"block dangles on a colon: {text!r}"
+        assert not report["summary"].rstrip().endswith(":")
+        # The fix strips only the announcement — real content either side stays.
+        assert "Section 51 lists the permitted home occupation uses" in blob
+        assert "Child daycare is not listed" in blob
