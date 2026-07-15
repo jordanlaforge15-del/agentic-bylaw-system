@@ -30,3 +30,21 @@ test("product chat shell matches snapshot", async ({ page }) => {
     mask: [page.locator('[data-testid="chat-thread"] >> nth=0')],
   });
 });
+
+test("pricing page matches snapshot", async ({ page }) => {
+  // ABS-387 "Pay by the turn": trial grant + token top-ups + gated report
+  // SKUs. The top-ups/reports/posture are fetched client-side, so wait for
+  // the fully-loaded data-driven state to settle before capturing —
+  // otherwise the loading skeleton (or a half-rendered catalog) races the
+  // screenshot. The e2e stack enables all five report slugs, so the whole
+  // reports section renders against the live gate.
+  await page.goto("/pricing");
+  await expect(
+    page.getByRole("heading", { level: 1, name: /Pay by the turn/i }),
+  ).toBeVisible();
+  await expect(page.getByTestId("trial-card")).toBeVisible();
+  await expect(page.getByTestId("topup-card-large")).toBeVisible();
+  await expect(page.getByTestId("reports-section")).toBeVisible();
+  await expect(page.getByTestId("report-sku-variance_justification")).toBeVisible();
+  await expect(page).toHaveScreenshot("pricing.png", { fullPage: true });
+});
