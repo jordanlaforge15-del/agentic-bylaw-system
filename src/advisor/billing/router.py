@@ -56,9 +56,7 @@ from advisor.billing.answers import (
 from advisor.billing.report import build_report
 from advisor.billing.checkout import (
     PriceNotConfiguredError,
-    UnknownOfferError,
     UnknownTopupError,
-    start_pack_checkout,
     start_topup_checkout,
 )
 from advisor.billing.client import StripeClient
@@ -1472,48 +1470,29 @@ def build_billing_router(
             ),
         )
 
-    @router.post("/checkout/pack", response_model=CheckoutResponse)
+    @router.post("/checkout/pack")
     def post_checkout_pack(
-        body: CheckoutPackRequest,
-        auth_session: Any = Depends(user_dependency),
-    ) -> CheckoutResponse:
-        _require_enabled()
-        if client_factory is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "billing_misconfigured",
-                    "message": "no Stripe client factory wired",
-                },
-            )
-        with _open_db() as db:
-            user = user_resolver(auth_session, db)
-            try:
-                url = start_pack_checkout(
-                    db,
-                    user,
-                    tier=body.tier,
-                    pack_sku=body.pack_sku,
-                    client=client_factory(),
-                    settings=settings,
-                )
-            except UnknownOfferError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "code": "unknown_offer",
-                        "message": str(exc),
-                    },
-                ) from exc
-            except PriceNotConfiguredError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "code": "price_not_configured",
-                        "message": str(exc),
-                    },
-                ) from exc
-            return CheckoutResponse(url=url)
+        body: CheckoutPackRequest,  # noqa: ARG001 — retired; body ignored
+        auth_session: Any = Depends(user_dependency),  # noqa: ARG001
+    ) -> Any:
+        """RETIRED (ABS-390). The beta pivot replaced the case-credit
+        tier×pack catalog with the turn-based token wallet + per-slug
+        reports. The pack checkout is gone product-wide: this endpoint
+        answers 410 Gone so any lingering client sees an explicit,
+        permanent retirement rather than a transient 503. Buy turns via
+        ``POST /checkout/topup`` instead.
+        """
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={
+                "code": "packs_retired",
+                "message": (
+                    "Credit packs are retired. The turn-based token wallet "
+                    "replaced them — buy turns via POST "
+                    "/v1/billing/checkout/topup."
+                ),
+            },
+        )
 
     # -- Token top-up catalog + checkout (ABS-381) ------------------------
 
@@ -2068,9 +2047,19 @@ def build_dormant_billing_router(
 
     @router.post("/checkout/pack")
     def post_checkout_disabled() -> Any:
+        # ABS-390: packs are retired product-wide — the same 410 as the live
+        # router, not a transient 503, so the retirement reads identically in
+        # every posture.
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=checkout_detail,
+            status_code=status.HTTP_410_GONE,
+            detail={
+                "code": "packs_retired",
+                "message": (
+                    "Credit packs are retired. The turn-based token wallet "
+                    "replaced them — buy turns via POST "
+                    "/v1/billing/checkout/topup."
+                ),
+            },
         )
 
     # ABS-381: the top-up catalog renders on the dormant router too (the

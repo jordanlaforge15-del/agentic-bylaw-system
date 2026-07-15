@@ -76,6 +76,29 @@ services:
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      # Beta pivot billing matrix (ABS-379) — turn-based token wallet +
+      # per-slug gated reports. See .env.example for the full annotation.
+      ADVISOR_BILLING_ENABLED: ${ADVISOR_BILLING_ENABLED:-true}
+      ADVISOR_PAYMENTS_ENABLED: ${ADVISOR_PAYMENTS_ENABLED:-false}
+      ADVISOR_CONVERSATION_ENTRY_ENABLED: ${ADVISOR_CONVERSATION_ENTRY_ENABLED:-true}
+      ADVISOR_OTHER_QUESTION_ENABLED: ${ADVISOR_OTHER_QUESTION_ENABLED:-false}
+      # Per-report gate (ABS-384). Deny-by-default when unset; disable a slug
+      # only after draining its `authorized` holds (see docs/RUNBOOK).
+      ADVISOR_ENABLED_QUESTIONS: ${ADVISOR_ENABLED_QUESTIONS:-}
+      # Token wallet / turns parameters (ABS-380).
+      ADVISOR_TOKENS_PER_TURN: ${ADVISOR_TOKENS_PER_TURN:-2500}
+      ADVISOR_SIGNUP_TOKEN_GRANT: ${ADVISOR_SIGNUP_TOKEN_GRANT:-25000}
+      ADVISOR_CHAT_MIN_BALANCE_TOKENS: ${ADVISOR_CHAT_MIN_BALANCE_TOKENS:-0}
+      ADVISOR_LOW_BALANCE_WARN_TOKENS: ${ADVISOR_LOW_BALANCE_WARN_TOKENS:-5000}
+      ADVISOR_CHAT_MAX_ITERATIONS: ${ADVISOR_CHAT_MAX_ITERATIONS:-20}
+      # Stripe — required only when ADVISOR_PAYMENTS_ENABLED=true. Token
+      # top-up Price IDs (ABS-381). Legacy STRIPE_PRICE_<TIER>_<PACK> IDs are
+      # RETIRED (checkout/pack → 410); do not configure them.
+      STRIPE_API_KEY: ${STRIPE_API_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_TOPUP_SMALL: ${STRIPE_PRICE_TOPUP_SMALL:-}
+      STRIPE_PRICE_TOPUP_MEDIUM: ${STRIPE_PRICE_TOPUP_MEDIUM:-}
+      STRIPE_PRICE_TOPUP_LARGE: ${STRIPE_PRICE_TOPUP_LARGE:-}
     depends_on:
       postgres:
         condition: service_healthy
