@@ -325,6 +325,143 @@ def test_wholly_monologue_trailing_block_is_dropped() -> None:
     ), "an empty block leaked through"
 
 
+# -- Dangling list-announcement preamble (ABS-374) --------------------------
+# Two retest reports announced a list ("The complete list is:", "Key
+# uncertainties include:") and then rendered no list — the agent emitted the
+# preamble but no items, so the colon sentence dangled straight into the next
+# section. The report has no generic "list" block, so a mixed prose+bullets
+# section already renders every item (as prose); the fix is to DROP the
+# announcement when the promised list is absent, and nothing else.
+
+
+def test_dangling_list_preamble_dropped_when_no_list_pu_repro() -> None:
+    """ABS-374 (PU-000019, 5184 Morris St, home-based daycare): a section that
+    announces "The complete list is:" but emits no list must not render the
+    dangling colon sentence. The real prose on the same line and the
+    conclusion survive — only the announcement is dropped."""
+    md = (
+        "A permitted-use determination for 5184 Morris St.\n\n"
+        "## 2. Home Occupation Uses\n"
+        "Section 51 lists permitted home occupation uses. The complete list "
+        "is:\n"
+        "Child daycare is not listed among the permitted home occupation "
+        "uses.\n"
+    )
+    summary, blocks = parse_blocks(md)
+    serialized = str((summary, blocks)).lower()
+    assert "complete list is" not in serialized, blocks
+    # The real prose either side of the announcement is preserved.
+    prose = [b for b in blocks if b["type"] == "prose"]
+    assert prose, blocks
+    body = prose[0]["text"]
+    assert "Section 51 lists permitted home occupation uses." in body
+    assert "Child daycare is not listed" in body
+    # And no colon-terminated sentence dangles at the end of a block.
+    assert not body.rstrip().endswith(":"), body
+
+
+def test_dangling_list_preamble_dropped_when_no_list_vj_repro() -> None:
+    """ABS-374 (VJ-000022, 5686 Spring Garden Rd): "Key uncertainties
+    include:" was the last line of the "Important limitations" section, with
+    the list never delivered before the Recommendation block. Drop the
+    dangling announcement without disturbing either section's real content."""
+    md = (
+        "A variance justification package.\n\n"
+        "## Important limitations\n"
+        "This analysis relies on the applicant-supplied survey. Key "
+        "uncertainties include:\n\n"
+        "## Recommendation\n"
+        "The variance is supportable, subject to conditions.\n"
+    )
+    summary, blocks = parse_blocks(md)
+    serialized = str((summary, blocks)).lower()
+    assert "uncertainties include" not in serialized, blocks
+    # The limitations section keeps its real sentence; recommendation intact.
+    limitations = next(
+        b for b in blocks if b.get("title") == "Important limitations"
+    )
+    assert limitations["text"] == (
+        "This analysis relies on the applicant-supplied survey."
+    )
+    rec = next(b for b in blocks if b.get("title") == "Recommendation")
+    assert rec["text"] == "The variance is supportable, subject to conditions."
+
+
+def test_announced_list_with_items_renders_every_item() -> None:
+    """ABS-374 (a): when the announced list IS present, the preamble stays and
+    every item survives into the deliverable — the fix strips only dangling
+    announcements, it never guts a real list."""
+    md = (
+        "Lead.\n\n## Home Occupation Uses\n"
+        "Section 51 lists permitted home occupation uses. The complete list "
+        "is:\n"
+        "- office use\n"
+        "- makerspace use\n"
+        "- tutoring\n"
+    )
+    _, blocks = parse_blocks(md)
+    prose = [b for b in blocks if b["type"] == "prose"]
+    assert prose, blocks
+    body = prose[0]["text"]
+    assert "The complete list is:" in body
+    for item in ("office use", "makerspace use", "tutoring"):
+        assert item in body, f"list item dropped: {item}"
+
+
+def test_announced_numbered_list_preamble_is_kept() -> None:
+    """A numbered list counts as "a list follows" — its preamble is not
+    dangling and must not be dropped."""
+    md = (
+        "Lead.\n\n## Uses\n"
+        "The complete list is:\n"
+        "1. office use\n"
+        "2. tutoring\n"
+    )
+    _, blocks = parse_blocks(md)
+    body = next(b for b in blocks if b["type"] == "prose")["text"]
+    assert "The complete list is:" in body
+    assert "office use" in body and "tutoring" in body
+
+
+def test_inline_colon_sentence_is_not_dropped() -> None:
+    """A colon that introduces inline content on the same line ("Section
+    52(1):") is not a list announcement — it must survive. Guards against the
+    scrubber over-reaching onto ordinary citations/labels."""
+    md = (
+        "Lead.\n\n## Home Office\n"
+        "Home office use is permitted. Section 52(1):\n"
+        "The provision applies across all zones.\n"
+    )
+    _, blocks = parse_blocks(md)
+    body = next(b for b in blocks if b["type"] == "prose")["text"]
+    assert "Section 52(1):" in body
+    assert "The provision applies across all zones." in body
+
+
+def test_dangling_preamble_helper_unit() -> None:
+    """ABS-374: unit-level guard on the drop helper itself."""
+    from advisor.billing.report import _drop_dangling_list_preamble
+
+    # Dropped: the announcement dangles with no following list item.
+    assert _drop_dangling_list_preamble(["The complete list is:"]) == []
+    assert _drop_dangling_list_preamble(
+        ["Key uncertainties include:"]
+    ) == []
+    # Sentence-level: real prose on the line survives, announcement dropped.
+    assert _drop_dangling_list_preamble(
+        ["Section 51 lists the uses. The complete list is:"]
+    ) == ["Section 51 lists the uses."]
+    # Kept: a bullet or numbered item follows, so the list is present.
+    assert _drop_dangling_list_preamble(
+        ["The complete list is:", "- office use"]
+    ) == ["The complete list is:", "- office use"]
+    assert _drop_dangling_list_preamble(
+        ["The complete list is:", "1. office use"]
+    ) == ["The complete list is:", "1. office use"]
+    # Kept: an inline colon carrying its own content is not an announcement.
+    assert _drop_dangling_list_preamble(["Section 52(1):"]) == ["Section 52(1):"]
+
+
 # -- Envelope ---------------------------------------------------------------
 
 
