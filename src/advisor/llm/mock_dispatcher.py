@@ -574,6 +574,45 @@ def _final_answer_response(user_text: str) -> CompletionResponse:
             stop_reason="end_turn",
         )
 
+    if "MOCK_DEV_STANDARDS_REPORT" in user_text:
+        # ABS-376: a dev-standards report that leads with the mandatory
+        # use-permission evaluation BEFORE the built-form standards table —
+        # the section the ABS-375 prompt refocus silently dropped (a $149
+        # report evaluated *how* the building complies while skipping
+        # *whether* the use is allowed). The go/no-go threshold names
+        # Section 43 / Schedule 9 for multi-unit dwelling use in the INS
+        # zone, and flags that the Schedule 9 landmark dataset is absent
+        # from the corpus (the ingestion gap). ``build_report`` turns the
+        # "Use-permission determination" heading into a ``finding`` block
+        # whose body preserves the Section 43 / Schedule 9 citation; the
+        # built-form table follows.
+        body = (
+            "The proposal's use permission is the decisive threshold and is "
+            "evaluated first, before built-form compliance.\n\n"
+            "## Use-permission determination\n\n"
+            "Multi-unit dwelling use in the INS (Institutional) zone is not "
+            "permitted as-of-right. Under Section 43 it is conditionally "
+            "permitted only on a Schedule 9 landmark site. Whether the "
+            "subject parcel is a designated Schedule 9 landmark site cannot "
+            "be resolved: the Schedule 9 landmark dataset is absent from the "
+            "corpus (see docs/data-gaps/schedule-9-18-ingestion.md). Until "
+            "that landmark status is confirmed with HRM, the entire proposal "
+            "is contingent on this use-permission gate, regardless of "
+            "built-form compliance.\n\n"
+            "## Built-form standards\n\n"
+            "| Standard | Required | Proposed | Result |\n"
+            "| --- | --- | --- | --- |\n"
+            "| Height | 20.0 m | 14.5 m | PASS |\n"
+            "| Front setback | 3.0 m | 3.0 m | PASS |\n"
+            "| Lot coverage | 60% | 48% | PASS |\n\n"
+            f"Source: {_DEFAULT_CITATION}"
+        )
+        return text_response(
+            body,
+            usage=TokenUsage(input_tokens=200, output_tokens=180),
+            stop_reason="end_turn",
+        )
+
     if "MOCK_REFINEMENT_HOLD" in user_text:
         # ABS-317 EVIDENCE INTEGRITY: model holds its grounded determination
         # and restates the original citation rather than capitulating to
