@@ -166,6 +166,13 @@ test.describe("report purchase is decoupled from the conversation ledger (ABS-39
     proposed_use: "a four-unit dwelling",
   };
 
+  const sumLedger = (
+    balances: { reserved: number; consumed: number }[],
+  ): { reserved: number; consumed: number } => ({
+    reserved: balances.reduce((s, b) => s + b.reserved, 0),
+    consumed: balances.reduce((s, b) => s + b.consumed, 0),
+  });
+
   test("free-start opens an Answers purchase with zero CaseCredit and no Case", async ({
     request,
   }) => {
@@ -173,13 +180,28 @@ test.describe("report purchase is decoupled from the conversation ledger (ABS-39
       .toString(36)
       .slice(2, 8)}`;
 
-    // Grant one free-question entitlement (the payments-off report unlock) via
-    // the test harness — the token wallet is a separate ledger.
-    const grant = await request.post(
-      `${E2E_API_URL}/v1/_test/buy-answer/grant-free-questions`,
-      { data: { user_id: userId, quantity: 1 } },
+    // Establish the pre-flight baseline via /me. The first authenticated
+    // request auto-provisions the user and issues the one-time signup starter
+    // grant (FREE_QUESTION_GRANT free questions), so reading /me first both
+    // settles that grant and pins the free-question count we expect free-start
+    // to decrement by exactly one. It also confirms the conversation ledger
+    // starts clean (no CaseCredit reserved/consumed) — that ledger is separate
+    // from the free-question entitlement the Answers path draws on.
+    const beforeRes = await request.get(`${E2E_API_URL}/v1/billing/me`, {
+      headers: { "X-Test-User-Id": userId },
+    });
+    expect(beforeRes.status(), await beforeRes.text()).toBe(200);
+    const before = (await beforeRes.json()) as {
+      tier_balances: { reserved: number; consumed: number }[];
+      free_questions_remaining: number;
+    };
+    const freeBefore = before.free_questions_remaining;
+    expect(freeBefore, "the signup starter grant seeds free questions").toBeGreaterThan(
+      0,
     );
-    expect(grant.status(), await grant.text()).toBe(200);
+    const beforeLedger = sumLedger(before.tier_balances);
+    expect(beforeLedger.reserved).toBe(0);
+    expect(beforeLedger.consumed).toBe(0);
 
     // free-start unlocks the report → an Answers QuestionPurchase, not a Case.
     const startRes = await request.post(
@@ -205,7 +227,9 @@ test.describe("report purchase is decoupled from the conversation ledger (ABS-39
     expect(start.status).toBe("authorized");
     // The decoupling: no Case identifier is handed back.
     expect(start.case_id).toBeUndefined();
-    expect(start.free_questions_remaining).toBe(0);
+    // Exactly one free question is drawn from the Answers ledger — not zeroed,
+    // not more — proving the report unlock spends its own entitlement.
+    expect(start.free_questions_remaining).toBe(freeBefore - 1);
 
     // The conversation ledger is untouched: no CaseCredit reserved/consumed.
     const meRes = await request.get(`${E2E_API_URL}/v1/billing/me`, {
@@ -215,10 +239,9 @@ test.describe("report purchase is decoupled from the conversation ledger (ABS-39
     const me = (await meRes.json()) as {
       tier_balances: { reserved: number; consumed: number }[];
     };
-    const reserved = me.tier_balances.reduce((s, b) => s + b.reserved, 0);
-    const consumed = me.tier_balances.reduce((s, b) => s + b.consumed, 0);
-    expect(reserved, "the Answers path reserves no CaseCredit").toBe(0);
-    expect(consumed, "the Answers path consumes no CaseCredit").toBe(0);
+    const afterLedger = sumLedger(me.tier_balances);
+    expect(afterLedger.reserved, "the Answers path reserves no CaseCredit").toBe(0);
+    expect(afterLedger.consumed, "the Answers path consumes no CaseCredit").toBe(0);
 
     // And no Case was opened for the subject address.
     const matchRes = await request.get(
