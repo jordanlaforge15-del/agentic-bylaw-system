@@ -47,6 +47,42 @@ export type BillingMeResponse = {
   tier_balances: TierBalance[];
   total_available_credits: number;
   free_questions_remaining: number;
+  // ABS-380 token wallet balance (signed). Additive to the legacy credit
+  // fields — the beta pivot bills chat by this wallet, shown as "~N turns".
+  token_balance: number;
+};
+
+// ABS-380 — the turns-aware token wallet view (GET /api/billing/wallet).
+// Turns conversion is backend-owned: render approx_turns_remaining /
+// tokens_per_turn straight off the wire; never divide tokens client-side.
+export type WalletResponse = {
+  balance_tokens: number;
+  approx_turns_remaining: number;
+  tokens_per_turn: number;
+  low_balance: boolean;
+  warn_threshold_tokens: number;
+  floor_tokens: number;
+  chat_enabled: boolean;
+  payments_enabled: boolean;
+};
+
+export type WalletEntryType = "grant" | "topup" | "burn" | "adjust";
+
+export type WalletTransaction = {
+  id: number;
+  entry_type: WalletEntryType;
+  amount_tokens: number;
+  balance_after: number;
+  reason: string | null;
+  created_at: string;
+};
+
+// GET /api/billing/wallet/transactions — newest-first, id-cursor paged.
+// Pass next_before_id back as ?before_id to fetch the next page (null =
+// last page).
+export type WalletTransactionsResponse = {
+  transactions: WalletTransaction[];
+  next_before_id: number | null;
 };
 
 export type PurchaseSummary = {
