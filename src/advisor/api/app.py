@@ -736,45 +736,42 @@ def create_app(
                         raise HTTPException(
                             status_code=404, detail={"code": "case_not_found"}
                         )
-                    if case_row.current_tier is None:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "code": "case_no_active_tier",
-                                "message": (
-                                    "Case has no active tier; reserve a "
-                                    "credit by opening it through "
-                                    "POST /v1/cases."
-                                ),
-                            },
-                        )
                     db_chat_session.case_id = case_row.id
                     db_chat_session.tier = case_row.current_tier
                     case_number_for_session = case_row.user_case_number
-                    # Initialise the per-case budget remaining from the
-                    # tier's full budget minus what the case has burned
-                    # in earlier sessions (reopen path).
-                    from advisor.llm.budget import (  # noqa: PLC0415
-                        case_budget_for,
-                    )
-
-                    db_chat_session.token_budget_remaining = max(
-                        0,
-                        case_budget_for(case_row.current_tier)
-                        - (case_row.tokens_consumed or 0),
-                    )
-                    credit = reserve_credit_for_session(
-                        db,
-                        db_user,
-                        session=db_chat_session,
-                        case=case_row,
-                        tier=case_row.current_tier,
-                    )
                     case_id_for_session = case_row.id
-                    case_number_for_session = case_row.user_case_number
-                    case_tier_for_session = credit.tier
                     case_anchor_label_for_session = case_row.anchor_label
                     case_anchor_kind_for_session = case_row.anchor_kind
+                    if case_row.current_tier is None:
+                        # ABS-382: opening a case is free — it reserves no
+                        # tier credit and carries ``current_tier=None``.
+                        # Such a case is chattable without a credit: skip
+                        # the reservation and leave ``token_budget_remaining``
+                        # None (no per-tier ledger). The account-level token
+                        # wallet floor + burn settlement land in ABS-383;
+                        # here the turn is simply not credit-gated.
+                        case_tier_for_session = None
+                    else:
+                        # Legacy tier-credit case (pre-ABS-382 rows may still
+                        # carry a tier during rollout): initialise the per-case
+                        # budget and reserve/adopt the credit as before.
+                        from advisor.llm.budget import (  # noqa: PLC0415
+                            case_budget_for,
+                        )
+
+                        db_chat_session.token_budget_remaining = max(
+                            0,
+                            case_budget_for(case_row.current_tier)
+                            - (case_row.tokens_consumed or 0),
+                        )
+                        credit = reserve_credit_for_session(
+                            db,
+                            db_user,
+                            session=db_chat_session,
+                            case=case_row,
+                            tier=case_row.current_tier,
+                        )
+                        case_tier_for_session = credit.tier
                 else:
                     case_id_for_session = existing_credit.case_id
                     case_tier_for_session = existing_credit.tier
