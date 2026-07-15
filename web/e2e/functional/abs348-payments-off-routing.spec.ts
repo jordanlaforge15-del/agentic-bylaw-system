@@ -1,15 +1,16 @@
-// ABS-348: in the go-live posture (ADVISOR_BILLING_ENABLED=true,
-// ADVISOR_PAYMENTS_ENABLED=false) the priced-question menu returns
-// available:true / payments_enabled:false. Completing a question must unlock
-// via a free credit and land on the report in the /app workspace — NOT a Stripe
-// checkout that returns no URL (the pre-fix dead-end, which silently consumed
-// the credit and then showed "Checkout returned no URL. Try again.").
+// ABS-390 (reconciled from ABS-348): in the beta payments-OFF posture
+// (ADVISOR_BILLING_ENABLED=true, ADVISOR_PAYMENTS_ENABLED=false) a gated report
+// slug returns available:true / payments_enabled:false. Ordering a report must
+// unlock via a free credit and land on the report in the /app workspace
+// (/app?report_id=<id>) — NOT a Stripe checkout that returns no URL (the
+// original ABS-348 dead-end, which silently consumed the credit and then showed
+// "Checkout returned no URL. Try again.").
 //
 // The e2e stack runs billing DORMANT (available:false), which is why this bug
 // was invisible: the available:true path never executed. Here we stub the menu
-// to the go-live posture and the me/intake/free-start calls, then assert the
-// UI takes the free-start → answer-view path and never touches
-// /checkout/question.
+// to the payments-off posture and the me/intake/free-start calls, then assert
+// the redesigned /cases/new report accordion (ABS-385) takes the
+// free-start → answer-view path and never touches /checkout/question.
 // Import the authenticated fixtures (mock-Clerk session), not raw
 // @playwright/test — otherwise /cases/new redirects to sign-in.
 import { expect, test } from "../fixtures/test-env";

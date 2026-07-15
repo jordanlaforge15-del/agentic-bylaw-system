@@ -200,9 +200,26 @@ GOOGLE_MAPS_COMPONENTS=country:CA|administrative_area:NS|locality:Halifax
 # Advisor server bind
 ADVISOR_HOST=0.0.0.0, ADVISOR_PORT=8000
 
-# Stripe (dormant; ADVISOR_BILLING_ENABLED=false)
-ADVISOR_BILLING_ENABLED, STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PRO, STRIPE_PRICE_TEAM,
+# Billing posture (beta pivot, ABS-379). Go-live: billing ON, payments OFF.
+ADVISOR_BILLING_ENABLED=true          # master switch; false → /v1/billing/* 503
+ADVISOR_PAYMENTS_ENABLED=false        # false → paid top-ups 503; wallet funded by signup grant only
+ADVISOR_CONVERSATION_ENTRY_ENABLED=true   # /cases/new leads with the turn-based chat
+ADVISOR_OTHER_QUESTION_ENABLED=false  # off-menu free-form question kill switch
+STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET # required only when ADVISOR_PAYMENTS_ENABLED=true
+STRIPE_PRICE_TOPUP_SMALL, STRIPE_PRICE_TOPUP_MEDIUM, STRIPE_PRICE_TOPUP_LARGE  # token top-up Price IDs (ABS-381)
 ADVISOR_BILLING_SUCCESS_URL, ADVISOR_BILLING_CANCEL_URL
+# RETIRED: the legacy STRIPE_PRICE_<TIER>_<PACK> credit-pack Price IDs (quick/
+# standard/complex × payg/starter/pro/enterprise). The token wallet replaced
+# them; POST /v1/billing/checkout/pack now answers 410 packs_retired. Do NOT
+# configure them — they sell nothing.
+
+# Token wallet / turns parameters (ABS-380). Read fresh per request — a
+# re-calibration takes effect on `docker compose up -d advisor`, no rebuild.
+ADVISOR_TOKENS_PER_TURN=2500          # display divisor (backend-owned "~N turns")
+ADVISOR_SIGNUP_TOKEN_GRANT=25000      # one-time new-user wallet grant (~10 turns)
+ADVISOR_CHAT_MIN_BALANCE_TOKENS=0     # pre-flight floor: chat 402s at balance <= floor
+ADVISOR_LOW_BALANCE_WARN_TOKENS=5000  # wallet flips to "low balance" at <= warn
+ADVISOR_CHAT_MAX_ITERATIONS=20        # tool-loop cap per chat turn
 
 # Per-report gate (ABS-384): which of the five report SKUs are on sale
 ADVISOR_ENABLED_QUESTIONS   # csv slugs; `*` = all; unset/empty = NONE (deny-by-default)
