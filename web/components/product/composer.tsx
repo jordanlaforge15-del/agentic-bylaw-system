@@ -23,9 +23,14 @@ type Props = {
   onSend: (text: string) => void;
   disabled?: boolean;
   parcel?: ParcelContext | null;
+  // ABS-386: the wallet is at/below the floor. The composer is disabled and
+  // its placeholder switches to the top-up nudge (the TopUpPrompt above it
+  // carries the actual affordance). Any text the user had typed is preserved —
+  // submit() no-ops while disabled rather than clearing.
+  outOfTokens?: boolean;
 };
 
-export function Composer({ onSend, disabled, parcel }: Props) {
+export function Composer({ onSend, disabled, parcel, outOfTokens }: Props) {
   const [val, setVal] = useState("");
   const [focused, setFocused] = useState(false);
   // Source-of-truth for the submitted text is the DOM, not React state.
@@ -90,7 +95,11 @@ export function Composer({ onSend, disabled, parcel }: Props) {
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) submit(e);
           }}
-          placeholder="Ask about this parcel — yard, height, use, density…"
+          placeholder={
+            outOfTokens
+              ? "Top up to continue"
+              : "Ask about this parcel — yard, height, use, density…"
+          }
           rows={1}
           disabled={disabled}
           className="flex-1 min-w-0 resize-none bg-transparent text-text font-sans outline-none px-3 sm:px-3.5 py-2.5 sm:py-3 text-[14px] min-h-[44px]"

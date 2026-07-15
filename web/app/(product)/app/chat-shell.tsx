@@ -28,12 +28,16 @@ import {
   AnswerView,
   type AnswerPhase,
 } from "@/components/product/answer-view";
-import { humanizeQuestionSlug, type QuestionPurchaseResponse } from "@/lib/cases";
+import {
+  humanizeQuestionSlug,
+  type QuestionPurchaseResponse,
+  type WalletResponse,
+} from "@/lib/cases";
 import { cn } from "@/lib/cn";
 import type { SavedFeedback } from "@/components/product/message-feedback";
 import { Composer } from "@/components/product/composer";
-import { CaseHeaderStrip } from "@/components/product/case-header-strip";
-import { CaseUpgradePrompt } from "@/components/product/case-upgrade-prompt";
+import { BalanceStrip } from "@/components/product/balance-strip";
+import { TopUpPrompt } from "@/components/product/top-up-prompt";
 import { ParcelPane } from "@/components/product/parcel-pane";
 import { AddressPill } from "@/components/product/address-pill";
 import { ParcelFab } from "@/components/product/parcel-fab";
@@ -130,11 +134,11 @@ function ProductAppPageInner() {
 
   // Case-billing context. ``caseId`` is taken from the URL on mount
   // (the /cases/new flow redirects with ``?case_id=N``) and from the
-  // backend's ``session`` SSE event on each turn. ``tier`` mirrors the
-  // active credit's tier so the header can show the badge. ``upgradeOffer``
-  // captures any in-flight ``case_upgrade_offer`` event the agent fired
-  // via the ``request_tier_upgrade`` tool. ``budgetWarning`` captures
-  // the ``case_budget_warning`` payload (Layer 1 nearing exhaustion).
+  // backend's ``session`` SSE event on each turn. The beta pivot (ABS-386)
+  // bills chat by an account-level token wallet shown as "~N turns" — the
+  // tier/credit machinery (caseTier / upgradeOffer / budgetWarning) is
+  // retired. ``wallet`` is seeded from /api/billing/wallet and updated live
+  // off the per-turn ``token_balance`` SSE event.
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -195,23 +199,21 @@ function ProductAppPageInner() {
     setCaseId(id);
   };
   const [caseNumber, setCaseNumber] = useState<number | null>(caseNumberFromUrl);
-  const [caseTier, setCaseTier] = useState<string | null>(null);
   const [caseAnchor, setCaseAnchor] = useState<{
     kind: string;
     label: string;
   } | null>(null);
-  const [upgradeOffer, setUpgradeOffer] = useState<{
-    case_id: number;
-    current_tier: string;
-    recommended_tier: string;
-    reason: string;
-  } | null>(null);
-  const [budgetWarning, setBudgetWarning] = useState<{
-    case_id: number;
-    tier: string;
-    remaining_tokens: number;
-    tier_budget: number;
-  } | null>(null);
+  // Token wallet (ABS-386). Seeded from /api/billing/wallet on mount, then
+  // decremented live off the per-turn ``token_balance`` SSE event. Null while
+  // the seed is in flight.
+  const [wallet, setWallet] = useState<WalletResponse | null>(null);
+  // Set when a send is refused for lack of tokens — either the client
+  // pre-flight (wallet at/below floor) or a backend 402 ``insufficient_tokens``
+  // that raced the client state. Reset on each accepted send and on a fresh
+  // mount (e.g. returning from a top-up checkout). Derived ``outOfTokens``
+  // below OR's it with the wallet's own ``chat_enabled`` flag.
+  const [refused, setRefused] = useState(false);
+  const outOfTokens = refused || (wallet !== null && !wallet.chat_enabled);
   // Keep the URL-derived caseId in sync when the user navigates with
   // a different ?case_id= without a full reload.
   useEffect(() => {
@@ -231,6 +233,29 @@ function ProductAppPageInner() {
       restoredCaseIdRef.current = null;
     }
   }, [caseIdFromUrl, caseNumberFromUrl]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Seed the token wallet on mount (and after returning from a top-up
+  // checkout — a full navigation back to /app re-runs this). The balance is
+  // then kept live by the per-turn ``token_balance`` SSE event; this fetch is
+  // the initial paint + the source of truth for ``payments_enabled`` and the
+  // pre-flight floor, neither of which rides on the SSE payload.
+  const refreshWallet = async () => {
+    try {
+      const res = await fetch("/api/billing/wallet", { cache: "no-store" });
+      if (!res.ok) return;
+      const w = (await res.json()) as WalletResponse;
+      setWallet(w);
+      // A fresh, chat-enabled wallet clears any prior refusal (e.g. the user
+      // topped up and came back).
+      if (w.chat_enabled) setRefused(false);
+    } catch {
+      // Non-critical: the strip simply doesn't paint until the next turn's
+      // token_balance event arrives.
+    }
+  };
+  useEffect(() => {
+    void refreshWallet();
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch the case anchor (kind + label) whenever caseId changes so
   // the parcel pane can show the address even before a spatial lookup.
@@ -381,7 +406,6 @@ function ProductAppPageInner() {
         message_db_ids?: number[];
         case_id?: number | null;
         case_number?: number | null;
-        tier?: string | null;
       };
       const enriched = attachDbIds(data.messages, data.message_db_ids);
       setParcel(extractParcelContext(enriched));
@@ -395,9 +419,6 @@ function ProductAppPageInner() {
       }
       if (typeof data.case_number === "number") {
         setCaseNumber(data.case_number);
-      }
-      if (typeof data.tier === "string") {
-        setCaseTier(data.tier);
       }
     } catch (e) {
       // Network blip. Same "don't overwrite stream errors" rule.
@@ -413,6 +434,16 @@ function ProductAppPageInner() {
   };
 
   const send = async (text: string) => {
+    // Client pre-flight (ABS-386): if the wallet is at/below the floor, refuse
+    // locally without POSTing. The composer is already disabled in this state,
+    // so this mainly guards the programmatic path (auto-send of a
+    // ``?first_message=`` after a balance drop). Nothing is appended or
+    // cleared — the typed text is not lost.
+    if (wallet !== null && !wallet.chat_enabled) {
+      setRefused(true);
+      return;
+    }
+    setRefused(false);
     setMessages((prev) => [...prev, { kind: "user", body: text }]);
     setThinking(true);
     setThinkLabel("Reading bylaw…");
@@ -424,6 +455,12 @@ function ProductAppPageInner() {
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+
+    // Set when the turn is refused out-of-tokens (402). Guards the post-turn
+    // refreshFromSession in the finally: reloading server history for a
+    // resumed session would otherwise drop the optimistic user bubble and
+    // lose the typed message.
+    let refusedThisTurn = false;
 
     try {
       const res = await fetch("/api/chat", {
@@ -440,6 +477,36 @@ function ProductAppPageInner() {
       if (!res.ok || !res.body) {
         const detail = await res.text().catch(() => "");
         stopThinking();
+        if (res.status === 402) {
+          // Out-of-tokens pre-flight refusal (ABS-383 backend). Render the
+          // TopUpPrompt state instead of a generic "Backend error (402)"
+          // toast. The optimistic user bubble stays in the thread, so the
+          // typed message is not lost, and no assistant stream started.
+          let turns = 0;
+          try {
+            const parsed = JSON.parse(detail) as {
+              detail?: { approx_turns_remaining?: number };
+            };
+            if (typeof parsed.detail?.approx_turns_remaining === "number") {
+              turns = parsed.detail.approx_turns_remaining;
+            }
+          } catch {
+            // Non-JSON 402 body — fall through with turns = 0.
+          }
+          refusedThisTurn = true;
+          setRefused(true);
+          setWallet((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  approx_turns_remaining: turns,
+                  low_balance: true,
+                  chat_enabled: false,
+                }
+              : prev,
+          );
+          return;
+        }
         setError(
           `Backend error (${res.status}). ${detail.slice(0, 240) || "No body."}`,
         );
@@ -476,7 +543,6 @@ function ProductAppPageInner() {
                 session_id?: string;
                 case_id?: number | null;
                 case_number?: number | null;
-                tier?: string | null;
               };
               if (data.session_id) setSessionId(data.session_id);
               if (typeof data.case_id === "number") {
@@ -485,58 +551,39 @@ function ProductAppPageInner() {
               if (typeof data.case_number === "number") {
                 setCaseNumber(data.case_number);
               }
-              if (typeof data.tier === "string") {
-                setCaseTier(data.tier);
-              }
             } catch {
               // ignore malformed session event
             }
-          } else if (ev.event === "case_upgrade_offer") {
+          } else if (ev.event === "token_balance") {
+            // Per-turn wallet decrement (ABS-383/386). Updates the
+            // BalanceStrip live without a reload. ``payments_enabled`` and the
+            // pre-flight floor are NOT on this payload — they come from the
+            // wallet seed — so we recompute ``chat_enabled`` from the fresh
+            // balance vs. the seed floor to flip into/out of the out-of-turns
+            // state.
             try {
               const data = JSON.parse(ev.data) as {
-                case_id?: number;
-                current_tier?: string;
-                recommended_tier?: string;
-                reason?: string;
+                balance_tokens?: number;
+                approx_turns_remaining?: number;
+                low_balance?: boolean;
               };
-              if (
-                typeof data.case_id === "number" &&
-                typeof data.current_tier === "string" &&
-                typeof data.recommended_tier === "string"
-              ) {
-                setUpgradeOffer({
-                  case_id: data.case_id,
-                  current_tier: data.current_tier,
-                  recommended_tier: data.recommended_tier,
-                  reason: data.reason || "Additional research depth required.",
-                });
-              }
+              setWallet((prev) => {
+                if (!prev) return prev;
+                const next = { ...prev };
+                if (typeof data.balance_tokens === "number") {
+                  next.balance_tokens = data.balance_tokens;
+                  next.chat_enabled = data.balance_tokens > prev.floor_tokens;
+                }
+                if (typeof data.approx_turns_remaining === "number") {
+                  next.approx_turns_remaining = data.approx_turns_remaining;
+                }
+                if (typeof data.low_balance === "boolean") {
+                  next.low_balance = data.low_balance;
+                }
+                return next;
+              });
             } catch {
-              // ignore malformed upgrade offer
-            }
-          } else if (ev.event === "case_budget_warning") {
-            try {
-              const data = JSON.parse(ev.data) as {
-                case_id?: number;
-                tier?: string;
-                remaining_tokens?: number;
-                tier_budget?: number;
-              };
-              if (
-                typeof data.case_id === "number" &&
-                typeof data.tier === "string" &&
-                typeof data.remaining_tokens === "number" &&
-                typeof data.tier_budget === "number"
-              ) {
-                setBudgetWarning({
-                  case_id: data.case_id,
-                  tier: data.tier,
-                  remaining_tokens: data.remaining_tokens,
-                  tier_budget: data.tier_budget,
-                });
-              }
-            } catch {
-              // ignore malformed budget warning
+              // ignore malformed token_balance event
             }
           } else if (ev.event === "content_block_start") {
             // Tool-use blocks tell us what the agent is *actually*
@@ -623,8 +670,12 @@ function ProductAppPageInner() {
       // Snap to authoritative session state: refreshes parcel pane
       // and replays reasoning steps that streaming didn't surface.
       // Reads sessionIdRef directly (not a captured local) so we
-      // always see the post-stream value the SSE handler set.
-      void refreshFromSession(sessionIdRef.current);
+      // always see the post-stream value the SSE handler set. Skipped on an
+      // out-of-tokens refusal — nothing changed server-side, and reloading
+      // history would drop the optimistic (still-typed) user message.
+      if (!refusedThisTurn) {
+        void refreshFromSession(sessionIdRef.current);
+      }
     }
   };
 
@@ -660,7 +711,6 @@ function ProductAppPageInner() {
         message_db_ids?: number[];
         case_id?: number | null;
         case_number?: number | null;
-        tier?: string | null;
       };
       const enriched = attachDbIds(data.messages, data.message_db_ids);
       const newCaseId = typeof data.case_id === "number" ? data.case_id : null;
@@ -687,7 +737,6 @@ function ProductAppPageInner() {
       setSessionId(id);
       setCaseIdBoth(newCaseId);
       setCaseNumber(typeof data.case_number === "number" ? data.case_number : null);
-      setCaseTier(typeof data.tier === "string" ? data.tier : null);
       setParcel(extractParcelContext(enriched));
       // Keep URL in sync so reloads and shared links land on the right case.
       // Only user-initiated calls (updateUrl=true) update the URL; the
@@ -902,24 +951,17 @@ function ProductAppPageInner() {
                 sessionId={activeSessionId}
                 feedbackMap={feedbackMap}
               />
-              {(caseTier || caseId !== null) && (
-                <CaseHeaderStrip
+              {caseId !== null && wallet !== null && (
+                <BalanceStrip
                   caseId={caseId}
                   caseNumber={caseNumber}
-                  tier={caseTier}
-                  budgetWarning={budgetWarning}
+                  approxTurnsRemaining={wallet.approx_turns_remaining}
+                  lowBalance={wallet.low_balance}
+                  paymentsEnabled={wallet.payments_enabled}
                 />
               )}
-              {upgradeOffer && (
-                <CaseUpgradePrompt
-                  offer={upgradeOffer}
-                  onClose={() => setUpgradeOffer(null)}
-                  onAccepted={(newTier) => {
-                    setCaseTier(newTier);
-                    setUpgradeOffer(null);
-                    setBudgetWarning(null);
-                  }}
-                />
+              {caseId !== null && outOfTokens && (
+                <TopUpPrompt paymentsEnabled={wallet?.payments_enabled ?? false} />
               )}
               <ChatDisclaimerBar />
               {caseId === null ? (
@@ -947,13 +989,18 @@ function ProductAppPageInner() {
                   <a href="/cases/new" className="underline text-text">
                     open a case
                   </a>{" "}
-                  first — pick the address, project, or DA you&rsquo;re
-                  asking about.
+                  first — it&rsquo;s free — pick the address, project, or DA
+                  you&rsquo;re asking about.
                 </>
               )}
             </div>
               ) : (
-                <Composer onSend={send} disabled={thinking} parcel={parcel} />
+                <Composer
+                  onSend={send}
+                  disabled={thinking || outOfTokens}
+                  outOfTokens={outOfTokens}
+                  parcel={parcel}
+                />
               )}
             </>
           )}
