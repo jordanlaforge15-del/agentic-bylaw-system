@@ -62,7 +62,7 @@ from advisor.billing.client import StripeClient
 from advisor.billing.intake import detect_intake
 from advisor.billing.packs import all_offers
 from advisor.billing.pricing import get_pricing_settings
-from advisor.billing.questions import all_questions, question_for
+from advisor.billing.questions import QUESTIONS, all_questions, question_for
 from advisor.billing.quote import EmptyQuestionError, quote_question
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.billing.webhooks import handle_event
@@ -533,6 +533,12 @@ def _build_question_menu(
     """
     items: list[QuestionMenuItem] = []
     for question in all_questions():
+        # ABS-384: a per-report gate — a slug not in
+        # ``ADVISOR_ENABLED_QUESTIONS`` vanishes from the menu entirely
+        # (deny-by-default). Read at request time so the toggle is a config
+        # flip with no redeploy.
+        if not _question_slug_enabled(question.slug):
+            continue
         price_id = (
             getattr(
                 settings, question.stripe_price_env_var.lower(), None
@@ -618,6 +624,45 @@ def _report_summary(purchase: QuestionPurchase) -> ReportSummary:
             else None
         ),
     )
+
+
+def _question_slug_enabled(slug: str) -> bool:
+    """ABS-384: is this report slug enabled for purchase right now?
+
+    Read at REQUEST time from ``ADVISOR_ENABLED_QUESTIONS`` (comma-separated
+    slugs; ``*`` = all; unset/empty = NONE, deny-by-default) so an operator
+    can enable or disable any of the five report SKUs with a config flip and
+    no redeploy. Disabled slugs vanish from the menu and reject new purchases;
+    already-purchased reports are unaffected — their delivery routes
+    (get / refine / reports-list) never consult this.
+    """
+    raw = os.environ.get("ADVISOR_ENABLED_QUESTIONS", "").strip()
+    if not raw:
+        return False
+    if raw == "*":
+        return True
+    return slug in {s.strip() for s in raw.split(",") if s.strip()}
+
+
+def _require_question_slug_enabled(slug: str) -> None:
+    """Reject a purchase / answer-run request for a disabled report slug.
+
+    Raises HTTP 503 ``question_disabled`` for a KNOWN catalog slug that is
+    toggled off. An unknown slug falls through untouched so the downstream
+    handler can raise its own 400 ``unknown_question``; the off-menu
+    ``other`` slug (its own kill switch) is likewise never blocked here.
+    """
+    if slug in QUESTIONS and not _question_slug_enabled(slug):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "question_disabled",
+                "message": (
+                    f"The '{slug}' report is not currently available. It has "
+                    "been disabled by the operator."
+                ),
+            },
+        )
 
 
 def _conversation_entry_enabled() -> bool:
@@ -758,6 +803,10 @@ def _mount_answer_delivery_routes(
                     "message": f"unknown question {body.question_slug!r}",
                 },
             ) from exc
+        # ABS-384: a disabled slug rejects intake too (503), so the
+        # consultant-style step never front-runs a report the operator has
+        # turned off.
+        _require_question_slug_enabled(question.slug)
         result = await detect_intake(
             answer_gateway,
             question,
@@ -870,6 +919,12 @@ def _mount_answer_delivery_routes(
                         ),
                     },
                 )
+            # ABS-384: an ``authorized`` (uncaptured-hold) purchase of a
+            # now-disabled slug must NOT run — 503 with the status left
+            # untouched so the hold can be drained/refunded by the operator.
+            # Already-settled purchases short-circuited above, so this only
+            # blocks a fresh run, never an existing report.
+            _require_question_slug_enabled(purchase.question_slug)
             # Persist ``generating`` BEFORE returning so a poll / the sidebar
             # / a second tab observe the in-flight state, then hand the run
             # to a background task that outlives this request.
@@ -1210,6 +1265,10 @@ def build_billing_router(
           manual-capture Checkout session and return its URL.
         """
         _require_enabled()
+        # ABS-384: reject a disabled report slug BEFORE any credit is
+        # consumed or Stripe object is created (unknown slugs fall through
+        # to the downstream 400 unknown_question).
+        _require_question_slug_enabled(body.question_slug)
         # Payments-off: free-credit path, no Stripe.
         if not settings.payments_enabled:
             with _open_db() as db:
@@ -1718,6 +1777,9 @@ def build_dormant_billing_router(
                         "message": "question_slug is required",
                     },
                 )
+            # ABS-384: reject a disabled slug (503) before the free-question
+            # credit is reserved.
+            _require_question_slug_enabled(body.question_slug)
             with _open_db_dormant() as db:
                 user = user_resolver(auth_session, db)
                 try:
