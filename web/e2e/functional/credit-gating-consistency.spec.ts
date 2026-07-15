@@ -103,57 +103,36 @@ test("GET /billing/me returns 200 with real balances in dormant mode", async ({
   ).toBe(3);
 });
 
-test("standard case opens when user has standard credits", async ({
+// ABS-382: opening a case is now free regardless of tier credits — the
+// case-open credit gate is retired. A tier in the body is accepted but
+// ignored; the case opens with `current_tier=null` and `credit_id=null`
+// no matter which tier (or none) the caller sends. The three tests below
+// used to assert 402 on quick/complex; they now assert free open. The
+// /billing/me balance display above is untouched by ABS-382.
+test("case opens free even when the (legacy) tier has no credits", async ({
   request,
 }) => {
-  const res = await request.post(`${E2E_API_URL}/v1/cases`, {
-    headers: { "X-Test-User-Id": STANDARD_ONLY_USER },
-    data: {
-      anchor_label: `std-consistency-standard-${Date.now()}`,
-      anchor_kind: "address",
-      tier: "standard",
-    },
-  });
-  expect(
-    res.status(),
-    `expected 200 but got ${res.status()}: ${await res.text()}`,
-  ).toBe(200);
-});
-
-test("quick lookup is blocked when user has no quick credits", async ({
-  request,
-}) => {
-  const res = await request.post(`${E2E_API_URL}/v1/cases`, {
-    headers: { "X-Test-User-Id": STANDARD_ONLY_USER },
-    data: {
-      anchor_label: `std-consistency-quick-${Date.now()}`,
-      anchor_kind: "address",
-      tier: "quick",
-    },
-  });
-  expect(res.status()).toBe(402);
-  const body = (await res.json()) as {
-    detail: { code: string; tier: string };
-  };
-  expect(body.detail.code).toBe("no_available_credit");
-  expect(body.detail.tier).toBe("quick");
-});
-
-test("complex file is blocked when user has no complex credits", async ({
-  request,
-}) => {
-  const res = await request.post(`${E2E_API_URL}/v1/cases`, {
-    headers: { "X-Test-User-Id": STANDARD_ONLY_USER },
-    data: {
-      anchor_label: `std-consistency-complex-${Date.now()}`,
-      anchor_kind: "address",
-      tier: "complex",
-    },
-  });
-  expect(res.status()).toBe(402);
-  const body = (await res.json()) as {
-    detail: { code: string; tier: string };
-  };
-  expect(body.detail.code).toBe("no_available_credit");
-  expect(body.detail.tier).toBe("complex");
+  for (const tier of ["standard", "quick", "complex"]) {
+    const res = await request.post(`${E2E_API_URL}/v1/cases`, {
+      headers: { "X-Test-User-Id": STANDARD_ONLY_USER },
+      data: {
+        anchor_label: `std-consistency-${tier}-${Date.now()}`,
+        anchor_kind: "address",
+        tier,
+      },
+    });
+    expect(
+      res.status(),
+      `tier=${tier}: expected 200 but got ${res.status()}: ${await res.text()}`,
+    ).toBe(200);
+    const body = (await res.json()) as {
+      credit_id: number | null;
+      case: { current_tier: string | null };
+    };
+    expect(body.credit_id, `tier=${tier}: no credit reserved`).toBeNull();
+    expect(
+      body.case.current_tier,
+      `tier=${tier}: free case carries no tier`,
+    ).toBeNull();
+  }
 });

@@ -31,6 +31,7 @@ Frontends that consume this don't need to know it's synthetic.
 """
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -80,6 +81,22 @@ from advisor.llm.tool_loop import ToolHandler, run_tool_loop
 # tool loop — bumping it back to 2 would push deep-question requests
 # to five breakpoints and Anthropic would reject the call.
 _MAX_CONVERSATION_CACHE_MILESTONES = 1
+
+# ABS-382: tool-loop iteration cap for tier-less (free) cases. Read at
+# call time so ops can tune it without a redeploy; defaults to 20 (the
+# beta business parameter). A malformed value falls back to the default.
+_DEFAULT_MAX_ITERATIONS = 20
+
+
+def _default_max_iterations() -> int:
+    raw = os.getenv("ADVISOR_CHAT_MAX_ITERATIONS")
+    if raw is None:
+        return _DEFAULT_MAX_ITERATIONS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_ITERATIONS
+    return value if value > 0 else _DEFAULT_MAX_ITERATIONS
 
 
 @dataclass
@@ -250,6 +267,10 @@ class ChatSession:
             cache_system=True,
             cache_tools=True,
         )
+        # ABS-382: free (tier-less) cases have no per-tier cap, so fall back
+        # to the env-configurable default ``ADVISOR_CHAT_MAX_ITERATIONS``
+        # (20) rather than the legacy hardcoded 10 — enough headroom for a
+        # deep multi-round turn. Legacy tier'd cases keep their Tier cap.
         _tier_def = _BILLING_TIERS.get(self.tier) if self.tier else None
         result = await run_tool_loop(
             gateway,
@@ -257,7 +278,11 @@ class ChatSession:
             handlers=self.tool_handlers,
             token_budget=self.token_budget,
             cumulative_token_budget=self.cumulative_token_budget,
-            max_iterations=_tier_def.max_iterations if _tier_def else 10,
+            max_iterations=(
+                _tier_def.max_iterations
+                if _tier_def
+                else _default_max_iterations()
+            ),
         )
 
         # ABS-263: deterministic safety net for high-liability answers. If the

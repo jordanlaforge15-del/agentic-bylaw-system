@@ -94,7 +94,9 @@ export type ClassifyResponse = {
 
 export type OpenCaseResponse = {
   case: CaseRow;
-  credit_id: number;
+  // ABS-382: opening a case is free — no CaseCredit is reserved, so
+  // `credit_id` is always null now (kept for old-frontend compat).
+  credit_id: number | null;
   reused_existing_case: boolean;
 };
 

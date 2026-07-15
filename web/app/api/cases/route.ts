@@ -24,15 +24,16 @@ export async function POST(req: NextRequest) {
     string,
     unknown
   > | null;
+  // ABS-382: opening a case is free — no tier is required. `tier` is
+  // no longer validated or forwarded; the backend ignores it anyway.
   if (
     !body ||
     typeof body.anchor_label !== "string" ||
-    typeof body.anchor_kind !== "string" ||
-    typeof body.tier !== "string"
+    typeof body.anchor_kind !== "string"
   ) {
     return new Response(
       JSON.stringify({
-        error: "anchor_label, anchor_kind, tier required",
+        error: "anchor_label, anchor_kind required",
       }),
       { status: 400, headers: { "Content-Type": "application/json" } },
     );
@@ -42,7 +43,6 @@ export async function POST(req: NextRequest) {
     body: {
       anchor_label: body.anchor_label,
       anchor_kind: body.anchor_kind,
-      tier: body.tier,
     },
   });
   const text = await r.text();
