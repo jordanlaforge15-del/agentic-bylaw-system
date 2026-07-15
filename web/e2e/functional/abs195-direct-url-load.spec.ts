@@ -10,14 +10,15 @@
 //   1. Reload: open a case, send a message, reload the page — transcript
 //      should survive.
 //   2. Direct share link: navigate cold to /app?case_id=N for an
-//      existing case with history — transcript and tier label render.
-//   3. Footer tier label: the "CASE #N Standard Case" strip in the
+//      existing case with history — transcript and the balance strip render.
+//   3. Footer balance strip: the "Case #N · ~N turns left" strip in the
 //      footer should appear after restore (regression from the same
-//      issue).
+//      issue). ABS-386 replaced the old tier/budget strip with this
+//      turns-based BalanceStrip.
 
 import { expect, openCaseViaApi, test } from "../fixtures/test-env";
 
-test("reloading /app?case_id=N restores transcript and tier label", async ({
+test("reloading /app?case_id=N restores transcript", async ({
   page,
 }) => {
   const { caseId } = await openCaseViaApi();
@@ -50,10 +51,10 @@ test("reloading /app?case_id=N restores transcript and tier label", async ({
   });
 });
 
-test("footer shows CASE # and tier label after direct URL restore", async ({
+test("footer balance strip shows Case # and turns after direct URL restore", async ({
   page,
 }) => {
-  const { caseId } = await openCaseViaApi({ tier: "standard" });
+  const { caseId } = await openCaseViaApi();
 
   // Send one turn first so the session exists.
   await page.goto(
@@ -67,9 +68,13 @@ test("footer shows CASE # and tier label after direct URL restore", async ({
   // Now navigate cold (simulates a share link / direct URL load).
   await page.goto(`/app?case_id=${caseId}`);
 
-  // The CaseHeaderStrip footer must show the case number.
-  // Tier label may read "Standard Case" after session restore
-  // hydrates the tier from the session response.
-  const footer = page.getByTestId("case-header-strip");
-  await expect(footer).toContainText(/CASE #/i, { timeout: 10_000 });
+  // The BalanceStrip footer must show the case number and a turns figure,
+  // seeded from /api/billing/wallet — no tier vocabulary (ABS-386).
+  const footer = page.getByTestId("balance-strip");
+  await expect(footer).toContainText(/Case #/i, { timeout: 10_000 });
+  await expect(footer).toContainText(/~\d+ turns? left/i);
+  // No retired tier vocabulary (the disclosure's "complex questions" is fine).
+  await expect(footer).not.toContainText(
+    /tier|Quick Lookup|Standard Case|Complex File|budget/i,
+  );
 });
