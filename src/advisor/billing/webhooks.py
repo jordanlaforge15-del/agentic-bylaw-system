@@ -53,8 +53,10 @@ from advisor.billing.packs import (
     pack_for_stripe_price_id,
 )
 from advisor.billing.settings import AdvisorBillingSettings
+from advisor.billing.topups import topup_for, topup_for_stripe_price_id
 from advisor.db.cases import issue_credits_from_pack_purchase
-from advisor.db.models import CasePurchase, UsageEvent, User
+from advisor.db.models import CasePurchase, TokenTransaction, UsageEvent, User
+from advisor.db.wallet import credit_topup
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +159,18 @@ def _handle_checkout_completed(
     question_purchase_id = _parse_int(metadata.get("question_purchase_id"))
     if question_purchase_id is not None:
         return _handle_question_authorized(db, event, question_purchase_id)
+
+    # ABS-381: token top-ups credit the prepaid wallet. Routed BEFORE the
+    # pack branch — a top-up event carries ``topup_sku`` (or, for a
+    # metadata-less event, a Price ID that reverse-looks-up to a top-up), and
+    # must never fall through to the case-credit pack path.
+    topup_sku = metadata.get("topup_sku")
+    if topup_sku is None and settings is not None:
+        topup = _topup_from_line_items(event.data, settings)
+        if topup is not None:
+            topup_sku = topup.sku
+    if topup_sku is not None:
+        return _handle_topup_completed(db, event, metadata, topup_sku)
 
     user_id = _parse_int(metadata.get("advisor_user_id"))
     tier = metadata.get("tier")
@@ -264,6 +278,132 @@ def _handle_checkout_completed(
     )
 
 
+def _handle_topup_completed(
+    db: Session,
+    event: StripeEvent,
+    metadata: dict[str, str],
+    topup_sku: str,
+) -> WebhookResult:
+    """Credit a token top-up to the user's wallet (ABS-381).
+
+    The token quantity is resolved from the **server-side catalog** by
+    ``topup_sku`` — the metadata never carries a token amount, so a tampered
+    checkout session can't inflate the credit.
+
+    Idempotency has two layers, mirroring the pack path:
+
+    * Event-level dedupe (``_is_duplicate_event``, applied by the caller
+      before we run) short-circuits a redelivery of the *same* Stripe event
+      id — that surfaces as ``duplicate_event``.
+    * Checkout-session dedupe: a *different* event id carrying the *same*
+      checkout session id (Stripe can emit more than one) must not double
+      credit. We pre-check for an existing top-up ledger row on this session
+      id and, failing that, ``credit_topup`` absorbs the UNIQUE-constraint
+      ``IntegrityError`` as the backstop. Either way the balance moves once
+      and we report ``duplicate_topup``.
+
+    Never raises: an unknown SKU (catalog changed out from under an in-flight
+    session) is logged and returned ``handled`` with a note, never a 5xx —
+    the Stripe retry-storm rule.
+    """
+    try:
+        topup = topup_for(topup_sku)
+    except KeyError:
+        logger.warning(
+            "stripe webhook: unknown topup_sku %r (event_id=%s); handled "
+            "as no-op to stop Stripe retries",
+            topup_sku,
+            event.id,
+        )
+        return WebhookResult(
+            handled=True,
+            event_type=event.type,
+            event_id=event.id,
+            note="unknown_topup",
+        )
+
+    user_id = _parse_int(metadata.get("advisor_user_id"))
+    if user_id is None:
+        logger.warning(
+            "stripe webhook topup: missing advisor_user_id (event_id=%s)",
+            event.id,
+        )
+        return WebhookResult(
+            handled=True,
+            event_type=event.type,
+            event_id=event.id,
+            note="missing_metadata",
+        )
+
+    user = db.get(User, user_id)
+    if user is None:
+        logger.warning(
+            "stripe webhook topup: user id %s not found (event_id=%s)",
+            user_id,
+            event.id,
+        )
+        return WebhookResult(
+            handled=True,
+            event_type=event.type,
+            event_id=event.id,
+            note="user_missing",
+        )
+
+    customer_id = _string(event.data.get("customer"))
+    if customer_id and not user.stripe_customer_id:
+        user.stripe_customer_id = customer_id
+
+    checkout_session_id = _string(event.data.get("id"))
+    if not checkout_session_id:
+        logger.warning(
+            "stripe webhook topup: missing checkout session id (event_id=%s)",
+            event.id,
+        )
+        return WebhookResult(
+            handled=True,
+            event_type=event.type,
+            event_id=event.id,
+            note="missing_session_id",
+        )
+
+    # Checkout-session-level idempotency: a different event id for the same
+    # completed session must not credit twice.
+    existing = db.execute(
+        select(TokenTransaction).where(
+            TokenTransaction.stripe_checkout_session_id == checkout_session_id
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        logger.info(
+            "stripe webhook topup: checkout session %s already credited "
+            "(event_id=%s); skipping",
+            checkout_session_id,
+            event.id,
+        )
+        return WebhookResult(
+            handled=True,
+            event_type=event.type,
+            event_id=event.id,
+            user_id=existing.user_id,
+            note="duplicate_topup",
+        )
+
+    credit_topup(
+        db,
+        user=user,
+        amount=topup.tokens,
+        stripe_checkout_session_id=checkout_session_id,
+        metadata={"topup_sku": topup.sku, "stripe_event_id": event.id},
+    )
+    return WebhookResult(
+        handled=True,
+        event_type=event.type,
+        event_id=event.id,
+        user_id=user.id,
+        note="topup_credited",
+    )
+
+
 def _handle_question_authorized(
     db: Session, event: StripeEvent, purchase_id: int
 ) -> WebhookResult:
@@ -355,6 +495,30 @@ def _offer_from_line_items(
     (manual invoice, legacy event). Returns ``None`` if no Price ID is
     present or the configured catalog doesn't recognise it.
     """
+    price_id = _first_line_item_price_id(data)
+    if not price_id:
+        return None
+    return pack_for_stripe_price_id(price_id, settings)
+
+
+def _topup_from_line_items(
+    data: dict[str, Any], settings: AdvisorBillingSettings
+):
+    """Reverse-lookup a top-up SKU from the first line-item Price (ABS-381).
+
+    Used when the checkout-session metadata is missing (a legacy event, a
+    manual invoice). Returns ``None`` if no Price ID is present or the
+    configured top-up catalog doesn't recognise it — the caller then falls
+    through to the pack / question branches.
+    """
+    price_id = _first_line_item_price_id(data)
+    if not price_id:
+        return None
+    return topup_for_stripe_price_id(price_id, settings)
+
+
+def _first_line_item_price_id(data: dict[str, Any]) -> str | None:
+    """Extract the first line item's Stripe Price ID, if present."""
     line_items = data.get("line_items") or {}
     if isinstance(line_items, dict):
         line_items = line_items.get("data") or []
@@ -362,14 +526,11 @@ def _offer_from_line_items(
         return None
     first = line_items[0]
     price = first.get("price") if isinstance(first, dict) else None
-    price_id = None
     if isinstance(price, dict):
-        price_id = price.get("id")
-    elif isinstance(price, str):
-        price_id = price
-    if not price_id:
-        return None
-    return pack_for_stripe_price_id(price_id, settings)
+        return price.get("id")
+    if isinstance(price, str):
+        return price
+    return None
 
 
 def _metadata_from_data(data: dict[str, Any]) -> dict[str, str]:
