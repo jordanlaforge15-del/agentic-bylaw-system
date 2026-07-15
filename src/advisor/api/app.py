@@ -46,11 +46,8 @@ from advisor.api.auth import current_user_dependency
 from advisor.api.db_session_store import DbSessionStore, default_resolve_user
 from advisor.api.quota import (
     add_case_tokens,
-    commit_credit_for,
     enforce_request_rate,
     record_llm_call,
-    refund_credit_for,
-    reserve_credit_for_session,
     update_usage_event_tokens,
 )
 from advisor.api.sessions import (
@@ -63,7 +60,7 @@ from advisor.chat.persona import load_persona
 from advisor.chat.session import ChatSession
 from advisor.chat.tools import build_bylaw_tools
 from advisor.db.models import Case, User
-from advisor.llm import LLMGateway, LLMRole, Message, StreamEvent
+from advisor.llm import LLMGateway, Message, StreamEvent
 from layer1.db.base import utcnow
 
 logger = logging.getLogger(__name__)
@@ -618,26 +615,41 @@ def create_app(
             model=_chat_main_model,
         )
 
-        # Pre-flight (case-credit + RPM) BEFORE we start streaming.
-        # In the case-credit model:
-        #   1. Enforce the per-user RPM rate cap.
-        #   2. Reserve a credit for this session if one isn't already
-        #      attached. New sessions need ``body.case_id`` so we know
-        #      which case to bill against; resumed sessions inherit the
-        #      previously-reserved credit.
-        #   3. Record an up-front ``llm_call`` audit row; tokens get
+        # Pre-flight (token-wallet floor + RPM) BEFORE we start streaming.
+        # In the token-wallet model (ABS-383):
+        #   1. Enforce the per-user RPM rate cap (429).
+        #   2. Enforce the click-wrap terms gate (412).
+        #   3. Refuse the turn with 402 ``insufficient_tokens`` when the
+        #      wallet balance is at or below the floor — BEFORE any
+        #      ``llm_call`` UsageEvent row is written, so a floored turn
+        #      leaves no (0,0) usage stub. ``unlimited_credits`` users
+        #      bypass the floor.
+        #   4. Resolve the case context (case_id / number / anchor) so the
+        #      system prompt anchors to it and the burn row links to it. No
+        #      credit is reserved and no tier is bound — the account-level
+        #      wallet is the only gate now; the tier/CaseCredit machinery is
+        #      retired from the live chat path.
+        #   5. Record an up-front ``llm_call`` audit row; tokens get
         #      patched after the stream.
         # Skip everything when no DB factory is wired (in-memory test
         # path) so existing tests don't need DB fixtures.
         usage_event_id: int | None = None
         case_id_for_session: int | None = None
         case_number_for_session: int | None = None
+        # Tier is intentionally always None on the live chat path (ABS-383):
+        # the tier/credit machinery is retired. Kept as a variable so the
+        # ``session`` SSE preamble can still carry an explicit ``tier: null``.
         case_tier_for_session: str | None = None
-        # Mirrored onto the in-memory ChatSession alongside case_id / tier
-        # so the LLM's system prompt picks up the case anchor (see
+        # Mirrored onto the in-memory ChatSession alongside case_id so the
+        # LLM's system prompt picks up the case anchor (see
         # ``_compose_system_prompt`` in ``advisor.chat.session``).
         case_anchor_label_for_session: str | None = None
         case_anchor_kind_for_session: str | None = None
+        # Captured inside the pre-flight transaction for post-stream burn
+        # settlement (see ``_settle_token_burn``): who to bill and whether
+        # they're exempt (unlimited).
+        settle_user_id: int | None = None
+        settle_unlimited: bool = False
         if db_session_factory is not None and isinstance(store, DbSessionStore):
             with db_session_factory() as db:
                 try:
@@ -675,16 +687,53 @@ def create_app(
                         },
                     )
 
+                settle_user_id = db_user.id
+                settle_unlimited = db_user.unlimited_credits
+
+                # Wallet floor pre-flight (ABS-383). Refuse the turn at
+                # ``balance <= floor`` BEFORE the ``llm_call`` row is
+                # recorded, so a floored turn never leaves a (0,0) usage
+                # stub. ``unlimited_credits`` users bypass the floor (and,
+                # later, the burn). The 402 payload mirrors the wallet read
+                # API's fields so the frontend can render the same
+                # out-of-tokens state it derives from ``GET /v1/wallet``.
+                from advisor.billing.turns import (  # noqa: PLC0415
+                    approx_turns_remaining as _approx_turns_remaining,
+                    chat_min_balance_tokens as _chat_min_balance_tokens,
+                )
+
+                floor_tokens = _chat_min_balance_tokens()
+                if (
+                    not db_user.unlimited_credits
+                    and db_user.token_balance <= floor_tokens
+                ):
+                    raise HTTPException(
+                        status_code=402,
+                        detail={
+                            "code": "insufficient_tokens",
+                            "balance_tokens": db_user.token_balance,
+                            "floor_tokens": floor_tokens,
+                            "approx_turns_remaining": _approx_turns_remaining(
+                                db_user.token_balance
+                            ),
+                            "message": (
+                                "Your token balance is exhausted. Top up to "
+                                "continue chatting."
+                            ),
+                        },
+                    )
+
                 try:
                     db_session_pk = int(session.session_id)
                 except ValueError:
                     db_session_pk = None
 
-                # Resolve / reserve the credit for this session. If the
-                # session already has one attached (resume path), use
-                # that. Otherwise the request must carry ``case_id``.
+                # Resolve the case context. New sessions carry ``case_id`` in
+                # the body; resumed sessions inherit the session's stored
+                # case. No credit is reserved and no tier is bound — the
+                # wallet floor + burn are the only billing now (ABS-383), so
+                # this is a pure read of the case's anchor / number.
                 from advisor.db.models import (  # noqa: PLC0415 — local import to avoid heavy import at module load
-                    CaseCredit as _CaseCredit,
                     ChatSession as _DbChatSession,
                 )
 
@@ -699,95 +748,36 @@ def create_app(
                         detail={"code": "session_not_found"},
                     )
 
-                existing_credit = (
-                    db.query(_CaseCredit)
-                    .filter(
-                        _CaseCredit.session_id == db_chat_session.id,
-                        _CaseCredit.state.in_(["reserved", "consumed"]),
-                    )
-                    .one_or_none()
+                effective_case_id = (
+                    body.case_id
+                    if body.case_id is not None
+                    else db_chat_session.case_id
                 )
-                if existing_credit is None:
-                    # Resume-path safety net: if the session is already
-                    # attached to a case in the DB but the live credit
-                    # got refunded / expired (or the client just didn't
-                    # bother sending case_id on a follow-up turn), fall
-                    # back to the session's stored case_id rather than
-                    # forcing the client to re-supply it.
-                    effective_case_id = (
-                        body.case_id
-                        if body.case_id is not None
-                        else db_chat_session.case_id
+                if effective_case_id is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "code": "case_id_required",
+                            "message": (
+                                "case_id is required for new sessions. Open "
+                                "a case via POST /v1/cases first."
+                            ),
+                        },
                     )
-                    if effective_case_id is None:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "code": "case_id_required",
-                                "message": (
-                                    "case_id is required for new sessions in "
-                                    "the case-credit model. Open a case via "
-                                    "POST /v1/cases first."
-                                ),
-                            },
-                        )
-                    case_row = db.get(Case, effective_case_id)
-                    if case_row is None or case_row.user_id != db_user.id:
-                        raise HTTPException(
-                            status_code=404, detail={"code": "case_not_found"}
-                        )
-                    db_chat_session.case_id = case_row.id
-                    db_chat_session.tier = case_row.current_tier
-                    case_number_for_session = case_row.user_case_number
-                    case_id_for_session = case_row.id
-                    case_anchor_label_for_session = case_row.anchor_label
-                    case_anchor_kind_for_session = case_row.anchor_kind
-                    if case_row.current_tier is None:
-                        # ABS-382: opening a case is free — it reserves no
-                        # tier credit and carries ``current_tier=None``.
-                        # Such a case is chattable without a credit: skip
-                        # the reservation and leave ``token_budget_remaining``
-                        # None (no per-tier ledger). The account-level token
-                        # wallet floor + burn settlement land in ABS-383;
-                        # here the turn is simply not credit-gated.
-                        case_tier_for_session = None
-                    else:
-                        # Legacy tier-credit case (pre-ABS-382 rows may still
-                        # carry a tier during rollout): initialise the per-case
-                        # budget and reserve/adopt the credit as before.
-                        from advisor.llm.budget import (  # noqa: PLC0415
-                            case_budget_for,
-                        )
-
-                        db_chat_session.token_budget_remaining = max(
-                            0,
-                            case_budget_for(case_row.current_tier)
-                            - (case_row.tokens_consumed or 0),
-                        )
-                        credit = reserve_credit_for_session(
-                            db,
-                            db_user,
-                            session=db_chat_session,
-                            case=case_row,
-                            tier=case_row.current_tier,
-                        )
-                        case_tier_for_session = credit.tier
-                else:
-                    case_id_for_session = existing_credit.case_id
-                    case_tier_for_session = existing_credit.tier
-                    # Resume path: load the case row to surface its anchor
-                    # to the LLM. The in-memory ChatSession is reconstituted
-                    # from the DB store on every turn, so we have to rebind
-                    # this each call (same pattern as case_id / tier above).
-                    resumed_case = (
-                        db.get(Case, existing_credit.case_id)
-                        if existing_credit.case_id is not None
-                        else None
+                case_row = db.get(Case, effective_case_id)
+                if case_row is None or case_row.user_id != db_user.id:
+                    raise HTTPException(
+                        status_code=404, detail={"code": "case_not_found"}
                     )
-                    if resumed_case is not None:
-                        case_number_for_session = resumed_case.user_case_number
-                        case_anchor_label_for_session = resumed_case.anchor_label
-                        case_anchor_kind_for_session = resumed_case.anchor_kind
+                db_chat_session.case_id = case_row.id
+                # Tier stays null on the live path — ``token_budget_remaining``
+                # is left untouched (None) so the retired per-tier ledger
+                # no-ops in ``send_user_message_blocking``.
+                db_chat_session.tier = None
+                case_id_for_session = case_row.id
+                case_number_for_session = case_row.user_case_number
+                case_anchor_label_for_session = case_row.anchor_label
+                case_anchor_kind_for_session = case_row.anchor_kind
 
                 usage_event = record_llm_call(
                     db,
@@ -829,24 +819,17 @@ def create_app(
             if facts_block:
                 session.system_prompt = persona + "\n\n" + facts_block
 
-        # Mirror case context onto the in-memory ChatSession so
-        # ``send_user_message_blocking`` can update the budget ledger
-        # and surface the per-turn upgrade-request drain.
+        # Mirror case context onto the in-memory ChatSession so the LLM's
+        # system prompt anchors to the case. Tier stays None (retired) and
+        # ``token_budget_remaining`` is left None so the per-tier ledger
+        # no-ops — ``max_iterations`` falls back to
+        # ``ADVISOR_CHAT_MAX_ITERATIONS`` for the turn.
         if case_id_for_session is not None:
             session.case_id = case_id_for_session
             session.case_number = case_number_for_session
             session.tier = case_tier_for_session
             session.case_anchor_label = case_anchor_label_for_session
             session.case_anchor_kind = case_anchor_kind_for_session
-            if (
-                session.token_budget_remaining is None
-                and case_tier_for_session is not None
-            ):
-                from advisor.llm.budget import case_budget_for  # noqa: PLC0415
-
-                session.token_budget_remaining = case_budget_for(
-                    case_tier_for_session
-                )
 
         async def event_stream() -> AsyncIterator[dict[str, str]]:
             # Send the session id up front so the frontend can persist
@@ -862,14 +845,12 @@ def create_app(
                     }
                 ),
             }
-            stream_failed = False
             try:
                 async for stream_event in session.send_user_message(
                     gateway, body.message
                 ):
                     yield _format_sse_event(stream_event)
             except Exception as exc:  # noqa: BLE001 — surface to client
-                stream_failed = True
                 logger.exception("chat stream failed")
                 yield {
                     "event": "chat_error",
@@ -881,45 +862,31 @@ def create_app(
                     ),
                 }
             finally:
-                # Drain any tier-upgrade requests the agent fired via
-                # ``request_tier_upgrade`` and emit them as
-                # ``case_upgrade_offer`` SSE events. Done outside the
-                # try-block so a stream failure still surfaces any
-                # upgrade prompt that was already raised mid-turn.
-                for offer in session.last_turn_upgrade_requests:
-                    yield {
-                        "event": "case_upgrade_offer",
-                        "data": json.dumps(
-                            {
-                                "case_id": case_id_for_session,
-                                "current_tier": case_tier_for_session,
-                                "recommended_tier": offer.get(
-                                    "recommended_tier"
-                                ),
-                                "reason": offer.get("reason"),
-                            }
-                        ),
-                    }
-
-                # Post-stream DB updates: patch tokens, commit / refund
-                # the case credit, bump the per-case ledger, and emit a
-                # budget warning if we're in the danger zone.
+                # Post-stream DB updates (ABS-383): patch the audit row with
+                # real token counts, then burn the measured usage from the
+                # wallet and emit the per-turn ``token_balance`` SSE so the
+                # UI can decrement live. The burn is unconditional on
+                # measured usage — a mid-stream failure still burns what was
+                # recorded; there is no refund heuristic. The
+                # ``token_balance`` event is emitted in the ``finally`` so it
+                # follows any ``chat_error`` that preceded it.
                 _patch_usage_event_tokens(
                     db_session_factory=db_session_factory,
                     usage_event_id=usage_event_id,
                     chat_session=session,
                 )
-                budget_warning = _settle_case_credit(
+                balance_event = _settle_token_burn(
                     db_session_factory=db_session_factory,
                     chat_session=session,
                     case_id=case_id_for_session,
-                    tier=case_tier_for_session,
-                    stream_failed=stream_failed,
+                    user_id=settle_user_id,
+                    unlimited=settle_unlimited,
+                    usage_event_id=usage_event_id,
                 )
-                if budget_warning is not None:
+                if balance_event is not None:
                     yield {
-                        "event": "case_budget_warning",
-                        "data": json.dumps(budget_warning),
+                        "event": "token_balance",
+                        "data": json.dumps(balance_event),
                     }
 
         return EventSourceResponse(event_stream())
@@ -1127,137 +1094,100 @@ def _trim_title_part(value: str | None, limit: int) -> str | None:
     return cleaned[:limit].rstrip() + "…"
 
 
-def _settle_case_credit(
+def _settle_token_burn(
     *,
     db_session_factory: DbSessionFactory | None,
     chat_session: ChatSession,
     case_id: int | None,
-    tier: str | None,
-    stream_failed: bool,
+    user_id: int | None,
+    unlimited: bool,
+    usage_event_id: int | None,
 ) -> dict | None:
-    """Post-stream credit settlement and budget-warning derivation.
+    """Post-stream wallet burn + ``token_balance`` SSE payload (ABS-383).
 
     Behaviour:
 
-    * If the stream errored before any tool call landed → refund the
-      reserved credit (the user got nothing).
-    * If the turn produced a qualifying assistant message AND at least
-      one prior tool_use block → commit the reserved credit (consumed).
-      "Qualifying" is defined as: final assistant content includes a
-      non-empty TextBlock AND the message history has at least one
-      ToolUseBlock from this session.
-    * Otherwise (empty assistant turn) → refund.
+    * Burn the turn's *measured* usage (input + output) from the wallet as
+      one ``burn`` ledger row linked to session / case / usage-event. The
+      burn is unconditional on measured usage — a mid-stream failure still
+      burns what was recorded; there is no refund heuristic and no
+      qualifying-turn check. Overdraw is by design (``burn_tokens`` has no
+      floor); the floor is a pre-flight concern.
+    * ``unlimited_credits`` users are exempt: no burn row, balance
+      unchanged. The ``UsageEvent`` still records the real tokens (patched
+      separately in ``_patch_usage_event_tokens``).
     * Bump ``advisor_case.tokens_consumed`` by the turn's input+output.
-    * Compute the budget-warning payload when ``token_budget_remaining``
-      drops below 25% of the tier's full budget.
+    * Return the ``token_balance`` SSE payload (balance after the burn,
+      how much was burned, backend-owned turns conversion, and the
+      low-balance flag / warn threshold) so the UI decrements live.
 
-    All DB work happens inside a single ``session_scope()`` — failing
-    here would otherwise propagate out of the SSE generator and surface
-    as a confusing 500 *after* the stream had already been delivered.
-    Returns the warning payload dict (or ``None`` to suppress the
-    warning event).
+    All DB work happens inside a single transaction — failing here would
+    otherwise propagate out of the SSE generator and surface as a
+    confusing 500 *after* the stream had already been delivered. Returns
+    ``None`` (suppressing the event) when there is no wallet to bill
+    (in-memory path) or the settlement raised.
     """
-    if db_session_factory is None or case_id is None:
+    if db_session_factory is None or user_id is None:
         return None
 
-    qualifying = _turn_was_qualifying(chat_session)
-    usage = chat_session.last_turn_usage
-    spent = (
-        (usage.input_tokens + usage.output_tokens)
-        if usage is not None
-        else 0
+    from advisor.billing.turns import (  # noqa: PLC0415
+        approx_turns_remaining,
+        low_balance_warn_tokens,
     )
+    from advisor.db.wallet import burn_tokens, get_balance  # noqa: PLC0415
 
+    usage = chat_session.last_turn_usage
+    input_tokens = usage.input_tokens if usage is not None else 0
+    output_tokens = usage.output_tokens if usage is not None else 0
+    spent = input_tokens + output_tokens
+
+    burned = 0
     try:
         with db_session_factory() as db:
             try:
                 db_session_pk = int(chat_session.session_id)
             except ValueError:
                 db_session_pk = None
-            if db_session_pk is not None:
-                if stream_failed or not qualifying:
-                    refund_credit_for(
+            if spent and not unlimited:
+                user = db.get(User, user_id)
+                if user is not None:
+                    txn = burn_tokens(
                         db,
+                        user=user,
+                        amount=spent,
+                        reason="chat_turn",
                         session_id=db_session_pk,
-                        reason=(
-                            "stream_error"
-                            if stream_failed
-                            else "non_qualifying_turn"
-                        ),
+                        case_id=case_id,
+                        usage_event_id=usage_event_id,
                     )
+                    burned = spent
+                    balance = txn.balance_after
                 else:
-                    commit_credit_for(db, session_id=db_session_pk)
-            if spent:
+                    balance = get_balance(db, user_id=user_id)
+            else:
+                balance = get_balance(db, user_id=user_id)
+            if spent and case_id is not None:
                 add_case_tokens(
                     db,
                     case_id=case_id,
-                    input_tokens=usage.input_tokens if usage else 0,
-                    output_tokens=usage.output_tokens if usage else 0,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
                 )
     except Exception:  # noqa: BLE001 — last-mile settlement; don't crash the SSE
         logger.exception(
-            "failed to settle case credit for session %s",
+            "failed to settle token burn for session %s",
             chat_session.session_id,
         )
         return None
 
-    if (
-        tier is None
-        or chat_session.token_budget_remaining is None
-        or chat_session.token_budget_remaining <= 0
-    ):
-        return None
-    from advisor.llm.budget import case_budget_for  # noqa: PLC0415
-
-    full = case_budget_for(tier)
-    if full <= 0:
-        return None
-    fraction_remaining = chat_session.token_budget_remaining / full
-    if fraction_remaining > 0.25:
-        return None
+    warn = low_balance_warn_tokens()
     return {
-        "case_id": case_id,
-        "tier": tier,
-        "remaining_tokens": chat_session.token_budget_remaining,
-        "tier_budget": full,
-        "fraction_remaining": fraction_remaining,
+        "balance_tokens": balance,
+        "burned_tokens": burned,
+        "approx_turns_remaining": approx_turns_remaining(balance),
+        "low_balance": balance <= warn,
+        "warn_threshold_tokens": warn,
     }
-
-
-def _turn_was_qualifying(chat_session: ChatSession) -> bool:
-    """Heuristic: did this turn produce billable output?
-
-    True iff the conversation contains at least one ``ToolUseBlock``
-    AND the final assistant message has a non-empty ``TextBlock``. The
-    "abandoned" definition in the brief: empty assistant turn or stream
-    error before any tool call → refund. Both conditions fail this
-    check.
-    """
-    has_tool_use = False
-    final_text_non_empty = False
-    for message in chat_session.messages:
-        if not isinstance(message.content, list):
-            continue
-        for block in message.content:
-            if getattr(block, "type", None) == "tool_use":
-                has_tool_use = True
-    last = next(
-        (
-            m
-            for m in reversed(chat_session.messages)
-            if m.role == LLMRole.ASSISTANT
-        ),
-        None,
-    )
-    if last is not None and isinstance(last.content, list):
-        for block in last.content:
-            if (
-                getattr(block, "type", None) == "text"
-                and getattr(block, "text", "").strip()
-            ):
-                final_text_non_empty = True
-                break
-    return has_tool_use and final_text_non_empty
 
 
 def _patch_usage_event_tokens(

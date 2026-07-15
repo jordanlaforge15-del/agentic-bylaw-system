@@ -1018,11 +1018,13 @@ def build_bylaw_tools(
             description=_DESC_BYLAW_QUERY,
             input_schema=_SCHEMA_BYLAW_QUERY,
         ),
-        ToolDefinition(
-            name="request_tier_upgrade",
-            description=_DESC_REQUEST_TIER_UPGRADE,
-            input_schema=_SCHEMA_REQUEST_TIER_UPGRADE,
-        ),
+        # ABS-383: ``request_tier_upgrade`` is intentionally NOT registered.
+        # The beta pivot retired tier upgrades — chat bills the account
+        # token wallet, not per-case tier credits — so the agent is no
+        # longer offered a tool to prompt one. The handler function and the
+        # ``_LAST_UPGRADE_REQUEST`` drain remain in this module as dormant
+        # no-ops (nothing appends to the buffer now); ``ChatSession`` still
+        # drains it each turn, harmlessly getting an empty list.
     ]
 
     handlers: dict[str, ToolHandler] = {
@@ -1035,7 +1037,6 @@ def build_bylaw_tools(
         "get_zone_profile": get_zone_profile_handler,
         "evaluate_submission_against_bylaws": evaluate_submission_handler,
         "bylaw_query": bylaw_query_handler,
-        "request_tier_upgrade": request_tier_upgrade_handler,
     }
 
     return tool_defs, handlers
