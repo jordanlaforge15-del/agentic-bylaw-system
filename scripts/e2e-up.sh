@@ -78,6 +78,31 @@ require_venv() {
   fi
 }
 
+require_docker() {
+  # Fail fast with an actionable message when the Docker daemon isn't
+  # reachable. Without this, the first `docker compose` call — the stale
+  # container probe in ensure_postgres — is a bare `x="$(... )"` command
+  # substitution. Under `set -euo pipefail` a daemon-unreachable failure
+  # there exits the script rc=1 with the daemon's error swallowed by
+  # `2>/dev/null`, so `make e2e-up` dies as an opaque "Error 1" right after
+  # the "Creating web/.env.local" log and no clue as to why. On macOS the
+  # daemon is often merely mid-start (Docker Desktop), so retry briefly
+  # before giving up.
+  if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
+    echo "error: Docker Compose required but not installed." >&2
+    exit 1
+  fi
+  local err=""
+  for _ in $(seq 1 15); do
+    err=$(docker info 2>&1 >/dev/null) && return 0
+    sleep 1
+  done
+  echo "error: Docker daemon not reachable after 15s. Is Docker running?" >&2
+  echo "last docker info error:" >&2
+  echo "$err" >&2
+  exit 1
+}
+
 ensure_compose_prereqs() {
   # docker-compose.yml's `web` service declares env_file: ./web/.env.local.
   # Compose validates the whole file on every command, so a missing
@@ -104,7 +129,11 @@ ensure_postgres() {
   # case is a stale container that's been stopped and restarted with a new
   # port (it shows up here in `ps -aq` but exposes nothing via `docker port`).
   local stale_container stale_port
-  stale_container="$(docker_compose ps -aq postgres 2>/dev/null | head -1)"
+  # `|| true` so a transient probe failure can't silently `set -e` exit the
+  # whole run before any diagnostic log prints. require_docker has already
+  # confirmed the daemon is reachable, so an empty result here just means
+  # "no existing container", which is the normal fresh-worktree case.
+  stale_container="$(docker_compose ps -aq postgres 2>/dev/null | head -1 || true)"
   if [[ -n "$stale_container" ]]; then
     stale_port="$(docker inspect "$stale_container" \
       --format '{{range $p, $bs := .HostConfig.PortBindings}}{{if eq $p "5432/tcp"}}{{range $bs}}{{.HostPort}}{{end}}{{end}}{{end}}' \
@@ -389,6 +418,7 @@ start_web() {
 
 main() {
   require_venv
+  require_docker
   ensure_compose_prereqs
   ensure_postgres
   ensure_test_db
