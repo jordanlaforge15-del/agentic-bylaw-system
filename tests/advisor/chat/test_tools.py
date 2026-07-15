@@ -60,10 +60,12 @@ def test_build_bylaw_tools_returns_full_tool_set(seeded_service):
     names = [t.name for t in tool_defs]
     # Order matters less than the exact set: callers can rely on
     # this set being complete because mismatched name <-> handler
-    # pairs would silently break tool dispatch. ``request_tier_upgrade``
-    # is the Layer-3 self-monitoring tool added with the case-credit
-    # billing model. ``bylaw_query`` is the Phase 4 intent-routed
-    # mega-tool (ABS-274) that composes over the thick tools.
+    # pairs would silently break tool dispatch. ``bylaw_query`` is the
+    # Phase 4 intent-routed mega-tool (ABS-274) that composes over the
+    # thick tools. ``request_tier_upgrade`` was UNREGISTERED in ABS-383:
+    # the beta pivot bills the account token wallet, not per-case tier
+    # credits, so the agent is no longer offered a tool to prompt a
+    # tier upgrade.
     assert set(names) == {
         "list_documents",
         "get_document_outline",
@@ -74,8 +76,8 @@ def test_build_bylaw_tools_returns_full_tool_set(seeded_service):
         "get_zone_profile",
         "evaluate_submission_against_bylaws",
         "bylaw_query",
-        "request_tier_upgrade",
     }
+    assert "request_tier_upgrade" not in set(names)
     assert set(handlers.keys()) == set(names)
 
 
