@@ -23,10 +23,17 @@ import { expect, test } from "../fixtures/test-env";
 
 async function stubEmptyMenu(page: import("@playwright/test").Page) {
   await page.route("**/api/billing/questions", async (route) => {
-    const resp = await route.fetch();
-    const body = await resp.json();
-    body.questions = [];
-    await route.fulfill({ response: resp, json: body });
+    // The zero-report assertions all check for *absence*, so they resolve
+    // before this real round-trip completes and the page can close mid-fetch.
+    // Swallow the resulting "page closed" rejection instead of failing.
+    try {
+      const resp = await route.fetch();
+      const body = await resp.json();
+      body.questions = [];
+      await route.fulfill({ response: resp, json: body });
+    } catch {
+      /* page closed before the menu fetch settled — nothing to fulfill */
+    }
   });
 }
 

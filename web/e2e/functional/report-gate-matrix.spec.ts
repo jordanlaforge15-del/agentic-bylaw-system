@@ -72,10 +72,17 @@ test.describe("per-report gate matrix (ABS-384)", () => {
     page,
   }) => {
     await page.route("**/api/billing/questions", async (route) => {
-      const resp = await route.fetch();
-      const body = await resp.json();
-      body.questions = [];
-      await route.fulfill({ response: resp, json: body });
+      // The zero-report assertions all check for *absence*, so they resolve
+      // before this real round-trip completes and the page can close
+      // mid-fetch. Swallow the "page closed" rejection instead of failing.
+      try {
+        const resp = await route.fetch();
+        const body = await resp.json();
+        body.questions = [];
+        await route.fulfill({ response: resp, json: body });
+      } catch {
+        /* page closed before the menu fetch settled — nothing to fulfill */
+      }
     });
 
     await page.goto("/cases/new");
