@@ -6,13 +6,15 @@
 // token wallet, top-up SKUs, and per-report gates that REPLACE today's
 // credit/tier chat-billing model.
 //
-// This spec locks in the CURRENT pre-pivot posture so that when the sub-
-// issues land, the flip is visible as an intentional edit to these
-// assertions rather than a silent regression. Two anchors:
+// This spec locks in the beta-pivot posture so that when the sub-issues
+// land, each flip is visible as an intentional edit to these assertions
+// rather than a silent regression. Two anchors:
 //
-//   1. The D6 API contract (GET /v1/billing/wallet, GET /v1/billing/topups)
-//      does NOT exist yet — both 404. When I1 (wallet) / I2 (top-up) ship,
-//      these assertions must be updated, proving the endpoints arrived.
+//   1. The D6 API contract. I1 (wallet, ABS-380) has LANDED:
+//      GET /v1/billing/wallet is now registered and auth-gated (401 with
+//      no credentials, no longer 404). I2 (top-up SKUs) has NOT shipped
+//      yet, so GET /v1/billing/topups is still route-not-found (404).
+//      When I2 lands, the topups assertion flips to 401/200 too.
 //
 //   2. The /billing surface still speaks the retired credit/tier vocabulary
 //      the ADR pivots away from ("Credit balance"), and shows NO turns /
@@ -25,15 +27,18 @@ import { expect, test } from "../fixtures/test-env";
 import { E2E_API_URL } from "../fixtures/test-env";
 
 test.describe("ABS-379 beta-pivot baseline", () => {
-  test("D6 wallet + top-up endpoints are not implemented yet (404)", async ({
+  test("D6: wallet endpoint is live (auth-gated), top-up endpoint not yet", async ({
     request,
   }) => {
-    // Route-not-found is independent of auth/billing-enabled state: these
-    // paths are simply not registered on the router pre-pivot. When I1/I2
-    // add them, they return 200/401/503 instead and this spec is updated.
+    // I1 (ABS-380) landed the wallet: the route is registered and requires
+    // auth, so an unauthenticated request is rejected (401) rather than
+    // route-not-found (404). This is the intentional flip from the pre-pivot
+    // 404 that proves the endpoint arrived.
     const wallet = await request.get(`${E2E_API_URL}/v1/billing/wallet`);
-    expect(wallet.status(), await wallet.text()).toBe(404);
+    expect(wallet.status(), await wallet.text()).toBe(401);
 
+    // I2 (top-up SKUs) has not shipped yet: this path is still simply not
+    // registered on the router. When I2 lands, this flips to 401/200.
     const topups = await request.get(`${E2E_API_URL}/v1/billing/topups`);
     expect(topups.status(), await topups.text()).toBe(404);
   });

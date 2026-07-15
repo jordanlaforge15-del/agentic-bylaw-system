@@ -44,8 +44,18 @@ from advisor.db.models import (
     ChatMessage,
     ChatSession,
     InviteRequest,
+    TokenTransaction,
     UsageEvent,
     User,
+)
+from advisor.db.wallet import (
+    adjust_tokens,
+    burn_tokens,
+    credit_topup,
+    get_balance,
+    grant_signup_tokens_if_needed,
+    grant_tokens,
+    list_transactions,
 )
 from advisor.db.schemas import (
     CaseCreditOut,
@@ -70,8 +80,17 @@ __all__ = [
     "ChatMessage",
     "ChatSession",
     "InviteRequest",
+    "TokenTransaction",
     "UsageEvent",
     "User",
+    # Token wallet service
+    "adjust_tokens",
+    "burn_tokens",
+    "credit_topup",
+    "get_balance",
+    "grant_signup_tokens_if_needed",
+    "grant_tokens",
+    "list_transactions",
     # Schemas
     "CaseCreditOut",
     "CaseOut",

@@ -1560,6 +1560,13 @@ def _resolve_or_create_test_user(
         )
 
         grant_starter_credits_if_needed(db, user=user)
+        # ABS-380: mirror prod auth — issue the signup token-wallet grant so
+        # the e2e X-Test-User-Id path exercises the wallet like a real user.
+        from advisor.db.wallet import (  # noqa: PLC0415
+            grant_signup_tokens_if_needed,
+        )
+
+        grant_signup_tokens_if_needed(db, user=user)
         return user
 
     # Existing user — refresh mutable profile fields only when the
@@ -1590,6 +1597,13 @@ def _resolve_or_create_test_user(
     )
 
     grant_starter_credits_if_needed(db, user=user)
+    # ABS-380: self-heal the token-wallet grant for existing e2e users too,
+    # mirroring the production existing-user branch.
+    from advisor.db.wallet import (  # noqa: PLC0415
+        grant_signup_tokens_if_needed,
+    )
+
+    grant_signup_tokens_if_needed(db, user=user)
     return user
 
 

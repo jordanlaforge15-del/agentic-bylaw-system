@@ -100,6 +100,15 @@ class User(Base):
     free_questions_remaining: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    # ABS-380 token wallet: the user's prepaid token balance, presented to
+    # the UI as "~N turns". BigInteger and **signed** on purpose — a chat
+    # turn burns *actual* usage with no floor at settlement time, so a turn
+    # that overshoots the remaining balance drives it negative. Overdraw is
+    # by design (the floor is a pre-flight concern, not a ledger invariant);
+    # ``advisor.db.wallet`` keeps ``SUM(amount_tokens) == token_balance``.
+    token_balance: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
     metadata_json: Mapped[dict] = mapped_column(
         MutableDict.as_mutable(json_type()), nullable=False, default=dict
     )
@@ -122,6 +131,99 @@ class User(Base):
     api_keys: Mapped[list["AdvisorApiKey"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    token_transactions: Mapped[list["TokenTransaction"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class TokenTransaction(Base):
+    """One append-only entry in the token wallet ledger (ABS-380).
+
+    The wallet is a running signed balance on ``User.token_balance``; this
+    table is the immutable audit trail behind it. Every balance-changing
+    operation writes exactly one row here inside the same transaction that
+    moves the balance, so the invariant ``SUM(amount_tokens) ==
+    User.token_balance`` holds for all time (verified by the wallet-service
+    tests). Rows are never updated or deleted — corrections are new
+    ``adjust`` entries, not edits.
+
+    ``entry_type`` is one of:
+
+    * ``grant`` — the signup free-trial grant (and any admin gift). Positive.
+    * ``topup`` — a Stripe top-up purchase (ABS-381). Positive.
+    * ``burn`` — chat-turn settlement burns actual token usage (ABS-383).
+      Negative; may drive the balance below zero (overdraw by design).
+    * ``adjust`` — a manual correction (support / reconciliation). Signed.
+
+    ``amount_tokens`` is the signed delta; ``balance_after`` is the wallet
+    balance immediately after this entry was applied — cheap to read for a
+    statement view without re-summing the whole ledger.
+
+    ``stripe_checkout_session_id`` is UNIQUE (nullable) so a Stripe webhook
+    that fires twice for the same checkout credits the wallet exactly once:
+    the second insert trips the unique index and the service absorbs the
+    ``IntegrityError`` rather than double-crediting.
+
+    The optional ``session_id`` / ``case_id`` / ``usage_event_id`` FKs
+    attribute a burn to the chat turn / case / usage event that caused it
+    (all ``ON DELETE SET NULL`` — losing the source row must not erase the
+    ledger entry).
+    """
+
+    __tablename__ = "advisor_token_transaction"
+    __table_args__ = (
+        # Newest-first pagination for the statement view is
+        # ``WHERE user_id = ? ORDER BY id DESC`` — this composite index
+        # serves both the filter and the sort.
+        Index(
+            "ix_advisor_token_transaction_user_id_id",
+            "user_id",
+            "id",
+        ),
+    )
+
+    # BigInteger PK on Postgres (this ledger is high-volume and append-only),
+    # but sqlite only auto-increments an ``INTEGER PRIMARY KEY`` (its rowid
+    # alias) — a ``BIGINT PRIMARY KEY`` there won't autoincrement. The
+    # variant gives sqlite (unit tests) a plain Integer PK while production
+    # Postgres keeps the 64-bit id space.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # 'grant' | 'topup' | 'burn' | 'adjust'.
+    entry_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    amount_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    balance_after: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Machine-readable provenance (``signup_grant`` / ``topup_medium`` /
+    # ``chat_turn`` / ``support_correction`` …). NULL when unattributed.
+    reason: Mapped[str | None] = mapped_column(String(64))
+    stripe_checkout_session_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True
+    )
+    session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("advisor_chat_session.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    case_id: Mapped[int | None] = mapped_column(
+        ForeignKey("advisor_case.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    usage_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("advisor_usage_event.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    metadata_json: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(json_type()), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, index=True
+    )
+
+    user: Mapped[User] = relationship(back_populates="token_transactions")
 
 
 class Case(Base):
