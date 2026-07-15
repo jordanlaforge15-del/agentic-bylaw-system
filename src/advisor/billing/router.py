@@ -34,6 +34,7 @@ from fastapi import (
     Depends,
     Header,
     HTTPException,
+    Query,
     Request,
     status,
 )
@@ -72,8 +73,10 @@ from advisor.billing.webhooks import handle_event
 # entitlement, via ``advisor.billing.answers.start_question_free``. Only the
 # read-only ``credit_balance_for`` (for the shared ``GET /me`` balance view)
 # is borrowed. The import-boundary guard test pins this.
+from advisor.billing import turns
 from advisor.db.cases import credit_balance_for
 from advisor.db.models import CasePurchase, QuestionPurchase, User
+from advisor.db.wallet import list_transactions
 
 logger = logging.getLogger(__name__)
 
@@ -459,6 +462,100 @@ class BillingMeResponse(BaseModel):
     tier_balances: list[TierBalance]
     total_available_credits: int
     free_questions_remaining: int = 0
+    token_balance: int = Field(
+        default=0,
+        description=(
+            "ABS-380 token wallet balance (signed). Additive to the legacy "
+            "credit fields — the beta pivot bills chat by this token wallet, "
+            "surfaced to users as '~N turns'. See GET /v1/billing/wallet for "
+            "the full turns-conversion view."
+        ),
+    )
+
+
+class WalletResponse(BaseModel):
+    """Body of ``GET /v1/billing/wallet`` — the turns-aware balance view.
+
+    Turns conversion is backend-owned (design spec D6): the client renders
+    ``approx_turns_remaining`` / ``tokens_per_turn`` directly and never
+    divides tokens itself. Every threshold is echoed so the UI's "low
+    balance" and "out of turns" states match the server's pre-flight rules
+    exactly.
+    """
+
+    balance_tokens: int = Field(
+        ..., description="Signed wallet balance in tokens."
+    )
+    approx_turns_remaining: int = Field(
+        ...,
+        description=(
+            "floor(balance / tokens_per_turn), floored at 0 (negative "
+            "balances display as 0)."
+        ),
+    )
+    tokens_per_turn: int = Field(
+        ..., description="ADVISOR_TOKENS_PER_TURN — the display divisor."
+    )
+    low_balance: bool = Field(
+        ...,
+        description=(
+            "True when balance has fallen to the warn threshold "
+            "(ADVISOR_LOW_BALANCE_WARN_TOKENS). Always False for "
+            "unlimited_credits users."
+        ),
+    )
+    warn_threshold_tokens: int = Field(
+        ..., description="ADVISOR_LOW_BALANCE_WARN_TOKENS."
+    )
+    floor_tokens: int = Field(
+        ...,
+        description=(
+            "ADVISOR_CHAT_MIN_BALANCE_TOKENS — chat is refused at "
+            "balance <= floor (pre-flight)."
+        ),
+    )
+    chat_enabled: bool = Field(
+        ...,
+        description=(
+            "True when the user may start a chat turn: unlimited_credits "
+            "users at any balance, otherwise balance > floor_tokens."
+        ),
+    )
+    payments_enabled: bool = Field(
+        ...,
+        description=(
+            "Whether top-ups are purchasable (Stripe on). When False the "
+            "UI shows 'paid top-ups coming soon' at exhaustion."
+        ),
+    )
+
+
+class WalletTransaction(BaseModel):
+    """One append-only ledger row projected for the statement view."""
+
+    id: int
+    entry_type: str = Field(
+        ..., description="grant | topup | burn | adjust."
+    )
+    amount_tokens: int = Field(
+        ..., description="Signed delta this entry applied to the balance."
+    )
+    balance_after: int = Field(
+        ..., description="Wallet balance immediately after this entry."
+    )
+    reason: str | None = None
+    created_at: str
+
+
+class WalletTransactionsResponse(BaseModel):
+    """Body of ``GET /v1/billing/wallet/transactions`` — newest-first page.
+
+    ``next_before_id`` is the cursor for the following page: pass it back as
+    ``before_id``. It is ``None`` when this page is the last one.
+    """
+
+    transactions: list[WalletTransaction]
+    next_before_id: int | None = None
 
 
 class PurchaseSummary(BaseModel):
@@ -1048,6 +1145,111 @@ def _mount_answer_delivery_routes(
             return _question_purchase_response(purchase)
 
 
+# -- Token wallet read surface (ABS-380) ------------------------------------
+
+
+_WALLET_TXN_DEFAULT_LIMIT = 50
+_WALLET_TXN_MAX_LIMIT = 200
+
+
+def _wallet_response(user: User, *, payments_enabled: bool) -> WalletResponse:
+    """Project a ``User`` into the turns-aware wallet view.
+
+    All thresholds are read fresh from the environment (via
+    ``advisor.billing.turns``) so a re-calibration of the per-turn token
+    size / floor / warn threshold takes effect without a restart. ``low_balance``
+    and ``chat_enabled`` are computed here — never client-side — so the UI's
+    states line up with the server's pre-flight rules.
+    """
+    balance = int(user.token_balance or 0)
+    floor = turns.chat_min_balance_tokens()
+    warn = turns.low_balance_warn_tokens()
+    unlimited = bool(getattr(user, "unlimited_credits", False))
+    return WalletResponse(
+        balance_tokens=balance,
+        approx_turns_remaining=turns.approx_turns_remaining(balance),
+        tokens_per_turn=turns.tokens_per_turn(),
+        # unlimited_credits users never run "low"; everyone else flips at
+        # the warn threshold.
+        low_balance=(not unlimited) and balance <= warn,
+        warn_threshold_tokens=warn,
+        floor_tokens=floor,
+        # unlimited_credits users can always chat; everyone else needs a
+        # balance strictly above the floor (pre-flight refuses at <= floor).
+        chat_enabled=unlimited or balance > floor,
+        payments_enabled=payments_enabled,
+    )
+
+
+def _mount_wallet_read_routes(
+    router: APIRouter,
+    *,
+    user_dependency: Callable[..., Any],
+    user_resolver: Callable[[Any, Session], User],
+    open_db: Callable[[], Any],
+    payments_enabled: bool,
+) -> None:
+    """Mount ``GET /wallet`` and ``GET /wallet/transactions`` (ABS-380).
+
+    Read-only and deliberately NOT gated by ``_require_enabled``: the token
+    wallet is the beta product's balance, so it must be visible on the
+    dormant (payments-off) router too — mounted on both flavours, same as
+    ``GET /me``. Both endpoints are ownership-scoped: a caller only ever
+    reads their own balance and their own ledger rows.
+    """
+
+    @router.get("/wallet", response_model=WalletResponse)
+    def get_wallet(
+        auth_session: Any = Depends(user_dependency),
+    ) -> WalletResponse:
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            return _wallet_response(user, payments_enabled=payments_enabled)
+
+    @router.get(
+        "/wallet/transactions", response_model=WalletTransactionsResponse
+    )
+    def get_wallet_transactions(
+        auth_session: Any = Depends(user_dependency),
+        limit: int = Query(
+            default=_WALLET_TXN_DEFAULT_LIMIT,
+            ge=1,
+            le=_WALLET_TXN_MAX_LIMIT,
+            description="Page size (newest-first).",
+        ),
+        before_id: int | None = Query(
+            default=None,
+            ge=1,
+            description=(
+                "Exclusive id cursor — pass the previous page's "
+                "next_before_id to fetch older rows."
+            ),
+        ),
+    ) -> WalletTransactionsResponse:
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            rows = list_transactions(
+                db, user_id=user.id, limit=limit, before_id=before_id
+            )
+            transactions = [
+                WalletTransaction(
+                    id=r.id,
+                    entry_type=r.entry_type,
+                    amount_tokens=r.amount_tokens,
+                    balance_after=r.balance_after,
+                    reason=r.reason,
+                    created_at=r.created_at.isoformat(),
+                )
+                for r in rows
+            ]
+            # A full page means there may be more — hand back the oldest id
+            # as the next cursor. A short page is the end of the ledger.
+            next_before_id = rows[-1].id if len(rows) == limit else None
+            return WalletTransactionsResponse(
+                transactions=transactions, next_before_id=next_before_id
+            )
+
+
 # -- Router factory ---------------------------------------------------------
 
 
@@ -1561,7 +1763,19 @@ def build_billing_router(
                     b.available for b in tier_balances
                 ),
                 free_questions_remaining=user.free_questions_remaining,
+                token_balance=int(user.token_balance or 0),
             )
+
+    # ABS-380: the token-wallet read surface (balance + ledger). Not gated by
+    # _require_enabled — the wallet is the beta product's balance and must
+    # render whenever a user is resolvable.
+    _mount_wallet_read_routes(
+        router,
+        user_dependency=user_dependency,
+        user_resolver=user_resolver,
+        open_db=_open_db,
+        payments_enabled=settings.payments_enabled,
+    )
 
     @router.get("/purchases", response_model=PurchaseHistoryResponse)
     def get_purchases(
@@ -1747,6 +1961,7 @@ def build_dormant_billing_router(
                         b.available for b in tier_balances
                     ),
                     free_questions_remaining=user.free_questions_remaining,
+                    token_balance=int(user.token_balance or 0),
                 )
 
         @router.post("/questions/free-start", response_model=FreeStartResponse)
@@ -1851,6 +2066,19 @@ def build_dormant_billing_router(
             client_factory=None,
             payments_enabled=False,
             require_enabled=None,
+        )
+
+        # ABS-380: the token wallet is the beta product's balance, so its
+        # read surface must be live on the dormant (payments-off) router too.
+        # payments_enabled=False here — top-ups aren't purchasable until
+        # Stripe is wired, and the wallet view reports that so the UI shows
+        # "paid top-ups coming soon" at exhaustion.
+        _mount_wallet_read_routes(
+            router,
+            user_dependency=user_dependency,
+            user_resolver=user_resolver,
+            open_db=_open_db_dormant,
+            payments_enabled=False,
         )
 
     else:
