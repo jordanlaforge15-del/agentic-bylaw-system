@@ -1,40 +1,81 @@
-// Smoke: /billing renders the dormant-state copy and shows real credit
-// balances from GET /v1/billing/me even when ADVISOR_BILLING_ENABLED is
-// false (the default in e2e_server wiring).
+// Smoke: /billing renders the unified turns-based account view in the
+// payments-off (dormant) posture — ABS-388.
 //
-// ABS-183: previously /billing/me returned 503 in dormant mode, so the
-// page displayed "0" for every tier even though users had admin-granted
-// credits. The fix makes /billing/me return real per-tier balances with
-// enabled=false so the "Buy" buttons are hidden but the counts are
-// accurate.
+// The billing page shares one BillingContent component across /billing
+// (marketing chrome) and /app/billing (AuthShell). It client-fetches the
+// turns-aware wallet, the wallet ledger, owned reports, and cases from the
+// /api proxies. In the e2e stack ADVISOR_BILLING_ENABLED is false, so the
+// wallet comes back payments_enabled=false and the page shows:
+//   * a "~N turns" balance headline (approx_turns_remaining, never a raw
+//     token count),
+//   * the free-trial beta banner ("paid top-ups open soon"),
+//   * the wallet ledger with at least the seed grant row.
+//
+// The demo user is seeded with a large token wallet (scripts/seed_e2e_user
+// tops it up to a huge floor), so the turns headline and a grant/top-up
+// ledger row are always present. This proves the client fetch hydrated real
+// data rather than a blank/error state — and that NO tier/credit/pack
+// vocabulary leaks into the copy.
 
 import { expect, test } from "../fixtures/test-env";
 
-test("/billing shows dormant notice with real credit balances", async ({
+test("/billing shows the turns balance, beta banner and wallet ledger (dormant)", async ({
   page,
 }) => {
   await page.goto("/billing");
+
   await expect(
     page.getByRole("heading", { level: 1, name: /Billing/ }),
   ).toBeVisible();
 
-  // Dormant notice must still be present (enabled=false in the response).
-  await expect(
-    page.getByText(/Billing is dormant on this deployment/),
-  ).toBeVisible();
+  // Turns headline — "~N turns", sourced from approx_turns_remaining.
+  const turns = page.getByTestId("billing-turns");
+  await expect(turns).toBeVisible({ timeout: 15_000 });
+  await expect(turns).toContainText(/~\d[\d,]*\s+turns?/i);
 
-  // The demo user has credits from the seed script, so the balance
-  // section should render with the "Credit balance" heading and at
-  // least one tier card — proving the page loaded real data rather
-  // than showing a blank state or an error.
-  await expect(
-    page.getByRole("heading", { name: /Credit balance/i }),
-  ).toBeVisible();
-
-  // At least one tier card should show a non-zero available count.
-  // The demo user has 100 credits per tier from seed_e2e_user.py.
-  const tierCards = page.locator(
-    "text=/available · \\d+ in flight · \\d+ consumed/",
+  // Payments-off beta banner replaces any purchase CTA.
+  await expect(page.getByTestId("billing-beta-banner")).toBeVisible();
+  await expect(page.getByTestId("billing-beta-banner")).toContainText(
+    /paid top-ups open soon/i,
   );
-  await expect(tierCards.first()).toBeVisible();
+  // No inline top-up buttons when payments are off.
+  await expect(page.getByTestId("billing-topup-btn")).toHaveCount(0);
+
+  // Wallet ledger: the seed leaves at least one grant/top-up row, each
+  // shown as a turns delta (never a raw token count).
+  await expect(page.getByTestId("billing-transactions")).toBeVisible();
+  await expect(page.getByTestId("billing-tx-row").first()).toBeVisible();
+  await expect(page.getByTestId("billing-tx-row").first()).toContainText(
+    /turns?/i,
+  );
+
+  // Reports + cases cards render (empty-state or rows — both are fine).
+  await expect(page.getByTestId("billing-reports")).toBeVisible();
+  await expect(page.getByTestId("billing-cases")).toBeVisible();
+
+  // No tier / credit / pack vocabulary anywhere in the copy.
+  const body = page.locator("body");
+  await expect(body).not.toContainText(/\bcredits?\b/i);
+  await expect(body).not.toContainText(/\bpack\b/i);
+  await expect(body).not.toContainText(
+    /Quick Lookup|Standard Case|Complex File/i,
+  );
+  await expect(body).not.toContainText(/\btier\b/i);
+});
+
+test("/app/billing renders the same turns view inside the authorized shell", async ({
+  page,
+}) => {
+  await page.goto("/app/billing");
+
+  await expect(
+    page.getByRole("heading", { level: 1, name: /Billing/ }),
+  ).toBeVisible();
+
+  const turns = page.getByTestId("billing-turns");
+  await expect(turns).toBeVisible({ timeout: 15_000 });
+  await expect(turns).toContainText(/~\d[\d,]*\s+turns?/i);
+
+  await expect(page.getByTestId("billing-beta-banner")).toBeVisible();
+  await expect(page.getByTestId("billing-transactions")).toBeVisible();
 });
