@@ -68,21 +68,30 @@ test.describe("per-report gate matrix (ABS-384)", () => {
     }
   });
 
-  test("zero: an empty gate renders a menu with no options", async ({
+  test("zero: an empty gate renders no report section at all", async ({
     page,
   }) => {
     await page.route("**/api/billing/questions", async (route) => {
-      const resp = await route.fetch();
-      const body = await resp.json();
-      body.questions = [];
-      await route.fulfill({ response: resp, json: body });
+      // The zero-report assertions all check for *absence*, so they resolve
+      // before this real round-trip completes and the page can close
+      // mid-fetch. Swallow the "page closed" rejection instead of failing.
+      try {
+        const resp = await route.fetch();
+        const body = await resp.json();
+        body.questions = [];
+        await route.fulfill({ response: resp, json: body });
+      } catch {
+        /* page closed before the menu fetch settled — nothing to fulfill */
+      }
     });
 
     await page.goto("/cases/new");
-    // The menu container still renders in the DOM; it simply carries no
-    // options, so it collapses to zero height (Playwright reports an empty
-    // container as hidden). Assert it is attached rather than visible.
-    await expect(page.getByTestId("question-menu")).toBeAttached();
+    // ABS-385: with zero enabled slugs the report accordion is not rendered
+    // at all — the page reads complete as anchor + question + free CTA. The
+    // menu container and every option are absent from the DOM.
+    await expect(page.getByTestId("start-conversation-btn")).toBeVisible();
+    await expect(page.getByTestId("question-menu")).toHaveCount(0);
+    await expect(page.getByText(/OR ORDER A WRITTEN REPORT/)).toHaveCount(0);
     for (const slug of LAUNCH_SLUGS) {
       await expect(
         page.getByTestId(`question-option-${slug}`),

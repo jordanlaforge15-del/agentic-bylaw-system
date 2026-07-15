@@ -170,19 +170,14 @@ test("billing dormant + zero free credits: shows exhausted message", async ({
   await expect(page.getByTestId("free-trial-btn")).not.toBeVisible();
 });
 
-test("Answers-only entry: the Conversation continue-case CTA is hidden (ABS-324)", async ({
+test("conversation-first: the in-window match block is always on (ABS-385)", async ({
   page,
 }) => {
-  // Continuing an existing case routes into the Conversation /app chat. At
-  // launch /cases/new is Answers-only (ADVISOR_CONVERSATION_ENTRY_ENABLED
-  // off), so even when a matching case exists the "EXISTING CASE FOUND" /
-  // "Continue case" entry must NOT surface. The Conversation product stays
-  // in the codebase; it's just not the primary in-app door.
-  //
-  // The e2e server runs with the flag ON (so the legacy continue-case suite
-  // can exercise it). This test asserts the production launch posture, so it
-  // stubs the question-menu response's conversation_enabled back to false —
-  // the exact signal /cases/new reads to decide whether the entry exists.
+  // The beta pivot (ABS-385) makes conversation the primary surface: the
+  // in-window match block is no longer gated behind conversation_enabled.
+  // Even with the menu's conversation_enabled stubbed false, anchoring to an
+  // existing case surfaces the "EXISTING CASE FOUND" / "Continue conversation"
+  // entry — the flag no longer suppresses it.
   await page.route("**/api/billing/questions", async (route) => {
     const resp = await route.fetch();
     const body = await resp.json();
@@ -194,16 +189,16 @@ test("Answers-only entry: the Conversation continue-case CTA is hidden (ABS-324)
   await openCaseViaApi({ anchorLabel: anchor });
 
   await page.goto("/cases/new");
-  await expect(page.getByTestId("question-menu")).toBeVisible();
   const anchorInput = page.getByPlaceholder(/1234 Main St, Halifax/);
   await anchorInput.fill(anchor);
   await anchorInput.blur();
 
-  // Give any (skipped) match lookup a beat — the CTA must stay absent.
-  await expect(page.getByText(/EXISTING CASE FOUND/)).toHaveCount(0);
+  const match = page.getByTestId("existing-case-match");
+  await expect(match).toBeVisible();
+  await expect(match).toContainText(/EXISTING CASE FOUND/);
   await expect(
-    page.getByRole("button", { name: /Continue case/ }),
-  ).toHaveCount(0);
+    match.getByRole("button", { name: /Continue conversation/ }),
+  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------

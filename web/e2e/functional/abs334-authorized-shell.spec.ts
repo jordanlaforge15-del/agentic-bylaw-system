@@ -33,11 +33,12 @@ test("workspace menu routes from /app to Open a case", async ({ page }) => {
     menu.getByRole("menuitem", { name: /Readings/ }),
   ).toHaveAttribute("aria-current", "page");
 
-  // Navigating to Open a case lands on /cases/new.
+  // Navigating to Open a case lands on /cases/new (ABS-385: the page is the
+  // conversation-first "Start a conversation." surface).
   await menu.getByRole("menuitem", { name: /Open a case/ }).click();
   await page.waitForURL(/\/cases\/new/);
   await expect(
-    page.getByRole("heading", { name: /Open a case/ }),
+    page.getByRole("heading", { name: /Start a conversation/ }),
   ).toBeVisible();
 });
 
@@ -63,30 +64,33 @@ test("workspace menu closes on Escape", async ({ page }) => {
   await expect(page.getByRole("menu")).not.toBeVisible();
 });
 
-test("Open a case renders the redesigned shell + live checkout summary", async ({
+test("Open a case renders the redesigned conversation-first shell", async ({
   page,
 }) => {
   await page.goto("/cases/new");
 
   // Authorized shell: the AuthBar carries its own workspace menu and the
-  // ACCOUNT · NEW CASE section label (not the marketing TopNav).
+  // ACCOUNT · NEW CONVERSATION section label (not the marketing TopNav).
   await expect(
     page.getByRole("button", { name: "Workspace menu" }),
   ).toBeVisible();
-  await expect(page.getByText("ACCOUNT · NEW CASE").first()).toBeVisible();
+  await expect(
+    page.getByText("ACCOUNT · NEW CONVERSATION").first(),
+  ).toBeVisible();
 
-  // The priced-question cards render; due-diligence is selected by default
-  // so the checkout summary shows its $199 anchor price.
+  // The free conversation entry is the primary surface.
+  await expect(page.getByTestId("start-conversation-btn")).toBeVisible();
+
+  // Released report SKUs render as the secondary accordion, each offer
+  // carrying its per-report price in the header (collapsed, nothing
+  // pre-selected).
   await expect(page.getByTestId("question-menu")).toBeVisible();
-  const summary = page.getByTestId("checkout-summary");
-  await expect(summary).toBeVisible();
-  await expect(summary).toContainText("YOUR ANSWER");
-  await expect(summary).toContainText("$199");
-
-  // Selecting a different question updates the summary price live.
-  await page.getByTestId("question-option-permitted_use").click();
-  await expect(summary).toContainText("$79");
-  await expect(summary).not.toContainText("$199");
+  await expect(
+    page.getByTestId("question-option-due_diligence"),
+  ).toContainText("$199");
+  await expect(
+    page.getByTestId("question-option-permitted_use"),
+  ).toContainText("$79");
 });
 
 test("/app/billing renders inside the authorized shell", async ({ page }) => {

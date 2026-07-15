@@ -1,14 +1,10 @@
-// Functional: the case-open form tolerates a network failure on the
-// anchor match-lookup without crashing or wedging the UI.
+// Functional: the conversation-first /cases/new tolerates a network failure
+// on the anchor match-lookup without crashing or wedging the UI (ABS-385).
 //
-// History: this spec originally guarded POST /api/cases (the old
-// tier-credit "Open case" button) against a silent hang on a dropped
-// connection (ABS-9, Safari "Load failed"). ABS-320 migrated the form off
-// the tier model onto the priced-question catalog, so that button and its
-// POST are gone. The always-reachable network call in the migrated form is
-// the on-blur anchor match-lookup (GET /api/cases/match); this spec pins
-// that a failed lookup degrades gracefully (treated as "no match") and the
-// form stays usable — the question menu still renders and is interactive.
+// The always-reachable network call before the user commits is the on-blur
+// in-window match lookup (GET /api/cases/match). A dropped connection (Safari
+// "Load failed") must degrade to "no match", and the free CTA + question must
+// stay usable — the failure can't block opening a conversation.
 
 import { expect, test } from "../fixtures/test-env";
 
@@ -25,13 +21,14 @@ test("a failed anchor match-lookup degrades gracefully", async ({ page }) => {
   await anchorInput.fill(anchor);
   await anchorInput.blur();
 
-  // No "existing case" banner is shown (the failed lookup is treated as
-  // "no match"), and crucially the form did not crash: the question menu
-  // is still rendered and interactive.
-  await expect(page.getByText(/EXISTING CASE FOUND/)).toHaveCount(0);
-  await expect(page.getByTestId("question-menu")).toBeVisible();
-  await page.getByTestId("question-option-permitted_use").click();
-  await expect(page.getByText(/Describe your situation/i)).toBeVisible();
+  // No match block (the failed lookup is treated as "no match"), and the
+  // form did not crash: the free CTA is enabled and the question composer is
+  // interactive.
+  await expect(page.getByTestId("existing-case-match")).toHaveCount(0);
+  await page
+    .getByPlaceholder(/Ask your question/)
+    .fill("Can I add a second unit?");
+  await expect(page.getByTestId("start-conversation-btn")).toBeEnabled();
 
   // We stayed on /cases/new.
   expect(new URL(page.url()).pathname).toBe("/cases/new");
