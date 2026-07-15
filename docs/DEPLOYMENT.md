@@ -204,6 +204,9 @@ ADVISOR_HOST=0.0.0.0, ADVISOR_PORT=8000
 ADVISOR_BILLING_ENABLED, STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PRO, STRIPE_PRICE_TEAM,
 ADVISOR_BILLING_SUCCESS_URL, ADVISOR_BILLING_CANCEL_URL
 
+# Per-report gate (ABS-384): which of the five report SKUs are on sale
+ADVISOR_ENABLED_QUESTIONS   # csv slugs; `*` = all; unset/empty = NONE (deny-by-default)
+
 # Shared-password gate
 DEMO_PASSWORD=$$<password>    # NB: literal $ in value must be escaped as $$ for compose
 ```
@@ -217,6 +220,26 @@ Values referenced from the YAML as `${VAR}` are interpolated from `.env`. **Any 
 1. Add to `/srv/bylaw/.env`.
 2. **Advisor / postgres:** nothing else to do — both use `env_file: .env`. `docker compose up -d advisor` recreates the container with the new var. (Note: editing `.env` causes compose to also recreate `postgres` on the next `up -d` because it shares the same `env_file`. Postgres data lives in a named volume, so there's no data loss, but expect a brief DB restart.)
 3. **Web:** add to the `environment:` block in `/srv/bylaw/docker-compose.yml` *and* rebuild the image if it's a `NEXT_PUBLIC_*` value (those are baked at build time). Server-only web env vars only need a `docker compose up -d web`.
+
+### Enabling / disabling a report SKU (ABS-384)
+
+`ADVISOR_ENABLED_QUESTIONS` gates the five priced-report slugs
+(`permitted_use`, `development_standards`, `due_diligence`,
+`legal_nonconforming`, `variance_justification`) independently. It is read
+at **request time**, so editing `/srv/bylaw/.env` and recreating the advisor
+container (`docker compose up -d advisor`) is enough — no image rebuild.
+Format: comma-separated slugs; `*` enables all; **unset/empty enables NONE**
+(deny-by-default). A disabled slug vanishes from the `/v1/billing/questions`
+menu and its purchase paths (`checkout/question`, `questions/intake`,
+`questions/free-start`, and running an `authorized` purchase's answer) return
+`503 {code:"question_disabled"}`.
+
+**Drain before disabling.** Already-`captured` reports stay fully accessible
+regardless of this flag (the answer-delivery routes are ungated). But a
+purchase can sit in `authorized` — a Stripe hold placed, the answer not yet
+run. Disabling that slug makes its `.../answer` run 503, stranding the hold.
+So before turning a slug off, drain (run or void) any `authorized`
+(uncaptured-hold) purchases for it; then flip the flag.
 
 ## Database operations
 

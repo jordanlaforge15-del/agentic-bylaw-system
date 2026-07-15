@@ -335,6 +335,7 @@ start_fastapi() {
     ADVISOR_ADMIN_API_ENABLED=true \
     ADVISOR_ADMIN_CLERK_USER_IDS="${E2E_USER_ID}" \
     ADVISOR_CONVERSATION_ENTRY_ENABLED=true \
+    ADVISOR_ENABLED_QUESTIONS='*' \
     MONITOR_TARGET_URL="http://127.0.0.1:${E2E_FASTAPI_PORT}/healthz" \
     nohup "${REPO_ROOT}/.venv/bin/uvicorn" advisor.api.e2e_server:app \
       --host 127.0.0.1 --port "$E2E_FASTAPI_PORT" &
