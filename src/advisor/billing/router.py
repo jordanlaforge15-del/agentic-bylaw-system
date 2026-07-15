@@ -1,21 +1,27 @@
-"""FastAPI router for the billing endpoints — case-credit model.
+"""FastAPI router for the billing endpoints — token-wallet model (beta).
 
-Five endpoints replace the v1 subscription-style trio:
+The beta pivot (ABS-379 epic) replaced the case-credit tier×pack catalog
+with a turn-based token wallet plus per-slug priced reports. The surface:
 
-* ``GET /v1/billing/catalog`` — auth-required. Returns the 12-SKU
-  matrix (tier × pack) with prices and which SKUs have a Stripe Price
-  ID configured. The pricing page renders this.
-* ``POST /v1/billing/checkout/pack`` — auth-required. Creates a Stripe
-  Checkout session for one (tier, pack) combination and returns its
-  URL.
+* ``GET /v1/billing/wallet`` / ``GET /v1/billing/me`` — auth-required.
+  Return the user's token balance (and, on ``me``, stripe_customer_id
+  and the enabled flag).
+* ``GET /v1/billing/topups`` + ``POST /v1/billing/checkout/topup`` —
+  the public top-up catalog and the Stripe Checkout session that buys
+  turns. Top-ups are the only way money enters the wallet.
+* ``GET /v1/billing/questions`` + the ``questions/*`` answer flow —
+  the per-slug priced reports gated by ``ADVISOR_ENABLED_QUESTIONS``.
 * ``POST /v1/billing/webhook`` — no auth; verified via
-  ``Stripe-Signature``. Applies the event to the database (inserts
-  per-credit rows on ``checkout.session.completed``).
-* ``GET /v1/billing/me`` — auth-required. Returns the user's credit
-  balance grouped by tier, plus their stripe_customer_id and the
-  enabled flag.
-* ``GET /v1/billing/purchases`` — auth-required. Returns the user's
-  purchase history newest-first.
+  ``Stripe-Signature``. Applies the event to the database.
+* ``GET /v1/billing/purchases`` — auth-required. Purchase history
+  newest-first.
+
+RETIRED (ABS-390): the tier×pack catalog and
+``POST /v1/billing/checkout/pack`` are gone product-wide. The pack
+endpoint answers ``410 packs_retired`` on both the live and dormant
+routers so any lingering client sees an explicit, permanent retirement
+rather than a transient 503. The legacy ``STRIPE_PRICE_<TIER>_<PACK>``
+env vars configure nothing.
 
 Every endpoint short-circuits to HTTP 503 when ``settings.enabled`` is
 False — same dormant-by-default safety as v1.
