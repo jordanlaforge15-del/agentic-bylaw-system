@@ -17,8 +17,8 @@
 //     send a follow-up question. The follow-up runs as a fresh chat
 //     session under the same case (the /app page doesn't auto-resume
 //     prior history from URL alone — users do that via /cases) but
-//     must successfully bill to the case-credit AND show up in
-//     /v1/chat/sessions alongside the first turn's session.
+//     must successfully burn from the same trial token wallet AND show
+//     up in /v1/chat/sessions alongside the first turn's session.
 //   * Two distinct sessions on the same case + same user is the
 //     load-bearing assertion: a user_id-mismatch regression makes
 //     the second send 401/404 OR makes the second session attach
@@ -48,11 +48,13 @@ test("logout / login keeps the same case usable for a new turn", async ({
     email: identity.email,
     name: identity.fullName,
   });
+  // Zero tier credits: the free-open case + trial token wallet fund
+  // everything post-pivot. The resume path must survive on the same
+  // wallet across a logout/login without any credit involved.
   await approveInviteForEmail(context, {
     email: identity.email,
     name: identity.fullName,
-    starter_credits: 2,
-    starter_tier: "standard",
+    starter_credits: 0,
   });
 
   // First login.
@@ -100,7 +102,7 @@ test("logout / login keeps the same case usable for a new turn", async ({
   // session-restore path (ABS-195 fix: bare ?case_id= now restores
   // the most recent session, which would continue the first session
   // rather than minting a second one). A user_id mismatch sneaking
-  // in would make the case-credit reservation or session insert
+  // in would make the token-wallet pre-flight or session insert
   // 401/404, and we'd never see a streamed reply.
   const followUp = "Follow-up question after logout/login.";
   await page.goto(
