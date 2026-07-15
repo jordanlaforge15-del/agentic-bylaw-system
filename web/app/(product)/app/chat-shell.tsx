@@ -456,6 +456,12 @@ function ProductAppPageInner() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
+    // Set when the turn is refused out-of-tokens (402). Guards the post-turn
+    // refreshFromSession in the finally: reloading server history for a
+    // resumed session would otherwise drop the optimistic user bubble and
+    // lose the typed message.
+    let refusedThisTurn = false;
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -487,6 +493,7 @@ function ProductAppPageInner() {
           } catch {
             // Non-JSON 402 body — fall through with turns = 0.
           }
+          refusedThisTurn = true;
           setRefused(true);
           setWallet((prev) =>
             prev
@@ -663,8 +670,12 @@ function ProductAppPageInner() {
       // Snap to authoritative session state: refreshes parcel pane
       // and replays reasoning steps that streaming didn't surface.
       // Reads sessionIdRef directly (not a captured local) so we
-      // always see the post-stream value the SSE handler set.
-      void refreshFromSession(sessionIdRef.current);
+      // always see the post-stream value the SSE handler set. Skipped on an
+      // out-of-tokens refusal — nothing changed server-side, and reloading
+      // history would drop the optimistic (still-typed) user message.
+      if (!refusedThisTurn) {
+        void refreshFromSession(sessionIdRef.current);
+      }
     }
   };
 
