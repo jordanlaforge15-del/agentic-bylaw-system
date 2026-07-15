@@ -66,6 +66,29 @@ export type WalletResponse = {
   payments_enabled: boolean;
 };
 
+// ABS-381 — one purchasable token top-up for the public pricing page.
+// Turns conversion is backend-owned: render `approx_turns` straight off
+// the wire; never divide `tokens` by `tokens_per_turn` client-side.
+export type TopupOption = {
+  sku: string;
+  display_name: string;
+  tokens: number;
+  approx_turns: number;
+  price_cents: number;
+  available: boolean;
+};
+
+// GET /api/billing/topups — the public top-up catalog rendered by the
+// "Pay by the turn" pricing page (ABS-387). `payments_enabled` is false
+// in the beta posture; every option is then `available: false` ("coming
+// soon") and the page shows the private-beta banner.
+export type TopupCatalogResponse = {
+  payments_enabled: boolean;
+  currency: string;
+  tokens_per_turn: number;
+  options: TopupOption[];
+};
+
 export type WalletEntryType = "grant" | "topup" | "burn" | "adjust";
 
 export type WalletTransaction = {

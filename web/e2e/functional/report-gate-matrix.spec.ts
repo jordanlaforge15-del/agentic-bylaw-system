@@ -90,3 +90,57 @@ test.describe("per-report gate matrix (ABS-384)", () => {
     }
   });
 });
+
+// ABS-387: the same gate drives the /pricing "Written reports" section. The
+// pricing page fetches /api/billing/questions client-side, so the gate subset
+// is stubbable the same way — only the enabled slugs become ReportSku cards.
+test.describe("pricing reports section reflects the gate (ABS-387)", () => {
+  test("all: every enabled slug renders a ReportSku card", async ({ page }) => {
+    await page.goto("/pricing");
+    await expect(page.getByTestId("reports-section")).toContainText(
+      /WRITTEN REPORTS · 5 AVAILABLE/i,
+    );
+    for (const slug of LAUNCH_SLUGS) {
+      await expect(page.getByTestId(`report-sku-${slug}`)).toBeVisible();
+    }
+  });
+
+  test("one: a single-slug gate renders exactly one ReportSku card", async ({
+    page,
+  }) => {
+    await page.route("**/api/billing/questions", async (route) => {
+      const resp = await route.fetch();
+      const body = await resp.json();
+      body.questions = (
+        body.questions as Array<{ slug: string }>
+      ).filter((q) => q.slug === "permitted_use");
+      await route.fulfill({ response: resp, json: body });
+    });
+
+    await page.goto("/pricing");
+    await expect(page.getByTestId("reports-section")).toContainText(
+      /WRITTEN REPORTS · 1 AVAILABLE/i,
+    );
+    await expect(page.getByTestId("report-sku-permitted_use")).toBeVisible();
+    for (const slug of LAUNCH_SLUGS.filter((s) => s !== "permitted_use")) {
+      await expect(page.getByTestId(`report-sku-${slug}`)).toHaveCount(0);
+    }
+  });
+
+  test("zero: an empty gate drops the reports section entirely", async ({
+    page,
+  }) => {
+    await page.route("**/api/billing/questions", async (route) => {
+      const resp = await route.fetch();
+      const body = await resp.json();
+      body.questions = [];
+      await route.fulfill({ response: resp, json: body });
+    });
+
+    await page.goto("/pricing");
+    // Trial + top-ups still render; the reports section is gone.
+    await expect(page.getByTestId("trial-card")).toBeVisible();
+    await expect(page.getByTestId("reports-section")).toHaveCount(0);
+    await expect(page.getByTestId("report-contact-card")).toBeVisible();
+  });
+});
