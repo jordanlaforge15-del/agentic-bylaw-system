@@ -83,7 +83,7 @@ services:
       ADVISOR_CONVERSATION_ENTRY_ENABLED: ${ADVISOR_CONVERSATION_ENTRY_ENABLED:-true}
       ADVISOR_OTHER_QUESTION_ENABLED: ${ADVISOR_OTHER_QUESTION_ENABLED:-false}
       # Per-report gate (ABS-384). Deny-by-default when unset; disable a slug
-      # only after draining its `authorized` holds (see docs/RUNBOOK).
+      # only after draining its `authorized` holds (see docs/DEPLOYMENT.md).
       ADVISOR_ENABLED_QUESTIONS: ${ADVISOR_ENABLED_QUESTIONS:-}
       # Token wallet / turns parameters (ABS-380).
       ADVISOR_TOKENS_PER_TURN: ${ADVISOR_TOKENS_PER_TURN:-2500}
