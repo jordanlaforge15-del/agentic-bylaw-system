@@ -462,6 +462,7 @@ export function OpenCaseForm({
           YOUR QUESTION
         </Mono>
         <textarea
+          aria-label="Your question"
           value={question}
           onChange={(e) => {
             setQuestion(e.target.value);
@@ -562,6 +563,7 @@ function BalanceChip({ wallet }: { wallet: WalletResponse | null }) {
   return (
     <div className="flex flex-col gap-1.5" data-testid="balance-chip">
       <span
+        role="img"
         aria-label={ariaLabel}
         className={cn(
           "inline-flex items-center gap-2 self-start",
@@ -746,6 +748,7 @@ function ReportOffer({
             DESCRIBE YOUR SITUATION
           </Mono>
           <textarea
+            aria-label="Describe your situation"
             value={reportConversation}
             onChange={(e) => setReportConversation(e.target.value)}
             placeholder="Tell us what you want answered. We'll ask for anything else we need before you pay."

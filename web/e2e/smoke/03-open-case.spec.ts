@@ -1,46 +1,47 @@
-// Smoke: the /cases/new entry flow renders the priced-question catalog
-// (ABS-320) and the free case container reaches the chat product.
+// Smoke: /cases/new is the FREE, conversation-first entry point (ABS-385).
 //
-// ABS-320 migrated this surface off the quick/standard/complex tier model
-// onto question selection: the form shows the live question menu and sells
-// per-question answers. A case is a free container, so the path into the
-// chat product is the in-window match's "Continue case" button. This smoke
-// pins:
-//   * the question menu renders from GET /api/billing/questions
-//   * continuing an existing (free) case lands on /app?case_id=N with the
-//     product shell connected
+// The beta pivot inverts the old "buy an answer" surface: opening a case is
+// free and starts a conversation. The user anchors to a property, asks their
+// question, and clicks "Start the conversation — free →". A case is created
+// via POST /api/cases (no purchase, no credit) and the browser lands on
+// /app?case_id=N with the question auto-sent (?first_message=), which streams
+// a mock assistant reply.
 //
-// The money paths (intake -> checkout, quote -> buy) need a live payment
-// processor and are exercised against the real services by abs315/abs316;
-// the menu rendering + entry wiring is what this smoke guards.
+// This smoke pins the critical path:
+//   * the designed page renders (kicker + free CTA)
+//   * the free CTA opens a case and routes into the chat product
+//   * the first message auto-sends and the SSE stream renders a reply
 
-import { expect, openCaseViaApi, test } from "../fixtures/test-env";
+import { expect, test } from "../fixtures/test-env";
 
-test("the case-open form shows the question menu and continues into chat", async ({
+test("the free CTA opens a case and auto-sends the first message into chat", async ({
   page,
 }) => {
-  // Seed a free case container so the in-window match path has a target.
-  const anchor = `123 Smoke St ${Date.now()}`;
-  const { caseId } = await openCaseViaApi({ anchorLabel: anchor });
-
   await page.goto("/cases/new");
 
-  // The priced-question menu renders (the migrated entry flow).
-  await expect(page.getByTestId("question-menu")).toBeVisible();
+  // The designed conversation-first surface.
+  await expect(page.getByText("ACCOUNT · NEW CONVERSATION").first()).toBeVisible();
   await expect(
-    page.getByTestId("question-option-permitted_use"),
+    page.getByRole("heading", { name: /Start a conversation/ }),
   ).toBeVisible();
 
-  // Anchoring to the existing case surfaces the free "continue" path.
+  // Anchor + question, then start the (free) conversation.
+  const anchor = `123 Smoke St ${Date.now()}`;
   await page.getByPlaceholder(/1234 Main St, Halifax/).fill(anchor);
-  await page.getByPlaceholder(/1234 Main St, Halifax/).blur();
-  await expect(page.getByText(/EXISTING CASE FOUND/)).toBeVisible();
-  await page.getByRole("button", { name: /Continue case/ }).click();
+  await page
+    .getByPlaceholder(/Ask your question/)
+    .fill("What is the minimum front yard setback?");
 
-  // We're redirected into the chat product with the case bound.
+  await page.getByTestId("start-conversation-btn").click();
+
+  // We land in the chat product with a fresh case bound.
   await page.waitForURL(/\/app\?case_id=\d+/);
-  await expect(page).toHaveURL(new RegExp(`case_id=${caseId}\\b`));
 
-  // The product shell shows the "Connected ·" system banner.
+  // The product shell connects and the auto-sent first message streams a
+  // mock assistant reply (proves ?first_message= auto-send end-to-end).
   await expect(page.getByText(/Connected · Regional Centre LUB/)).toBeVisible();
+  await expect(page.getByTestId("chat-thread")).toContainText(
+    /Based on the bylaw evidence/i,
+    { timeout: 15_000 },
+  );
 });
