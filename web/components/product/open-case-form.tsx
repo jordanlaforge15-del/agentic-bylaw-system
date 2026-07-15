@@ -235,6 +235,10 @@ export function OpenCaseForm({
     questionSlug: string,
     inputs: Record<string, string>,
   ) {
+    if (!anchorLabel.trim()) {
+      setError("Add a property address before ordering a report.");
+      return;
+    }
     setWorking("checkout");
     setError(null);
     try {
