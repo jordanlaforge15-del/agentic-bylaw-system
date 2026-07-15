@@ -149,6 +149,21 @@ class AdvisorBillingSettings(BaseSettings):
         default=None, alias="STRIPE_PRICE_QUESTION_VARIANCE_JUSTIFICATION"
     )
 
+    # Token top-up catalog (ABS-381 — beta pivot wallet). One Stripe Price
+    # per top-up SKU, named ``STRIPE_PRICE_TOPUP_<SKU>``. The token quantity
+    # each SKU credits is server-side truth in ``advisor.billing.topups`` —
+    # the webhook reverse-looks-up these Price IDs for metadata-less events.
+    # The display amount of each Price MUST equal the SKU's ``price_cents``.
+    stripe_price_topup_small: str | None = Field(
+        default=None, alias="STRIPE_PRICE_TOPUP_SMALL"
+    )
+    stripe_price_topup_medium: str | None = Field(
+        default=None, alias="STRIPE_PRICE_TOPUP_MEDIUM"
+    )
+    stripe_price_topup_large: str | None = Field(
+        default=None, alias="STRIPE_PRICE_TOPUP_LARGE"
+    )
+
     success_url: str = Field(
         default="http://localhost:3000/billing/success",
         alias="ADVISOR_BILLING_SUCCESS_URL",
@@ -178,6 +193,9 @@ class AdvisorBillingSettings(BaseSettings):
         "stripe_price_question_due_diligence",
         "stripe_price_question_legal_nonconforming",
         "stripe_price_question_variance_justification",
+        "stripe_price_topup_small",
+        "stripe_price_topup_medium",
+        "stripe_price_topup_large",
         mode="before",
     )
     @classmethod
