@@ -14,7 +14,7 @@
 
 import { expect, test } from "../fixtures/test-env";
 
-test("workspace menu routes from /app to Open a case", async ({ page }) => {
+test("workspace menu routes from /app to New conversation", async ({ page }) => {
   await page.goto("/app");
 
   // The compact workspace menu lives in the app header.
@@ -33,26 +33,30 @@ test("workspace menu routes from /app to Open a case", async ({ page }) => {
     menu.getByRole("menuitem", { name: /Readings/ }),
   ).toHaveAttribute("aria-current", "page");
 
-  // Navigating to Open a case lands on /cases/new (ABS-385: the page is the
-  // conversation-first "Start a conversation." surface).
-  await menu.getByRole("menuitem", { name: /Open a case/ }).click();
+  // Navigating to New conversation lands on /cases/new (ABS-385: the page is
+  // the conversation-first "Start a conversation." surface; ABS-389 relabeled
+  // the retired "Open a case" menu item to "New conversation").
+  await menu.getByRole("menuitem", { name: /New conversation/ }).click();
   await page.waitForURL(/\/cases\/new/);
   await expect(
     page.getByRole("heading", { name: /Start a conversation/ }),
   ).toBeVisible();
 });
 
-test("sidebar primary action is '+ Open a case' and routes to /cases/new", async ({
+test("sidebar primary action is '+ New conversation' and routes to /cases/new", async ({
   page,
 }) => {
   await page.goto("/app");
-  // The desktop sidebar's primary button is relabeled from "+ New reading".
-  const openCase = page.getByRole("button", { name: "+ Open a case" });
-  await expect(openCase).toBeVisible();
+  // ABS-389: the desktop sidebar's primary button is the conversation-first
+  // "+ New conversation" CTA (retired "+ Open a case" / "+ New reading").
+  const newConversation = page.getByRole("button", {
+    name: "+ New conversation",
+  });
+  await expect(newConversation).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "+ New reading" }),
+    page.getByRole("button", { name: "+ Open a case" }),
   ).toHaveCount(0);
-  await openCase.click();
+  await newConversation.click();
   await page.waitForURL(/\/cases\/new/);
 });
 

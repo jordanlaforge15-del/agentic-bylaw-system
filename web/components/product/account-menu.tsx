@@ -34,9 +34,9 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: "WORKSPACE",
     items: [
-      { href: "/cases/new", label: "Open a case", hint: "Start a new reading" },
+      { href: "/cases/new", label: "New conversation", hint: "Start a new conversation" },
       { href: "/app", label: "Readings", hint: "Chat + parcel readings" },
-      { href: "/app/billing", label: "Billing", hint: "Turns, top-ups & history" },
+      { href: "/app/billing", label: "Billing", hint: "Turn balance & top-ups" },
     ],
   },
   {
@@ -138,7 +138,7 @@ export function AccountMenu({ compact = false, showNav = true }: Props) {
               {identity.name}
             </span>
             <Mono muted size={9} className="!tracking-[0.08em]">
-              PRACTICE · 4 SEATS
+              PRIVATE BETA
             </Mono>
           </span>
         )}
@@ -177,7 +177,7 @@ export function AccountMenu({ compact = false, showNav = true }: Props) {
               className="bg-accent text-on-accent font-mono"
               style={{ padding: "3px 7px", fontSize: 8.5, letterSpacing: "0.12em" }}
             >
-              PRACTICE
+              BETA
             </span>
           </div>
 

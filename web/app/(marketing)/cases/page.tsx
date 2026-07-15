@@ -4,10 +4,7 @@
 
 import Link from "next/link";
 import { ADVISOR_API_URL } from "@/lib/api";
-import {
-  CaseListResponse,
-  TIER_DISPLAY,
-} from "@/lib/cases";
+import { CaseListResponse } from "@/lib/cases";
 import { buildAdvisorAuthHeaders } from "@/lib/advisor-auth";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
@@ -65,7 +62,7 @@ export default async function CasesPage() {
         <div className="bg-surface-alt border border-hair p-8">
           <div className="font-semibold mb-2">Sign in to view your cases</div>
           <div className="text-text-muted text-[13.5px] mb-4">
-            Your case list and credit balance live behind your account.
+            Your cases and turn balance live behind your account.
           </div>
           <Link href="/login?next=/cases">
             <Btn variant="primary" size="sm">
@@ -78,7 +75,7 @@ export default async function CasesPage() {
           <div className="font-semibold mb-2">No cases yet</div>
           <div className="text-text-muted text-[13.5px] mb-4">
             Open a case for a property, project, or development
-            application. Each case is one credit.
+            application. Opening a case is free.
           </div>
           <Link href="/cases/new">
             <Btn variant="primary" size="sm">
@@ -93,9 +90,7 @@ export default async function CasesPage() {
               <tr className="bg-surface-alt text-left">
                 <th className="px-4 py-2.5 font-mono text-[11px] uppercase text-text-muted">Anchor</th>
                 <th className="px-4 py-2.5 font-mono text-[11px] uppercase text-text-muted">Kind</th>
-                <th className="px-4 py-2.5 font-mono text-[11px] uppercase text-text-muted">Tier</th>
                 <th className="px-4 py-2.5 font-mono text-[11px] uppercase text-text-muted">Status</th>
-                <th className="px-4 py-2.5 font-mono text-[11px] uppercase text-text-muted text-right">Tokens used</th>
                 <th className="px-4 py-2.5 font-mono text-[11px] uppercase text-text-muted text-right">Last activity</th>
                 <th className="px-4 py-2.5"></th>
               </tr>
@@ -109,13 +104,7 @@ export default async function CasesPage() {
                   <td className="px-4 py-2.5 capitalize text-text-muted">
                     {c.anchor_kind.replace("_", " ")}
                   </td>
-                  <td className="px-4 py-2.5">
-                    {c.current_tier ? TIER_DISPLAY[c.current_tier] : "—"}
-                  </td>
                   <td className="px-4 py-2.5 capitalize">{c.status}</td>
-                  <td className="px-4 py-2.5 text-right font-mono text-text-muted">
-                    {c.tokens_consumed.toLocaleString()}
-                  </td>
                   <td className="px-4 py-2.5 text-right text-text-muted">
                     {new Date(c.last_activity_at).toLocaleDateString("en-CA")}
                   </td>

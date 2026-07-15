@@ -6,33 +6,11 @@
 import type { ReportContent } from "@/lib/report";
 
 export type Tier = "quick" | "standard" | "complex";
-export type PackSku = "payg" | "starter" | "pro" | "enterprise";
 export type CaseStatus = "open" | "closed" | "archived";
 export type AnchorKind =
   | "address"
   | "project_ref"
   | "development_application";
-
-export type CatalogOffer = {
-  tier: Tier;
-  tier_display_name: string;
-  tier_token_budget: number;
-  pack_sku: PackSku;
-  pack_display_name: string;
-  quantity: number;
-  discount_bps: number;
-  list_price_cents: number;
-  amount_due_cents: number;
-  currency: string;
-  available: boolean;
-};
-
-export type CatalogResponse = {
-  enabled: boolean;
-  currency: string;
-  cad_per_usd: number;
-  offers: CatalogOffer[];
-};
 
 export type TierBalance = {
   tier: Tier;
@@ -315,14 +293,4 @@ export function formatUsdFromCadCents(
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   }).format(usd);
-}
-
-export function formatDiscount(bps: number): string {
-  if (bps <= 0) return "";
-  return `${bps / 100}% off`;
-}
-
-export function formatTokenBudget(tokens: number): string {
-  if (tokens >= 1000) return `${Math.round(tokens / 1000)}k tokens`;
-  return `${tokens} tokens`;
 }

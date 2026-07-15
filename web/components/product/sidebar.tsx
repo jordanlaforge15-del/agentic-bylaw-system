@@ -325,12 +325,12 @@ export function Sidebar({
     >
       <div className="border-b border-hair p-4 flex flex-col gap-3">
         <Btn variant="primary" size="sm" onClick={onNew} className="w-full">
-          + Open a case
+          + New conversation
         </Btn>
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search cases…"
+          placeholder="Search conversations…"
           className="bg-surface-alt text-text border border-hair font-sans outline-none px-2.5 py-2"
           style={{ fontSize: 12.5 }}
         />
@@ -352,7 +352,7 @@ export function Sidebar({
         {!loadError && filtered.length === 0 && (
           <div className="text-[12px] text-text-muted px-3 py-3 leading-[1.4]">
             {rows.length === 0
-              ? "No cases yet. Open a case to start one."
+              ? "No conversations yet. Start one to begin."
               : "No matches."}
           </div>
         )}
@@ -529,7 +529,7 @@ function PlaceholderProfile() {
       </div>
       <div className="flex-1 min-w-0">
         <div className="text-[12.5px] font-semibold">Halifax Studio</div>
-        <div className="text-[10.5px] text-text-muted">Practice · 4 seats</div>
+        <div className="text-[10.5px] text-text-muted">Private beta</div>
       </div>
       <button
         type="button"

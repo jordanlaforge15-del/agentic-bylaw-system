@@ -114,7 +114,7 @@ const SECTIONS: Section[] = [
       },
       {
         k: "p",
-        v: "On beta deployments where the purchase flow is dormant, an operator may grant credits manually.",
+        v: "On beta deployments where the purchase flow is dormant, an operator may grant a starting turn balance manually.",
       },
     ],
   },
