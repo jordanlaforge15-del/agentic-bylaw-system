@@ -112,6 +112,16 @@ from advisor.billing.router import (
     build_dormant_billing_router,
 )
 from advisor.billing.settings import AdvisorBillingSettings, get_settings
+from advisor.billing.topups import (
+    TOPUP_LARGE_DEF,
+    TOPUP_MEDIUM_DEF,
+    TOPUP_SMALL_DEF,
+    TOPUPS,
+    Topup,
+    all_topups,
+    topup_for,
+    topup_for_stripe_price_id,
+)
 from advisor.billing.webhooks import WebhookResult, handle_event
 
 __all__ = [
@@ -148,8 +158,16 @@ __all__ = [
     "TIER_QUICK_DEF",
     "TIER_STANDARD_DEF",
     "Tier",
+    "TOPUPS",
+    "TOPUP_LARGE_DEF",
+    "TOPUP_MEDIUM_DEF",
+    "TOPUP_SMALL_DEF",
+    "Topup",
     "WebhookResult",
     "all_offers",
+    "all_topups",
+    "topup_for",
+    "topup_for_stripe_price_id",
     "build_billing_router",
     "build_dormant_billing_router",
     "get_pricing_settings",

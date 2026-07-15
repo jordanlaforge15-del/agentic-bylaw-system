@@ -57,11 +57,14 @@ from advisor.billing.report import build_report
 from advisor.billing.checkout import (
     PriceNotConfiguredError,
     UnknownOfferError,
+    UnknownTopupError,
     start_pack_checkout,
+    start_topup_checkout,
 )
 from advisor.billing.client import StripeClient
 from advisor.billing.intake import detect_intake
 from advisor.billing.packs import all_offers
+from advisor.billing.topups import all_topups
 from advisor.billing.pricing import get_pricing_settings
 from advisor.billing.questions import QUESTIONS, all_questions, question_for
 from advisor.billing.quote import EmptyQuestionError, quote_question
@@ -96,8 +99,65 @@ class CheckoutPackRequest(BaseModel):
     )
 
 
+class CheckoutTopupRequest(BaseModel):
+    """Body of ``POST /v1/billing/checkout/topup`` (ABS-381)."""
+
+    sku: str = Field(
+        ...,
+        description="Top-up identifier (small / medium / large).",
+    )
+
+
 class CheckoutResponse(BaseModel):
     url: str = Field(..., description="Stripe Checkout redirect URL.")
+
+
+class TopupOption(BaseModel):
+    """One purchasable token top-up for the public pricing page (ABS-381)."""
+
+    sku: str
+    display_name: str
+    tokens: int = Field(
+        ..., description="Tokens credited to the wallet on purchase."
+    )
+    approx_turns: int = Field(
+        ...,
+        description=(
+            "floor(tokens / tokens_per_turn) — backend-owned turns "
+            "conversion so the UI never divides tokens itself."
+        ),
+    )
+    price_cents: int = Field(..., description="Price in CAD cents.")
+    available: bool = Field(
+        ...,
+        description=(
+            "True iff payments are enabled AND this SKU's Stripe Price ID is "
+            "configured. Disabled top-ups render as 'coming soon'."
+        ),
+    )
+
+
+class TopupCatalogResponse(BaseModel):
+    """Body of ``GET /v1/billing/topups`` — the public top-up catalog.
+
+    Unauthenticated (skipAuth) so the pricing page renders signed-out.
+    ``tokens_per_turn`` is echoed so the UI can present each top-up as
+    "~N turns" consistently with the wallet view; the per-option
+    ``approx_turns`` is the backend's own computation of that.
+    """
+
+    payments_enabled: bool = Field(
+        ...,
+        description=(
+            "Whether top-ups are purchasable (Stripe on). When False every "
+            "option is unavailable and the UI shows 'coming soon'."
+        ),
+    )
+    currency: str = "CAD"
+    tokens_per_turn: int = Field(
+        ..., description="ADVISOR_TOKENS_PER_TURN — the display divisor."
+    )
+    options: list[TopupOption]
 
 
 class CatalogOffer(BaseModel):
@@ -1152,6 +1212,48 @@ _WALLET_TXN_DEFAULT_LIMIT = 50
 _WALLET_TXN_MAX_LIMIT = 200
 
 
+def _build_topup_catalog(
+    *,
+    settings: AdvisorBillingSettings | None,
+    payments_enabled: bool,
+) -> TopupCatalogResponse:
+    """Render the token top-up catalog for ``GET /v1/billing/topups``.
+
+    ``available`` is ``payments_enabled AND price id configured`` — a top-up
+    is purchasable only when Stripe is on *and* its Price ID is wired. On the
+    dormant router ``settings`` is ``None`` and ``payments_enabled`` False, so
+    every option is unavailable but still rendered (the pricing page shows
+    "coming soon"). Turns conversion is backend-owned (design spec D6): the
+    per-option ``approx_turns`` and the top-level ``tokens_per_turn`` are
+    computed here, never client-side.
+    """
+    pricing = get_pricing_settings()
+    per_turn = turns.tokens_per_turn()
+    options: list[TopupOption] = []
+    for topup in all_topups():
+        price_id = (
+            getattr(settings, topup.stripe_price_env_var.lower(), None)
+            if settings is not None
+            else None
+        )
+        options.append(
+            TopupOption(
+                sku=topup.sku,
+                display_name=topup.display_name,
+                tokens=topup.tokens,
+                approx_turns=turns.approx_turns_remaining(topup.tokens),
+                price_cents=topup.price_cents,
+                available=payments_enabled and bool(price_id),
+            )
+        )
+    return TopupCatalogResponse(
+        payments_enabled=payments_enabled,
+        currency=pricing.display_currency,
+        tokens_per_turn=per_turn,
+        options=options,
+    )
+
+
 def _wallet_response(user: User, *, payments_enabled: bool) -> WalletResponse:
     """Project a ``User`` into the turns-aware wallet view.
 
@@ -1400,6 +1502,76 @@ def build_billing_router(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
                         "code": "unknown_offer",
+                        "message": str(exc),
+                    },
+                ) from exc
+            except PriceNotConfiguredError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "price_not_configured",
+                        "message": str(exc),
+                    },
+                ) from exc
+            return CheckoutResponse(url=url)
+
+    # -- Token top-up catalog + checkout (ABS-381) ------------------------
+
+    @router.get("/topups", response_model=TopupCatalogResponse)
+    def get_topups() -> TopupCatalogResponse:
+        """Return the public token top-up catalog.
+
+        Unauth-accessible by design (skipAuth at the proxy): the pricing page
+        renders top-ups to signed-out visitors. ``payments_enabled`` and each
+        option's ``available`` flag tell the frontend whether checkout will
+        actually work.
+        """
+        return _build_topup_catalog(
+            settings=settings, payments_enabled=settings.payments_enabled
+        )
+
+    @router.post("/checkout/topup", response_model=CheckoutResponse)
+    def post_checkout_topup(
+        body: CheckoutTopupRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> CheckoutResponse:
+        # Top-ups are a payments-ON feature: the trial-only posture
+        # (payments off) sells nothing, so refuse before touching Stripe.
+        if not settings.payments_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "payments_disabled",
+                    "message": (
+                        "Paid top-ups are not available on this deployment. "
+                        "The trial grants a starting balance; paid top-ups "
+                        "unlock when payments are enabled."
+                    ),
+                },
+            )
+        if client_factory is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "billing_misconfigured",
+                    "message": "no Stripe client factory wired",
+                },
+            )
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            try:
+                url = start_topup_checkout(
+                    db,
+                    user,
+                    sku=body.sku,
+                    client=client_factory(),
+                    settings=settings,
+                )
+            except UnknownTopupError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "unknown_topup",
                         "message": str(exc),
                     },
                 ) from exc
@@ -1899,6 +2071,30 @@ def build_dormant_billing_router(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=checkout_detail,
+        )
+
+    # ABS-381: the top-up catalog renders on the dormant router too (the
+    # pricing page is public), but with payments off every option is
+    # unavailable — "coming soon" until Stripe is wired.
+    @router.get("/topups", response_model=TopupCatalogResponse)
+    def get_topups_disabled() -> TopupCatalogResponse:
+        return _build_topup_catalog(settings=None, payments_enabled=False)
+
+    @router.post("/checkout/topup")
+    def post_checkout_topup_disabled() -> Any:
+        # Trial-only posture: paid top-ups aren't purchasable until payments
+        # are enabled. Mirror the live router's ``payments_disabled`` code so
+        # the frontend renders the same "coming soon" state.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "payments_disabled",
+                "message": (
+                    "Paid top-ups are not available on this deployment. The "
+                    "trial grants a starting balance; paid top-ups unlock "
+                    "when payments are enabled."
+                ),
+            },
         )
 
     @router.post("/webhook")
