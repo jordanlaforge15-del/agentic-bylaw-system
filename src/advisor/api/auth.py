@@ -160,6 +160,14 @@ def resolve_or_create_user(
         )
 
         grant_starter_credits_if_needed(db, user=user)
+        # ABS-380 token wallet: issue the signup free-trial token grant. A
+        # separate, independently-gated grant from the free-question one
+        # above — the beta pivot bills chat by tokens, not free questions.
+        from advisor.db.wallet import (  # noqa: PLC0415
+            grant_signup_tokens_if_needed,
+        )
+
+        grant_signup_tokens_if_needed(db, user=user)
         return user
 
     # Refresh the mutable profile fields if Clerk has new values. We
@@ -187,6 +195,14 @@ def resolve_or_create_user(
     )
 
     grant_starter_credits_if_needed(db, user=user)
+    # ABS-380: self-heal the token-wallet signup grant for pre-wallet users
+    # on their next authenticated request. Idempotent on the
+    # ``token_grant_issued`` flag, so it's a no-op once issued.
+    from advisor.db.wallet import (  # noqa: PLC0415
+        grant_signup_tokens_if_needed,
+    )
+
+    grant_signup_tokens_if_needed(db, user=user)
     return user
 
 
