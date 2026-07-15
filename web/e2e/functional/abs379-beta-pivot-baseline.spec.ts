@@ -12,9 +12,11 @@
 //
 //   1. The D6 API contract. I1 (wallet, ABS-380) has LANDED:
 //      GET /v1/billing/wallet is now registered and auth-gated (401 with
-//      no credentials, no longer 404). I2 (top-up SKUs) has NOT shipped
-//      yet, so GET /v1/billing/topups is still route-not-found (404).
-//      When I2 lands, the topups assertion flips to 401/200 too.
+//      no credentials, no longer 404). I2 (top-up SKUs, ABS-381) has NOW
+//      LANDED too: GET /v1/billing/topups is the PUBLIC pricing catalog
+//      (skipAuth, like /catalog), so an unauthenticated request returns 200
+//      with the top-up options — the intentional flip from the pre-pivot
+//      404 that proves the endpoint arrived.
 //
 //   2. The /billing surface still speaks the retired credit/tier vocabulary
 //      the ADR pivots away from ("Credit balance"), and shows NO turns /
@@ -27,7 +29,7 @@ import { expect, test } from "../fixtures/test-env";
 import { E2E_API_URL } from "../fixtures/test-env";
 
 test.describe("ABS-379 beta-pivot baseline", () => {
-  test("D6: wallet endpoint is live (auth-gated), top-up endpoint not yet", async ({
+  test("D6: wallet endpoint is live (auth-gated), top-up catalog is live (public)", async ({
     request,
   }) => {
     // I1 (ABS-380) landed the wallet: the route is registered and requires
@@ -37,10 +39,22 @@ test.describe("ABS-379 beta-pivot baseline", () => {
     const wallet = await request.get(`${E2E_API_URL}/v1/billing/wallet`);
     expect(wallet.status(), await wallet.text()).toBe(401);
 
-    // I2 (top-up SKUs) has not shipped yet: this path is still simply not
-    // registered on the router. When I2 lands, this flips to 401/200.
+    // I2 (top-up SKUs, ABS-381) landed the public top-up catalog: it is
+    // skipAuth (the pricing page renders signed-out), so an unauthenticated
+    // request returns 200 with the SKU options — no longer 404. The stack is
+    // dormant (payments off), so payments_enabled is false here.
     const topups = await request.get(`${E2E_API_URL}/v1/billing/topups`);
-    expect(topups.status(), await topups.text()).toBe(404);
+    expect(topups.status(), await topups.text()).toBe(200);
+    const body = (await topups.json()) as {
+      payments_enabled: boolean;
+      options: Array<{ sku: string }>;
+    };
+    expect(body.payments_enabled).toBe(false);
+    expect(body.options.map((o) => o.sku)).toEqual([
+      "small",
+      "medium",
+      "large",
+    ]);
   });
 
   test("/billing still shows the retired credit/tier model, not turns", async ({
