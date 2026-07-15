@@ -639,6 +639,64 @@ def test_verdict_label_tailored_to_report_type() -> None:
     assert use["label"] == "Permitted as-of-right"
 
 
+def test_variance_not_required_band() -> None:
+    """ABS-377: a variance package that concludes the resolved requirement is
+    already met renders the NOT REQUIRED band, not the supportability verdict —
+    even when the answer also carries pass/fail keywords."""
+    # The exact repro shape (VJ-000025 / the ABS-375 no-variance-required
+    # answer): the answer says the setback "PASSES" AND "no variance is
+    # required". The not-required conclusion must win over the pass signal so
+    # the band never reads "PASS — Supportable on all three statutory tests".
+    v = build_report(
+        _purchase(
+            question_slug="variance_justification",
+            answer_text=(
+                "The abutting parcel is zoned DH-1, so the required side yard "
+                "is 0.0 m — the proposed 0.0 m side setback complies and PASSES, "
+                "and no variance is required."
+            ),
+        )
+    )["verdict"]
+    assert v["status"] == "not_required"
+    assert v["label"] == "Resolved requirement already met — no variance needed"
+
+    # "variance may not be required" phrasing (the report's central finding)
+    # also resolves to the not-required band, ahead of any fail keyword.
+    v2 = build_report(
+        _purchase(
+            question_slug="variance_justification",
+            answer_text=(
+                "CRITICAL FINDING: variance may not be required. The applicant's "
+                "premise that the proposal does not comply is incorrect."
+            ),
+        )
+    )["verdict"]
+    assert v2["status"] == "not_required"
+
+
+def test_variance_supportable_band_unchanged() -> None:
+    """ABS-377 regression guard on ABS-365 tailoring: a variance answer that
+    concludes on supportability (no not-required signal) still renders the
+    supportable/conditional band."""
+    supportable = build_report(
+        _purchase(
+            question_slug="variance_justification",
+            answer_text="The requested variance is permitted as-of-right on its merits.",
+        )
+    )["verdict"]
+    assert supportable["status"] == "pass"
+    assert supportable["label"] == "Supportable on all three statutory tests"
+
+    conditional = build_report(
+        _purchase(
+            question_slug="variance_justification",
+            answer_text="The variance is supportable, subject to conditions.",
+        )
+    )["verdict"]
+    assert conditional["status"] == "conditional"
+    assert conditional["label"] == "Supportable with conditions"
+
+
 def test_verdict_label_falls_back_for_unknown_report_type() -> None:
     """An off-menu / unknown slug keeps the neutral use-permission wording."""
     v = build_report(

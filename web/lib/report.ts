@@ -7,15 +7,19 @@
 // a closed set of block shapes rendered by one shared switch, so no report
 // type carries its own layout.
 
-// A determination status. `pass` is the only favourable ("accent") verdict;
-// everything adverse renders in brick. Per-row table cells reuse this plus
-// `exceeds` (a favourable over-compliance).
+// A determination status. `pass`, `exceeds` and `not_required` are the
+// favourable ("accent") verdicts; everything adverse renders in brick. Per-row
+// table cells reuse this plus `exceeds` (a favourable over-compliance).
+// `not_required` (ABS-377) is a variance-package outcome: the resolved
+// requirement is already met, so no variance is required — a distinct
+// determination from `pass` ("supportable on the merits").
 export type ReportStatus =
   | "pass"
   | "fail"
   | "conditional"
   | "attention"
-  | "exceeds";
+  | "exceeds"
+  | "not_required";
 
 // --- Body blocks -----------------------------------------------------------
 
@@ -117,6 +121,17 @@ export function statusInfo(status: string | null | undefined): StatusInfo {
     case "exceeds":
       return {
         tag: "EXCEEDS",
+        fg: "text-accent-ink",
+        chipBg: "bg-accent text-on-accent",
+        border: "border-accent",
+        favourable: true,
+      };
+    case "not_required":
+      // ABS-377 — a variance package whose resolved requirement is already
+      // met. Favourable (no variance needed), but the tag says NOT REQUIRED,
+      // not PASS, so it never misreads as "the variance is supportable".
+      return {
+        tag: "NOT REQUIRED",
         fg: "text-accent-ink",
         chipBg: "bg-accent text-on-accent",
         border: "border-accent",

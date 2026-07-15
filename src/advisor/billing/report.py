@@ -70,6 +70,25 @@ _REF_PREFIX = {
 # *supportability*, not use-permission). So the label is tailored per
 # report type's question below, keyed by the same content-derived status
 # (ABS-365).
+# A variance package can conclude that the requirement it was asked to justify
+# is *already met* — the resolved standard leaves nothing to vary, so no
+# variance is required at all (ABS-377). That is a determination in its own
+# right, distinct from "supportable" (pass): the report is telling the
+# applicant their variance premise is moot, not blessing a variance on its
+# merits. It MUST win over every other signal, because such an answer routinely
+# also states the setback "complies" / "is permitted" (a `pass` signal) or
+# rebuts a "does not comply" premise (a `fail` signal) — classifying on those
+# would paint the misleading "PASS — Supportable" band the ticket flags. So
+# this is checked first in `_classify_status`.
+_NOT_REQUIRED_SIGNALS = (
+    "no variance is required",
+    "no variance required",
+    "variance is not required",
+    "variance may not be required",
+    "variance is not needed",
+    "no variance is needed",
+    "variance not required",
+)
 _FAIL_SIGNALS = (
     "not permitted",
     "prohibited",
@@ -142,6 +161,10 @@ _VERDICT_LABELS: dict[str, dict[str, str]] = {
         "conditional": "Supportable with conditions",
         "fail": "Not supportable",
         "attention": "Supportability unclear",
+        # ABS-377: the resolved requirement is already met, so the variance
+        # the package was asked to justify is moot. The chip reads NOT REQUIRED
+        # (client statusInfo); this headline explains why.
+        "not_required": "Resolved requirement already met — no variance needed",
     },
 }
 # Neutral fallback frame for any unknown / off-menu ("other") report type —
@@ -151,19 +174,28 @@ _DEFAULT_VERDICT_LABELS: dict[str, str] = {
     "conditional": "Permitted with conditions",
     "fail": "Does not comply",
     "attention": "Review required",
+    # Generic frame for the ABS-377 not-required band on a non-variance report
+    # type. In practice only variance packages emit "no variance required"
+    # phrasing, but keep a default so `_label_for` never KeyErrors on it.
+    "not_required": "Requirement already met — no variance needed",
 }
 
 
 def _classify_status(answer: str) -> str:
     """Derive the determination *status* (colour band) from the answer text.
 
-    Adverse signals win over favourable ones (a report that says "permitted
+    A "no variance required" conclusion wins over everything (ABS-377): it is
+    the report's central determination and such answers routinely also carry
+    pass/fail keywords that would otherwise mispaint the band. After that,
+    adverse signals win over favourable ones (a report that says "permitted
     but the rear setback fails" is not a clean pass). Falls back to a
     neutral ``attention`` band — a report with no determination keyword is
     informational, still rendered in the adverse (brick) palette so it never
     misreads as a green all-clear.
     """
     lowered = answer.lower()
+    if any(sig in lowered for sig in _NOT_REQUIRED_SIGNALS):
+        return "not_required"
     if any(sig in lowered for sig in _FAIL_SIGNALS):
         return "fail"
     if any(sig in lowered for sig in _CONDITIONAL_SIGNALS):
