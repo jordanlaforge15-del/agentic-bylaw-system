@@ -108,19 +108,10 @@ export type WalletTransactionsResponse = {
   next_before_id: number | null;
 };
 
-export type PurchaseSummary = {
-  id: number;
-  tier: Tier;
-  pack_sku: PackSku;
-  quantity: number;
-  amount_paid_cents: number;
-  currency: string;
-  created_at: string;
-};
-
-export type PurchaseHistoryResponse = {
-  purchases: PurchaseSummary[];
-};
+// ABS-388: the old pack/tier PurchaseSummary + PurchaseHistoryResponse
+// shapes are gone with the pack-purchase billing view — the unified
+// billing page renders the turns wallet ledger
+// (WalletTransactionsResponse) instead.
 
 export type CaseRow = {
   id: number;

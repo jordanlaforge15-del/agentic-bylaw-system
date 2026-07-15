@@ -18,10 +18,10 @@
 //      with the top-up options — the intentional flip from the pre-pivot
 //      404 that proves the endpoint arrived.
 //
-//   2. The /billing surface still speaks the retired credit/tier vocabulary
-//      the ADR pivots away from ("Credit balance"), and shows NO turns /
-//      wallet vocabulary yet — the "inverse posture" the ADR Context calls
-//      out. When I9 (billing pages) ships, this flips to turns.
+//   2. The /billing surface. I9 (unified billing pages, ABS-388) has NOW
+//      LANDED: the page speaks turns ("~N turns", top-ups) and the retired
+//      credit/tier vocabulary is gone — the intentional flip from the
+//      pre-pivot "Credit balance" posture the ADR pivots away from.
 //
 // Driven against the real local stack (Next proxy -> FastAPI). No stubs.
 
@@ -57,7 +57,7 @@ test.describe("ABS-379 beta-pivot baseline", () => {
     ]);
   });
 
-  test("/billing still shows the retired credit/tier model, not turns", async ({
+  test("/billing now shows the turns model, not the retired credit/tier model", async ({
     page,
   }) => {
     await page.goto("/billing");
@@ -65,16 +65,17 @@ test.describe("ABS-379 beta-pivot baseline", () => {
       page.getByRole("heading", { level: 1, name: /Billing/ }),
     ).toBeVisible();
 
-    // Pre-pivot: the credit balance surface is the billing vocabulary.
+    // Post-pivot (I9): the turns balance is the billing vocabulary.
+    await expect(page.getByTestId("billing-turns")).toContainText(
+      /~\d[\d,]*\s+turns?/i,
+      { timeout: 15_000 },
+    );
+
+    // The retired credit/tier vocabulary must NOT be present anymore.
     await expect(
       page.getByRole("heading", { name: /Credit balance/i }),
-    ).toBeVisible();
-
-    // The pivot introduces turns/wallet vocabulary; it must NOT be present
-    // yet on this surface. (Case-insensitive, whole-page assertion.)
-    await expect(
-      page.getByText(/\bturns?\s+(remaining|balance)\b/i),
     ).toHaveCount(0);
-    await expect(page.getByText(/top[\s-]?up/i)).toHaveCount(0);
+    await expect(page.locator("body")).not.toContainText(/\bcredits?\b/i);
+    await expect(page.locator("body")).not.toContainText(/\btier\b/i);
   });
 });

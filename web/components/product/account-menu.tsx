@@ -36,7 +36,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { href: "/cases/new", label: "Open a case", hint: "Start a new reading" },
       { href: "/app", label: "Readings", hint: "Chat + parcel readings" },
-      { href: "/app/billing", label: "Billing", hint: "Plan, seats & invoices" },
+      { href: "/app/billing", label: "Billing", hint: "Turns, top-ups & history" },
     ],
   },
   {
