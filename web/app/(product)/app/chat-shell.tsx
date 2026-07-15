@@ -976,16 +976,16 @@ function ProductAppPageInner() {
             <div className="border-t border-hair px-4 py-3 bg-surface-alt text-[13px] text-text-muted">
               {activeSessionId !== null ? (
                 <>
-                  This conversation predates our new case-based billing
-                  and can&rsquo;t be continued.{" "}
+                  This conversation predates our current billing and
+                  can&rsquo;t be continued.{" "}
                   <a href="/cases/new" className="underline text-text">
-                    Start a new case
+                    Start a new conversation
                   </a>{" "}
                   to ask another question.
                 </>
               ) : (
                 <>
-                  To start a new reading,{" "}
+                  To start a new conversation,{" "}
                   <a href="/cases/new" className="underline text-text">
                     open a case
                   </a>{" "}

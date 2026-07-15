@@ -16,7 +16,7 @@ import { Mono } from "@/components/mono";
 import { AccountMenu } from "@/components/product/account-menu";
 
 const AUTH_LABELS: { test: (p: string) => boolean; label: string }[] = [
-  { test: (p) => p.startsWith("/cases/new"), label: "ACCOUNT · NEW CASE" },
+  { test: (p) => p.startsWith("/cases/new"), label: "ACCOUNT · NEW CONVERSATION" },
   { test: (p) => p.startsWith("/app/billing"), label: "ACCOUNT · BILLING" },
   { test: (p) => p === "/app", label: "WORKSPACE · READINGS" },
   { test: (p) => p.startsWith("/coverage"), label: "REFERENCE · COVERAGE" },

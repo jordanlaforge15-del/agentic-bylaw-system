@@ -61,9 +61,10 @@ function HeroSafe() {
           </h1>
           <p className="text-text-muted m-0 text-[15px] sm:text-[17px] lg:text-[19px] leading-[1.45] lg:leading-[1.4] max-w-[520px]">
             ABS reads the Halifax Regional Centre Land Use By-law,
-            applied to your specific parcel. Ask in plain English. Get a
-            sourced answer in seconds. More HRM bylaws coming through
-            2026.
+            applied to your specific parcel. Have a conversation in plain
+            English — ask, follow up, and get sourced, dated replies.
+            Opening a conversation is free; you only use turns once the
+            advisor replies. More HRM bylaws coming through 2026.
           </p>
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-2.5 mt-1 sm:mt-1.5">
             <Link href="/signup" className="contents">
