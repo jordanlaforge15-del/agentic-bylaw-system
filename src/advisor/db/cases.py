@@ -268,8 +268,19 @@ def open_case(
     case = match.case
     now = _utcnow()
     if case is None:
+        # Compute the next user-scoped sequential number inside this
+        # transaction. Unlike a Postgres sequence, this value rolls
+        # back if the surrounding transaction aborts — so the user
+        # always sees contiguous "Case #1, #2, #3" labels.
+        next_num = (
+            db.execute(
+                select(func.coalesce(func.max(Case.user_case_number), 0) + 1)
+                .where(Case.user_id == user.id)
+            ).scalar()
+        ) or 1
         case = Case(
             user_id=user.id,
+            user_case_number=next_num,
             anchor_label=anchor_label,
             anchor_key=normalise_anchor(anchor_label, anchor_kind),
             anchor_kind=anchor_kind,
@@ -333,7 +344,9 @@ def open_case(
         )
         return case, existing
 
-    credit = _claim_available_credit(db, user_id=user.id, tier=tier)
+    credit = _claim_available_credit(
+        db, user_id=user.id, tier=tier, unlimited=user.unlimited_credits
+    )
     if credit is None:
         raise NoAvailableCreditError(tier=tier)
 
@@ -351,6 +364,78 @@ def open_case(
         payload={"tier": credit.tier, "source": credit.source},
     )
     return case, credit
+
+
+def open_case_free(
+    db: Session,
+    *,
+    user: User,
+    anchor_label: str,
+    anchor_kind: str,
+) -> Case:
+    """Open or find a case container without consuming a tier credit.
+
+    Used for the free-question trial path (ABS-314 / ABS-320) where a
+    free-entitlement counter is consumed instead of a paid tier credit.
+    The case gets ``current_tier=None`` because no tier credit is involved.
+
+    Callers should call ``consume_free_question`` before this function to
+    atomically gate the operation; if that call returns False the caller
+    should reject with 402 before ever calling here.
+    """
+    match = match_case(
+        db, user_id=user.id, anchor_label=anchor_label, anchor_kind=anchor_kind
+    )
+    now = _utcnow()
+    if match.case is None:
+        next_num = (
+            db.execute(
+                select(func.coalesce(func.max(Case.user_case_number), 0) + 1)
+                .where(Case.user_id == user.id)
+            ).scalar()
+        ) or 1
+        case = Case(
+            user_id=user.id,
+            user_case_number=next_num,
+            anchor_label=anchor_label,
+            anchor_key=normalise_anchor(anchor_label, anchor_kind),
+            anchor_kind=anchor_kind,
+            status="open",
+            current_tier=None,
+            tokens_consumed=0,
+            opened_at=now,
+            last_activity_at=now,
+        )
+        db.add(case)
+        db.flush()
+        _record_event(
+            db,
+            case=case,
+            user=user,
+            credit=None,
+            event_type="opened",
+            payload={
+                "anchor_kind": anchor_kind,
+                "anchor_key": case.anchor_key,
+                "tier": None,
+                "source": "free_question",
+            },
+        )
+    else:
+        case = match.case
+        if case.status == "closed":
+            case.status = "open"
+            case.closed_at = None
+            _record_event(
+                db,
+                case=case,
+                user=user,
+                credit=None,
+                event_type="reopened",
+                payload={"source": "free_question"},
+            )
+        case.last_activity_at = now
+    return case
 
 
 def close_case(db: Session, *, case: Case, reason: str = "user_request") -> None:
@@ -527,7 +612,12 @@ def upgrade_case_credit(
             f"target tier {target_tier!r} is not strictly higher than "
             f"current tier {current.tier!r}"
         )
-    new = _claim_available_credit(db, user_id=case.user_id, tier=target_tier)
+    new = _claim_available_credit(
+        db,
+        user_id=case.user_id,
+        tier=target_tier,
+        unlimited=case.user.unlimited_credits,
+    )
     if new is None:
         raise NoAvailableCreditError(tier=target_tier)
 
@@ -648,41 +738,147 @@ def grant_admin_credits(
     return credits
 
 
-# Default trial allocation for any newly-created user that doesn't
-# arrive with invite-driven starter credits. Mirrors the 3-standard
-# gift the 0012_case_based_billing migration applied to pre-existing
-# active users so the on-ramp is consistent across migration cohorts.
+# Legacy constants kept for backward-compat references (e.g. existing
+# CaseCredit rows with source='signup_starter_grant'). No longer used to
+# issue new credits — replaced by the free-question entitlement counter.
 STARTER_GRANT_TIER = "standard"
 STARTER_GRANT_QUANTITY = 3
 
+# How many free questions a brand-new user receives before any Stripe
+# charge is placed. Granting free uses is not holding customer money —
+# this is an entitlement counter, not a balance.
+FREE_QUESTION_GRANT = 3
+
 
 def grant_starter_credits_if_needed(db: Session, *, user: User) -> bool:
-    """Issue the default trial credit pack to a user with no credits yet.
+    """Set the free-question entitlement counter for a user.
 
-    Idempotent by construction: we only grant when the user has zero
-    ``CaseCredit`` rows of any state. Invite redemptions (which run
-    earlier in the user-creation flow) leave behind ``available``
-    credits, so invited users with starter packs are correctly skipped.
+    Idempotent on the ``free_question_grant_issued`` metadata flag, which
+    is the *sole* gate: the grant issues once per user and self-heals
+    existing users on their next authenticated request (it runs on every
+    login), so no backfill migration is needed.
 
-    Returns ``True`` if credits were granted, ``False`` if the user
-    already had credits and the call was a no-op.
+    ABS-323: the legacy-credit skips that used to live here (the
+    ``signup_starter_grant`` CaseCredit check and the broader
+    "has any CaseCredit" check) were removed. They predated the
+    tier→question pivot and assumed "holds credits ⇒ already onboarded."
+    After the pivot legacy *tier* credits cannot buy answers, so those
+    skips locked every existing user out of the free trial with payments
+    off — ``free_questions_remaining = 0`` and the grant never issued.
+    Legacy CaseCredit rows now coexist with the free-question grant
+    rather than suppressing it.
+
+    Returns ``True`` if the grant was applied, ``False`` if already done.
     """
-    has_any_credit = (
-        db.query(CaseCredit.id)
-        .filter(CaseCredit.user_id == user.id)
-        .first()
-        is not None
-    )
-    if has_any_credit:
+    if user.metadata_json.get("free_question_grant_issued"):
         return False
-    grant_admin_credits(
+    user.free_questions_remaining = FREE_QUESTION_GRANT
+    user.metadata_json["free_question_grant_issued"] = True
+    db.flush()
+    _record_event(
         db,
+        case=None,
         user=user,
-        tier=STARTER_GRANT_TIER,
-        quantity=STARTER_GRANT_QUANTITY,
-        reason="signup_starter_grant",
+        credit=None,
+        event_type="free_question_grant",
+        payload={"quantity": FREE_QUESTION_GRANT, "reason": "signup_starter_grant"},
     )
     return True
+
+
+def consume_free_question(db: Session, *, user: User) -> bool:
+    """Atomically decrement the free-question entitlement counter.
+
+    Returns ``True`` if a free question was consumed (counter was > 0
+    and has been decremented). Returns ``False`` when the counter is
+    already 0 — the caller should then place a Stripe charge.
+
+    Uses ``SELECT FOR UPDATE`` to prevent concurrent double-decrement
+    when two question-answer requests race for the same user.
+    """
+    locked_user = db.execute(
+        select(User).where(User.id == user.id).with_for_update()
+    ).scalar_one()
+    if locked_user.free_questions_remaining <= 0:
+        return False
+    locked_user.free_questions_remaining -= 1
+    db.flush()
+    _record_event(
+        db,
+        case=None,
+        user=locked_user,
+        credit=None,
+        event_type="free_question_consumed",
+        payload={"remaining": locked_user.free_questions_remaining},
+    )
+    return True
+
+
+def refund_free_question(db: Session, *, user: User) -> int:
+    """Atomically increment the free-question entitlement counter by one.
+
+    The payments-off (ABS-322) inverse of :func:`consume_free_question`:
+    when a credit-gated answer turns out to be ungroundable / fails the
+    cost cap (the failed-question rule), the reserved free question is
+    handed back rather than burned — the trial user is no worse off than
+    if they had never asked. Mirrors the Stripe path's authorization
+    *void*, where a failed question releases the card hold.
+
+    Returns the user's free-question balance after the refund. Uses
+    ``SELECT FOR UPDATE`` so a concurrent consume/refund can't lose an
+    update.
+    """
+    locked_user = db.execute(
+        select(User).where(User.id == user.id).with_for_update()
+    ).scalar_one()
+    locked_user.free_questions_remaining += 1
+    db.flush()
+    _record_event(
+        db,
+        case=None,
+        user=locked_user,
+        credit=None,
+        event_type="free_question_refunded",
+        payload={"remaining": locked_user.free_questions_remaining},
+    )
+    return locked_user.free_questions_remaining
+
+
+def grant_free_questions(
+    db: Session,
+    *,
+    user: User,
+    quantity: int,
+    reason: str,
+) -> int:
+    """Top up a user's free-question entitlement counter (admin grant).
+
+    The admin-grant path for the payments-off trial (ABS-322 / ABS-314):
+    where :func:`grant_starter_credits_if_needed` is the one-time signup
+    grant, this is the repeatable "give this user N more free questions"
+    lever for support / generosity. Unlike the signup grant it is NOT
+    idempotency-guarded — each call adds ``quantity`` more.
+
+    Returns the user's free-question balance after the grant. ``quantity``
+    must be positive; a non-positive value is a no-op that returns the
+    current balance unchanged.
+    """
+    if quantity <= 0:
+        return user.free_questions_remaining
+    locked_user = db.execute(
+        select(User).where(User.id == user.id).with_for_update()
+    ).scalar_one()
+    locked_user.free_questions_remaining += quantity
+    db.flush()
+    _record_event(
+        db,
+        case=None,
+        user=locked_user,
+        credit=None,
+        event_type="free_question_grant",
+        payload={"quantity": quantity, "reason": reason},
+    )
+    return locked_user.free_questions_remaining
 
 
 def issue_credits_from_pack_purchase(
@@ -904,13 +1100,17 @@ def refund_abandoned_credits(db: Session) -> int:
 
 
 def _claim_available_credit(
-    db: Session, *, user_id: int, tier: str
+    db: Session, *, user_id: int, tier: str, unlimited: bool = False
 ) -> CaseCredit | None:
     """FIFO-claim one available credit at ``tier`` for ``user_id``.
 
     Uses ``with_for_update(skip_locked=True)`` so two concurrent
     case-open calls for the same user/tier don't deadlock — the second
     request just grabs the next row in line.
+
+    When ``unlimited`` is True (test/QA accounts with
+    ``User.unlimited_credits``), a fresh credit with ``source='test'``
+    is auto-minted on the fly if no real credit is available.
     """
     stmt = (
         select(CaseCredit)
@@ -923,7 +1123,47 @@ def _claim_available_credit(
         .limit(1)
         .with_for_update(skip_locked=True)
     )
-    return db.execute(stmt).scalar_one_or_none()
+    credit = db.execute(stmt).scalar_one_or_none()
+    if credit is not None:
+        return credit
+    if not unlimited:
+        return None
+    return _mint_test_credit(db, user_id=user_id, tier=tier)
+
+
+def _mint_test_credit(
+    db: Session, *, user_id: int, tier: str
+) -> CaseCredit:
+    """Create a synthetic credit for an unlimited-credits test user.
+
+    Writes real rows (``CasePurchase`` + ``CaseCredit``) with
+    ``source='test'`` so the existing lifecycle machinery works
+    unchanged and analytics can filter test traffic.
+    """
+    purchase = CasePurchase(
+        user_id=user_id,
+        pack_sku="test",
+        tier=tier,
+        quantity=1,
+        list_price_cents=0,
+        discount_bps=0,
+        amount_paid_cents=0,
+        currency="CAD",
+        stripe_checkout_session_id=None,
+        stripe_payment_intent_id=None,
+    )
+    db.add(purchase)
+    db.flush()
+    credit = CaseCredit(
+        user_id=user_id,
+        purchase_id=purchase.id,
+        tier=tier,
+        source="test",
+        state="available",
+    )
+    db.add(credit)
+    db.flush()
+    return credit
 
 
 def _existing_active_credit_for_case(
@@ -1054,6 +1294,7 @@ __all__: Iterable[str] = (
     "normalise_anchor",
     "match_case",
     "open_case",
+    "open_case_free",
     "close_case",
     "commit_credit_for_session",
     "refund_credit_for_session",
@@ -1061,8 +1302,12 @@ __all__: Iterable[str] = (
     "upgrade_case_credit",
     "grant_admin_credits",
     "grant_starter_credits_if_needed",
+    "consume_free_question",
+    "refund_free_question",
+    "grant_free_questions",
     "STARTER_GRANT_TIER",
     "STARTER_GRANT_QUANTITY",
+    "FREE_QUESTION_GRANT",
     "issue_credits_from_pack_purchase",
     "credit_balance_for",
     "list_user_cases",

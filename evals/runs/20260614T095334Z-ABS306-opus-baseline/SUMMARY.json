@@ -1,0 +1,202 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "complexity": "simple",
+    "turns_completed": 2,
+    "turns_expected": 2,
+    "tool_calls": 0,
+    "wall_s": 84.65,
+    "error": null
+  },
+  {
+    "id": "TC-002",
+    "title": "Homeowner secondary suite legality in ER-2",
+    "complexity": "simple",
+    "turns_completed": 3,
+    "turns_expected": 3,
+    "tool_calls": 0,
+    "wall_s": 143.38,
+    "error": null
+  },
+  {
+    "id": "TC-003",
+    "title": "Homeowner converting single-unit to multi-unit in ER-3",
+    "complexity": "medium",
+    "turns_completed": 4,
+    "turns_expected": 4,
+    "tool_calls": 0,
+    "wall_s": 153.43,
+    "error": null
+  },
+  {
+    "id": "TC-004",
+    "title": "Architect scoping a mid-rise residential building in HR-1",
+    "complexity": "complex",
+    "turns_completed": 5,
+    "turns_expected": 5,
+    "tool_calls": 0,
+    "wall_s": 138.08,
+    "error": null
+  },
+  {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "complexity": "complex",
+    "turns_completed": 6,
+    "turns_expected": 6,
+    "tool_calls": 0,
+    "wall_s": 1.47,
+    "error": null
+  },
+  {
+    "id": "TC-006",
+    "title": "Developer mixed-use tower in CEN-1 with height overlay",
+    "complexity": "complex",
+    "turns_completed": 6,
+    "turns_expected": 6,
+    "tool_calls": 0,
+    "wall_s": 2.67,
+    "error": null
+  },
+  {
+    "id": "TC-007",
+    "title": "Realtor due diligence on CEN-2 redevelopment potential",
+    "complexity": "medium",
+    "turns_completed": 3,
+    "turns_expected": 3,
+    "tool_calls": 0,
+    "wall_s": 0.54,
+    "error": null
+  },
+  {
+    "id": "TC-008",
+    "title": "City planner reviewing heritage demolition application in DH",
+    "complexity": "complex",
+    "turns_completed": 5,
+    "turns_expected": 5,
+    "tool_calls": 0,
+    "wall_s": 0.85,
+    "error": null
+  },
+  {
+    "id": "TC-009",
+    "title": "Real estate lawyer vetting a DD site for a mixed-use purchase",
+    "complexity": "medium",
+    "turns_completed": 4,
+    "turns_expected": 4,
+    "tool_calls": 0,
+    "wall_s": 1.02,
+    "error": null
+  },
+  {
+    "id": "TC-010",
+    "title": "Planner scoping a corridor mixed-use development in COR",
+    "complexity": "complex",
+    "turns_completed": 5,
+    "turns_expected": 5,
+    "tool_calls": 0,
+    "wall_s": 1.91,
+    "error": null
+  },
+  {
+    "id": "TC-011",
+    "title": "City planner reviewing university lab expansion in INS",
+    "complexity": "medium",
+    "turns_completed": 4,
+    "turns_expected": 4,
+    "tool_calls": 0,
+    "wall_s": 1.0,
+    "error": null
+  },
+  {
+    "id": "TC-012",
+    "title": "Lawyer advising adjoining owner on RPK encroachment risk",
+    "complexity": "medium",
+    "turns_completed": 3,
+    "turns_expected": 3,
+    "tool_calls": 0,
+    "wall_s": 0.49,
+    "error": null
+  },
+  {
+    "id": "TC-013",
+    "title": "Architect scoping a mid-rise residential infill in HR-2",
+    "complexity": "complex",
+    "turns_completed": 5,
+    "turns_expected": 5,
+    "tool_calls": 0,
+    "wall_s": 0.95,
+    "error": null
+  },
+  {
+    "id": "TC-014",
+    "title": "Developer chasing bonus density in CEN-2",
+    "complexity": "complex",
+    "turns_completed": 6,
+    "turns_expected": 6,
+    "tool_calls": 0,
+    "wall_s": 1.24,
+    "error": null
+  },
+  {
+    "id": "TC-015",
+    "title": "Developer pricing a DH heritage retention infill",
+    "complexity": "complex",
+    "turns_completed": 5,
+    "turns_expected": 5,
+    "tool_calls": 0,
+    "wall_s": 1.07,
+    "error": null
+  },
+  {
+    "id": "TC-016",
+    "title": "Realtor due-diligence on a DD listing",
+    "complexity": "medium",
+    "turns_completed": 3,
+    "turns_expected": 3,
+    "tool_calls": 0,
+    "wall_s": 0.54,
+    "error": null
+  },
+  {
+    "id": "TC-017",
+    "title": "Homeowner expanding a legally non-conforming duplex in ER-1",
+    "complexity": "complex",
+    "turns_completed": 4,
+    "turns_expected": 4,
+    "tool_calls": 0,
+    "wall_s": 0.75,
+    "error": null
+  },
+  {
+    "id": "TC-018",
+    "title": "Developer scoping a transit-oriented infill on a COR corridor site",
+    "complexity": "complex",
+    "turns_completed": 5,
+    "turns_expected": 5,
+    "tool_calls": 0,
+    "wall_s": 0.88,
+    "error": null
+  },
+  {
+    "id": "TC-019",
+    "title": "Homeowner planning a backyard suite in ER-3",
+    "complexity": "medium",
+    "turns_completed": 3,
+    "turns_expected": 3,
+    "tool_calls": 0,
+    "wall_s": 0.5,
+    "error": null
+  },
+  {
+    "id": "TC-020",
+    "title": "Planner reviewing site plan approval for HR-1 mid-rise near a viewplane",
+    "complexity": "complex",
+    "turns_completed": 5,
+    "turns_expected": 5,
+    "tool_calls": 0,
+    "wall_s": 3.93,
+    "error": null
+  }
+]

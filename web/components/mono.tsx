@@ -11,6 +11,7 @@ type Props = {
   size?: number;
   className?: string;
   style?: React.CSSProperties;
+  "data-testid"?: string;
 };
 
 export function Mono({
@@ -20,6 +21,7 @@ export function Mono({
   size = 10,
   className,
   style,
+  "data-testid": testId,
 }: Props) {
   return (
     <span
@@ -29,6 +31,7 @@ export function Mono({
         className,
       )}
       style={{ fontSize: size, letterSpacing: "0.14em", ...style }}
+      data-testid={testId}
     >
       {children}
     </span>

@@ -111,10 +111,56 @@ async def test_send_user_message_blocking_with_tool_use():
 
 
 @pytest.mark.asyncio
+async def test_feasibility_answer_gets_hedge_appended():
+    """ABS-263: a feasibility-grade final answer (multiple built-form
+    dimensions, no hedging) gets the verify-with-a-planner qualifier
+    appended on both the returned response and the persisted turn."""
+    session = _empty_session()
+    feasibility = (
+        "Max height: 25.0 m. Max FAR: 2.0. Lot coverage: 65%. "
+        "Front setback: 3.0 m. Parking: 1 space per dwelling unit."
+    )
+    gateway = MockGateway(scripted=[text_response(feasibility)])
+
+    response = await session.send_user_message_blocking(
+        gateway, "Feasibility for a tower on this HR-2 site?"
+    )
+
+    text = response.content[-1].text
+    assert text.startswith(feasibility)
+    # Hedge markers the ABS-260 verifier scans for.
+    low = text.lower()
+    assert "planner" in low and "hrm" in low and "not legal advice" in low
+    # The persisted assistant turn carries the same hedged text.
+    assert session.messages[-1].role == LLMRole.ASSISTANT
+    assert session.messages[-1].content[-1].text == text
+
+
+@pytest.mark.asyncio
+async def test_simple_lookup_answer_is_not_hedged():
+    """ABS-263 carve-out: a narrow single-dimension lookup stays lean —
+    no hedge dance appended."""
+    session = _empty_session()
+    answer = "The rear-yard setback in ER-1 is 7.5 m (RC-LUB §6.2)."
+    gateway = MockGateway(scripted=[text_response(answer)])
+
+    response = await session.send_user_message_blocking(
+        gateway, "What's the rear-yard setback in ER-1?"
+    )
+
+    assert response.content[-1].text == answer
+    assert "qualified planner" not in response.content[-1].text
+
+
+@pytest.mark.asyncio
 async def test_send_user_message_streams_in_correct_order():
     """The synthetic stream must start with MessageStartEvent and end
-    with MessageStopEvent — that's the contract the SSE frontend
-    relies on for opening and closing render frames."""
+    its CONTENT frame with MessageStopEvent — that's the contract the
+    SSE frontend relies on for opening and closing render frames.
+
+    ABS-266 appends a ``tool_loop_metrics`` event after the content
+    stream for out-of-band consumers; the chat UI ignores unknown
+    event types so this doesn't affect render."""
     session = _empty_session()
     gateway = MockGateway(scripted=[text_response("hello there")])
 
@@ -124,7 +170,14 @@ async def test_send_user_message_streams_in_correct_order():
     ]
 
     assert isinstance(events[0], MessageStartEvent)
-    assert isinstance(events[-1], MessageStopEvent)
+    # MessageStopEvent is the last event of the CONTENT stream;
+    # tool_loop_metrics (ABS-266) is appended after it.
+    stop_indices = [
+        i for i, e in enumerate(events) if isinstance(e, MessageStopEvent)
+    ]
+    assert len(stop_indices) == 1
+    assert events[stop_indices[0] + 1].type == "tool_loop_metrics"
+    assert stop_indices[0] + 1 == len(events) - 1
     # And the user message landed on the session even though we
     # consumed via the streaming path:
     assert any(
@@ -240,11 +293,16 @@ async def test_session_requests_enable_prompt_cache_for_system_and_tools():
 
 
 @pytest.mark.asyncio
-async def test_session_marks_first_assistant_turns_as_cache_milestones():
-    """First-assistant turns are byte-stable across the rest of the
-    session; marking the LAST block of up to two of them gives turn 3+
-    a long stable prefix to read from cache. Without this, the only
-    cached prefix on later turns is system + tools."""
+async def test_session_marks_first_assistant_turn_as_cache_milestone():
+    """The first-assistant turn is byte-stable across the rest of the
+    session; marking the LAST block of it gives turn 2+ a stable prefix
+    to read from cache. Without this, the only cached prefix on later
+    turns is system + tools.
+
+    ABS-285: only ONE milestone is marked now — the fourth Anthropic
+    cache breakpoint is reserved for the tool loop's rolling intra-loop
+    breakpoint, so the second assistant turn is intentionally left
+    unmarked."""
     session = _empty_session()
     gateway = MockGateway(
         scripted=[
@@ -263,8 +321,9 @@ async def test_session_marks_first_assistant_turns_as_cache_milestones():
     asst2 = third.messages[3]
     assert isinstance(asst1.content, list)
     assert isinstance(asst2.content, list)
+    # Exactly one milestone breakpoint: the first assistant turn.
     assert asst1.content[-1].cache is True
-    assert asst2.content[-1].cache is True
+    assert asst2.content[-1].cache is False
     # Plain user-string messages stay untouched — wrapping them would
     # change the shape the rest of the chat layer observes.
     assert third.messages[0].content == "q1"
@@ -615,3 +674,310 @@ async def test_no_case_anchor_leaves_system_prompt_unchanged():
     await session.send_user_message_blocking(gateway, "anything")
 
     assert seen_systems == ["You are a senior urban planner."]
+
+
+# ----------------------------------------------------------------------
+# ABS-266: ChatSession surfaces tool-loop observability via the
+# streaming SSE path so test runners can audit cost and behaviour
+# without scraping server logs.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_blocking_turn_populates_last_tool_loop_metrics():
+    """After ``send_user_message_blocking`` returns, the session
+    exposes a ``ToolLoopMetricsEvent`` summarising the loop. Fields
+    must reflect the actual loop run, not zeros."""
+    from advisor.llm import ToolLoopMetricsEvent
+
+    session = _empty_session()
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+            ),
+            text_response("done."),
+        ]
+    )
+    session.tool_defs = [
+        ToolDefinition(
+            name="search_bylaw_evidence",
+            description="d",
+            input_schema={"type": "object"},
+        )
+    ]
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return "ok"
+
+    session.tool_handlers = {"search_bylaw_evidence": handler}
+
+    await session.send_user_message_blocking(gateway, "hi")
+
+    metrics = session.last_tool_loop_metrics
+    assert isinstance(metrics, ToolLoopMetricsEvent)
+    assert metrics.type == "tool_loop_metrics"
+    assert metrics.iterations == 2
+    assert metrics.terminated_reason == "end_turn"
+    assert metrics.total_usage is not None
+    assert metrics.total_usage.input_tokens > 0
+    assert len(metrics.per_iteration) == 2
+    assert metrics.per_iteration[0].tool_call_count == 1
+    assert metrics.per_iteration[1].tool_call_count == 0
+    assert len(metrics.tool_calls) == 1
+    assert metrics.tool_calls[0].name == "search_bylaw_evidence"
+    assert metrics.tool_calls[0].is_error is False
+
+
+@pytest.mark.asyncio
+async def test_streaming_yields_tool_loop_metrics_event_after_message_stop():
+    """The streaming path appends the metrics event after the
+    synthetic content stream completes. Order matters: chat UIs
+    terminate on ``message_stop``, so the metrics must come AFTER it
+    or out-of-band consumers will miss it. Verifying the relative
+    position pins both the contract for runners and the
+    no-UI-impact guarantee."""
+    session = _empty_session()
+    gateway = MockGateway(scripted=[text_response("hello there")])
+
+    events = [
+        event
+        async for event in session.send_user_message(gateway, "hi")
+    ]
+
+    # The synthetic stream contains message_start ... message_stop.
+    stop_idx = next(
+        i for i, e in enumerate(events) if isinstance(e, MessageStopEvent)
+    )
+    metrics_idx = next(
+        i for i, e in enumerate(events) if e.type == "tool_loop_metrics"
+    )
+    assert metrics_idx == len(events) - 1, (
+        "tool_loop_metrics must be the very last event"
+    )
+    assert metrics_idx > stop_idx, (
+        "tool_loop_metrics must come AFTER message_stop"
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_tier_session_uses_default_max_iterations():
+    """ABS-287: a session without a tier (legacy / test path) defaults
+    to max_iterations=10 inside run_tool_loop. The loop should still
+    settle organically when the gateway answers before the cap."""
+    session = _empty_session()  # no tier set
+    gateway = MockGateway(scripted=[text_response("quick answer")])
+
+    await session.send_user_message_blocking(gateway, "anything")
+
+    # One gateway call (no tool use), terminated organically.
+    metrics = session.last_tool_loop_metrics
+    assert metrics is not None
+    assert metrics.iterations == 1
+    assert metrics.terminated_reason == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_complex_tier_session_does_not_cap_at_ten_iterations():
+    """ABS-287: a Complex-tier session must be able to exceed 10
+    tool-loop iterations without hitting the iteration cap.
+
+    The MockGateway is scripted to demand 11 tool rounds before
+    answering. A hardcoded max_iterations=10 would force-synthesise
+    at round 10 (terminated_reason='iteration_cap'). With the per-tier
+    cap (Complex=55) the loop runs all 11 and ends organically."""
+    session = _empty_session()
+    session.tier = "complex"
+    session.tool_defs = [
+        ToolDefinition(
+            name="search_bylaw_evidence",
+            description="search",
+            input_schema={"type": "object"},
+        )
+    ]
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return "found something"
+
+    session.tool_handlers = {"search_bylaw_evidence": handler}
+
+    # Script: 11 tool_use requests followed by a final text answer.
+    gateway = MockGateway(
+        scripted=[
+            *[
+                tool_use_response(
+                    tool_id=f"tu_{i}",
+                    tool_name="search_bylaw_evidence",
+                    tool_input={"query": f"round {i}"},
+                )
+                for i in range(1, 12)
+            ],
+            text_response("Here is the complex analysis."),
+        ]
+    )
+
+    await session.send_user_message_blocking(gateway, "Do a deep complex search")
+
+    metrics = session.last_tool_loop_metrics
+    assert metrics is not None
+    assert metrics.iterations == 12  # 11 tool rounds + 1 final text round
+    assert metrics.terminated_reason == "end_turn", (
+        f"Expected end_turn but got {metrics.terminated_reason!r} — "
+        "Complex-tier sessions are being capped at 10 iterations "
+        "(the old non-tier default) instead of using the per-tier cap (55)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_metrics_event_reports_tool_errors():
+    """A handler that raises shows up in the metrics event as a
+    tool_call with ``is_error=True``. That's the signal a runner uses
+    to distinguish 'tool was called and succeeded' from 'tool was
+    called and the model had to recover'."""
+    session = _empty_session()
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_boom",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+            ),
+            text_response("apologies."),
+        ]
+    )
+    session.tool_defs = [
+        ToolDefinition(
+            name="search_bylaw_evidence",
+            description="d",
+            input_schema={"type": "object"},
+        )
+    ]
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        raise RuntimeError("boom")
+
+    session.tool_handlers = {"search_bylaw_evidence": handler}
+
+    events = [
+        event
+        async for event in session.send_user_message(gateway, "hi")
+    ]
+
+    metrics = next(e for e in events if e.type == "tool_loop_metrics")
+    assert len(metrics.tool_calls) == 1
+    assert metrics.tool_calls[0].is_error is True
+    assert metrics.tool_calls[0].name == "search_bylaw_evidence"
+
+
+# ----------------------------------------------------------------------
+# ABS-317: Refinement-window guardrails — _compose_system_prompt and
+# the is_refinement detection in send_user_message_blocking.
+# ----------------------------------------------------------------------
+
+
+def test_compose_system_prompt_no_anchor_no_refinement():
+    """Bare persona with no anchor and not a refinement: returned unchanged."""
+    from advisor.chat.session import _compose_system_prompt
+
+    persona = "You are a senior urban planner."
+    result = _compose_system_prompt(
+        persona, anchor_label=None, anchor_kind=None, is_refinement=False
+    )
+    assert result == persona
+
+
+def test_compose_system_prompt_with_anchor_no_refinement():
+    """Anchor block is appended; no refinement block when is_refinement=False."""
+    from advisor.chat.session import _compose_system_prompt
+
+    persona = "You are a senior urban planner."
+    result = _compose_system_prompt(
+        persona,
+        anchor_label="1234 Main St",
+        anchor_kind="address",
+        is_refinement=False,
+    )
+    assert persona in result
+    assert "Active case" in result
+    assert "1234 Main St" in result
+    assert "Active refinement turn" not in result
+
+
+def test_compose_system_prompt_with_refinement_no_anchor():
+    """Refinement block is appended even without an anchor."""
+    from advisor.chat.session import _compose_system_prompt
+
+    persona = "You are a senior urban planner."
+    result = _compose_system_prompt(
+        persona, anchor_label=None, anchor_kind=None, is_refinement=True
+    )
+    assert persona in result
+    assert "Active refinement turn" in result
+    assert "EVIDENCE INTEGRITY" in result
+    assert "ANTI-NEW-REPORT" in result
+
+
+def test_compose_system_prompt_with_anchor_and_refinement():
+    """Both anchor and refinement blocks appear when both flags are set."""
+    from advisor.chat.session import _compose_system_prompt
+
+    persona = "You are a senior urban planner."
+    result = _compose_system_prompt(
+        persona,
+        anchor_label="1234 Main St",
+        anchor_kind="address",
+        is_refinement=True,
+    )
+    assert "Active case" in result
+    assert "1234 Main St" in result
+    assert "Active refinement turn" in result
+    assert "EVIDENCE INTEGRITY" in result
+    assert "ANTI-NEW-REPORT" in result
+
+
+@pytest.mark.asyncio
+async def test_refinement_guardrails_injected_on_second_turn():
+    """ABS-317: the system prompt on the second user turn must contain
+    the refinement guardrail block because there is already an assistant
+    turn in the conversation. The first turn must NOT contain it."""
+    session = _empty_session()
+    seen_systems: list[str] = []
+
+    scripted = iter([text_response("first answer"), text_response("second answer")])
+
+    def capture(request):
+        seen_systems.append(request.system)
+        return next(scripted)
+
+    gateway = MockGateway(callable_=capture)
+
+    await session.send_user_message_blocking(gateway, "first question")
+    await session.send_user_message_blocking(gateway, "second question")
+
+    assert len(seen_systems) == 2
+    # First turn: no prior assistant turn → not a refinement.
+    assert "Active refinement turn" not in seen_systems[0]
+    # Second turn: prior assistant turn exists → refinement guardrails injected.
+    assert "Active refinement turn" in seen_systems[1]
+    assert "EVIDENCE INTEGRITY" in seen_systems[1]
+    assert "ANTI-NEW-REPORT" in seen_systems[1]
+
+
+@pytest.mark.asyncio
+async def test_refinement_guardrails_not_injected_on_first_turn():
+    """ABS-317: the very first user turn on a fresh session must NOT
+    contain the refinement block — there is no prior answer to refine."""
+    session = _empty_session()
+    seen_systems: list[str] = []
+
+    def capture(request):
+        seen_systems.append(request.system)
+        return text_response("first answer")
+
+    gateway = MockGateway(callable_=capture)
+    await session.send_user_message_blocking(gateway, "What is the height limit?")
+
+    assert len(seen_systems) == 1
+    assert "Active refinement turn" not in seen_systems[0]

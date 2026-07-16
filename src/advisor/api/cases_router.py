@@ -11,11 +11,10 @@ Five endpoints expose the case service to the frontend:
   classifier. Cheap Haiku call; returns a recommended tier + confidence
   + reasons. Surfaced as a banner on the case-open form.
 * ``POST /v1/cases`` — auth-required. Open a new case (or reopen an
-  in-window match) and reserve one credit at the requested tier.
-* ``POST /v1/cases/{case_id}/upgrade`` — auth-required. Layer-2 / 3
-  upgrade accept. Atomically swaps the active credit for one at a
-  higher tier; 409 if the user has no available credit at the target
-  tier.
+  in-window match). Free: no tier credit is reserved (ABS-382). Any
+  ``tier`` in the body is accepted-but-ignored for old-frontend compat.
+* ``POST /v1/cases/{case_id}/upgrade`` — RETIRED (ABS-382). Always
+  returns 410 ``{code: "tier_model_retired"}``; the tier model is gone.
 * ``POST /v1/cases/{case_id}/close`` — auth-required. User explicitly
   closes a case (refunds any reserved-but-uncommitted credit).
 
@@ -36,14 +35,10 @@ from sqlalchemy.orm import Session
 
 from advisor.chat.classifier import ClassifierResult, classify_query
 from advisor.db.cases import (
-    CaseStateError,
-    NoAvailableCreditError,
-    UnknownTierError,
     close_case as close_case_svc,
     list_user_cases,
     match_case,
-    open_case,
-    upgrade_case_credit,
+    open_case_free,
 )
 from advisor.db.models import Case, User
 from advisor.db.schemas import CaseOut
@@ -80,27 +75,18 @@ class OpenCaseRequest(BaseModel):
     anchor_kind: str = Field(
         pattern=r"^(address|project_ref|development_application)$"
     )
-    tier: str = Field(pattern=r"^(quick|standard|complex)$")
+    # ABS-382: tiers are retired. Opening a case is free and reserves no
+    # credit, so ``tier`` is accepted-but-ignored (no validation pattern)
+    # to keep old frontends that still POST a tier alive during rollout.
+    tier: str | None = None
 
 
 class OpenCaseResponse(BaseModel):
     case: CaseOut
-    credit_id: int
+    # ABS-382: no CaseCredit is reserved on open, so ``credit_id`` is
+    # always null. Kept in the response for old-frontend compatibility.
+    credit_id: int | None = None
     reused_existing_case: bool
-
-
-class UpgradeRequest(BaseModel):
-    target_tier: str = Field(pattern=r"^(standard|complex)$")
-    trigger: str = Field(
-        default="user_manual",
-        pattern=r"^(classifier|agent_request|user_manual)$",
-    )
-
-
-class UpgradeResponse(BaseModel):
-    case: CaseOut
-    new_credit_id: int
-    burned_credit_id: int
 
 
 class CaseListResponse(BaseModel):
@@ -222,31 +208,16 @@ def build_cases_router(
                 anchor_label=body.anchor_label,
                 anchor_kind=body.anchor_kind,
             )
-            try:
-                case, credit = open_case(
-                    db,
-                    user=user,
-                    anchor_label=body.anchor_label,
-                    anchor_kind=body.anchor_kind,
-                    tier=body.tier,
-                )
-            except UnknownTierError as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail={"code": "unknown_tier", "message": str(exc)},
-                ) from exc
-            except NoAvailableCreditError as exc:
-                raise HTTPException(
-                    status_code=402,
-                    detail={
-                        "code": "no_available_credit",
-                        "tier": exc.tier,
-                        "message": (
-                            f"No available {exc.tier} credit. Purchase a "
-                            "credit to continue."
-                        ),
-                    },
-                ) from exc
+            # ABS-382: opening a case is free. No tier credit is claimed
+            # or reserved; ``current_tier`` stays null and the response
+            # carries ``credit_id=null``. Any ``tier`` in the body is
+            # ignored (see OpenCaseRequest).
+            case = open_case_free(
+                db,
+                user=user,
+                anchor_label=body.anchor_label,
+                anchor_kind=body.anchor_kind,
+            )
             # Compute lot spatial facts (area, frontage, depth, corner)
             # and pin them to the case so every chat turn sees them
             # without an extra tool call. Never blocks case creation:
@@ -266,62 +237,33 @@ def build_cases_router(
                 commit()
             return OpenCaseResponse(
                 case=CaseOut.model_validate(case),
-                credit_id=credit.id,
+                credit_id=None,
                 reused_existing_case=existing.case is not None
                 and existing.case.id == case.id,
             )
 
-    @router.post("/{case_id}/upgrade", response_model=UpgradeResponse)
+    @router.post("/{case_id}/upgrade")
     def post_upgrade(
         case_id: int,
-        body: UpgradeRequest,
         auth_session: Any = Depends(user_dependency),
-    ) -> UpgradeResponse:
-        with _open_db() as db:
-            user = user_resolver(auth_session, db)
-            case = db.get(Case, case_id)
-            if case is None or case.user_id != user.id:
-                # 404 (not 403) to avoid enumeration of other users' cases.
-                raise HTTPException(
-                    status_code=404, detail={"code": "case_not_found"}
-                )
-            try:
-                burned, new = upgrade_case_credit(
-                    db,
-                    case=case,
-                    target_tier=body.target_tier,
-                    trigger=body.trigger,
-                )
-            except CaseStateError as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail={"code": "invalid_upgrade", "message": str(exc)},
-                ) from exc
-            except NoAvailableCreditError as exc:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "no_available_credit",
-                        "tier": exc.tier,
-                        "message": (
-                            f"No available {exc.tier} credit to upgrade "
-                            "into. Purchase one and retry."
-                        ),
-                    },
-                ) from exc
-            except UnknownTierError as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail={"code": "unknown_tier", "message": str(exc)},
-                ) from exc
-            commit = getattr(db, "commit", None)
-            if callable(commit):
-                commit()
-            return UpgradeResponse(
-                case=CaseOut.model_validate(case),
-                new_credit_id=new.id,
-                burned_credit_id=burned.id,
-            )
+    ) -> dict[str, Any]:
+        # ABS-382: the tier model is retired. Upgrading a case is no
+        # longer a concept — every case runs on the free wallet. Return
+        # 410 Gone for any request body so old frontends surface a clear
+        # "this feature is gone" signal instead of a silent success. The
+        # ``upgrade_case_credit`` service fn is intentionally kept in
+        # cases.py for historical data-migration tooling, but is no
+        # longer reachable over HTTP.
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={
+                "code": "tier_model_retired",
+                "message": (
+                    "Case tier upgrades are retired. Opening and using a "
+                    "case is free; there is no tier to upgrade."
+                ),
+            },
+        )
 
     @router.post("/{case_id}/close")
     def post_close(

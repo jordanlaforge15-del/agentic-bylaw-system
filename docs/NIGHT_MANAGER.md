@@ -79,10 +79,17 @@ When an agent exits successfully:
 2. **E2E gate** — `make e2e` runs in the worktree with the issue's port triplet.
    If tests fail, the dev agent gets the failure output and retries. Max 3 fix
    cycles.
-3. **Merge** — Sequential `git merge --no-ff` into `dev`, one issue at a time.
-4. **Regression check** — `make e2e` on `dev` after each merge. If regression
+3. **Migration rechain** — Before rebasing, `scripts/rechain_migration.py` runs
+   automatically if the branch touches `alembic/versions/`. It detects dual-head
+   collisions (two branches both parented to the same `down_revision`) and fixes
+   the feature branch's root migration to point to dev's current head. See
+   [Alembic collision resistance](#alembic-collision-resistance) below.
+4. **Rebase** — The agent branch is rebased onto the current `origin/dev` tip to
+   absorb sibling merges.
+5. **Merge** — Sequential `git merge --no-ff` into `dev`, one issue at a time.
+6. **Regression check** — `make e2e` on `dev` after each merge. If regression
    detected, the merge is reverted and the issue marked as blocked.
-5. **Cleanup** — Worktree and branch removed after successful merge.
+7. **Cleanup** — Worktree and branch removed after successful merge.
 
 ### 5. Deployment (optional)
 
@@ -191,6 +198,60 @@ scripts/start-night-manager.sh   # caffeinate + tmux launcher
 └── report-{timestamp}.md
 ```
 
+## Alembic collision resistance
+
+*Background (2026-06-15 incident — ABS-312/ABS-314/ABS-316):* Two concurrent
+agents each created a migration with `down_revision` pointing to the same dev
+head. When the first branch merged, the second still carried the old
+`down_revision` — producing two Alembic heads. `alembic upgrade head` then
+failed with "Multiple head revisions are present," breaking `e2e-up` on the
+merged branch and triggering a revert/re-pickup loop.
+
+### How the NM prevents this
+
+Two interlocking guards:
+
+**1. Pre-merge rechain (`scripts/rechain_migration.py`)**
+
+`merge_to_dev` calls this automatically when the feature branch adds files
+under `alembic/versions/`. The script:
+- Identifies migration files new on the branch vs dev (via `git diff
+  --diff-filter=A --name-only dev...HEAD -- alembic/versions/`).
+- Finds the "root" of the new chain — the migration whose `down_revision`
+  points to an existing dev revision (not another new migration).
+- Compares that `down_revision` to dev's current single head. If they differ,
+  rewrites the `down_revision` and commits a `[rechain]` fix on the feature
+  branch.
+- The rechain commit becomes part of the feature branch; the subsequent rebase
+  onto `origin/dev` carries the corrected chain forward.
+
+Run manually from any feature branch:
+
+```bash
+python scripts/rechain_migration.py          # auto-detects worktree
+python scripts/rechain_migration.py --dry-run  # show what would change
+```
+
+**2. Single-head guard (`scripts/e2e-up.sh`)**
+
+Before `alembic upgrade head`, `e2e-up.sh` runs `alembic heads` and counts
+revisions labelled `(head)`. If the count is > 1 it prints an actionable error
+and exits 1 before migrations run, so the failure surfaces at `make e2e` time
+with a clear message rather than an opaque crash deep in the migration chain.
+
+This guard catches collisions that slip past the rechain step (e.g. manually
+merged branches, or a rechain that couldn't determine dev's head).
+
+### Rule for implementing agents
+
+When you add a migration, the only rule is: **parent it to the current
+single head when you create it.** The NM's rechain step handles the case
+where a sibling branch merges before yours does.
+
+If you see "Multiple Alembic heads" from `make e2e-up`, run
+`python scripts/rechain_migration.py` from your worktree root and commit the
+fix before re-running.
+
 ## Failure modes
 
 | Symptom | NM behavior |
@@ -204,6 +265,7 @@ scripts/start-night-manager.sh   # caffeinate + tmux launcher
 | NM process dies | Restart reads state.json, resumes |
 | Machine tries to sleep | `caffeinate -s` prevents it |
 | Terminal disconnect | `tmux` keeps session alive |
+| Dual Alembic heads after merge | Rechain runs pre-merge; guard fires in e2e-up |
 
 ## Relationship to other docs
 

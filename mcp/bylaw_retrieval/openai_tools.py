@@ -7,7 +7,12 @@ from typing import Any
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from bylaw_retrieval.retrieval import CitationLookupRequest, RetrievalRequest, RetrievalService
+from bylaw_retrieval.retrieval import (
+    ATTRIBUTE_VOCABULARY,
+    CitationLookupRequest,
+    RetrievalRequest,
+    RetrievalService,
+)
 
 
 def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
@@ -52,18 +57,59 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
             "name": "lookup_citation",
             "description": (
                 "Retrieve the authoritative fragment for an exact citation path such as '4.2' or 'Schedule B > 3'. "
-                "Use this when the user or agent already knows the citation."
+                "Use this when the user or agent already knows the citation.\n\n"
+                "Provide exactly one of 'citation_path' or 'structured'. "
+                "Use 'structured' with kind='zone_attribute' to look up a zone's attribute rule "
+                "without guessing the canonical path format."
             ),
             "parameters": {
                 "type": "object",
+                "description": (
+                    "Provide exactly one of 'citation_path' or 'structured'."
+                ),
                 "properties": {
-                    "citation_path": {"type": "string"},
+                    "citation_path": {
+                        "type": "string",
+                        "description": (
+                            "Exact citation path. Mutually exclusive with 'structured'."
+                        ),
+                    },
+                    "structured": {
+                        "description": (
+                            "Structured query. Mutually exclusive with 'citation_path'. "
+                            "Set 'kind' to 'zone_attribute' or 'schedule_row'."
+                        ),
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "required": ["kind", "zone", "attribute"],
+                                "properties": {
+                                    "kind": {"type": "string", "const": "zone_attribute"},
+                                    "zone": {"type": "string"},
+                                    "attribute": {
+                                        "type": "string",
+                                        "enum": sorted(ATTRIBUTE_VOCABULARY),
+                                    },
+                                },
+                                "additionalProperties": False,
+                            },
+                            {
+                                "type": "object",
+                                "required": ["kind", "schedule", "row"],
+                                "properties": {
+                                    "kind": {"type": "string", "const": "schedule_row"},
+                                    "schedule": {"type": "string"},
+                                    "row": {"type": "string"},
+                                },
+                                "additionalProperties": False,
+                            },
+                        ],
+                    },
                     "document_id": {"type": "integer"},
-                    "include_context": {"type": "boolean", "default": True},
-                    "include_cross_references": {"type": "boolean", "default": True},
-                    "include_tables": {"type": "boolean", "default": True},
+                    "include_context": {"type": "boolean", "default": False},
+                    "include_cross_references": {"type": "boolean", "default": False},
+                    "include_tables": {"type": "boolean", "default": False},
                 },
-                "required": ["citation_path"],
                 "additionalProperties": False,
             },
         },
@@ -123,13 +169,71 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                         },
                         "additionalProperties": False,
                     },
-                    "include_context": {"type": "boolean", "default": True},
-                    "include_cross_references": {"type": "boolean", "default": True},
-                    "include_tables": {"type": "boolean", "default": True},
-                    "include_datasets": {"type": "boolean", "default": True},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 8},
+                    "include_context": {"type": "boolean", "default": False},
+                    "include_cross_references": {"type": "boolean", "default": False},
+                    "include_tables": {"type": "boolean", "default": False},
+                    "include_datasets": {"type": "boolean", "default": False},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 5,
+                        "description": (
+                            "Maximum fragments to return. Default 5; bump to 15 when the "
+                            "question covers multiple dimensions (e.g. zone feasibility); cap is 50."
+                        ),
+                    },
                 },
                 "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "type": "function",
+            "name": "get_address_profile",
+            "description": (
+                "Use this at the start of a case-bound conversation when the user "
+                "mentions an address, parcel, or named place. Returns the zone, "
+                "overlay precincts, heritage status, and citations in one call. "
+                "Saves multiple lookups. The 'address' argument is free text in the "
+                "same shape the search_bylaw_evidence 'location' slot accepts. If the "
+                "address can't be resolved, the response carries 'unresolvable': true "
+                "with empty citations rather than an error."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "address": {"type": "string"},
+                },
+                "required": ["address"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "type": "function",
+            "name": "bylaw_query",
+            "description": (
+                "Use this when the user has stated both a location AND a "
+                "specific intent (feasibility, use permission, dimensional "
+                "check). Saves multiple round-trips by composing the full "
+                "answer server-side. For exploratory questions where you "
+                "don't yet know the intent, use the thin tools. 'intent' is "
+                "one of zone_feasibility, address_lookup, use_check, "
+                "dimensional_check. Pass 'zone' for zone-scoped intents, "
+                "'address' for address_lookup, and 'proposed' (e.g. "
+                "{\"height_m\": 80}) for dimensional_check. An unrecognised "
+                "intent returns 'unrecognized_intent': true with a "
+                "'suggested_tools' list rather than an error."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "intent": {"type": "string"},
+                    "address": {"type": "string"},
+                    "zone": {"type": "string"},
+                    "proposed": {"type": "object", "additionalProperties": True},
+                },
+                "required": ["intent"],
                 "additionalProperties": False,
             },
         },
@@ -184,10 +288,30 @@ class OpenAIToolExecutor:
             ).model_dump(mode="json")
         if tool_name == "lookup_citation":
             request = _validated(CitationLookupRequest, args)
-            return service.lookup_citation(request).model_dump(mode="json")
+            response = service.lookup_citation(request)
+            # ABS-261: lookup_citation now returns a
+            # CitationLookupResponse envelope. To preserve the existing
+            # OpenAI-adapter contract for hits (flat RetrievalMatch
+            # shape), unwrap on success. Misses surface the new
+            # match-null + suggestions envelope so the calling LLM can
+            # self-correct instead of retrying random variants.
+            if response.match is not None:
+                return response.match.model_dump(mode="json")
+            return response.model_dump(mode="json")
         if tool_name == "search_bylaw_evidence":
             request = _validated(RetrievalRequest, args)
             return service.search(request).model_dump(mode="json")
+        if tool_name == "get_address_profile":
+            return service.get_address_profile(str(args.get("address") or "")).model_dump(
+                mode="json"
+            )
+        if tool_name == "bylaw_query":
+            return service.bylaw_query(
+                intent=str(args.get("intent") or ""),
+                address=args.get("address"),
+                zone=args.get("zone"),
+                proposed=args.get("proposed"),
+            ).model_dump(mode="json")
         raise ValueError(f"Unsupported OpenAI retrieval tool: {tool_name}")
 
 

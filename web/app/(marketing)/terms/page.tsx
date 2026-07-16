@@ -114,7 +114,22 @@ const SECTIONS: Section[] = [
       },
       {
         k: "p",
-        v: "On beta deployments where the purchase flow is dormant, an operator may grant credits manually.",
+        v: "On beta deployments where the purchase flow is dormant, an operator may grant a starting turn balance manually.",
+      },
+    ],
+  },
+  {
+    id: "tm-7a",
+    n: "7a",
+    t: "Paid answers — still research",
+    body: [
+      {
+        k: "p",
+        v: "Some queries are designated as priced questions and carry a fee. Paying that fee does not change what the answer is: it is a research output from an automated bylaw-analysis tool, not a determination by any municipality, and not the professional opinion of a licensed planner, lawyer, engineer, architect, or surveyor.",
+      },
+      {
+        k: "note",
+        v: "Every paid answer carries a disclaimer to this effect. The same verification obligation from section 3.0 applies — independently confirm the output with HRM Planning (or a qualified professional) before relying on it for any permit application or irreversible decision.",
       },
     ],
   },

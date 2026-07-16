@@ -1,0 +1,211 @@
+{
+  "id": "TC-005",
+  "title": "Developer feasibility for residential tower in HR-2",
+  "zone": "HR-2",
+  "persona": {
+    "type": "real_estate_developer",
+    "subtype": null,
+    "description": "Mid-size developer running a quick feasibility pass before purchasing a site"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "100 Robie Street, Halifax, NS",
+  "session_id": "a2051060-86e4-4850-8a38-b38ece400ac2",
+  "model": "claude-opus-4-5-20251101",
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "We\u2019re looking at a site on Robie Street zoned HR-2 for a high-rise residential development \u2014 likely 60\u201380 units. What are the base zoning standards: height, lot coverage, setbacks?",
+      "assistant_text": "Based on my retrieval, here are the **base zoning standards for HR-2 (High-Rise Residential 2)** under the Regional Centre Land Use By-law:\n\n---\n\n## HR-2 Zone \u2014 Base Built-Form Standards\n\n| Standard | Requirement | Citation |\n|----------|-------------|----------|\n| **Max Building Height** | Per **Schedule 15** (Height Precincts) \u2014 varies by location | Section 196 |\n| **Max Floor Area Ratio (FAR)** | Per **Schedule 17** (FAR Precincts) \u2014 varies by location | (standard FAR provision applies) |\n| **Min Front/Flanking Setback** | Per **Schedule 18** \u2014 varies by location | Section 197 |\n| **Max Front/Flanking Setback** | Per **Schedule 19** \u2014 varies by location | (standard provision) |\n\n### Side Setbacks (Section 198)\nThe minimum side setback depends on what zone the **adjacent lot** is in:\n- **6.0 m** \u2014 where the lot abuts ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK zones\n- **0.0 m** \u2014 where the lot abuts DD, DH, CEN-2, CEN-1, or COR zones (except as modified by Section 198(1)(a))\n\n### Rear Setbacks (Section 199)\n- **6.0 m** \u2014 where the lot abuts ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK zones\n\n### Streetwall Heights (Sections 200\u2013201)\n- **Maximum streetwall height**: Per Section 200 (specific values not retrieved but governed by zone chapter)\n- **Minimum streetwall height**: \n  - **2 storeys** along pedestrian-oriented commercial streets (Schedule 7)\n  - For other streets: building height if \u22642 storeys; otherwise **2 storeys**\n\n### Maximum Building Dimensions (Section 210)\nFor the **tower portion** above the streetwall:\n- **Max building depth**: 35.0 m\n- **Max building width**: 40.0 m\n- **Max average floor area per storey**: 900 m\u00b2\n\n---\n\n## Critical Note \u2014 Schedule-Dependent Values\n\n**Height, FAR, and setbacks are NOT fixed zone-wide** \u2014 they're mapped by precinct on Schedules 15, 17, 18, and 19. Without a specific address, I cannot tell you the actual numbers for your site. Along Robie Street, height precincts can range from modest mid-rise (e.g. 20\u201325 m) to high-rise (50+ m) depending on the block.\n\n**To get your actual envelope**, provide the civic address and I'll pull the schedule overlays for that parcel, including:\n- Height cap (metres or storeys)\n- FAR cap\n- Front/flanking setback range\n- Heritage district status (Schedule 22)\n- View plane or shadow-impact overlays (if any)\n\nFor a 60\u201380 unit high-rise on Robie, you'll also want to know whether the lot falls within a **bonus-zoning district** (Schedule 50) \u2014 that can increase FAR in exchange for community benefits.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 43616,
+        "output_tokens": 783,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "wall_time_s": 70.7,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Is there a floor area ratio (FAR) limit in HR-2, or does the bylaw rely only on height and lot coverage to control density?",
+      "assistant_text": "Based on my research, I can now give you a clear answer:\n\n---\n\n## FAR in the HR-2 Zone: **No FAR Limit Applies**\n\nYou've identified a key distinction in how the RCLUB controls density across different zones.\n\n### The Short Answer\n\n**The HR-2 and HR-1 zones do NOT have a Floor Area Ratio (FAR) requirement.** Density is controlled entirely through:\n\n1. **Maximum building height** (Schedule 15)\n2. **Maximum building dimensions** (Section 210):\n   - Max building depth: **35.0 m**\n   - Max building width: **40.0 m**\n   - Max average floor area per storey (tower portion): **900 m\u00b2**\n3. **Setbacks** (Schedules 18/19, Sections 197\u2013199)\n4. **Streetwall height requirements** (Sections 200\u2013201)\n5. **Stepback requirements** when abutting lower-density zones (Section 208)\n\n### Comparison with FAR-Controlled Zones\n\n| Zone | FAR Control? | Citation |\n|------|--------------|----------|\n| **DD, DH** (Downtown) | Yes \u2014 Schedule 17 | Chapters 2\u20133 |\n| **CEN-2, CEN-1** (Centre) | Yes \u2014 Schedule 17 | Section 158 |\n| **COR** (Corridor) | **No** | Chapter 6 |\n| **HR-2, HR-1** (High-Rise Residential) | **No** | Chapter 7 |\n\n### Why This Matters for Your Project\n\nIn HR-2, your **buildable GFA is effectively unlimited** by FAR \u2014 it's constrained only by:\n\n- The **height precinct** cap (Schedule 15) for your specific lot\n- The **900 m\u00b2 per-storey cap** on the tower portion above the streetwall\n- **Setbacks and stepbacks** that reduce your footprint\n- **Separation distances** if you have multiple towers (25 m between high-rise typologies per Section 209)\n\nFor a 60\u201380 unit high-rise, this is actually favorable \u2014 you're not fighting a FAR cap. Your limiting factors will be:\n1. The height precinct (varies by block along Robie)\n2. The 900 m\u00b2 tower floorplate limit\n3. Adjacent-zone stepbacks if you're next to ER or CH zones\n\n**Provide the civic address** and I can pull the height precinct to calculate your actual maximum GFA based on lot size and tower floorplate constraints.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 2944,
+        "output_tokens": 605,
+        "cache_creation_input_tokens": 2648,
+        "cache_read_input_tokens": 58824
+      },
+      "wall_time_s": 54.51,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 3,
+      "user_message": "The site is 2,200 m\u00b2. At 65% lot coverage and 25 metres of height, roughly how many floors could we fit? And is multi-unit dwelling confirmed as a permitted use in HR-2?",
+      "assistant_text": "Based on my research, I have enough information to answer your questions. The table preview shows the residential uses row for HR-2 and HR-1, and I found footnote \u246d which applies to HR-1. Let me provide a complete answer:\n\n---\n\n## 1. Multi-Unit Dwelling Use in HR-2: **Yes, Permitted**\n\n**Table 1A** (Part I, Section 39) lists permitted uses by zone. For the HR-2 zone:\n\n| Use | HR-2 | HR-1 |\n|-----|------|------|\n| Multi-unit dwelling use | \u25cf (permitted) | \u246d (conditional) |\n\n**Multi-unit dwelling is permitted as-of-right in HR-2** \u2014 no conditions or footnotes apply. \n\nFor HR-1, footnote \u246d applies: *\"Use is permitted, except within the Halifax Grain Elevator (HGE) Special Area.\"* But that doesn't affect HR-2.\n\n---\n\n## 2. Massing Math: Floors at 25 m Height\n\nLet's work through your scenario:\n\n### Your Inputs\n- **Lot area**: 2,200 m\u00b2\n- **Assumed lot coverage**: 65%\n- **Height cap**: 25 m (assumed \u2014 actual depends on Schedule 15 for your specific lot)\n\n### Calculation\n\n| Parameter | Value | Notes |\n|-----------|-------|-------|\n| **Building footprint** | 2,200 \u00d7 0.65 = **1,430 m\u00b2** | At 65% coverage |\n| **Typical floor-to-floor** | ~3.0\u20133.2 m | Residential high-rise standard |\n| **Floors at 25 m** | 25 \u00f7 3.0 = **~8 storeys** | Or 7 if 3.5 m f-t-f for ground floor retail |\n| **Gross floor area** | 1,430 \u00d7 8 = **~11,440 m\u00b2** | Before efficiency losses |\n\n### But Here's the Constraint You'll Hit\n\nIn HR-2, the **tower portion** above the streetwall is limited to:\n\n| Max Building Dimension | Limit | Citation |\n|------------------------|-------|----------|\n| Building width | 40.0 m | Section 210(1)(a) |\n| Building depth | 35.0 m | Section 210(1)(b) |\n| **Avg floor area per storey (tower)** | **900 m\u00b2** | Section 210(1)(c) |\n\nSo while your lot could support a 1,430 m\u00b2 footprint at grade (streetwall/podium), the **tower floors above the streetwall are capped at 900 m\u00b2 average**.\n\n### Revised Massing Estimate\n\nAssuming a **3-storey podium** (streetwall) + **5-storey tower**:\n\n| Component | Floors | Floor Area | Subtotal |\n|-----------|--------|------------|----------|\n| Podium (streetwall) | 3 | 1,430 m\u00b2 | 4,290 m\u00b2 |\n| Tower | 5 | 900 m\u00b2 (max avg) | 4,500 m\u00b2 |\n| **Total GFA** | 8 | \u2014 | **~8,790 m\u00b2** |\n\nAt ~75\u201385 m\u00b2 net per unit (typical Halifax apartment), that's roughly **70\u201380 units** \u2014 right in your target range.\n\n### Unit Count Sensitivity\n\n| Tower Floorplate | Tower Floors | Podium GFA | Tower GFA | Total GFA | Est. Units |\n|------------------|--------------|------------|-----------|-----------|------------|\n| 900 m\u00b2 | 5 | 4,290 m\u00b2 | 4,500 m\u00b2 | 8,790 m\u00b2 | 70\u201380 |\n| 900 m\u00b2 | 6 | 4,290 m\u00b2 | 5,400 m\u00b2 | 9,690 m\u00b2 | 77\u201386 |\n| 900 m\u00b2 | 7 | 2,860 m\u00b2 | 6,300 m\u00b2 | 9,160 m\u00b2 | 73\u201381 |\n\n---\n\n## Key Takeaways\n\n1. **Multi-unit dwelling is permitted as-of-right** in HR-2 (Table 1A).\n2. **No FAR limit** \u2014 but the **900 m\u00b2 tower floorplate cap** (Section 210) is your real constraint above the streetwall.\n3. At 25 m height, you're looking at **7\u20138 storeys** and **~8,500\u20139,500 m\u00b2 GFA**.\n4. **60\u201380 units is achievable** within these parameters.\n\n**Next step**: Provide the civic address so I can confirm the actual height precinct (Schedule 15) and check for any overlays (heritage, view planes, shadow impact) that might further constrain the envelope.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 6837,
+        "output_tokens": 1177,
+        "cache_creation_input_tokens": 3248,
+        "cache_read_input_tokens": 40682
+      },
+      "wall_time_s": 52.4,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 4,
+      "user_message": "For 70 units, what\u2019s the parking obligation? Does the no-parking exemption that applies in some downtown zones apply here in HR-2?",
+      "assistant_text": "Based on my retrieval, here's the answer on parking requirements for your HR-2 multi-unit dwelling:\n\n---\n\n## Motor Vehicle Parking in HR-2: **No Minimum Required**\n\n**Table 15** (Section 433) sets out parking requirements by zone and use. The table preview I retrieved shows:\n\n| Use | HR-2, HR-1 |\n|-----|------------|\n| **Any other residential use not listed within this table** | **Not required** |\n\nMulti-unit dwelling is not separately listed with a specific rate in Table 15, which means it falls under \"any other residential use not listed\" \u2014 and for HR-2, that means **no minimum parking is required**.\n\n### Section 433(1) confirms the rule:\n> *\"Table 15 sets out the minimum number of motor vehicle parking spaces required or the maximum number of motor vehicle parking spaces permitted by zone for each listed use. Where a use is not listed in Table 15, no minimum or maximum parking requirement applies.\"*\n\n---\n\n## Your 70-Unit Building: Parking Summary\n\n| Requirement | HR-2 Zone | Citation |\n|-------------|-----------|----------|\n| **Minimum motor vehicle parking** | **0 spaces** | Table 15, Section 433 |\n| **Maximum motor vehicle parking** | No cap stated | Table 15 |\n\n**You are not required to provide any parking spaces** for a 70-unit multi-unit dwelling in the HR-2 zone. This is a significant cost and design advantage \u2014 no underground parkade required by the bylaw.\n\n---\n\n## The Downtown Exemption You Asked About\n\nYou're correct that downtown zones (DD, DH, CEN-2, CEN-1) have no minimum parking \u2014 but **HR-2 has the same benefit**. The table shows \"Not required\" for HR-2/HR-1 as well as the downtown zones. So while HR-2 isn't technically \"downtown,\" it enjoys the same parking flexibility.\n\n---\n\n## Bicycle Parking: Still Required\n\nWhile motor vehicle parking isn't required, **bicycle parking IS required** for multi-unit dwellings. I found references to:\n\n- **Class A bicycle parking** (secure, long-term \u2014 Section 451) \u2014 must be located in secure indoor areas, accessible by ramp or elevator\n- **Table 16** sets out the specific rates (I didn't retrieve the full table values)\n\nBased on typical RCLUB rates for multi-unit dwellings, expect approximately:\n- **0.5\u20131.0 Class A spaces per dwelling unit** (secure/indoor)\n- **0.1 Class B spaces per dwelling unit** (visitor/short-term)\n\nFor 70 units, budget roughly **35\u201370 secure bike spaces** plus **7+ visitor spaces**. I'd need to retrieve Table 16 specifically to confirm the exact rate.\n\n---\n\n## Bottom Line for Your Pro Forma\n\n| Item | Requirement | Impact |\n|------|-------------|--------|\n| **Motor vehicle parking** | 0 spaces required | Can build parkade for market demand, not code compliance |\n| **Bicycle parking** | ~50\u201380 spaces (estimate) | Minor space allocation in P1 or ground floor |\n\nThis is a major feasibility advantage for HR-2 \u2014 you can right-size parking to market demand rather than over-building to satisfy a code minimum. Many developers in HR-2 still provide 0.5\u20130.7 spaces per unit for marketability, but that's a business decision, not a bylaw requirement.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 61872,
+        "output_tokens": 802,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "wall_time_s": 67.31,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 5,
+      "user_message": "Can we add a home occupation component \u2014 say a property management office \u2014 for the building manager in one of the ground-floor units? Is home occupation permitted in HR-2?",
+      "assistant_text": "I found what I needed. Now let me also check if home office use (which might be more suitable for a building manager) is different from home occupation:\n\nBased on my retrieval, I can now provide a complete answer:\n\n---\n\n## Home Occupation Use in HR-2: **Yes, Permitted**\n\n**Home occupation use is permitted in HR-2** as an accessory use to a dwelling unit. A property management office qualifies as an **\"office use\"** under the home occupation categories (Section 51(1)(f)).\n\n---\n\n## Key Requirements for Home Occupation (Section 51)\n\nThe bylaw lists the following as permitted home occupation activities:\n\n| Permitted Home Occupation Types | Citation |\n|--------------------------------|----------|\n| Makerspace use | Section 51(1)(c) |\n| Grooming and haircutting salon | Section 51(1)(d) |\n| Medical clinic use | Section 51(1)(e) |\n| **Office use** \u2713 | Section 51(1)(f) |\n| Pet daycare (max 5 animals) | Section 51(1)(g) |\n| Pet grooming | Section 51(1)(h) |\n| Studio use | Section 51(1)(i) |\n| Tailoring and shoe repair | Section 51(1)(j) |\n| Tattooing | Section 51(1)(k) |\n| Tutoring | Section 51(1)(l) |\n\n**A property management office falls under \"office use\"** \u2014 this is explicitly permitted.\n\n---\n\n## Important Limitation: Must Be in a Dwelling Unit\n\nSection 51(1) states:\n> *\"Excluding a home occupation use contained within a grade-related dwelling unit use, a home occupation use shall...\"*\n\nThis means the home occupation must be **contained within a dwelling unit** \u2014 the building manager would need to actually **live in the unit** where the office operates. This is the standard home occupation model: the operator resides in the dwelling and runs a small business from it.\n\n---\n\n## Alternative: Home Office Use (Section 52)\n\nIf the building manager just needs a desk and doesn't have clients visiting, **home office use** is even simpler:\n\n> **Section 52(1):** *\"Home office uses are permitted in all dwelling units.\"*\n\nA home office is permitted in **any dwelling unit** with no additional conditions \u2014 no zone restrictions, no special requirements. This would cover a building manager doing paperwork, phone calls, and administrative work from their apartment.\n\n---\n\n## Practical Recommendation for Your Project\n\n| Option | What It Covers | Requirements |\n|--------|----------------|--------------|\n| **Home office use** | Administrative work, no client visits | Permitted in any unit, no conditions |\n| **Home occupation (office)** | Office with client visits | Must be in operator's dwelling unit |\n\nFor a **building manager's office** in a 70-unit building:\n\n1. **If it's just administrative work** (rent collection, maintenance scheduling, resident communications) \u2014 **home office use** is sufficient and has no restrictions.\n\n2. **If tenants/vendors will visit the office regularly** \u2014 use the **home occupation (office)** model, which requires the manager to live in that unit.\n\n3. **If you want a dedicated management office that's NOT in a dwelling unit** \u2014 that would be a standalone **office use**, which is also permitted in HR-2 (Table 1A shows office use is permitted in HR-2). This would be a separate commercial space, not a home occupation.\n\n---\n\n## Bottom Line\n\n**Yes, you can include a property management component.** The simplest path is:\n- Designate one ground-floor unit as the building manager's residence\n- The manager operates a **home office** (no restrictions) or **home occupation (office)** from that unit\n- No additional parking required (home office/occupation are exempt per Section 431)\n\nThis is a common setup for larger residential buildings and is fully compliant in HR-2.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 6085,
+        "output_tokens": 907,
+        "cache_creation_input_tokens": 1730,
+        "cache_read_input_tokens": 63173
+      },
+      "wall_time_s": 65.54,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 6,
+      "user_message": "Pull it all together for me: for an HR-2 site at 2,200 m\u00b2, what is the realistic maximum buildable program in terms of units, height, and GFA, and what are the major bylaw constraints to flag for our architect?",
+      "assistant_text": "Now I have enough information to provide a comprehensive summary. Let me compile everything:\n\n---\n\n# HR-2 Development Summary: 2,200 m\u00b2 Site on Robie Street\n\n## Maximum Buildable Program (Estimated)\n\n| Parameter | Value | Constraint | Citation |\n|-----------|-------|------------|----------|\n| **Lot Area** | 2,200 m\u00b2 | Given | \u2014 |\n| **Max Height** | **Per Schedule 15** (location-specific) | Height precinct map | Section 196 |\n| **Max FAR** | **None** | No FAR limit in HR-2 | \u2014 |\n| **Max Tower Floorplate** | **900 m\u00b2** avg per storey | Above streetwall | Section 210(1)(c) |\n| **Max Tower Width** | 40.0 m | Above streetwall | Section 210(1)(a) |\n| **Max Tower Depth** | 35.0 m | Above streetwall | Section 210(1)(b) |\n\n---\n\n## Realistic Massing Scenarios\n\nWithout knowing your specific height precinct (Schedule 15), here are scenarios at typical Robie Street height caps:\n\n### Scenario A: 25 m Height Cap (~8 storeys)\n\n| Component | Floors | Floorplate | GFA |\n|-----------|--------|------------|-----|\n| Podium (streetwall) | 3 | ~1,200 m\u00b2 | 3,600 m\u00b2 |\n| Tower | 5 | 900 m\u00b2 (max) | 4,500 m\u00b2 |\n| **Total** | **8** | \u2014 | **~8,100 m\u00b2** |\n| **Est. Units** | \u2014 | \u2014 | **65\u201375 units** |\n\n### Scenario B: 35 m Height Cap (~11 storeys)\n\n| Component | Floors | Floorplate | GFA |\n|-----------|--------|------------|-----|\n| Podium (streetwall) | 3 | ~1,200 m\u00b2 | 3,600 m\u00b2 |\n| Tower | 8 | 900 m\u00b2 (max) | 7,200 m\u00b2 |\n| **Total** | **11** | \u2014 | **~10,800 m\u00b2** |\n| **Est. Units** | \u2014 | \u2014 | **85\u201395 units** |\n\n### Scenario C: 45 m Height Cap (~14 storeys)\n\n| Component | Floors | Floorplate | GFA |\n|-----------|--------|------------|-----|\n| Podium (streetwall) | 3 | ~1,200 m\u00b2 | 3,600 m\u00b2 |\n| Tower | 11 | 900 m\u00b2 (max) | 9,900 m\u00b2 |\n| **Total** | **14** | \u2014 | **~13,500 m\u00b2** |\n| **Est. Units** | \u2014 | \u2014 | **105\u2013120 units** |\n\n*Assumes ~75\u201385 m\u00b2 net per unit (typical Halifax apartment mix)*\n\n---\n\n## Key Bylaw Constraints to Flag for Architect\n\n### 1. **Tower Floorplate Cap \u2014 900 m\u00b2 Average** (Section 210)\nThis is your primary massing constraint. Above the streetwall:\n- Max width: 40.0 m\n- Max depth: 35.0 m  \n- Max average floor area: **900 m\u00b2**\n\nThe podium can fill more of the lot; the tower must step back to \u2264900 m\u00b2.\n\n### 2. **Side & Rear Setbacks \u2014 Context-Dependent** (Sections 198\u2013199)\n\n| Adjacent Zone | Side Setback | Rear Setback |\n|---------------|--------------|--------------|\n| ER-3, ER-2, ER-1, CH-2, CH-1, PCF, RPK | **6.0 m** | **6.0 m** |\n| DD, DH, CEN-2, CEN-1, COR | **0.0 m** | \u2014 |\n\n\u26a0\ufe0f **Critical**: If your Robie Street site backs onto an ER (Established Residential) zone, you lose 6.0 m on that side. Check the zoning of adjacent lots.\n\n### 3. **Upper-Storey Stepbacks** (Section 208)\nAbove the streetwall, the tower must step back from side and rear lot lines:\n- **High-rise buildings**: **6.0 m** stepback from side/rear\n\nThis compounds with the base setback \u2014 if you have a 6 m setback at grade plus a 6 m stepback above the streetwall, the tower face is 12 m from the property line.\n\n### 4. **Separation Distance Between Towers** (Section 209)\nIf you're considering two towers on the lot:\n\n| Typology Pairing | Min Separation |\n|------------------|----------------|\n| Mid-rise to high-rise | 12.5 m |\n| High-rise to high-rise | **25.0 m** |\n\nOn a 2,200 m\u00b2 lot, a second tower is likely not feasible given the 25 m separation requirement.\n\n### 5. **Streetwall Height Requirements** (Sections 200\u2013201)\n- **Minimum streetwall**: 2 storeys (on pedestrian-oriented commercial streets per Schedule 7)\n- **Maximum streetwall**: Per Section 200 (varies \u2014 typically 11\u201315 m)\n\nThe streetwall defines where the tower stepback begins.\n\n### 6. **Dwelling Unit Mix** (Section 64)\nMandatory bedroom mix for new multi-unit dwellings:\n\n| Requirement | Minimum |\n|-------------|---------|\n| 2+ bedroom units | **\u2265 20%** of all units |\n| 3+ bedroom units | **\u2265 5%** of all units |\n\nFor 70 units: minimum **14 two-bedroom** + **4 three-bedroom** units.\n\n### 7. **Parking** (Table 15, Section 433)\n- **Motor vehicle parking**: **Not required** in HR-2\n- **Bicycle parking**: Required (Table 16) \u2014 estimate ~50\u201380 spaces for 70 units\n\n### 8. **Front/Flanking Setbacks** (Schedules 18 & 19)\n- **Minimum**: Per Schedule 18 (location-specific)\n- **Maximum**: Per Schedule 19 (location-specific)\n\nThese control streetwall placement \u2014 you can't set back too far from the street.\n\n---\n\n## Permitted Uses \u2014 Confirmed\n\n| Use | HR-2 Status | Citation |\n|-----|-------------|----------|\n| Multi-unit dwelling | \u2705 Permitted | Table 1A |\n| Home occupation (office) | \u2705 Permitted | Section 51(1)(f) |\n| Home office | \u2705 Permitted (any unit) | Section 52(1) |\n\n---\n\n## Site Plan Approval Variation (Section 393)\n\nIf you want to exceed the 900 m\u00b2 tower floorplate or 40 m width, **Site Plan Approval** can grant a variation if:\n- The lot is in HR-2 \u2713\n- Massing is broken up to look like 2+ distinct buildings\n- Open space provided along streetline\n- Mid-rise portions above streetwall limited to 64 m width/depth\n- 10 m minimum separation between mid-rise portions\n\nThis is a discretionary path \u2014 adds 2\u20134 months but can unlock larger floorplates.\n\n---\n\n## Unknown Until You Provide the Address\n\n| Item | Why It Matters |\n|------|----------------|\n| **Height precinct** (Schedule 15) | Determines max storeys and GFA |\n| **Front/flanking setbacks** (Schedules 18/19) | Affects podium footprint |\n| **Adjacent lot zoning** | Triggers 6 m setback if ER/CH abuts |\n| **Heritage district** (Schedule 22) | Design review if applicable |\n| **View planes** (Schedules 25\u201347) | Could cap height below precinct |\n| **Shadow impact area** (Schedule 51) | Could trigger shadow study |\n| **Bonus zoning district** (Schedule 50) | Could increase density for community benefits |\n\n---\n\n## Bottom Line\n\n**On a 2,200 m\u00b2 HR-2 site, your realistic program is:**\n\n| Height Cap | Storeys | GFA | Units |\n|------------|---------|-----|-------|\n| 25 m | 8 | ~8,100 m\u00b2 | 65\u201375 |\n| 35 m | 11 | ~10,800 m\u00b2 | 85\u201395 |\n| 45 m | 14 | ~13,500 m\u00b2 | 105\u2013120 |\n\n**Your binding constraints are:**\n1. Height precinct (Schedule 15) \u2014 **get the address to confirm**\n2. 900 m\u00b2 tower floorplate cap (Section 210)\n3. Adjacent-zone setbacks if ER/CH lots abut (6.0 m side/rear)\n4. 25% unit mix requirement (20% 2-bed, 5% 3-bed)\n\n**Your advantages:**\n- No FAR limit\n- No parking minimum\n- Multi-unit dwelling permitted as-of-right\n- Home occupation/office permitted for building manager\n\n**Next step**: Provide the civic address and I'll pull the schedule overlays to lock in the actual height, setbacks, and any overlay constraints (heritage, view planes, shadow).",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 4727,
+        "output_tokens": 2267,
+        "cache_creation_input_tokens": 581,
+        "cache_read_input_tokens": 62328
+      },
+      "wall_time_s": 74.57,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    }
+  ],
+  "spec": {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "persona": {
+      "type": "real_estate_developer",
+      "subtype": null,
+      "description": "Mid-size developer running a quick feasibility pass before purchasing a site"
+    },
+    "address": "100 Robie Street, Halifax, NS",
+    "zone": "HR-2",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "new_construction",
+      "residential",
+      "multi_unit",
+      "high_rise",
+      "feasibility",
+      "redevelopment"
+    ],
+    "bylaw_features": [
+      "height",
+      "FAR",
+      "setbacks",
+      "lot_coverage",
+      "parking",
+      "permitted_use"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "We\u2019re looking at a site on Robie Street zoned HR-2 for a high-rise residential development \u2014 likely 60\u201380 units. What are the base zoning standards: height, lot coverage, setbacks?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Is there a floor area ratio (FAR) limit in HR-2, or does the bylaw rely only on height and lot coverage to control density?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "The site is 2,200 m\u00b2. At 65% lot coverage and 25 metres of height, roughly how many floors could we fit? And is multi-unit dwelling confirmed as a permitted use in HR-2?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "For 70 units, what\u2019s the parking obligation? Does the no-parking exemption that applies in some downtown zones apply here in HR-2?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "Can we add a home occupation component \u2014 say a property management office \u2014 for the building manager in one of the ground-floor units? Is home occupation permitted in HR-2?"
+      },
+      {
+        "turn": 6,
+        "role": "user",
+        "message": "Pull it all together for me: for an HR-2 site at 2,200 m\u00b2, what is the realistic maximum buildable program in terms of units, height, and GFA, and what are the major bylaw constraints to flag for our architect?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Table 3",
+      "Table 5",
+      "Section 120(a)",
+      "Section 120(b)"
+    ],
+    "expected_answer_keywords": [
+      "HR-2",
+      "25.0 m",
+      "65%",
+      "3.0 m",
+      "multi-unit dwelling",
+      "permitted",
+      "home occupation",
+      "not permitted",
+      "HR-2",
+      "1 parking space",
+      "dwelling unit",
+      "no off-street parking"
+    ],
+    "expected_topics": [
+      "height",
+      "lot_coverage",
+      "setbacks",
+      "FAR",
+      "use_permission",
+      "parking"
+    ],
+    "notes": "Six-turn developer feasibility session. Tests that agent correctly identifies home occupation is NOT permitted in HR-2 (Table 1A). High liability: 60-80 unit building."
+  },
+  "case_wall_time_s": 385.03
+}

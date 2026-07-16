@@ -48,14 +48,20 @@ import os
 from typing import Any
 
 from bylaw_retrieval.retrieval.schemas import (
+    AddressProfile,
+    AdjacentZoningProfile,
     AncestorFragment,
+    BylawQueryResponse,
+    CitationLookupResponse,
     CrossReferenceSummary,
     DocumentOutlineResponse,
     DocumentSummary,
     LinkedDataset,
+    PermittedUseResult,
     RetrievalMatch,
     RetrievalResponse,
     TableSummary,
+    ZoneProfile,
 )
 
 
@@ -64,20 +70,22 @@ _TABLE_PREVIEW_CHARS = 500
 _TABLE_PREVIEW_CELLS = 24
 
 
-def _max_matches() -> int:
-    """Cap on matches returned in compact mode.
+def _compact_ceiling() -> int:
+    """Hard ceiling on matches returned in compact mode.
 
-    ``ADVISOR_COMPACT_MAX_MATCHES`` lets ops tune this without a
-    redeploy. The default of 10 covers the common search shape where
-    the request defaults to ``limit=8`` — most calls won't truncate.
-    Higher-limit callers (e.g. an outline-style sweep) get clipped.
+    ``ADVISOR_COMPACT_MAX_MATCHES`` lets ops lower this without a
+    redeploy (e.g. to protect against runaway payloads on constrained
+    infra). Default 50 matches the schema's max ``limit`` value so
+    that a caller requesting ``limit=50`` gets all 50 results rather
+    than being silently clipped. The ceiling is applied as
+    ``min(request.limit, ceiling)`` in ``compact_search_response``.
     """
-    raw = os.environ.get("ADVISOR_COMPACT_MAX_MATCHES", "10")
+    raw = os.environ.get("ADVISOR_COMPACT_MAX_MATCHES", "50")
     try:
         value = int(raw)
     except ValueError:
-        return 10
-    return value if value > 0 else 10
+        return 50
+    return value if value > 0 else 50
 
 
 def _truncate(text: str, max_chars: int) -> str:
@@ -199,6 +207,127 @@ def compact_match(match: RetrievalMatch) -> dict[str, Any]:
     return out
 
 
+def compact_citation_lookup(response: CitationLookupResponse) -> dict[str, Any]:
+    """Project ``CitationLookupResponse`` into a tool_result payload.
+
+    Three shapes the model can dispatch on without re-parsing:
+
+    * Exact hit: ``{"match": {...compact_match...}}``.
+    * No exact hit + suggestions: ``{"match": null, "suggestions":
+      [...], "instruction": "Re-issue lookup_citation with the closest
+      candidate; do not guess further variants."}``.
+    * No exact hit + nothing similar: ``{"match": null, "suggestions":
+      [], "instruction": "Path not present in this document. Switch to
+      search_bylaw_evidence or get_document_outline; do not retry
+      lookup_citation."}``.
+
+    The inline ``instruction`` field is what stops ABS-261's
+    max_iterations thrash — the model would otherwise see ``match: null``
+    and treat it as a transient failure to retry. The instruction
+    converts the empty result into an explicit next action.
+    """
+    out: dict[str, Any] = {}
+    # ABS-279: a structured permitted_use query resolves a single matrix
+    # cell rather than a citation_path. Surface it as its own key (and stop
+    # here) so the model reads the typed permission directly instead of
+    # treating the empty match/suggestions as a miss to retry.
+    if response.permitted_use is not None:
+        out["permitted_use"] = compact_permitted_use(response.permitted_use)
+        return out
+    if response.match is not None:
+        out["match"] = compact_match(response.match)
+        # Even on a hit, surface suggestions if the service decided to
+        # ship them (currently it doesn't, but the schema allows it
+        # and future tuning might use them for disambiguation hints).
+        if response.suggestions:
+            out["suggestions"] = list(response.suggestions)
+        return out
+    out["match"] = None
+    out["suggestions"] = list(response.suggestions)
+    if response.suggestions:
+        out["instruction"] = (
+            "No exact citation_path match. Re-issue lookup_citation with the "
+            "closest candidate from suggestions; do NOT guess further variants."
+        )
+    else:
+        out["instruction"] = (
+            "Citation path not present in this document and no near matches "
+            "found. Switch to search_bylaw_evidence or get_document_outline "
+            "instead of retrying lookup_citation."
+        )
+    return out
+
+
+def compact_permitted_use(result: PermittedUseResult) -> dict[str, Any]:
+    """Project a ``PermittedUseResult`` (ABS-279) to its LLM-essential fields.
+
+    Preserves the typed shape — ``permission`` plus the footnote condition on
+    a conditional cell, or ``indeterminate``/``reason`` on a miss — and drops
+    null fields so the model isn't billed for empty keys. The ``citation`` is
+    collapsed to the same compact citation shape used elsewhere.
+    """
+    out: dict[str, Any] = {"use": result.use, "zone": result.zone}
+    if result.indeterminate:
+        out["indeterminate"] = True
+        if result.reason_code is not None:
+            out["reason_code"] = result.reason_code
+        if result.reason is not None:
+            out["reason"] = result.reason
+        # ABS-351: an unknown-use miss ships the closest real matrix rows plus an
+        # inline next-action so the model re-issues with the intended row rather
+        # than guessing spellings (the ABS-261 anti-thrash pattern, applied to
+        # the permitted-use axis).
+        if result.suggested_uses:
+            out["suggested_uses"] = list(result.suggested_uses)
+            out["instruction"] = (
+                "No matrix row matched this use. Re-issue the permitted_use "
+                "query with the closest label from suggested_uses verbatim; do "
+                "NOT guess further use variants."
+            )
+        return out
+
+    out["permission"] = result.permission
+    if result.footnote_ordinal is not None:
+        out["footnote_ordinal"] = result.footnote_ordinal
+    if result.condition_text is not None:
+        out["condition_text"] = result.condition_text
+    # A conditional cell's verdict hinges on the Table 1A footnote, not on the
+    # use's general operating standards. Without this nudge the writer commits
+    # to "conditional" but paraphrases unrelated operating requirements and
+    # drops the footnote carve-out (observed on TC-005 T5 — ABS-280 AC2). The
+    # inline instruction is the same writer-steering pattern ABS-261 uses for
+    # citation-lookup misses.
+    if result.permission == "conditional":
+        footnote_ref = (
+            f" (footnote {result.footnote_ordinal})"
+            if result.footnote_ordinal is not None
+            else ""
+        )
+        out["instruction"] = (
+            "This use is CONDITIONALLY permitted in this zone. State the verdict "
+            "as conditional — not a plain 'permitted' — and quote the "
+            f"'condition_text' footnote verbatim{footnote_ref} as the governing "
+            "condition on permission. Do not substitute the use's general "
+            "operating standards for this footnote condition."
+        )
+    if result.citation is not None:
+        citation: dict[str, Any] = {}
+        if result.citation.citation_path is not None:
+            citation["citation_path"] = result.citation.citation_path
+        if result.citation.citation_label is not None:
+            citation["citation_label"] = result.citation.citation_label
+        if result.citation.page_start is not None:
+            citation["page_start"] = result.citation.page_start
+        if result.citation.page_end is not None:
+            citation["page_end"] = result.citation.page_end
+        if result.citation.municipality is not None:
+            citation["municipality"] = result.citation.municipality
+        if result.citation.bylaw_name is not None:
+            citation["bylaw_name"] = result.citation.bylaw_name
+        out["citation"] = citation
+    return out
+
+
 def compact_search_response(
     response: RetrievalResponse,
     *,
@@ -212,7 +341,7 @@ def compact_search_response(
     location slot and ``include_*`` toggles) on every tool turn was
     pure cache bloat.
     """
-    cap = max_matches if max_matches is not None else _max_matches()
+    cap = max_matches if max_matches is not None else _compact_ceiling()
     matches = response.matches[:cap]
     out: dict[str, Any] = {
         "total_matches": response.total_matches,
@@ -228,6 +357,76 @@ def compact_search_response(
             "Narrow the query with citation_path_prefix, page range, or "
             "a more specific location to surface them."
         )
+    return out
+
+
+def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
+    """Project a ``ZoneProfile`` to its LLM-essential fields.
+
+    Unlike search/citation payloads, the zone profile is already
+    structured and small. The compact rule here is to PRESERVE the
+    structured shape (FR-2 implementation note: "compact should preserve
+    the structured shape, not flatten to a prose blob") while dropping
+    null fields so the model isn't billed for keys carrying no
+    information. The nested ``dimensions``/``uses``/``parking`` objects
+    keep their field names so the model can read e.g.
+    ``dimensions.max_height_m`` directly.
+    """
+    out: dict[str, Any] = {"zone": profile.zone}
+    if profile.unknown_zone:
+        # Mirror the lookup_citation "miss" convention: an explicit
+        # instruction so the model doesn't retry the same zone code.
+        out["unknown_zone"] = True
+        out["instruction"] = (
+            "Zone not found. Verify the zone code, or use "
+            "search_bylaw_evidence / get_document_outline to discover the "
+            "correct code; do not retry get_zone_profile with the same value."
+        )
+        return out
+
+    if profile.zone_full_name:
+        out["zone_full_name"] = profile.zone_full_name
+    if profile.chapter:
+        out["chapter"] = profile.chapter
+
+    if profile.dimensions is not None:
+        dims = {
+            key: value
+            for key, value in profile.dimensions.model_dump().items()
+            if value is not None
+        }
+        if dims:
+            out["dimensions"] = dims
+
+    if profile.uses is not None and (
+        profile.uses.permitted or profile.uses.not_permitted
+    ):
+        uses: dict[str, Any] = {}
+        if profile.uses.permitted:
+            uses["permitted"] = list(profile.uses.permitted)
+        if profile.uses.not_permitted:
+            uses["not_permitted"] = list(profile.uses.not_permitted)
+        out["uses"] = uses
+
+    if profile.parking is not None:
+        parking = {
+            key: value
+            for key, value in profile.parking.model_dump().items()
+            if value is not None
+        }
+        if parking:
+            out["parking"] = parking
+
+    if profile.citations:
+        out["citations"] = [
+            {
+                "citation_path": c.citation_path,
+                **({"backs": list(c.backs)} if c.backs else {}),
+            }
+            for c in profile.citations
+        ]
+    if profile.confidence:
+        out["confidence"] = dict(profile.confidence)
     return out
 
 
@@ -257,3 +456,191 @@ def compact_outline(outline: DocumentOutlineResponse) -> dict[str, Any]:
 
 def compact_document_list(docs: list[DocumentSummary]) -> dict[str, Any]:
     return {"documents": [compact_document_summary(d) for d in docs]}
+
+
+def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
+    """Project ``AddressProfile`` to the fields the LLM grounds an answer on.
+
+    Drops null facets and the per-overlay ``attributes`` blob — the headline
+    value already lives on the dedicated field / overlay ``label``, and the
+    raw canonical attributes duplicate it byte-for-byte on every replayed
+    turn. The ``citations`` list is kept whole (it's the grounding contract),
+    with empty fields elided.
+    """
+    out: dict[str, Any] = {"address": profile.address}
+    if profile.unresolvable:
+        out["unresolvable"] = True
+        out["instruction"] = (
+            "Address could not be resolved spatially. Fall back to "
+            "search_bylaw_evidence with the location slot, or ask the user "
+            "to verify the address."
+        )
+        return out
+
+    for field in (
+        "civic_number",
+        "street",
+        "pid",
+        "zone",
+        "zone_chapter",
+        "height_precinct",
+        "far_precinct",
+    ):
+        value = getattr(profile, field)
+        if value is not None:
+            out[field] = value
+    if profile.heritage is not None:
+        out["heritage"] = profile.heritage
+    if profile.bonus_zoning_eligible is not None:
+        out["bonus_zoning_eligible"] = profile.bonus_zoning_eligible
+    if profile.overlays:
+        out["overlays"] = [
+            {
+                "kind": o.kind,
+                "dataset_name": o.dataset_name,
+                **({"label": o.label} if o.label else {}),
+                **({"citation": o.citation} if o.citation else {}),
+            }
+            for o in profile.overlays
+        ]
+    if profile.citations:
+        out["citations"] = [
+            {
+                k: v
+                for k, v in {
+                    "backs": c.backs,
+                    "citation_path": c.citation_path,
+                    "citation_label": c.citation_label,
+                    "document_id": c.document_id,
+                    "municipality": c.municipality,
+                    "bylaw_name": c.bylaw_name,
+                }.items()
+                if v is not None
+            }
+            for c in profile.citations
+        ]
+    return out
+
+
+def compact_adjacent_zoning(profile: AdjacentZoningProfile) -> dict[str, Any]:
+    """Project ``AdjacentZoningProfile`` to the fields the LLM grounds on (ABS-375).
+
+    Keeps the subject zone, the per-neighbour (pid, zone, direction), the
+    distinct-zone summary, and one citation. Elides null fields so the
+    replayed-every-turn tool_result stays small.
+    """
+    out: dict[str, Any] = {"address": profile.address}
+    if profile.unresolvable:
+        out["unresolvable"] = True
+        out["instruction"] = (
+            "Address could not be resolved spatially, so abutting parcels "
+            "could not be found. Fall back to search_bylaw_evidence or ask "
+            "the user to verify the address."
+        )
+        return out
+    if profile.subject_pid is not None:
+        out["subject_pid"] = profile.subject_pid
+    if profile.subject_zone is not None:
+        out["subject_zone"] = profile.subject_zone
+    if profile.neighbours:
+        out["neighbours"] = [
+            {
+                k: v
+                for k, v in {
+                    "pid": n.pid,
+                    "zone": n.zone,
+                    "direction": n.direction,
+                }.items()
+                if v is not None
+            }
+            for n in profile.neighbours
+        ]
+    if profile.distinct_neighbour_zones:
+        out["distinct_neighbour_zones"] = profile.distinct_neighbour_zones
+    if profile.citation is not None:
+        c = profile.citation
+        out["citation"] = {
+            k: v
+            for k, v in {
+                "backs": c.backs,
+                "citation_path": c.citation_path,
+                "citation_label": c.citation_label,
+                "document_id": c.document_id,
+                "municipality": c.municipality,
+                "bylaw_name": c.bylaw_name,
+            }.items()
+            if v is not None
+        }
+    if profile.note is not None:
+        out["note"] = profile.note
+    return out
+
+
+def compact_bylaw_query(response: BylawQueryResponse) -> dict[str, Any]:
+    """Project a ``BylawQueryResponse`` to its LLM-essential fields (ABS-274).
+
+    Reuses ``compact_zone_profile`` / ``compact_address_profile`` for the
+    composed sub-DTOs so the projection rules stay in one place, and elides
+    null facets. An unrecognised intent carries an explicit fall-back
+    instruction (mirroring the lookup_citation / unknown-zone convention) so
+    the model pivots to the thin tools without re-issuing the same intent.
+    """
+    out: dict[str, Any] = {"intent": response.intent}
+    if response.unrecognized_intent:
+        out["unrecognized_intent"] = True
+        out["suggested_tools"] = list(response.suggested_tools)
+        out["instruction"] = (
+            "Intent not recognised. Use one of the suggested_tools (thin "
+            "tools) to answer this question; do not retry bylaw_query with "
+            "the same intent."
+        )
+        return out
+
+    if response.suggested_tools:
+        # Recognised intent but a required slot (zone/address) was missing.
+        out["suggested_tools"] = list(response.suggested_tools)
+        out["instruction"] = (
+            "This intent needs a zone or address. Supply it, or fall back to "
+            "the suggested_tools."
+        )
+        return out
+
+    if response.zone_profile is not None:
+        out["zone_profile"] = compact_zone_profile(response.zone_profile)
+    if response.address_profile is not None:
+        out["address_profile"] = compact_address_profile(response.address_profile)
+    if response.conformance_check is not None:
+        check = response.conformance_check
+        out["conformance_check"] = {
+            "zone": check.zone,
+            "overall": check.overall,
+            "results": [
+                {
+                    k: v
+                    for k, v in {
+                        "attribute": r.attribute,
+                        "proposed": r.proposed,
+                        "limit": r.limit,
+                        "comparison": r.comparison,
+                        "status": r.status,
+                        "note": r.note,
+                    }.items()
+                    if v is not None
+                }
+                for r in check.results
+            ],
+        }
+    if response.citations:
+        out["citations"] = [
+            {
+                k: v
+                for k, v in {
+                    "backs": c.backs,
+                    "citation_path": c.citation_path,
+                    "citation_label": c.citation_label,
+                }.items()
+                if v
+            }
+            for c in response.citations
+        ]
+    return out

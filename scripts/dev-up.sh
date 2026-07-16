@@ -7,9 +7,10 @@
 #   ANTHROPIC_API_KEY  — required; passed through to the advisor backend
 #   DEV_FASTAPI_PORT   — default 8000
 #   DEV_WEB_PORT       — default 3000
+#   DEV_PG_PORT        — host port for the Postgres container (default 5432)
 #   DEV_USER_ID        — default demo-user-1 (forwarded as ADVISOR_DEMO_USER_ID)
 #   DATABASE_URL       — default from .env or
-#                        postgresql+psycopg://layer1:layer1@localhost:5432/layer1
+#                        postgresql+psycopg://layer1:layer1@localhost:${DEV_PG_PORT}/layer1
 #   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
 #   CLERK_SECRET_KEY   — optional; when present (in shell env or
 #                        web/.env.local), enables real Clerk sign-in.
@@ -63,7 +64,10 @@ if [[ -f web/.env.local ]]; then
   source web/.env.local
   set +a
 fi
-DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://layer1:layer1@localhost:5432/layer1}"
+DEV_PG_PORT="${DEV_PG_PORT:-5432}"
+export POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-$DEV_PG_PORT}"
+
+DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://layer1:layer1@localhost:${DEV_PG_PORT}/layer1}"
 export DATABASE_URL
 
 docker_compose() {

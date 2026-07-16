@@ -1,12 +1,11 @@
-// Working address input on the home page. Submitting any input — typed or
-// chip — runs a 5-step "thinking" sequence at 480ms each (with jitter),
-// then resolves to a verdict card. Lookup matches the address against the
-// known SAMPLE_READINGS by leading characters; anything else falls through
-// to the first sample.
+// Home page "Try It" demo. Only the three pre-recorded SAMPLE_READINGS are
+// offered — no free-text input. This prevents the widget from echoing
+// arbitrary or nonsense addresses with a result that looks live.
 
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { HighlightWord } from "@/components/highlight-word";
 import { Mono } from "@/components/mono";
 import { Btn } from "@/components/btn";
@@ -15,8 +14,8 @@ import { SAMPLE_READINGS, type SampleReading } from "@/lib/mock";
 const STEPS = [
   "Geocoding parcel…",
   "Fetching HRM Land Use By-law…",
-  "Reading § 9 — Established Residential…",
-  "Cross-checking § 4.3 frontage minimums…",
+  "Identifying applicable zone standards…",
+  "Cross-checking dimensional requirements…",
   "Compiling answer…",
 ];
 
@@ -25,25 +24,20 @@ type State = "idle" | "thinking" | "done";
 type ResolvedReading = SampleReading & { addr: string };
 
 export function AddressDemo() {
-  const [val, setVal] = useState("");
+  const router = useRouter();
   const [state, setState] = useState<State>("idle");
   const [reading, setReading] = useState<ResolvedReading | null>(null);
   const [step, setStep] = useState(0);
 
-  const submit = (presetAddr?: string) => {
-    const a = (presetAddr ?? val).trim();
-    if (!a) return;
+  const submit = (presetAddr: string) => {
+    const r = SAMPLE_READINGS.find((s) => s.addr === presetAddr) ?? SAMPLE_READINGS[0];
     setState("thinking");
     setStep(0);
-    const r =
-      SAMPLE_READINGS.find((s) =>
-        a.toLowerCase().includes(s.addr.toLowerCase().slice(0, 5)),
-      ) ?? SAMPLE_READINGS[0];
     let i = 0;
     const tick = () => {
       i += 1;
       if (i >= STEPS.length) {
-        setReading({ ...r, addr: a });
+        setReading({ ...r, addr: presetAddr });
         setState("done");
       } else {
         setStep(i);
@@ -56,7 +50,6 @@ export function AddressDemo() {
   const reset = () => {
     setState("idle");
     setReading(null);
-    setVal("");
     setStep(0);
   };
 
@@ -66,7 +59,7 @@ export function AddressDemo() {
       style={{ border: "1.5px solid var(--text)" }}
     >
       <div className="flex items-center justify-between">
-        <Mono muted>TRY IT · HRM ADDRESSES</Mono>
+        <Mono muted>TRY IT · RECORDED SAMPLES</Mono>
         {state !== "idle" && (
           <button
             onClick={reset}
@@ -79,48 +72,27 @@ export function AddressDemo() {
       </div>
 
       {state === "idle" && (
-        <>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              submit();
-            }}
-            className="flex"
-            style={{ border: "1.5px solid var(--text)" }}
-          >
-            <input
-              value={val}
-              onChange={(e) => setVal(e.target.value)}
-              placeholder="e.g. 5184 Morris St, Halifax"
-              className="flex-1 min-w-0 bg-surface text-text font-sans text-[14px] sm:text-[15px] outline-none px-3 sm:px-4 py-3 sm:py-3.5 tracking-[-0.005em]"
-            />
-            <button
-              type="submit"
-              className="bg-text text-surface font-sans font-bold px-4 sm:px-5 cursor-pointer text-[13px] sm:text-[14px] tracking-[-0.01em]"
-            >
-              Read it →
-            </button>
-          </form>
-          <div className="flex gap-1.5 flex-wrap mt-1">
-            <span className="text-[11.5px] text-text-muted self-center mr-1">
-              or try:
-            </span>
+        <div className="flex flex-col gap-2.5">
+          <p className="text-[12px] text-text-muted font-mono tracking-[0.03em]">
+            SELECT A SAMPLE ADDRESS TO SEE A RECORDED READING:
+          </p>
+          <div className="flex gap-2 flex-wrap">
             {SAMPLE_READINGS.map((s) => (
               <button
                 key={s.addr}
                 onClick={() => submit(s.addr)}
-                className="bg-transparent border border-hair text-text font-mono cursor-pointer"
+                className="bg-transparent border border-hair text-text font-mono cursor-pointer hover:bg-surface transition-colors"
                 style={{
-                  fontSize: 10.5,
+                  fontSize: 11,
                   letterSpacing: "0.04em",
-                  padding: "5px 9px",
+                  padding: "7px 12px",
                 }}
               >
                 {s.addr}
               </button>
             ))}
           </div>
-        </>
+        </div>
       )}
 
       {state === "thinking" && (
@@ -166,7 +138,7 @@ export function AddressDemo() {
             <Mono muted>
               {reading.addr.toUpperCase()} · {reading.zone}
             </Mono>
-            <Mono accent>VERIFIED · 0.93 CONF</Mono>
+            <Mono muted>SAMPLE READING</Mono>
           </div>
           <div className="text-[14px] text-text-muted italic">
             {reading.q}
@@ -179,7 +151,18 @@ export function AddressDemo() {
           </div>
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2.5 sm:gap-2 pt-2 border-t border-hair">
             <Mono muted>SOURCE · HRM LUB {reading.cite}</Mono>
-            <Btn variant="ghost" size="sm" className="self-start sm:self-auto">
+            <Btn
+              variant="ghost"
+              size="sm"
+              className="self-start sm:self-auto"
+              onClick={() => {
+                const params = new URLSearchParams({
+                  anchor_label: reading.addr,
+                  first_message: reading.q,
+                });
+                router.push(`/cases/new?${params.toString()}`);
+              }}
+            >
               Open full reading →
             </Btn>
           </div>

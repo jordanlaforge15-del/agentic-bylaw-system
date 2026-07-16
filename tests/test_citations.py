@@ -65,3 +65,70 @@ def test_address_heading_is_not_parsed_as_numeric_section():
 def test_measurement_value_is_not_a_citation_label():
     assert parse_citation_label("16M TEMPORARY CONSTRUCTION USES PERMITTED") is not None
     assert parse_citation_label("40 ANGLE") is not None
+
+
+def test_subsection_label_with_caps_suffix_no_space():
+    # ABS-116: 62EE(1) without space — must produce distinct subsection label
+    match = parse_citation_label("62EE(1) No structures shall be permitted")
+    assert match is not None
+    assert match.label == "62EE(1)"
+    assert match.fragment_type == FragmentType.SUBSECTION
+
+
+def test_subsection_label_with_caps_suffix_spaced():
+    # ABS-116: PDF sometimes emits a space between the base section and the
+    # parenthetical subsection number; the label must still round-trip as 62EE(1).
+    match = parse_citation_label("62EE (1) No structures shall be permitted")
+    assert match is not None
+    assert match.label == "62EE(1)"
+    assert match.fragment_type == FragmentType.SUBSECTION
+
+
+def test_subsection_label_digit_letter_digit_base():
+    # ABS-116: base label with pattern digit+letter+digit (e.g. 34B22) must be
+    # captured as a single token rather than stopping at the first letter run.
+    match = parse_citation_label("34B22(2)(a) Some provision")
+    assert match is not None
+    assert match.label == "34B22(2)(a)"
+    assert match.fragment_type == FragmentType.CLAUSE
+
+
+def test_subsection_label_simple_numeric_paren():
+    # Regression: 5(1)(a) must continue to work correctly.
+    match = parse_citation_label("5(1)(a) Permitted uses")
+    assert match is not None
+    assert match.label == "5(1)(a)"
+    assert match.fragment_type == FragmentType.CLAUSE
+
+
+def test_parse_roman_numeral_part_labels():
+    # ABS-264: [A-Z] only matched a single letter, so "Part IV" was captured as
+    # "Part I" with the remaining characters absorbed into the title. The fix
+    # uses [IVXLCDM]+ to greedily match multi-character Roman numerals.
+    cases = [
+        ("Part I General Provisions", "Part I"),
+        ("Part II Permitted Uses", "Part II"),
+        ("Part III Zones", "Part III"),
+        ("Part IV: Lot Requirements", "Part IV"),
+        ("Part V Parking", "Part V"),
+        ("Part VI Signs", "Part VI"),
+        ("Part VII Landscaping", "Part VII"),
+        ("Part VIII Lighting", "Part VIII"),
+        ("Part IX Noise", "Part IX"),
+        ("Part X Definitions", "Part X"),
+        ("Part XI Enforcement", "Part XI"),
+        ("Part XII Amendments", "Part XII"),
+        ("Part XIII Variances", "Part XIII"),
+        ("Part XIV Appeals", "Part XIV"),
+        ("Part XV Penalties", "Part XV"),
+        ("Part XVI Repeal", "Part XVI"),
+        ("Part XVII: Definitions", "Part XVII"),
+        ("Part XVIII Special Provisions", "Part XVIII"),
+        ("Part XIX Transitional", "Part XIX"),
+        ("Part XX Coming into Force", "Part XX"),
+    ]
+    for text, expected_label in cases:
+        m = parse_citation_label(text)
+        assert m is not None, f"Expected match for {text!r}"
+        assert m.label == expected_label, f"Got {m.label!r}, expected {expected_label!r} for {text!r}"
+        assert m.fragment_type == FragmentType.PART, f"Expected PART for {text!r}, got {m.fragment_type}"

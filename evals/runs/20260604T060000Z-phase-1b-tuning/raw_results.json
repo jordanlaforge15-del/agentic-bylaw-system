@@ -1,0 +1,377 @@
+[
+  {
+    "status": "ok",
+    "limit": 5,
+    "model": "claude-haiku-4-5",
+    "turns": [
+      {
+        "turn": 1,
+        "iterations": 3,
+        "tool_calls": 2,
+        "stop_reason": "end_turn",
+        "wall_time_s": 12.0,
+        "cost_usd": 0.011608,
+        "input_tokens": 11085,
+        "output_tokens": 685,
+        "assistant_text_chars": 1605
+      },
+      {
+        "turn": 2,
+        "iterations": 2,
+        "tool_calls": 2,
+        "stop_reason": "end_turn",
+        "wall_time_s": 6.8,
+        "cost_usd": 0.009058,
+        "input_tokens": 8352,
+        "output_tokens": 594,
+        "assistant_text_chars": 1656
+      },
+      {
+        "turn": 3,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 5.7,
+        "cost_usd": 0.005563,
+        "input_tokens": 4354,
+        "output_tokens": 520,
+        "assistant_text_chars": 1720
+      },
+      {
+        "turn": 4,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 6.3,
+        "cost_usd": 0.006083,
+        "input_tokens": 4909,
+        "output_tokens": 539,
+        "assistant_text_chars": 1964
+      },
+      {
+        "turn": 5,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 9.8,
+        "cost_usd": 0.007586,
+        "input_tokens": 5487,
+        "output_tokens": 799,
+        "assistant_text_chars": 3188
+      },
+      {
+        "turn": 6,
+        "iterations": 2,
+        "tool_calls": 2,
+        "stop_reason": "max_tokens",
+        "wall_time_s": 13.8,
+        "cost_usd": 0.015694,
+        "input_tokens": 13348,
+        "output_tokens": 1254,
+        "assistant_text_chars": 3133
+      }
+    ],
+    "total_cost_usd": 0.055592,
+    "total_wall_s": 54.4
+  },
+  {
+    "status": "ok",
+    "limit": 10,
+    "model": "claude-haiku-4-5",
+    "turns": [
+      {
+        "turn": 1,
+        "iterations": 3,
+        "tool_calls": 2,
+        "stop_reason": "end_turn",
+        "wall_time_s": 6.8,
+        "cost_usd": 0.011186,
+        "input_tokens": 11083,
+        "output_tokens": 580,
+        "assistant_text_chars": 1271
+      },
+      {
+        "turn": 2,
+        "iterations": 2,
+        "tool_calls": 2,
+        "stop_reason": "end_turn",
+        "wall_time_s": 7.0,
+        "cost_usd": 0.009064,
+        "input_tokens": 8220,
+        "output_tokens": 622,
+        "assistant_text_chars": 1389
+      },
+      {
+        "turn": 3,
+        "iterations": 2,
+        "tool_calls": 1,
+        "stop_reason": "end_turn",
+        "wall_time_s": 7.8,
+        "cost_usd": 0.009455,
+        "input_tokens": 8629,
+        "output_tokens": 638,
+        "assistant_text_chars": 1721
+      },
+      {
+        "turn": 4,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 6.2,
+        "cost_usd": 0.005755,
+        "input_tokens": 4744,
+        "output_tokens": 490,
+        "assistant_text_chars": 1836
+      },
+      {
+        "turn": 5,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 6.5,
+        "cost_usd": 0.006606,
+        "input_tokens": 5273,
+        "output_tokens": 597,
+        "assistant_text_chars": 2483
+      },
+      {
+        "turn": 6,
+        "iterations": 2,
+        "tool_calls": 4,
+        "stop_reason": "max_tokens",
+        "wall_time_s": 14.2,
+        "cost_usd": 0.016745,
+        "input_tokens": 13226,
+        "output_tokens": 1541,
+        "assistant_text_chars": 2704
+      }
+    ],
+    "total_cost_usd": 0.058811,
+    "total_wall_s": 48.5
+  },
+  {
+    "status": "ok",
+    "limit": 15,
+    "model": "claude-haiku-4-5",
+    "turns": [
+      {
+        "turn": 1,
+        "iterations": 3,
+        "tool_calls": 2,
+        "stop_reason": "end_turn",
+        "wall_time_s": 7.6,
+        "cost_usd": 0.011014,
+        "input_tokens": 11102,
+        "output_tokens": 533,
+        "assistant_text_chars": 1146
+      },
+      {
+        "turn": 2,
+        "iterations": 2,
+        "tool_calls": 1,
+        "stop_reason": "end_turn",
+        "wall_time_s": 5.1,
+        "cost_usd": 0.007841,
+        "input_tokens": 7726,
+        "output_tokens": 415,
+        "assistant_text_chars": 1243
+      },
+      {
+        "turn": 3,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 6.1,
+        "cost_usd": 0.004993,
+        "input_tokens": 4066,
+        "output_tokens": 435,
+        "assistant_text_chars": 1432
+      },
+      {
+        "turn": 4,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 4.2,
+        "cost_usd": 0.005081,
+        "input_tokens": 4536,
+        "output_tokens": 363,
+        "assistant_text_chars": 1322
+      },
+      {
+        "turn": 5,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 4.6,
+        "cost_usd": 0.005334,
+        "input_tokens": 4938,
+        "output_tokens": 346,
+        "assistant_text_chars": 1527
+      },
+      {
+        "turn": 6,
+        "iterations": 2,
+        "tool_calls": 4,
+        "stop_reason": "end_turn",
+        "wall_time_s": 9.7,
+        "cost_usd": 0.013306,
+        "input_tokens": 12023,
+        "output_tokens": 922,
+        "assistant_text_chars": 1594
+      }
+    ],
+    "total_cost_usd": 0.047569,
+    "total_wall_s": 37.3
+  },
+  {
+    "status": "ok",
+    "limit": 20,
+    "model": "claude-haiku-4-5",
+    "turns": [
+      {
+        "turn": 1,
+        "iterations": 3,
+        "tool_calls": 2,
+        "stop_reason": "end_turn",
+        "wall_time_s": 7.2,
+        "cost_usd": 0.011083,
+        "input_tokens": 11129,
+        "output_tokens": 545,
+        "assistant_text_chars": 1200
+      },
+      {
+        "turn": 2,
+        "iterations": 2,
+        "tool_calls": 1,
+        "stop_reason": "end_turn",
+        "wall_time_s": 5.7,
+        "cost_usd": 0.007982,
+        "input_tokens": 7747,
+        "output_tokens": 446,
+        "assistant_text_chars": 1370
+      },
+      {
+        "turn": 3,
+        "iterations": 2,
+        "tool_calls": 1,
+        "stop_reason": "end_turn",
+        "wall_time_s": 6.0,
+        "cost_usd": 0.008913,
+        "input_tokens": 8516,
+        "output_tokens": 525,
+        "assistant_text_chars": 1298
+      },
+      {
+        "turn": 4,
+        "iterations": 2,
+        "tool_calls": 1,
+        "stop_reason": "end_turn",
+        "wall_time_s": 5.6,
+        "cost_usd": 0.009346,
+        "input_tokens": 9428,
+        "output_tokens": 451,
+        "assistant_text_chars": 1283
+      },
+      {
+        "turn": 5,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 5.5,
+        "cost_usd": 0.005629,
+        "input_tokens": 4956,
+        "output_tokens": 416,
+        "assistant_text_chars": 1661
+      },
+      {
+        "turn": 6,
+        "iterations": 2,
+        "tool_calls": 1,
+        "stop_reason": "end_turn",
+        "wall_time_s": 12.8,
+        "cost_usd": 0.013294,
+        "input_tokens": 11162,
+        "output_tokens": 1091,
+        "assistant_text_chars": 3187
+      }
+    ],
+    "total_cost_usd": 0.056247,
+    "total_wall_s": 42.8
+  },
+  {
+    "status": "ok",
+    "limit": 30,
+    "model": "claude-haiku-4-5",
+    "turns": [
+      {
+        "turn": 1,
+        "iterations": 3,
+        "tool_calls": 2,
+        "stop_reason": "end_turn",
+        "wall_time_s": 8.2,
+        "cost_usd": 0.011255,
+        "input_tokens": 11064,
+        "output_tokens": 601,
+        "assistant_text_chars": 1579
+      },
+      {
+        "turn": 2,
+        "iterations": 2,
+        "tool_calls": 2,
+        "stop_reason": "end_turn",
+        "wall_time_s": 6.1,
+        "cost_usd": 0.008606,
+        "input_tokens": 8228,
+        "output_tokens": 506,
+        "assistant_text_chars": 1316
+      },
+      {
+        "turn": 3,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 5.5,
+        "cost_usd": 0.005326,
+        "input_tokens": 4198,
+        "output_tokens": 492,
+        "assistant_text_chars": 1526
+      },
+      {
+        "turn": 4,
+        "iterations": 2,
+        "tool_calls": 1,
+        "stop_reason": "end_turn",
+        "wall_time_s": 9.5,
+        "cost_usd": 0.009971,
+        "input_tokens": 9764,
+        "output_tokens": 540,
+        "assistant_text_chars": 1663
+      },
+      {
+        "turn": 5,
+        "iterations": 1,
+        "tool_calls": 0,
+        "stop_reason": "end_turn",
+        "wall_time_s": 5.9,
+        "cost_usd": 0.005862,
+        "input_tokens": 5192,
+        "output_tokens": 427,
+        "assistant_text_chars": 1812
+      },
+      {
+        "turn": 6,
+        "iterations": 2,
+        "tool_calls": 1,
+        "stop_reason": "end_turn",
+        "wall_time_s": 13.2,
+        "cost_usd": 0.013758,
+        "input_tokens": 11667,
+        "output_tokens": 1106,
+        "assistant_text_chars": 3070
+      }
+    ],
+    "total_cost_usd": 0.054778,
+    "total_wall_s": 48.4
+  }
+]

@@ -1,0 +1,194 @@
+{
+  "id": "TC-006",
+  "title": "Developer mixed-use tower in CEN-1 with height overlay",
+  "zone": "CEN-1",
+  "persona": {
+    "type": "real_estate_developer",
+    "subtype": null,
+    "description": "Large-scale developer working with a consultant team on a downtown Halifax mixed-use tower"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "1505 Barrington Street, Halifax, NS",
+  "session_id": "84d59ff5-7287-41c3-ab35-52a28e3069a2",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "We\u2019re proposing a mixed-use tower at 1505 Barrington Street in downtown Halifax \u2014 CEN-1 zone. The program is residential units on the upper floors with retail at grade. Is multi-unit dwelling a permitted use in CEN-1, and is commercial/retail included?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "What are the setback requirements in CEN-1? We\u2019re trying to maximize the building envelope right to the street edge.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.35,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "What\u2019s the maximum lot coverage in CEN-1? And is the building height governed by Table 5 or by Schedule 15?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.93,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "Is there also a floor area ratio limit that applies in CEN-1, and what schedule governs it?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.16,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 5,
+      "user_message": "Our site is near some older heritage buildings on Barrington Street. Is there a heritage overlay we need to worry about, and how does it interact with our development permit?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 6,
+      "user_message": "Given that this is CEN-1, do we need to provide off-street parking for the residential units?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.88,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-006",
+    "title": "Developer mixed-use tower in CEN-1 with height overlay",
+    "persona": {
+      "type": "real_estate_developer",
+      "subtype": null,
+      "description": "Large-scale developer working with a consultant team on a downtown Halifax mixed-use tower"
+    },
+    "address": "1505 Barrington Street, Halifax, NS",
+    "zone": "CEN-1",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "new_construction",
+      "mixed_use",
+      "commercial",
+      "residential",
+      "downtown",
+      "redevelopment",
+      "overlay",
+      "high_rise"
+    ],
+    "bylaw_features": [
+      "FAR",
+      "height_overlay",
+      "setbacks",
+      "lot_coverage",
+      "parking",
+      "permitted_use",
+      "heritage_overlay"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "We\u2019re proposing a mixed-use tower at 1505 Barrington Street in downtown Halifax \u2014 CEN-1 zone. The program is residential units on the upper floors with retail at grade. Is multi-unit dwelling a permitted use in CEN-1, and is commercial/retail included?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "What are the setback requirements in CEN-1? We\u2019re trying to maximize the building envelope right to the street edge."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "What\u2019s the maximum lot coverage in CEN-1? And is the building height governed by Table 5 or by Schedule 15?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "Is there also a floor area ratio limit that applies in CEN-1, and what schedule governs it?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "Our site is near some older heritage buildings on Barrington Street. Is there a heritage overlay we need to worry about, and how does it interact with our development permit?"
+      },
+      {
+        "turn": 6,
+        "role": "user",
+        "message": "Given that this is CEN-1, do we need to provide off-street parking for the residential units?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1B",
+      "Table 4",
+      "Table 5",
+      "Section 111",
+      "Section 112",
+      "Section 110",
+      "Section 120(b)",
+      "Schedule 15",
+      "Schedule 17",
+      "Schedule 22"
+    ],
+    "expected_answer_keywords": [
+      "CEN-1",
+      "permitted",
+      "multi-unit dwelling",
+      "Schedule 15",
+      "Schedule 17",
+      "floor area ratio",
+      "heritage",
+      "heritage conservation district",
+      "not required",
+      "0.0 m"
+    ],
+    "expected_topics": [
+      "use_permission",
+      "setbacks",
+      "lot_coverage",
+      "height_overlay",
+      "FAR_overlay",
+      "heritage_overlay",
+      "parking"
+    ],
+    "notes": "Six-turn complex downtown scenario. Tests three overlay interactions (height, FAR, heritage) plus base zone standards. Highest liability: 100+ unit high-rise in heritage area."
+  },
+  "case_wall_time_s": 2.67
+}

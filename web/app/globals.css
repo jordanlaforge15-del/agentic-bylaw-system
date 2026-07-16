@@ -146,6 +146,16 @@ body {
   border-radius: 50%;
 }
 
+.abs-ellipsis-dot {
+  animation: abs-pulse 1.2s ease-in-out infinite;
+}
+.abs-ellipsis-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.abs-ellipsis-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
 .abs-cursor {
   display: inline-block;
   animation: abs-blink 0.9s steps(2) infinite;

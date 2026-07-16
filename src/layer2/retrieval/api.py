@@ -6,7 +6,14 @@ from typing import Any
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from layer1.db.base import PageBlock, SourceFragment, SourceTable, SourceTableCell
+from layer1.db.base import (
+    PageBlock,
+    SourceFragment,
+    SourceTable,
+    SourceTableCell,
+    TableSemanticProfile,
+)
+from layer1.semantic.permission_markers import PERMISSION_MATRIX_PROFILE
 from layer2.models.enums import RetrievalChannel, SourceType
 from layer2.models.schemas import CandidateFragment, RetrievalOperation, RetrievalPlan
 from layer2.retrieval.planner import STANDARD_ALIASES, normalize_zone_code
@@ -812,10 +819,13 @@ def _structured_permission_table_candidates(
     use_name: str,
     zone: str | None = None,
 ) -> list[CandidateFragment]:
+    # ABS-281: detect permission matrices by their semantic profile, not the
+    # (empty) caption.
     tables = (
         session.query(SourceTable)
+        .join(TableSemanticProfile, TableSemanticProfile.table_id == SourceTable.id)
         .filter(SourceTable.document_id == document_id)
-        .filter(SourceTable.caption.ilike("Table 1%Permitted uses by zone%"))
+        .filter(TableSemanticProfile.profile_type == PERMISSION_MATRIX_PROFILE)
         .order_by(SourceTable.page_start, SourceTable.id)
         .all()
     )
@@ -845,6 +855,12 @@ def _structured_permission_table_candidates(
             values = []
             matched_zone = False
             for cell in ordered[1:]:
+                # ABS-278 Defect C: a cell flagged as header-bleed holds a zone
+                # code that spilled out of the header band, not a permission
+                # value — skip it so the zone code doesn't leak into candidate
+                # text as if it were a marker.
+                if (cell.metadata_json or {}).get("header_bleed"):
+                    continue
                 header = headers.get(cell.col_index, f"column {cell.col_index}")
                 if zone_forms and not _contains_any_zone(header, zone_forms):
                     continue

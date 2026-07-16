@@ -22,6 +22,14 @@
 
 import { defineConfig, devices } from "@playwright/test";
 
+// Default the general-feedback gate flag to "true" in the e2e stack.
+// The Next.js server gets it via e2e-up.sh; this sets it for the Playwright
+// runner process so specs that branch on this env var behave consistently
+// regardless of whether they're invoked via `make e2e` or directly.
+if (!process.env.NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED) {
+  process.env.NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED = "true";
+}
+
 const BASE_URL = process.env.E2E_BASE_URL || "http://localhost:3001";
 
 const isCI = !!process.env.CI;
@@ -34,13 +42,20 @@ export default defineConfig({
   // Tests don't share state; parallelizing across files is safe and
   // the DB seed gives the demo user enough credits for concurrent
   // cases. If we ever introduce per-user contention, drop this to 1.
+  //
+  // Local workers capped at 4 (not auto/unlimited): WebKit projects hold
+  // an HTTP/1.1 SSE connection open per turn, and Safari's per-origin
+  // connection cap is ~6. With >4 concurrent workers the SSE slots can
+  // exhaust, queuing React effect fetches behind the stream and pushing
+  // `toContainText` past its deadline — the ABS-6 flake. CI already uses
+  // 2 workers; 4 local gives enough parallelism without the congestion.
   fullyParallel: true,
   forbidOnly: isCI,
   retries: isCI ? 1 : 0,
-  workers: isCI ? 2 : undefined,
+  workers: isCI ? 2 : 4,
   reporter: isCI
-    ? [["list"], ["html", { open: "never" }]]
-    : [["list"], ["html", { open: "never" }]],
+    ? [["list"], ["html", { open: "never" }], ["json", { outputFile: "test-results/results.json" }]]
+    : [["list"], ["html", { open: "never" }], ["json", { outputFile: "test-results/results.json" }]],
   // Per-test 30s cap is generous for SSE flows (chat turn end-to-end
   // is well under 5s with MockGateway). Bump if a real flow needs it.
   timeout: 30_000,

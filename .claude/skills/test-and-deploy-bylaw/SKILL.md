@@ -238,6 +238,12 @@ Invoke the `deploy-bylaw` skill now. Carry forward into it:
 
 Do **not** restate `deploy-bylaw`'s build / push / ssh-sed / up -d / verify / rollback steps here — defer to that skill as the single source of truth.
 
+> **Pre-deploy gate (advisor scope only):** `deploy-bylaw` Step 5a runs an import
+> smoke test (`import advisor.api.main`) against the new image under prod-mirroring
+> runtime constraints before swapping the container. This is a hard gate — if it
+> exits non-zero, `deploy-bylaw` halts and the old container keeps running. You do
+> not need to wire this yourself; it is part of `deploy-bylaw`'s Step 5a.
+
 After `deploy-bylaw` reports verification green, this skill is done.
 
 ---

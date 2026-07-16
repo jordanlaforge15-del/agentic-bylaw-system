@@ -1,40 +1,47 @@
-// Smoke: open a case via the marketing form, land on /app with the
-// case_id bound. Exercises:
-//   * /api/cases/classify (the pre-flight Haiku call — mock returns
-//     "standard" with 0.85 confidence by default)
-//   * /api/cases POST (real DB write: advisor_user + advisor_case +
-//     advisor_case_credit row state transition to "reserved")
-//   * Next.js redirect to /app?case_id=N
+// Smoke: /cases/new is the FREE, conversation-first entry point (ABS-385).
 //
-// Doesn't send a chat message — that lives in 04-chat-sse.spec.ts so
-// each smoke spec stays focused and a failure points at one seam.
+// The beta pivot inverts the old "buy an answer" surface: opening a case is
+// free and starts a conversation. The user anchors to a property, asks their
+// question, and clicks "Start the conversation — free →". A case is created
+// via POST /api/cases (no purchase, no credit) and the browser lands on
+// /app?case_id=N with the question auto-sent (?first_message=), which streams
+// a mock assistant reply.
+//
+// This smoke pins the critical path:
+//   * the designed page renders (kicker + free CTA)
+//   * the free CTA opens a case and routes into the chat product
+//   * the first message auto-sends and the SSE stream renders a reply
 
 import { expect, test } from "../fixtures/test-env";
 
-test("open a case from /cases/new", async ({ page }) => {
+test("the free CTA opens a case and auto-sends the first message into chat", async ({
+  page,
+}) => {
   await page.goto("/cases/new");
 
-  const anchor = `123 Smoke St ${Date.now()}`;
-  await page
-    .getByPlaceholder(/1234 Main St, Halifax/)
-    .fill(anchor);
-
-  await page
-    .getByPlaceholder(/Describe the inquiry/)
-    .fill("Can I add a backyard suite at this address?");
-
-  // Optional classifier preview — the dispatcher returns standard/0.85.
-  await page.getByRole("button", { name: /Get tier recommendation/ }).click();
+  // The designed conversation-first surface.
+  await expect(page.getByText("ACCOUNT · NEW CONVERSATION").first()).toBeVisible();
   await expect(
-    page.getByText(/CLASSIFIER RECOMMENDS · 85% CONFIDENCE/),
+    page.getByRole("heading", { name: /Start a conversation/ }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: /^Open case$/ }).click();
+  // Anchor + question, then start the (free) conversation.
+  const anchor = `123 Smoke St ${Date.now()}`;
+  await page.getByPlaceholder(/1234 Main St, Halifax/).fill(anchor);
+  await page
+    .getByPlaceholder(/Ask your question/)
+    .fill("What is the minimum front yard setback?");
 
-  // We're redirected to /app?case_id=N. Wait for the URL to settle.
+  await page.getByTestId("start-conversation-btn").click();
+
+  // We land in the chat product with a fresh case bound.
   await page.waitForURL(/\/app\?case_id=\d+/);
-  await expect(page).toHaveURL(/case_id=\d+/);
 
-  // The product shell shows the "Connected ·" system banner.
+  // The product shell connects and the auto-sent first message streams a
+  // mock assistant reply (proves ?first_message= auto-send end-to-end).
   await expect(page.getByText(/Connected · Regional Centre LUB/)).toBeVisible();
+  await expect(page.getByTestId("chat-thread")).toContainText(
+    /Based on the bylaw evidence/i,
+    { timeout: 15_000 },
+  );
 });

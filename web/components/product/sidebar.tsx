@@ -1,7 +1,15 @@
-// Left pane of /app. Fetches the current user's chat sessions from
-// /api/chat/sessions, renders one button per session, and calls
-// `onSelect(id)` when one is clicked. The active session gets a 2px
-// accent left border + alt-surface background.
+// Left pane of /app. Renders a single **case-aware** list that merges
+// the current user's chat sessions (conversation product) with their
+// priced "report" purchases (Answers product) so the two purchase types
+// coexist legibly (ABS-345). Each row shows the anchor address in bold
+// with the question/title muted beneath, the zone + timestamp in mono,
+// an unread accent dot for rows you haven't opened, and a REPORT badge
+// on report-backed rows. A report that settled without an answer
+// (voided/failed — ABS-367) instead shows a FAILED tag in place of the
+// generating pill / unread dot, so a failed purchase is visible without
+// opening it. Selecting a conversation row calls `onSelect(id)`;
+// selecting a report row opens it inside the unified /app workspace via
+// `?report_id=` (ABS-344), keeping the shared panes.
 //
 // `refreshTrigger` is a number the page bumps after each successful
 // chat turn — bumping it triggers a refetch so newly-created sessions
@@ -10,11 +18,12 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 import { cn } from "@/lib/cn";
+import { GeneralFeedbackButton } from "@/components/product/general-feedback-button";
 
 // Inlined at build time (NEXT_PUBLIC_*). When unset OR set to a
 // placeholder (the example file ships "pk_test_replace-me"), we
@@ -31,7 +40,80 @@ type SessionSummary = {
   title: string;
   message_count: number;
   updated_at: string | null;
+  case_id?: number | null;
+  // ABS-345 discrete row pieces (older backends omit these; we fall
+  // back to `title` when `anchor_label` is absent).
+  anchor_label?: string | null;
+  anchor_kind?: string | null;
+  zone?: string | null;
+  question?: string | null;
+  kind?: string;
 };
+
+type ReportSummary = {
+  id: number;
+  question_slug: string;
+  title: string;
+  status: string;
+  address?: string | null;
+  zone?: string | null;
+  answer_ready?: boolean;
+  updated_at?: string | null;
+};
+
+// Unified sidebar row. `key` doubles as the stable id we persist in the
+// client-side "seen" set that drives the unread dot.
+type CaseRow = {
+  key: string;
+  kind: "conversation" | "report";
+  sessionId: string | null;
+  reportId: number | null;
+  address: string | null;
+  title: string;
+  zone: string | null;
+  updatedAt: string | null;
+  // Whether the row has deliverable content worth an unread dot: a
+  // conversation with at least one message, or a report whose answer
+  // has been produced. Empty/pending rows never show a dot.
+  hasContent: boolean;
+  // ABS-343: a report whose generation job is still running (or queued).
+  // The row shows a "generating…" affordance instead of the unread dot,
+  // then flips to ready when the answer lands — so a user who left the
+  // generation page can watch the case-list item resolve.
+  generating: boolean;
+  // ABS-367: a report that settled without an answer (`voided` — couldn't
+  // be grounded — or `failed` — internal error), so the purchase wasn't
+  // charged. Both render the same "couldn't be answered" card in the
+  // detail view (answer-view.tsx), so the list treats them the same way:
+  // a FAILED tag in place of the generating pill / unread dot, so a
+  // failed report is visible without opening it.
+  failed: boolean;
+};
+
+// localStorage key for the set of rows the user has opened. Bumping the
+// suffix invalidates the prior shape if the row-key scheme ever changes.
+const SEEN_KEY = "abs-sidebar-seen-v1";
+
+function loadSeen(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(SEEN_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? new Set(parsed.map(String)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function persistSeen(seen: Set<string>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SEEN_KEY, JSON.stringify([...seen]));
+  } catch {
+    // Private-mode / quota — unread state degrades to session-only.
+  }
+}
 
 // Render a backend ISO timestamp as a sidebar-friendly relative label.
 // Buckets: <60s "just now"; <60m "Nm"; <24h "Nh"; <7d "Nd"; older as
@@ -52,10 +134,67 @@ function formatRelative(iso: string | null): string {
   });
 }
 
+// Sort key: newest-first by updated_at, unparseable/absent timestamps last.
+function sortByRecency(a: CaseRow, b: CaseRow): number {
+  const ta = a.updatedAt ? Date.parse(a.updatedAt) : NaN;
+  const tb = b.updatedAt ? Date.parse(b.updatedAt) : NaN;
+  const va = Number.isNaN(ta) ? -Infinity : ta;
+  const vb = Number.isNaN(tb) ? -Infinity : tb;
+  return vb - va;
+}
+
+function sessionToRow(s: SessionSummary): CaseRow {
+  const address = s.anchor_label?.trim() || null;
+  // When we have a discrete anchor, the bold line is the address and the
+  // muted line is the question. Without one, fall back to the composed
+  // title (older backend) as the bold line.
+  const title = address
+    ? s.question?.trim() || ""
+    : s.title?.trim() || "New reading";
+  return {
+    key: `session:${s.session_id}`,
+    kind: "conversation",
+    sessionId: s.session_id,
+    reportId: null,
+    address,
+    title,
+    zone: s.zone?.trim() || null,
+    updatedAt: s.updated_at,
+    hasContent: (s.message_count ?? 0) > 0,
+    generating: false,
+    failed: false,
+  };
+}
+
+function reportToRow(r: ReportSummary): CaseRow {
+  const address = r.address?.trim() || null;
+  return {
+    key: `report:${r.id}`,
+    kind: "report",
+    sessionId: null,
+    reportId: r.id,
+    address,
+    title: r.title?.trim() || "Report",
+    zone: r.zone?.trim() || null,
+    updatedAt: r.updated_at ?? null,
+    hasContent: Boolean(r.answer_ready),
+    // A purchased report is still "generating" while its engine job runs
+    // (`generating`) or is queued (`authorized`) and no answer has landed.
+    generating:
+      !r.answer_ready &&
+      (r.status === "generating" || r.status === "authorized"),
+    failed: r.status === "voided" || r.status === "failed",
+  };
+}
+
 type Props = {
   onNew: () => void;
   onSelect: (id: string) => void;
   activeSessionId: string | null;
+  // ABS-361: the report currently open in the center pane (from
+  // ?report_id=). Report rows highlight against this so a click reflects
+  // instantly, mirroring the conversation-row active state.
+  activeReportId?: number | null;
   refreshTrigger: number;
   // When `true`, the sidebar drops the fixed width and right border —
   // the parent (Drawer) supplies them. Mobile uses this; desktop
@@ -67,31 +206,52 @@ export function Sidebar({
   onNew,
   onSelect,
   activeSessionId,
+  activeReportId,
   refreshTrigger,
   inDrawer,
 }: Props) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [reports, setReports] = useState<ReportSummary[]>([]);
   const [q, setQ] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [seen, setSeen] = useState<Set<string>>(() => loadSeen());
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // Sessions (conversations) are the primary list; a failure here is
+      // surfaced. Reports (Answers product) are best-effort — payments-off
+      // deployments may not mount the endpoint — so a report-fetch failure
+      // just leaves the list conversation-only rather than erroring out.
       try {
         const res = await fetch("/api/chat/sessions", { cache: "no-store" });
         if (!res.ok) {
           if (!cancelled)
-            setLoadError(`Couldn't load sessions (HTTP ${res.status})`);
-          return;
-        }
-        const data = (await res.json()) as { sessions: SessionSummary[] };
-        if (!cancelled) {
-          setSessions(data.sessions);
-          setLoadError(null);
+            setLoadError(`Couldn't load your cases (HTTP ${res.status})`);
+        } else {
+          const data = (await res.json()) as { sessions: SessionSummary[] };
+          if (!cancelled) {
+            setSessions(data.sessions ?? []);
+            setLoadError(null);
+          }
         }
       } catch (e) {
         if (!cancelled)
-          setLoadError(`Couldn't load sessions: ${(e as Error).message}`);
+          setLoadError(`Couldn't load your cases: ${(e as Error).message}`);
+      }
+
+      try {
+        const res = await fetch("/api/billing/questions/purchases", {
+          cache: "no-store",
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { reports: ReportSummary[] };
+          if (!cancelled) setReports(data.reports ?? []);
+        } else if (!cancelled) {
+          setReports([]);
+        }
+      } catch {
+        if (!cancelled) setReports([]);
       }
     })();
     return () => {
@@ -99,13 +259,61 @@ export function Sidebar({
     };
   }, [refreshTrigger]);
 
-  const filtered = useMemo<SessionSummary[]>(
-    () =>
-      sessions.filter(
-        (x) => !q || x.title.toLowerCase().includes(q.toLowerCase()),
-      ),
-    [sessions, q],
-  );
+  const markSeen = useCallback((key: string) => {
+    setSeen((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      persistSeen(next);
+      return next;
+    });
+  }, []);
+
+  // The active conversation is, by definition, open — clear its dot.
+  useEffect(() => {
+    if (activeSessionId) markSeen(`session:${activeSessionId}`);
+  }, [activeSessionId, markSeen]);
+
+  const rows = useMemo<CaseRow[]>(() => {
+    const merged = [
+      ...sessions.map(sessionToRow),
+      ...reports.map(reportToRow),
+    ];
+    return merged.sort(sortByRecency);
+  }, [sessions, reports]);
+
+  const filtered = useMemo<CaseRow[]>(() => {
+    if (!q) return rows;
+    const needle = q.toLowerCase();
+    return rows.filter((r) =>
+      `${r.address ?? ""} ${r.title}`.toLowerCase().includes(needle),
+    );
+  }, [rows, q]);
+
+  const handleActivate = (row: CaseRow) => {
+    markSeen(row.key);
+    if (row.kind === "report" && row.reportId !== null) {
+      // ABS-344: open the report inside the unified /app workspace (shared
+      // sidebar + parcel panes, Report·Conversation toggle) rather than the
+      // standalone answer route.
+      //
+      // ABS-361: switch reports with the native History API rather than
+      // `router.push`. The /app route is a `force-dynamic` server component
+      // (a terms-acceptance GET runs on every render), so `router.push` to a
+      // new ?report_id= is a soft nav that re-runs that server round-trip
+      // before `useSearchParams` — and thus the keyed <AnswerView> — sees the
+      // new id. That left the center pane rendering the PREVIOUS report for
+      // the ~2s round-trip (stale), and concurrent soft navs got coalesced so
+      // the first click sometimes registered as a no-op. `history.pushState`
+      // integrates with the Next router and updates `useSearchParams`
+      // synchronously on the client with no server round-trip, so the report
+      // swaps immediately (a brief AnswerView loading spinner at most).
+      if (row.reportId === activeReportId) return; // already open — no-op
+      window.history.pushState(null, "", `/app?report_id=${row.reportId}`);
+      return;
+    }
+    if (row.sessionId) onSelect(row.sessionId);
+  };
 
   return (
     <aside
@@ -117,12 +325,12 @@ export function Sidebar({
     >
       <div className="border-b border-hair p-4 flex flex-col gap-3">
         <Btn variant="primary" size="sm" onClick={onNew} className="w-full">
-          + New reading
+          + New conversation
         </Btn>
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search readings…"
+          placeholder="Search conversations…"
           className="bg-surface-alt text-text border border-hair font-sans outline-none px-2.5 py-2"
           style={{ fontSize: 12.5 }}
         />
@@ -143,24 +351,32 @@ export function Sidebar({
         )}
         {!loadError && filtered.length === 0 && (
           <div className="text-[12px] text-text-muted px-3 py-3 leading-[1.4]">
-            {sessions.length === 0
-              ? "No readings yet. Ask a question to start one."
+            {rows.length === 0
+              ? "No conversations yet. Start one to begin."
               : "No matches."}
           </div>
         )}
-        {filtered.map((th) => {
-          const active = th.session_id === activeSessionId;
+        {filtered.map((row) => {
+          const active =
+            (row.kind === "conversation" && row.sessionId === activeSessionId) ||
+            (row.kind === "report" &&
+              activeReportId != null &&
+              row.reportId === activeReportId);
+          const unread = row.hasContent && !active && !seen.has(row.key);
+          const boldLine = row.address || row.title || "New reading";
+          const mutedLine = row.address ? row.title : null;
           return (
             <button
-              key={th.session_id}
+              key={row.key}
               type="button"
-              onClick={() => onSelect(th.session_id)}
+              data-testid="case-row"
+              data-kind={row.kind}
+              data-active={active ? "true" : "false"}
+              onClick={() => handleActivate(row)}
               className={cn(
                 "text-left flex flex-col gap-1 cursor-pointer text-text font-sans",
                 "px-3 py-2.5 pl-3 transition-colors",
-                active
-                  ? "bg-surface-alt"
-                  : "bg-transparent hover:bg-surface-alt",
+                active ? "bg-surface-alt" : "bg-transparent hover:bg-surface-alt",
               )}
               style={{
                 borderLeft: active
@@ -168,26 +384,96 @@ export function Sidebar({
                   : "2px solid transparent",
               }}
             >
-              <span
-                className="text-[12.5px] font-semibold tracking-[-0.005em]"
-                style={{
-                  display: "-webkit-box",
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: "vertical",
-                  overflow: "hidden",
-                }}
-              >
-                {th.title}
-              </span>
-              <div className="flex justify-between items-baseline mt-0.5">
+              <div className="flex justify-between items-start gap-2">
+                <span
+                  className="text-[12.5px] font-semibold tracking-[-0.005em] min-w-0"
+                  style={{
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                    overflow: "hidden",
+                  }}
+                >
+                  {boldLine}
+                </span>
+                <div className="flex items-center gap-1.5 flex-shrink-0 pt-0.5">
+                  {row.kind === "report" && (
+                    <span
+                      data-testid="report-badge"
+                      className="font-mono uppercase leading-none px-1 py-[3px]"
+                      style={{
+                        fontSize: 8.5,
+                        letterSpacing: "0.12em",
+                        color: "var(--on-accent)",
+                        background: "var(--accent)",
+                      }}
+                    >
+                      Report
+                    </span>
+                  )}
+                  {row.failed && (
+                    <span
+                      data-testid="row-failed"
+                      className="font-mono uppercase leading-none px-1 py-[3px]"
+                      style={{
+                        fontSize: 8.5,
+                        letterSpacing: "0.12em",
+                        color: "var(--on-accent)",
+                        background: "var(--brick)",
+                      }}
+                    >
+                      Failed
+                    </span>
+                  )}
+                  {row.generating && !row.failed && (
+                    <span
+                      data-testid="row-generating"
+                      className="flex items-center gap-1 font-mono uppercase leading-none"
+                      style={{ fontSize: 8.5, letterSpacing: "0.1em" }}
+                    >
+                      <span
+                        className="abs-pulse-dot bg-accent inline-block"
+                        style={{ width: 5, height: 5, borderRadius: "50%" }}
+                      />
+                      <span className="text-text-muted">generating</span>
+                    </span>
+                  )}
+                  {unread && !row.generating && !row.failed && (
+                    <span
+                      data-testid="unread-dot"
+                      aria-label="Unread"
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background: "var(--accent)",
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+              {mutedLine && (
+                <span className="text-[11.5px] text-text-muted leading-[1.35] line-clamp-2">
+                  {mutedLine}
+                </span>
+              )}
+              <div className="flex justify-between items-baseline mt-0.5 gap-2">
                 <Mono muted size={9}>
-                  {th.message_count} MSG
+                  {/* Zone when a chat turn has resolved it; a neutral
+                      dash otherwise (the REPORT badge already conveys the
+                      row's kind, so we don't repeat it here). */}
+                  {row.zone || "—"}
                 </Mono>
-                <Mono muted size={9}>{formatRelative(th.updated_at)}</Mono>
+                <Mono muted size={9}>
+                  {formatRelative(row.updatedAt)}
+                </Mono>
               </div>
             </button>
           );
         })}
+      </div>
+      <div className="border-t border-hair px-4 py-2">
+        <GeneralFeedbackButton />
       </div>
       <div className="border-t border-hair px-4 py-3 flex items-center gap-2.5">
         {CLERK_ENABLED ? <ClerkProfile /> : <PlaceholderProfile />}
@@ -243,7 +529,7 @@ function PlaceholderProfile() {
       </div>
       <div className="flex-1 min-w-0">
         <div className="text-[12.5px] font-semibold">Halifax Studio</div>
-        <div className="text-[10.5px] text-text-muted">Practice · 4 seats</div>
+        <div className="text-[10.5px] text-text-muted">Private beta</div>
       </div>
       <button
         type="button"

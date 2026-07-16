@@ -461,3 +461,32 @@ def test_location_label_shapes(location_input, expected):
         {"total_matches": 0, "matches": []},
     )
     assert f"location {expected}" in summary
+
+
+# -- WI-4 (ABS-290): in-flight tool-loop compaction -----------------------
+
+
+def _search_round(idx: int, *, citation: str) -> list[Message]:
+    """One in-loop search round: assistant tool_use + the user-side
+    tool_result it produced. Mirrors the shape ``run_tool_loop`` builds
+    inside a single deep question (no intervening user prompt)."""
+    payload = json.dumps(
+        {
+            "total_matches": 1,
+            "matches": [{"citation_path": citation, "score": 0.9}],
+        }
+    )
+    return [
+        _assistant_tool_use(
+            tool_id=f"tu_{idx}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"query": f"q{idx}"},
+        ),
+        _tool_result(f"tu_{idx}", payload),
+    ]
+
+
+# ABS-304: tests for `compact_tool_loop_history` and
+# `resolve_tool_loop_keep_recent` removed alongside the reverted WI-4
+# production code. See evals/token_savings/20260610-ABS303-real-api-validation/
+# ROLLUP.md for the evidence.

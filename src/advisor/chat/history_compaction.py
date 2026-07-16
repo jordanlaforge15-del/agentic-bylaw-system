@@ -107,6 +107,23 @@ def compact_history_for_submission(
         return list(messages)
 
     cutoff = boundaries[-keep_recent]
+    return _summarize_tool_results_before(messages, cutoff)
+
+
+def _summarize_tool_results_before(
+    messages: list[Message], cutoff: int
+) -> list[Message]:
+    """Replace every ``ToolResultBlock`` content in ``messages[:cutoff]``
+    with its deterministic one-line summary, passing everything at or
+    after ``cutoff`` through by reference.
+
+    Shared by both compaction policies; they differ only in how they
+    locate ``cutoff`` (user-prompt boundary vs tool_result-turn
+    boundary). Assistant text and tool_use blocks always pass through
+    verbatim — the summariser reads the tool_use input for calling
+    context, and the matching block stays so Anthropic's
+    every-tool_use-needs-a-tool_result invariant holds.
+    """
     tool_uses = _index_tool_uses(messages[:cutoff])
 
     out: list[Message] = []

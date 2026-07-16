@@ -20,12 +20,28 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AppHeader } from "@/components/product/app-header";
 import { Sidebar } from "@/components/product/sidebar";
 import { ChatThread } from "@/components/product/chat-thread";
+import {
+  CaseToolbar,
+  type CaseView,
+} from "@/components/product/case-toolbar";
+import {
+  AnswerView,
+  type AnswerPhase,
+} from "@/components/product/answer-view";
+import {
+  humanizeQuestionSlug,
+  type QuestionPurchaseResponse,
+  type WalletResponse,
+} from "@/lib/cases";
+import { cn } from "@/lib/cn";
+import type { SavedFeedback } from "@/components/product/message-feedback";
 import { Composer } from "@/components/product/composer";
-import { CaseHeaderStrip } from "@/components/product/case-header-strip";
-import { CaseUpgradePrompt } from "@/components/product/case-upgrade-prompt";
+import { BalanceStrip } from "@/components/product/balance-strip";
+import { TopUpPrompt } from "@/components/product/top-up-prompt";
 import { ParcelPane } from "@/components/product/parcel-pane";
 import { AddressPill } from "@/components/product/address-pill";
 import { ParcelFab } from "@/components/product/parcel-fab";
+import { ChatDisclaimerBar } from "@/components/product/chat-disclaimer-bar";
 import { Drawer } from "@/components/drawer";
 import { Sheet } from "@/components/sheet";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
@@ -96,7 +112,18 @@ function ProductAppPageInner() {
   // session's spatial-join tool results; null when the conversation
   // has no address-bearing question yet.
   const [parcel, setParcel] = useState<ParcelContext | null>(null);
+  const [feedbackMap, setFeedbackMap] = useState<Record<number, SavedFeedback>>({});
   const abortRef = useRef<AbortController | null>(null);
+  // Per-case message snapshot. Saved when the user navigates away from a case
+  // mid-stream so that navigating back restores at least the user's question
+  // (and any partial reply) even if the server hasn't persisted the response
+  // yet. Entries are cleared once the server response is at least as complete.
+  const caseMessageCacheRef = useRef<Map<number, Message[]>>(new Map());
+  // Guard for the URL-based session-restore effect. Tracks which case_id has
+  // most recently been restored to prevent double-fetches from React Strict Mode
+  // double-invoke and normal re-renders. Declared here (before the effect that
+  // reads it) so the binding is initialized before the effect callback runs.
+  const restoredCaseIdRef = useRef<number | null>(null);
   // Mobile/tablet overlay state. Both default closed; opening one
   // doesn't close the other (parcel sheet on mobile sits above the
   // chat which sits behind the sidebar drawer when both happen, but
@@ -107,11 +134,11 @@ function ProductAppPageInner() {
 
   // Case-billing context. ``caseId`` is taken from the URL on mount
   // (the /cases/new flow redirects with ``?case_id=N``) and from the
-  // backend's ``session`` SSE event on each turn. ``tier`` mirrors the
-  // active credit's tier so the header can show the badge. ``upgradeOffer``
-  // captures any in-flight ``case_upgrade_offer`` event the agent fired
-  // via the ``request_tier_upgrade`` tool. ``budgetWarning`` captures
-  // the ``case_budget_warning`` payload (Layer 1 nearing exhaustion).
+  // backend's ``session`` SSE event on each turn. The beta pivot (ABS-386)
+  // bills chat by an account-level token wallet shown as "~N turns" — the
+  // tier/credit machinery (caseTier / upgradeOffer / budgetWarning) is
+  // retired. ``wallet`` is seeded from /api/billing/wallet and updated live
+  // off the per-turn ``token_balance`` SSE event.
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -121,35 +148,178 @@ function ProductAppPageInner() {
     const n = Number(raw);
     return Number.isInteger(n) && n > 0 ? n : null;
   }, [searchParams]);
+  const caseNumberFromUrl = useMemo(() => {
+    const raw = searchParams.get("case_number");
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }, [searchParams]);
+  // ABS-344: a report-backed case opens the SAME /app workspace via
+  // ``?report_id=N``. The center pane then swaps between the purchased
+  // report and a conversation on that case; the sidebar/parcel panes stay
+  // shared. ``view`` is which face the center pane shows; the report's
+  // lifecycle phase + settled purchase (fed up from AnswerView) drive the
+  // header label and the parcel/seed context.
+  const reportIdFromUrl = useMemo(() => {
+    const raw = searchParams.get("report_id");
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }, [searchParams]);
+  const [view, setView] = useState<CaseView>("report");
+  const [reportPhase, setReportPhase] = useState<AnswerPhase | null>(null);
+  const [reportPurchase, setReportPurchase] =
+    useState<QuestionPurchaseResponse | null>(null);
+  // A fresh report_id starts on the report face (spec: generating → report,
+  // then the user may toggle to conversation).
+  useEffect(() => {
+    setView("report");
+    setReportPhase(null);
+    setReportPurchase(null);
+  }, [reportIdFromUrl]);
+
+  // ABS-363: AnswerView (below) settles a report — success or failure — by
+  // transitioning its own phase to "ready" (the coarse name covers
+  // captured/voided/failed alike, see answer-view.tsx's classify()). That
+  // phase already bubbles up to `reportPhase` via onPhaseChange, but nothing
+  // previously told the sidebar to refetch, so a report that finished while
+  // the user watched it generate kept showing the GENERATING pill in the
+  // case list until a full reload. Bumping sidebarRefresh here re-runs the
+  // sidebar's fetch so the badge flips live.
+  useEffect(() => {
+    if (reportPhase === "ready") {
+      setSidebarRefresh((n) => n + 1);
+    }
+  }, [reportPhase]);
+
   const [caseId, setCaseId] = useState<number | null>(caseIdFromUrl);
   const caseIdRef = useRef<number | null>(caseIdFromUrl);
   const setCaseIdBoth = (id: number | null) => {
     caseIdRef.current = id;
     setCaseId(id);
   };
-  const [caseTier, setCaseTier] = useState<string | null>(null);
-  const [upgradeOffer, setUpgradeOffer] = useState<{
-    case_id: number;
-    current_tier: string;
-    recommended_tier: string;
-    reason: string;
+  const [caseNumber, setCaseNumber] = useState<number | null>(caseNumberFromUrl);
+  const [caseAnchor, setCaseAnchor] = useState<{
+    kind: string;
+    label: string;
   } | null>(null);
-  const [budgetWarning, setBudgetWarning] = useState<{
-    case_id: number;
-    tier: string;
-    remaining_tokens: number;
-    tier_budget: number;
-  } | null>(null);
+  // Token wallet (ABS-386). Seeded from /api/billing/wallet on mount, then
+  // decremented live off the per-turn ``token_balance`` SSE event. Null while
+  // the seed is in flight.
+  const [wallet, setWallet] = useState<WalletResponse | null>(null);
+  // Set when a send is refused for lack of tokens — either the client
+  // pre-flight (wallet at/below floor) or a backend 402 ``insufficient_tokens``
+  // that raced the client state. Reset on each accepted send and on a fresh
+  // mount (e.g. returning from a top-up checkout). Derived ``outOfTokens``
+  // below OR's it with the wallet's own ``chat_enabled`` flag.
+  const [refused, setRefused] = useState(false);
+  const outOfTokens = refused || (wallet !== null && !wallet.chat_enabled);
   // Keep the URL-derived caseId in sync when the user navigates with
   // a different ?case_id= without a full reload.
   useEffect(() => {
     if (caseIdFromUrl !== null && caseIdFromUrl !== caseIdRef.current) {
       setCaseIdBoth(caseIdFromUrl);
+      // Use URL-supplied case_number if present; SSE event will update
+      // it on the first chat turn if not.
+      setCaseNumber(caseNumberFromUrl);
       // New case binding → discard prior session id; the next send()
       // will mint a new session under this case.
       setSessionId(null);
+      // Allow the restore effect to re-run for the new case. Without
+      // this reset, navigating A → B → A would skip restoring A on
+      // return because restoredCaseIdRef still holds A from the first
+      // visit (React Strict Mode double-invoke guard now resets cleanly
+      // between distinct navigations).
+      restoredCaseIdRef.current = null;
     }
-  }, [caseIdFromUrl]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [caseIdFromUrl, caseNumberFromUrl]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Seed the token wallet on mount (and after returning from a top-up
+  // checkout — a full navigation back to /app re-runs this). The balance is
+  // then kept live by the per-turn ``token_balance`` SSE event; this fetch is
+  // the initial paint + the source of truth for ``payments_enabled`` and the
+  // pre-flight floor, neither of which rides on the SSE payload.
+  const refreshWallet = async () => {
+    try {
+      const res = await fetch("/api/billing/wallet", { cache: "no-store" });
+      if (!res.ok) return;
+      const w = (await res.json()) as WalletResponse;
+      setWallet(w);
+      // A fresh, chat-enabled wallet clears any prior refusal (e.g. the user
+      // topped up and came back).
+      if (w.chat_enabled) setRefused(false);
+    } catch {
+      // Non-critical: the strip simply doesn't paint until the next turn's
+      // token_balance event arrives.
+    }
+  };
+  useEffect(() => {
+    void refreshWallet();
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch the case anchor (kind + label) whenever caseId changes so
+  // the parcel pane can show the address even before a spatial lookup.
+  useEffect(() => {
+    if (!caseId) {
+      setCaseAnchor(null);
+      return;
+    }
+    void (async () => {
+      try {
+        const res = await fetch("/api/cases", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          cases: Array<{
+            id: number;
+            anchor_kind: string;
+            anchor_label: string;
+          }>;
+        };
+        const matched = data.cases.find((c) => c.id === caseId);
+        if (matched) {
+          setCaseAnchor({
+            kind: matched.anchor_kind,
+            label: matched.anchor_label,
+          });
+        }
+      } catch {
+        // Non-critical — parcel pane falls back to generic empty state.
+      }
+    })();
+  }, [caseId]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // On direct URL load (reload, share link, browser back/forward) with
+  // a ?case_id=N param but no ?first_message=, restore the most recent
+  // session for that case so the transcript and parcel pane aren't
+  // empty. Skipped when first_message is present — that flow mints a
+  // new session via send() and handles its own state hydration.
+  useEffect(() => {
+    if (caseIdFromUrl === null) return;
+    if (searchParams.get("first_message")) return;
+    // Guard against running twice for the same case (React Strict Mode
+    // double-invoke, or a re-render triggered by state settling).
+    if (restoredCaseIdRef.current === caseIdFromUrl) return;
+    restoredCaseIdRef.current = caseIdFromUrl;
+
+    void (async () => {
+      try {
+        const res = await fetch("/api/chat/sessions", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          sessions: Array<{ session_id: string; case_id?: number | null }>;
+        };
+        // Sessions are already newest-first from the backend; pick the
+        // first one whose case_id matches the URL param.
+        const match = data.sessions.find((s) => s.case_id === caseIdFromUrl);
+        if (match) {
+          await selectSession(match.session_id);
+        }
+      } catch {
+        // Non-critical: the page still renders; the user can click the
+        // sidebar to manually restore the session.
+      }
+    })();
+  }, [caseIdFromUrl, searchParams]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-send the first message that the case-open form passed via
   // ``?first_message=...``. Runs once: a ref guard handles React Strict
@@ -203,10 +373,13 @@ function ProductAppPageInner() {
       return;
     }
     try {
-      const res = await fetch(
-        `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
-        { cache: "no-store" },
-      );
+      const [res, fbMap] = await Promise.all([
+        fetch(
+          `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
+          { cache: "no-store" },
+        ),
+        fetchFeedback(sessionId),
+      ]);
       if (sessionIdRef.current !== sessionId) return; // user moved on
       if (!res.ok) {
         // Surface non-2xx so the parcel pane being stale is *visible*.
@@ -230,19 +403,22 @@ function ProductAppPageInner() {
       }
       const data = (await res.json()) as {
         messages: BackendMessage[];
+        message_db_ids?: number[];
         case_id?: number | null;
-        tier?: string | null;
+        case_number?: number | null;
       };
-      setParcel(extractParcelContext(data.messages));
-      setMessages(translateHistory(data.messages));
+      const enriched = attachDbIds(data.messages, data.message_db_ids);
+      setParcel(extractParcelContext(enriched));
+      setMessages(translateHistory(enriched));
+      setFeedbackMap(fbMap);
       // Keep the case-billing context aligned with the authoritative
       // server state — covers the case where the resume fallback
       // attached a case mid-turn that the SSE stream didn't surface.
       if (typeof data.case_id === "number") {
         setCaseIdBoth(data.case_id);
       }
-      if (typeof data.tier === "string") {
-        setCaseTier(data.tier);
+      if (typeof data.case_number === "number") {
+        setCaseNumber(data.case_number);
       }
     } catch (e) {
       // Network blip. Same "don't overwrite stream errors" rule.
@@ -258,6 +434,16 @@ function ProductAppPageInner() {
   };
 
   const send = async (text: string) => {
+    // Client pre-flight (ABS-386): if the wallet is at/below the floor, refuse
+    // locally without POSTing. The composer is already disabled in this state,
+    // so this mainly guards the programmatic path (auto-send of a
+    // ``?first_message=`` after a balance drop). Nothing is appended or
+    // cleared — the typed text is not lost.
+    if (wallet !== null && !wallet.chat_enabled) {
+      setRefused(true);
+      return;
+    }
+    setRefused(false);
     setMessages((prev) => [...prev, { kind: "user", body: text }]);
     setThinking(true);
     setThinkLabel("Reading bylaw…");
@@ -269,6 +455,12 @@ function ProductAppPageInner() {
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+
+    // Set when the turn is refused out-of-tokens (402). Guards the post-turn
+    // refreshFromSession in the finally: reloading server history for a
+    // resumed session would otherwise drop the optimistic user bubble and
+    // lose the typed message.
+    let refusedThisTurn = false;
 
     try {
       const res = await fetch("/api/chat", {
@@ -285,6 +477,36 @@ function ProductAppPageInner() {
       if (!res.ok || !res.body) {
         const detail = await res.text().catch(() => "");
         stopThinking();
+        if (res.status === 402) {
+          // Out-of-tokens pre-flight refusal (ABS-383 backend). Render the
+          // TopUpPrompt state instead of a generic "Backend error (402)"
+          // toast. The optimistic user bubble stays in the thread, so the
+          // typed message is not lost, and no assistant stream started.
+          let turns = 0;
+          try {
+            const parsed = JSON.parse(detail) as {
+              detail?: { approx_turns_remaining?: number };
+            };
+            if (typeof parsed.detail?.approx_turns_remaining === "number") {
+              turns = parsed.detail.approx_turns_remaining;
+            }
+          } catch {
+            // Non-JSON 402 body — fall through with turns = 0.
+          }
+          refusedThisTurn = true;
+          setRefused(true);
+          setWallet((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  approx_turns_remaining: turns,
+                  low_balance: true,
+                  chat_enabled: false,
+                }
+              : prev,
+          );
+          return;
+        }
         setError(
           `Backend error (${res.status}). ${detail.slice(0, 240) || "No body."}`,
         );
@@ -320,64 +542,48 @@ function ProductAppPageInner() {
               const data = JSON.parse(ev.data) as {
                 session_id?: string;
                 case_id?: number | null;
-                tier?: string | null;
+                case_number?: number | null;
               };
               if (data.session_id) setSessionId(data.session_id);
               if (typeof data.case_id === "number") {
                 setCaseIdBoth(data.case_id);
               }
-              if (typeof data.tier === "string") {
-                setCaseTier(data.tier);
+              if (typeof data.case_number === "number") {
+                setCaseNumber(data.case_number);
               }
             } catch {
               // ignore malformed session event
             }
-          } else if (ev.event === "case_upgrade_offer") {
+          } else if (ev.event === "token_balance") {
+            // Per-turn wallet decrement (ABS-383/386). Updates the
+            // BalanceStrip live without a reload. ``payments_enabled`` and the
+            // pre-flight floor are NOT on this payload — they come from the
+            // wallet seed — so we recompute ``chat_enabled`` from the fresh
+            // balance vs. the seed floor to flip into/out of the out-of-turns
+            // state.
             try {
               const data = JSON.parse(ev.data) as {
-                case_id?: number;
-                current_tier?: string;
-                recommended_tier?: string;
-                reason?: string;
+                balance_tokens?: number;
+                approx_turns_remaining?: number;
+                low_balance?: boolean;
               };
-              if (
-                typeof data.case_id === "number" &&
-                typeof data.current_tier === "string" &&
-                typeof data.recommended_tier === "string"
-              ) {
-                setUpgradeOffer({
-                  case_id: data.case_id,
-                  current_tier: data.current_tier,
-                  recommended_tier: data.recommended_tier,
-                  reason: data.reason || "Additional research depth required.",
-                });
-              }
+              setWallet((prev) => {
+                if (!prev) return prev;
+                const next = { ...prev };
+                if (typeof data.balance_tokens === "number") {
+                  next.balance_tokens = data.balance_tokens;
+                  next.chat_enabled = data.balance_tokens > prev.floor_tokens;
+                }
+                if (typeof data.approx_turns_remaining === "number") {
+                  next.approx_turns_remaining = data.approx_turns_remaining;
+                }
+                if (typeof data.low_balance === "boolean") {
+                  next.low_balance = data.low_balance;
+                }
+                return next;
+              });
             } catch {
-              // ignore malformed upgrade offer
-            }
-          } else if (ev.event === "case_budget_warning") {
-            try {
-              const data = JSON.parse(ev.data) as {
-                case_id?: number;
-                tier?: string;
-                remaining_tokens?: number;
-                tier_budget?: number;
-              };
-              if (
-                typeof data.case_id === "number" &&
-                typeof data.tier === "string" &&
-                typeof data.remaining_tokens === "number" &&
-                typeof data.tier_budget === "number"
-              ) {
-                setBudgetWarning({
-                  case_id: data.case_id,
-                  tier: data.tier,
-                  remaining_tokens: data.remaining_tokens,
-                  tier_budget: data.tier_budget,
-                });
-              }
-            } catch {
-              // ignore malformed budget warning
+              // ignore malformed token_balance event
             }
           } else if (ev.event === "content_block_start") {
             // Tool-use blocks tell us what the agent is *actually*
@@ -464,41 +670,85 @@ function ProductAppPageInner() {
       // Snap to authoritative session state: refreshes parcel pane
       // and replays reasoning steps that streaming didn't surface.
       // Reads sessionIdRef directly (not a captured local) so we
-      // always see the post-stream value the SSE handler set.
-      void refreshFromSession(sessionIdRef.current);
+      // always see the post-stream value the SSE handler set. Skipped on an
+      // out-of-tokens refusal — nothing changed server-side, and reloading
+      // history would drop the optimistic (still-typed) user message.
+      if (!refusedThisTurn) {
+        void refreshFromSession(sessionIdRef.current);
+      }
     }
   };
 
-  const selectSession = async (id: string) => {
+  const selectSession = async (id: string, { updateUrl = false }: { updateUrl?: boolean } = {}) => {
     if (id === activeSessionId) return;
+
+    // Snapshot current case messages before switching away. This preserves
+    // the user's in-flight question (and any partial streaming reply) so
+    // that navigating back to this case shows it even if the server hasn't
+    // persisted the response yet. Only worth caching when there's more than
+    // just the opening system message.
+    if (caseIdRef.current !== null && messages.length > 1) {
+      caseMessageCacheRef.current.set(caseIdRef.current, messages);
+    }
+
     abortRef.current?.abort();
     setError(null);
     setThinking(false);
     try {
-      const res = await fetch(
-        `/api/chat/sessions/${encodeURIComponent(id)}`,
-        { cache: "no-store" },
-      );
+      const [res, fbMap] = await Promise.all([
+        fetch(
+          `/api/chat/sessions/${encodeURIComponent(id)}`,
+          { cache: "no-store" },
+        ),
+        fetchFeedback(id),
+      ]);
       if (!res.ok) {
         setError(`Couldn't load that reading (HTTP ${res.status}).`);
         return;
       }
       const data = (await res.json()) as {
         messages: BackendMessage[];
+        message_db_ids?: number[];
         case_id?: number | null;
-        tier?: string | null;
+        case_number?: number | null;
       };
-      setMessages(translateHistory(data.messages));
+      const enriched = attachDbIds(data.messages, data.message_db_ids);
+      const newCaseId = typeof data.case_id === "number" ? data.case_id : null;
+
+      // Prefer cached messages when they contain more turns than the server
+      // returned — this happens when the stream was aborted mid-flight and
+      // the backend hasn't yet saved the response. Once the server catches up
+      // (or has always been ahead) we drop the cache entry and use the
+      // authoritative server copy.
+      const serverMessages = translateHistory(enriched);
+      const cachedMessages = newCaseId !== null
+        ? caseMessageCacheRef.current.get(newCaseId)
+        : undefined;
+      const messagesToShow =
+        cachedMessages !== undefined && cachedMessages.length > serverMessages.length
+          ? cachedMessages
+          : serverMessages;
+      if (newCaseId !== null && serverMessages.length >= (cachedMessages?.length ?? 0)) {
+        caseMessageCacheRef.current.delete(newCaseId);
+      }
+
+      setMessages(messagesToShow);
+      setFeedbackMap(fbMap);
       setSessionId(id);
-      // Rehydrate the case-billing context from the server. The /v1/chat
-      // resume path can fall back to the session's stored case_id, but
-      // the UI also needs it to drive the header strip and (when null
-      // on a session with prior turns) the legacy-session composer gate.
-      setCaseIdBoth(
-        typeof data.case_id === "number" ? data.case_id : null,
-      );
-      setCaseTier(typeof data.tier === "string" ? data.tier : null);
-      setParcel(extractParcelContext(data.messages));
+      setCaseIdBoth(newCaseId);
+      setCaseNumber(typeof data.case_number === "number" ? data.case_number : null);
+      setParcel(extractParcelContext(enriched));
+      // Keep URL in sync so reloads and shared links land on the right case.
+      // Only user-initiated calls (updateUrl=true) update the URL; the
+      // restore effect passes updateUrl=false so it never races with a
+      // concurrent user click and reverts the URL to the prior case.
+      if (updateUrl && newCaseId !== null) {
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("case_id", String(newCaseId));
+        params.delete("case_number");
+        params.delete("report_id");
+        router.replace(`${pathname}?${params.toString()}`);
+      }
     } catch (e) {
       setError(`Couldn't load that reading: ${(e as Error).message}`);
     }
@@ -537,7 +787,91 @@ function ProductAppPageInner() {
   // drawer so the user lands back in the chat thread.
   const onSelectFromDrawer = (id: string) => {
     setSidebarOpen(false);
-    void selectSession(id);
+    void selectSession(id, { updateUrl: true });
+  };
+
+  // ── ABS-344 workspace derivations ──────────────────────────────────────
+  const isReportBacked = reportIdFromUrl !== null;
+  const reportContent = reportPurchase?.report ?? null;
+
+  // Header label tracks which face the workspace is showing. CONVERSATION
+  // whenever the conversation face is up (or a plain conversation-only case);
+  // GENERATING only while the engine is *actually* running; REPORT otherwise.
+  //
+  // ABS-361: "REPORT" is the default for a report-backed workspace — including
+  // the brief `loading`/`null` phase right after switching to a different
+  // report, while its GET is in flight. Previously anything that wasn't yet
+  // "ready" fell through to "GENERATING", so switching between two ALREADY
+  // COMPLETED reports flashed a stale "GENERATING …" in the status bar (the
+  // freshly-remounted <AnswerView> resets reportPhase to null before its
+  // purchase GET resolves to "ready"). That read like the report was
+  // regenerating/re-charging. Only a real `generating` phase — a report whose
+  // background engine job is running — should say GENERATING now.
+  const headerLabel =
+    !isReportBacked || view === "conversation"
+      ? "CONVERSATION"
+      : reportPhase === "generating"
+        ? "GENERATING"
+        : "REPORT";
+
+  // Prefer a resolved parcel for the header reading; then the report's own
+  // subject; then the case anchor; finally the static fallback.
+  const headerReading = reportContent
+    ? {
+        addr: reportContent.address,
+        zone: reportContent.zone_subtitle || "—",
+      }
+    : caseAnchor
+      ? { addr: caseAnchor.label, zone: "—" }
+      : READING;
+
+  // Seed a report-backed conversation with a system line noting the report +
+  // parcel are in context, so follow-ups read as grounded in the purchased
+  // answer (spec). Only once the report subject is known.
+  const reportSeed: Message | null = useMemo(() => {
+    if (!isReportBacked || !reportContent || !reportPurchase) return null;
+    const title = humanizeQuestionSlug(reportPurchase.question_slug);
+    const bits = [reportContent.address, reportContent.zone_subtitle].filter(
+      (s): s is string => Boolean(s && s.trim()),
+    );
+    const subject = bits.length ? ` · ${bits.join(" · ")}` : "";
+    return {
+      kind: "system",
+      body: `Report in context · ${title}${subject} · Follow-ups are grounded in your purchased answer.`,
+    };
+  }, [isReportBacked, reportContent, reportPurchase]);
+
+  const conversationMessages = reportSeed
+    ? [reportSeed, ...messages]
+    : messages;
+
+  // The shared parcel pane anchors on the report subject when report-backed,
+  // else the case anchor.
+  const paneAnchorLabel = reportContent?.address ?? caseAnchor?.label;
+  const paneAnchorKind = reportContent ? "address" : caseAnchor?.kind;
+
+  // ABS-346: the report's "Export PDF" renders the ReportDocument (letterhead
+  // → findings → verification footer) via the dedicated report print surface —
+  // NOT window.print() on the whole workspace (which would capture the chat
+  // chrome/sidebar) and NOT the session transcript. Opens in a new tab so the
+  // export is a clean, self-contained page that auto-triggers the print dialog.
+  const handleExportReport = () => {
+    if (reportIdFromUrl === null || typeof window === "undefined") return;
+    window.open(`/app/print?report_id=${reportIdFromUrl}`, "_blank");
+  };
+  const handleShareReport = async () => {
+    try {
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.clipboard &&
+        typeof window !== "undefined"
+      ) {
+        await navigator.clipboard.writeText(window.location.href);
+      }
+    } catch {
+      // Clipboard blocked (permissions / insecure context) — no-op; the
+      // Share affordance is best-effort chrome, not a critical path.
+    }
   };
 
   return (
@@ -546,7 +880,8 @@ function ProductAppPageInner() {
     // keeps the chat thread's scroll contained.
     <div className="h-dvh flex flex-col bg-surface text-text overflow-hidden">
       <AppHeader
-        reading={READING}
+        reading={headerReading}
+        label={headerLabel}
         onMenuClick={() => setSidebarOpen(true)}
       />
       {/* AddressPill is mobile-only; renders nothing once lg or once
@@ -558,38 +893,78 @@ function ProductAppPageInner() {
         <div className="hidden lg:contents">
           <Sidebar
             onNew={onNew}
-            onSelect={selectSession}
+            onSelect={(id) => selectSession(id, { updateUrl: true })}
             activeSessionId={activeSessionId}
+            activeReportId={reportIdFromUrl}
             refreshTrigger={sidebarRefresh}
           />
         </div>
 
         <main className="flex-1 flex flex-col min-w-0 bg-surface">
-          <ChatThread
-            messages={messages}
-            thinking={thinking}
-            thinkLabel={thinkLabel}
-            error={error}
-          />
-          {(caseTier || caseId !== null) && (
-            <CaseHeaderStrip
-              caseId={caseId}
-              tier={caseTier}
-              budgetWarning={budgetWarning}
+          {/* ABS-344: the CaseToolbar wraps the center pane on a
+           * report-backed case, swapping report ↔ conversation. Hidden for
+           * a conversation-only case (no report to toggle to). */}
+          {isReportBacked && (
+            <CaseToolbar
+              view={view}
+              onToggle={setView}
+              showToggle
+              // Share / Export act on the report document, so they only wire up
+              // once the report has actually rendered (not while GENERATING).
+              onShare={reportContent ? handleShareReport : undefined}
+              onExport={reportContent ? handleExportReport : undefined}
             />
           )}
-          {upgradeOffer && (
-            <CaseUpgradePrompt
-              offer={upgradeOffer}
-              onClose={() => setUpgradeOffer(null)}
-              onAccepted={(newTier) => {
-                setCaseTier(newTier);
-                setUpgradeOffer(null);
-                setBudgetWarning(null);
-              }}
-            />
+
+          {/* Report face — kept mounted (CSS-hidden when the conversation
+           * face is up) so toggling back doesn't re-run the engine. Owns the
+           * GENERATING → report lifecycle and feeds phase/subject upward. */}
+          {reportIdFromUrl !== null && (
+            <div
+              className={cn(
+                "flex-1 overflow-y-auto",
+                view === "report" ? "" : "hidden",
+              )}
+              data-testid="report-canvas"
+            >
+              <div className="px-5 sm:px-8 py-8 lg:py-10 mx-auto max-w-[820px]">
+                <AnswerView
+                  key={reportIdFromUrl}
+                  purchaseId={reportIdFromUrl}
+                  onPhaseChange={setReportPhase}
+                  onPurchaseChange={setReportPurchase}
+                />
+              </div>
+            </div>
           )}
-          {caseId === null ? (
+
+          {/* Conversation face — the existing chat thread. Shown for a
+           * conversation-only case, or when a report-backed case is toggled
+           * to Conversation. */}
+          {(!isReportBacked || view === "conversation") && (
+            <>
+              <ChatThread
+                messages={conversationMessages}
+                thinking={thinking}
+                thinkLabel={thinkLabel}
+                error={error}
+                sessionId={activeSessionId}
+                feedbackMap={feedbackMap}
+              />
+              {caseId !== null && wallet !== null && (
+                <BalanceStrip
+                  caseId={caseId}
+                  caseNumber={caseNumber}
+                  approxTurnsRemaining={wallet.approx_turns_remaining}
+                  lowBalance={wallet.low_balance}
+                  paymentsEnabled={wallet.payments_enabled}
+                />
+              )}
+              {caseId !== null && outOfTokens && (
+                <TopUpPrompt paymentsEnabled={wallet?.payments_enabled ?? false} />
+              )}
+              <ChatDisclaimerBar />
+              {caseId === null ? (
             // No active case → /v1/chat would 400 case_id_required.
             // Two sub-states share this gate:
             //   - activeSessionId !== null: a legacy session loaded
@@ -601,33 +976,47 @@ function ProductAppPageInner() {
             <div className="border-t border-hair px-4 py-3 bg-surface-alt text-[13px] text-text-muted">
               {activeSessionId !== null ? (
                 <>
-                  This conversation predates our new case-based billing
-                  and can&rsquo;t be continued.{" "}
+                  This conversation predates our current billing and
+                  can&rsquo;t be continued.{" "}
                   <a href="/cases/new" className="underline text-text">
-                    Start a new case
+                    Start a new conversation
                   </a>{" "}
                   to ask another question.
                 </>
               ) : (
                 <>
-                  To start a new reading,{" "}
+                  To start a new conversation,{" "}
                   <a href="/cases/new" className="underline text-text">
                     open a case
                   </a>{" "}
-                  first — pick the address, project, or DA you&rsquo;re
-                  asking about.
+                  first — it&rsquo;s free — pick the address, project, or DA
+                  you&rsquo;re asking about.
                 </>
               )}
             </div>
-          ) : (
-            <Composer onSend={send} disabled={thinking} />
+              ) : (
+                <Composer
+                  onSend={send}
+                  disabled={thinking || outOfTokens}
+                  outOfTokens={outOfTokens}
+                  parcel={parcel}
+                />
+              )}
+            </>
           )}
         </main>
 
         {/* Desktop parcel pane (lg+ only). Below lg the pane shows
          * inside Sheet (mobile) or as a side overlay (tablet). */}
         <div className="hidden lg:contents">
-          <ParcelPane parcel={parcel} />
+          <ParcelPane
+            parcel={parcel}
+            sessionId={activeSessionId}
+            caseId={caseId}
+            anchorLabel={paneAnchorLabel}
+            anchorKind={paneAnchorKind}
+            appendix={isReportBacked}
+          />
         </div>
 
         <ParcelFab
@@ -650,6 +1039,7 @@ function ProductAppPageInner() {
             onNew={onNew}
             onSelect={onSelectFromDrawer}
             activeSessionId={activeSessionId}
+            activeReportId={reportIdFromUrl}
             refreshTrigger={sidebarRefresh}
             inDrawer
           />
@@ -676,7 +1066,15 @@ function ProductAppPageInner() {
           maxHeightPct={80}
           ariaLabel="Parcel details"
         >
-          <ParcelPane parcel={parcel} inSheet />
+          <ParcelPane
+            parcel={parcel}
+            sessionId={activeSessionId}
+            caseId={caseId}
+            anchorLabel={paneAnchorLabel}
+            anchorKind={paneAnchorKind}
+            appendix={isReportBacked}
+            inSheet
+          />
         </Sheet>
       )}
       {isTablet && (
@@ -687,11 +1085,50 @@ function ProductAppPageInner() {
           width={320}
           ariaLabel="Parcel details"
         >
-          <ParcelPane parcel={parcel} inSheet />
+          <ParcelPane
+            parcel={parcel}
+            sessionId={activeSessionId}
+            caseId={caseId}
+            anchorLabel={paneAnchorLabel}
+            anchorKind={paneAnchorKind}
+            appendix={isReportBacked}
+            inSheet
+          />
         </Drawer>
       )}
     </div>
   );
+}
+
+async function fetchFeedback(
+  sessionId: string,
+): Promise<Record<number, SavedFeedback>> {
+  try {
+    const res = await fetch(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/feedback`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) return {};
+    const data = (await res.json()) as {
+      feedback: Array<{
+        message_id: number;
+        rating: string | null;
+        flag_reason: string | null;
+        flag_notes: string | null;
+      }>;
+    };
+    const map: Record<number, SavedFeedback> = {};
+    for (const item of data.feedback) {
+      map[item.message_id] = {
+        rating: (item.rating as SavedFeedback["rating"]) ?? null,
+        flag_reason: (item.flag_reason as SavedFeedback["flag_reason"]) ?? null,
+        flag_notes: item.flag_notes,
+      };
+    }
+    return map;
+  } catch {
+    return {};
+  }
 }
 
 function appendAgentDelta(
@@ -723,27 +1160,31 @@ function appendAgentDelta(
 // user turns that carry tool_result are dropped, leaving just the
 // human-readable turns. The opening system message is prepended so
 // resumed sessions still show the "connected" banner.
+function attachDbIds(
+  messages: BackendMessage[],
+  dbIds?: number[],
+): BackendMessage[] {
+  if (!dbIds || dbIds.length === 0) return messages;
+  return messages.map((m, i) => ({
+    ...m,
+    db_id: dbIds[i] ?? undefined,
+  }));
+}
+
 function translateHistory(messages: BackendMessage[]): Message[] {
   const out: Message[] = [OPENING];
-  // One agent message per user question. The tool-use loop can emit
-  // many intermediate assistant turns ("Let me check X" → tool →
-  // "Now let me also check Y" → tool → final answer); rendering all
-  // of them inflates the chat and makes the post-stream snap (which
-  // splits a single streamed message into N) jarring. Instead we
-  // accumulate everything between user messages and emit one agent
-  // turn whose body is the *last* text-bearing assistant turn (the
-  // final answer) and whose reasoning is every tool call that
-  // happened along the way.
   let pendingReasoning: AgentReasoningStep[] = [];
   let pendingFinalText = "";
+  let pendingDbId: number | undefined;
 
   const flush = () => {
     if (!pendingFinalText.trim() && pendingReasoning.length === 0) return;
     out.push(
-      buildAgentFromText(pendingFinalText.trim(), pendingReasoning),
+      buildAgentFromText(pendingFinalText.trim(), pendingReasoning, pendingDbId),
     );
     pendingReasoning = [];
     pendingFinalText = "";
+    pendingDbId = undefined;
   };
 
   for (const m of messages) {
@@ -752,13 +1193,12 @@ function translateHistory(messages: BackendMessage[]): Message[] {
         flush();
         out.push({ kind: "user", body: m.content });
       }
-      // tool_result intermediate → skip
       continue;
     }
     // assistant
     if (typeof m.content === "string") {
-      // Defensive: future provider might collapse to string.
       pendingFinalText = m.content;
+      pendingDbId = m.db_id;
       continue;
     }
     for (const b of m.content) {
@@ -773,8 +1213,8 @@ function translateHistory(messages: BackendMessage[]): Message[] {
       .map((b) => b.text)
       .join("");
     if (text.trim()) {
-      // Overwrite — only the last text turn becomes the rendered body.
       pendingFinalText = text;
+      pendingDbId = m.db_id;
     }
   }
   flush();
@@ -784,6 +1224,7 @@ function translateHistory(messages: BackendMessage[]): Message[] {
 function buildAgentFromText(
   text: string,
   reasoning: AgentReasoningStep[] = [],
+  messageDbId?: number,
 ): AgentMessage {
   return {
     kind: "agent",
@@ -792,6 +1233,7 @@ function buildAgentFromText(
     reasoning,
     confidence: 0.9,
     sources: [],
+    messageDbId,
   };
 }
 

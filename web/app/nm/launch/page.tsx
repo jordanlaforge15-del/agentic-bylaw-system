@@ -1,23 +1,55 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Panel } from "../components/panel";
+import type { RunState, Issue } from "../lib/types";
 
 export default function LaunchPage() {
   const router = useRouter();
   const [maxAgents, setMaxAgents] = useState(3);
   const [label, setLabel] = useState("Triaged");
   const [model, setModel] = useState("opus");
+  const [agentModel, setAgentModel] = useState("opus");
+  const [agentEffort, setAgentEffort] = useState("high");
+  const [agentTokenLimit, setAgentTokenLimit] = useState(10);
+  const [reviewerModel, setReviewerModel] = useState("sonnet");
+  const [reviewerTokenLimit, setReviewerTokenLimit] = useState(2);
   const [deploy, setDeploy] = useState(true);
   const [dryRun, setDryRun] = useState(false);
   const [override, setOverride] = useState("");
   const [launching, setLaunching] = useState(false);
+  const [lastRun, setLastRun] = useState<RunState | null>(null);
+  const [resumeQueued, setResumeQueued] = useState(false);
 
   const groups = useMemo(() => {
     const count = override ? 1 : 9;
     return Math.ceil(count / maxAgents);
   }, [maxAgents, override]);
+
+  useEffect(() => {
+    fetch("/api/nm/state")
+      .then((r) => r.json())
+      .then((data: RunState) => {
+        if (data.run_id) setLastRun(data);
+      })
+      .catch(() => {});
+  }, []);
+
+  const resumableIssues = useMemo(() => {
+    if (!lastRun) return [];
+    const allowed = resumeQueued
+      ? ["failed", "blocked", "reviewing", "queued"]
+      : ["failed", "blocked", "reviewing"];
+    return Object.values(lastRun.issues).filter((i) =>
+      allowed.includes(i.status),
+    );
+  }, [lastRun, resumeQueued]);
+
+  const hasQueued = useMemo(() => {
+    if (!lastRun) return false;
+    return Object.values(lastRun.issues).some((i) => i.status === "queued");
+  }, [lastRun]);
 
   async function handleLaunch() {
     setLaunching(true);
@@ -29,6 +61,11 @@ export default function LaunchPage() {
           maxAgents,
           label,
           model,
+          agentModel,
+          agentEffort,
+          agentTokenLimit,
+          reviewerModel,
+          reviewerTokenLimit,
           deploy,
           issue: override || undefined,
           dryRun,
@@ -40,9 +77,35 @@ export default function LaunchPage() {
     }
   }
 
+  async function handleResume(issueId?: string) {
+    setLaunching(true);
+    try {
+      await fetch("/api/nm/run/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          maxAgents,
+          model,
+          agentModel,
+          agentEffort,
+          agentTokenLimit,
+          reviewerModel,
+          reviewerTokenLimit,
+          deploy,
+          resume: !issueId,
+          resumeIssue: issueId,
+          resumeQueued,
+        }),
+      });
+      router.push("/nm");
+    } catch {
+      setLaunching(false);
+    }
+  }
+
   return (
     <div className="nm-launch">
-      <div className="nm-col" style={{ gap: 12, minWidth: 0 }}>
+      <div className="nm-col nm-col--min-0">
         <Panel
           id="CFG-01"
           title="LAUNCH CONFIGURATION"
@@ -53,9 +116,9 @@ export default function LaunchPage() {
             label="Max parallel agents"
             hint="how many Claude Code processes can run concurrently (default 3)"
           >
-            <div className="nm-row" style={{ gap: 14 }}>
+            <div className="nm-row nm-row--gap-14">
               <input
-                className="nm-input"
+                className="nm-input nm-input-narrow"
                 type="number"
                 min={1}
                 max={10}
@@ -65,25 +128,16 @@ export default function LaunchPage() {
                     Math.max(1, Math.min(10, +e.target.value || 1)),
                   )
                 }
-                style={{ width: 80 }}
               />
-              <div className="nm-row" style={{ gap: 4 }}>
+              <div className="nm-row nm-agent-slots">
                 {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
                   <span
                     key={n}
-                    style={{
-                      width: 14,
-                      height: 22,
-                      border: "1px solid var(--line-2)",
-                      background:
-                        n <= maxAgents ? "var(--primary)" : "transparent",
-                      boxShadow:
-                        n <= maxAgents ? "var(--glow-soft)" : "none",
-                    }}
+                    className={`nm-agent-slot ${n <= maxAgents ? "nm-agent-slot--active" : ""}`}
                   />
                 ))}
               </div>
-              <span className="nm-mute" style={{ marginLeft: 8 }}>
+              <span className="nm-mute nm-right">
                 &asymp; {groups} groups
               </span>
             </div>
@@ -94,28 +148,91 @@ export default function LaunchPage() {
             hint="Linear label used to pull the issue queue"
           >
             <input
-              className="nm-input"
+              className="nm-input nm-input-label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              style={{ maxWidth: 280 }}
             />
           </FormRow>
 
           <FormRow
-            label="Model"
-            hint="default opus · sonnet for speed, haiku for cheap experiments"
+            label="Agent model"
+            hint="Claude model for dev agents that implement issues"
           >
             <div className="nm-seg">
               {["opus", "sonnet", "haiku"].map((m) => (
                 <button
                   key={m}
-                  className={`nm-seg__opt ${model === m ? "nm-seg__opt--active" : ""}`}
-                  onClick={() => setModel(m)}
+                  className={`nm-seg__opt ${agentModel === m ? "nm-seg__opt--active" : ""}`}
+                  onClick={() => setAgentModel(m)}
                 >
                   {m.toUpperCase()}
                 </button>
               ))}
             </div>
+          </FormRow>
+
+          <FormRow
+            label="Agent effort"
+            hint="low = fast/cheap · medium = balanced · high = thorough"
+          >
+            <div className="nm-seg">
+              {["low", "medium", "high"].map((e) => (
+                <button
+                  key={e}
+                  className={`nm-seg__opt ${agentEffort === e ? "nm-seg__opt--active" : ""}`}
+                  onClick={() => setAgentEffort(e)}
+                >
+                  {e.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </FormRow>
+
+          <FormRow
+            label="Agent token limit"
+            hint="estimated-USD cap per agent — Claude Code --max-budget-usd"
+          >
+            <input
+              className="nm-input nm-input-narrow"
+              type="number"
+              min={1}
+              max={50}
+              step={1}
+              value={agentTokenLimit}
+              onChange={(e) => setAgentTokenLimit(Math.max(1, +e.target.value || 1))}
+            />
+          </FormRow>
+
+          <FormRow
+            label="Reviewer model"
+            hint="Claude model for code review gate"
+          >
+            <div className="nm-seg">
+              {["opus", "sonnet", "haiku"].map((m) => (
+                <button
+                  key={m}
+                  className={`nm-seg__opt ${reviewerModel === m ? "nm-seg__opt--active" : ""}`}
+                  onClick={() => setReviewerModel(m)}
+                >
+                  {m.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </FormRow>
+
+          <FormRow
+            label="Reviewer token limit"
+            hint="estimated-USD cap per review — Claude Code --max-budget-usd"
+          >
+            <input
+              className="nm-input nm-input-narrow"
+              type="number"
+              min={0.5}
+              max={20}
+              step={0.5}
+              value={reviewerTokenLimit}
+              onChange={(e) => setReviewerTokenLimit(Math.max(0.5, +e.target.value || 0.5))}
+            />
           </FormRow>
 
           <FormRow
@@ -138,11 +255,10 @@ export default function LaunchPage() {
             hint="optional · pulls only this issue and ignores label filter"
           >
             <input
-              className="nm-input"
+              className="nm-input nm-input-override"
               value={override}
               onChange={(e) => setOverride(e.target.value.toUpperCase())}
               placeholder="e.g. ABS-101"
-              style={{ maxWidth: 200 }}
             />
           </FormRow>
 
@@ -163,19 +279,16 @@ export default function LaunchPage() {
         </Panel>
 
         <Panel id="CMD-02" title="EFFECTIVE COMMAND" right={<span>copy</span>}>
-          <div
-            style={{
-              fontSize: 13,
-              color: "var(--text)",
-              padding: "4px 0",
-              wordBreak: "break-word",
-            }}
-          >
+          <div className="nm-cmd-display">
             <span className="nm-mute">$</span>{" "}
             <span className="nm-prim">./scripts/start-night-manager.sh</span>{" "}
             <span>--max-agents {maxAgents}</span>{" "}
             <span>--label &quot;{label}&quot;</span>{" "}
-            <span>--model {model}</span>{" "}
+            <span>--agent-model {agentModel}</span>{" "}
+            <span>--agent-effort {agentEffort}</span>{" "}
+            <span>--agent-token-limit {agentTokenLimit}</span>{" "}
+            <span>--reviewer-model {reviewerModel}</span>{" "}
+            <span>--reviewer-token-limit {reviewerTokenLimit}</span>{" "}
             {deploy && <span>--deploy </span>}
             {override && <span>--issue {override} </span>}
             {dryRun && <span>--dry-run</span>}
@@ -183,87 +296,112 @@ export default function LaunchPage() {
         </Panel>
       </div>
 
-      <div className="nm-col" style={{ gap: 12, minWidth: 0 }}>
+      <div className="nm-col nm-col--gap-12 nm-col--min-0">
         <Panel
           id="PLN-04"
           title="PLANNED EXECUTION"
           flush
         >
-          <div
-            style={{
-              padding: 12,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
+          <div className="nm-planned-container">
             {Array.from({ length: groups }, (_, i) => (
-              <div
-                key={i}
-                style={{
-                  border: "1px solid var(--line-2)",
-                  padding: "8px 10px",
-                  display: "grid",
-                  gridTemplateColumns: "70px 1fr",
-                  gap: 12,
-                  alignItems: "center",
-                  background: "var(--bg-2)",
-                }}
-              >
+              <div key={i} className="nm-group-row">
                 <div>
                   <div className="nm-up">group</div>
-                  <div
-                    className="nm-prim"
-                    style={{ fontSize: 18, letterSpacing: "0.04em" }}
-                  >
+                  <div className="nm-prim nm-group-num">
                     G{String(i + 1).padStart(2, "0")}
                   </div>
                 </div>
-                <div className="nm-row" style={{ gap: 6, flexWrap: "wrap" }}>
-                  <span className="nm-pill" style={{ color: "var(--text-dim)" }}>
+                <div className="nm-row nm-row--gap-6 nm-row--wrap">
+                  <span className="nm-pill nm-dim">
                     {maxAgents} slots
                   </span>
                 </div>
               </div>
             ))}
             {deploy && (
-              <div
-                style={{
-                  border: "1px dashed var(--line-2)",
-                  padding: "10px 12px",
-                  color: "var(--text-mute)",
-                  textAlign: "center",
-                  letterSpacing: "0.12em",
-                  textTransform: "uppercase",
-                  fontSize: 11,
-                }}
-              >
+              <div className="nm-deploy-row">
                 &#9650; then DEPLOY &middot; dev &rarr; staging &rarr; prod
               </div>
             )}
           </div>
         </Panel>
 
-        <Panel id="LCH-05" title="" flush>
-          <div
-            style={{
-              padding: 16,
-              display: "flex",
-              gap: 12,
-              alignItems: "center",
-              borderTop: "1px solid var(--line)",
-            }}
+        {lastRun && (resumableIssues.length > 0 || hasQueued) && (
+          <Panel
+            id="RSM-03"
+            title="RESUME LAST RUN"
+            right={<span>{lastRun.run_id}</span>}
+            flush
           >
+            <div className="nm-resume-section">
+              <div className="nm-resume-header">
+                {resumableIssues.length} failed/blocked issue
+                {resumableIssues.length !== 1 ? "s" : ""} from last run
+              </div>
+              {resumableIssues.map((iss) => (
+                <div
+                  key={iss.identifier}
+                  data-testid={`resume-row-${iss.identifier}`}
+                  className="nm-resume-row"
+                >
+                  <span className="nm-prim nm-resume-row__id">
+                    {iss.identifier}
+                  </span>
+                  <span className="nm-mute nm-resume-row__title">
+                    {iss.title}
+                  </span>
+                  <span
+                    className={`nm-pill nm-resume-row__status ${
+                      iss.status === "failed" ? "nm-err" : "nm-warn"
+                    }`}
+                  >
+                    {iss.status}
+                  </span>
+                  <button
+                    className="nm-btn nm-btn--ghost nm-resume-row__button"
+                    onClick={() => handleResume(iss.identifier)}
+                    disabled={launching}
+                  >
+                    RESUME
+                  </button>
+                </div>
+              ))}
+              {hasQueued && (
+                <label
+                  data-testid="resume-queued-toggle"
+                  className="nm-resume-checkbox"
+                >
+                  <input
+                    type="checkbox"
+                    checked={resumeQueued}
+                    onChange={(e) => setResumeQueued(e.target.checked)}
+                  />
+                  Include queued (never-started) issues
+                </label>
+              )}
+              <div className="nm-resume-actions">
+                <button
+                  className="nm-btn nm-btn--prim nm-resume-button-full"
+                  onClick={() => handleResume()}
+                  disabled={launching || resumableIssues.length === 0}
+                >
+                  {launching
+                    ? "RESUMING…"
+                    : resumableIssues.length === 0
+                      ? "▶ NOTHING TO RESUME"
+                      : `▶ RESUME ALL ${resumableIssues.length} ISSUES`}
+                </button>
+              </div>
+            </div>
+          </Panel>
+        )}
+
+        <Panel id="LCH-05" title="" flush>
+          <div className="nm-row nm-launch-footer">
             <div className="nm-grow">
               <div className="nm-up">ready to launch</div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: "var(--text-dim)",
-                  marginTop: 2,
-                }}
-              >
-                {groups} groups &middot; {model} &middot;{" "}
+              <div className="nm-dim nm-mt-1">
+                {groups} groups &middot; {agentModel}/{agentEffort} &middot;{" "}
                 {deploy ? "deploy on" : "no deploy"}
               </div>
             </div>

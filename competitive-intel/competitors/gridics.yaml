@@ -1,0 +1,67 @@
+name: "Gridics"
+slug: "gridics"
+url: "https://gridics.com"
+category: "direct"
+status: "active"
+discovered: "2026-05-27"
+last_analyzed: "2026-05-27"
+
+description: "Zoning and land use intelligence platform that digitizes municipal zoning codes into structured, searchable data."
+
+product:
+  type: "saas"
+  target_market:
+    - "developers"
+    - "planners"
+    - "municipalities"
+    - "lawyers"
+  geography:
+    - "United States"
+  jurisdictions:
+    - "Miami-Dade County"
+    - "Multiple US municipalities"
+  pricing_model: "enterprise"
+  pricing_range: "Custom enterprise pricing"
+  key_features:
+    - "Zoning code digitization into structured data"
+    - "Parcel-level zoning lookups"
+    - "Development feasibility analysis"
+    - "API access for integrations"
+    - "GIS map overlays"
+
+positioning:
+  tagline: "Zoning & Land Use Intelligence"
+  differentiators:
+    - "Structured zoning data at parcel level"
+    - "API-first for integrations with proptech platforms"
+    - "GIS visualization layer"
+    - "Multi-jurisdiction coverage in US"
+  weaknesses:
+    - "US-only, no Canadian market presence"
+    - "Enterprise pricing excludes small users"
+    - "Manual code digitization process (not fully automated)"
+    - "No conversational interface"
+
+funding:
+  stage: "seed"
+  total_raised: "unknown"
+  last_round_date: null
+  notable_investors: []
+
+signals:
+  - date: "2026-05-27"
+    type: "product-launch"
+    summary: "Initial competitor profile created during ABS competitive monitoring setup"
+    source_url: "https://gridics.com"
+
+threat_assessment:
+  level: "medium"
+  rationale: "Direct zoning intelligence competitor but US-only. If they expand to Canada, overlap would be significant. Their structured-data approach is complementary to our conversational approach."
+  overlap_areas:
+    - "Zoning code interpretation"
+    - "Parcel-level analysis"
+    - "Developer/planner market"
+  watch_triggers:
+    - "Canadian market expansion announcement"
+    - "Conversational AI feature launch"
+    - "Series A or significant funding round"

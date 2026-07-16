@@ -1,0 +1,15 @@
+[
+  {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "zone": "HR-2",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "PASS",
+    "kw_rate": 0.6333333333333333,
+    "citation_found": 62,
+    "citation_total": 62,
+    "hallucinated": 0,
+    "reasons": []
+  }
+]

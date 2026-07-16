@@ -28,19 +28,27 @@ Each handler:
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
 from advisor.chat.compact import (
+    compact_address_profile,
+    compact_adjacent_zoning,
+    compact_bylaw_query,
+    compact_citation_lookup,
     compact_document_list,
     compact_match,
     compact_outline,
     compact_search_response,
+    compact_zone_profile,
 )
 from advisor.llm import ToolDefinition
 from advisor.llm.tool_loop import ToolHandler
 from bylaw_retrieval.retrieval import (
+    ATTRIBUTE_VOCABULARY,
+    BYLAW_INTENTS,
     CitationLookupRequest,
     LocationSlot,
     RetrievalRequest,
@@ -53,6 +61,31 @@ from layer2.compliance.evaluator import (
     EvaluatorService,
     SubmissionAttributeInput,
 )
+
+
+def _coerce_stringified_object_arg(
+    payload: dict[str, Any], key: str
+) -> dict[str, Any]:
+    """Return ``payload`` with ``payload[key]`` parsed from a JSON string.
+
+    LLMs sometimes serialize a nested object tool argument as a JSON *string*
+    instead of a nested object — e.g. ``{"structured": "{\\"kind\\": ...}"}``
+    rather than ``{"structured": {"kind": ...}}``. Pydantic then rejects the
+    string with ``model_attributes_type``. When ``payload[key]`` is a string
+    that parses to a dict, substitute the parsed dict so validation succeeds;
+    otherwise leave ``payload`` untouched and let normal validation run. Does
+    not mutate the input dict.
+    """
+    value = payload.get(key)
+    if not isinstance(value, str):
+        return payload
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, ValueError):
+        return payload
+    if not isinstance(parsed, dict):
+        return payload
+    return {**payload, key: parsed}
 
 
 # Description copied verbatim from ``mcp/bylaw_retrieval/openai_tools.py``
@@ -70,7 +103,11 @@ _DESC_GET_DOCUMENT_OUTLINE = (
 
 _DESC_LOOKUP_CITATION = (
     "Retrieve the authoritative fragment for an exact citation path such as '4.2' or 'Schedule B > 3'. "
-    "Use this when the user or agent already knows the citation."
+    "Use this when the user or agent already knows the citation.\n\n"
+    "Response shape: `{match: <fragment> | null, suggestions: [<path>, ...], instruction: <next-step>}`. "
+    "If `match` is null, DO NOT retry lookup_citation with a guessed variant. Instead: "
+    "(a) if `suggestions` is non-empty, pick the closest candidate verbatim and re-issue lookup_citation with that exact string; "
+    "(b) if `suggestions` is empty, switch to `search_bylaw_evidence` or `get_document_outline` — the path doesn't exist in this document."
 )
 
 # This is the long form copied from ``server.py:search_bylaw_evidence``
@@ -120,7 +157,14 @@ _DESC_SEARCH_BYLAW_EVIDENCE = (
     "The response's top-level ``notes`` array carries server-side "
     "advisories. If you see a note saying the address should have been "
     "in the 'location' field, RE-ISSUE the call with the slot populated "
-    "— do not just ignore it."
+    "— do not just ignore it.\n\n"
+    "--------------------------------------------------------------------\n"
+    "Tuning the result-set size via 'limit':\n\n"
+    "Default 5; bump to 15 when the question covers multiple dimensions "
+    "(e.g. zone feasibility, height, setbacks, and FAR all at once). "
+    "Cap is 50. Higher limits reduce iteration count but increase the "
+    "payload size billed on every subsequent turn — use the smallest "
+    "value that covers the question's breadth."
 )
 
 
@@ -153,14 +197,88 @@ _SCHEMA_GET_DOCUMENT_OUTLINE: dict[str, Any] = {
 
 _SCHEMA_LOOKUP_CITATION: dict[str, Any] = {
     "type": "object",
+    "description": (
+        "Provide exactly one of 'citation_path' or 'structured'. "
+        "Use 'citation_path' when you already know the exact path string. "
+        "Use 'structured' (zone_attribute, schedule_row, or permitted_use) to "
+        "resolve by zone + attribute, schedule + row, or a single use × zone "
+        "permission-matrix cell — without guessing the path format. "
+        "Prefer the 'permitted_use' kind when the question is 'is <use> "
+        "permitted in <zone>?': it returns a typed permission (permitted / "
+        "conditional / not_permitted) plus any footnote condition, instead of "
+        "leaving you to infer it from table prose."
+    ),
     "properties": {
-        "citation_path": {"type": "string"},
+        "citation_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Exact citation path, e.g. '4.2' or 'Schedule B > 3'. "
+                "Mutually exclusive with 'structured'."
+            ),
+        },
+        "structured": {
+            "description": (
+                "Structured query variant. Mutually exclusive with 'citation_path'. "
+                "Set 'kind' to 'zone_attribute', 'schedule_row', or 'permitted_use'."
+            ),
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["kind", "zone", "attribute"],
+                    "properties": {
+                        "kind": {"type": "string", "const": "zone_attribute"},
+                        "zone": {
+                            "type": "string",
+                            "description": "Zone code, e.g. 'HR-2'.",
+                        },
+                        "attribute": {
+                            "type": "string",
+                            "enum": sorted(ATTRIBUTE_VOCABULARY),
+                            "description": "Attribute to look up.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["kind", "schedule", "row"],
+                    "properties": {
+                        "kind": {"type": "string", "const": "schedule_row"},
+                        "schedule": {
+                            "type": "string",
+                            "description": "Schedule name, e.g. 'Table 1A'.",
+                        },
+                        "row": {
+                            "type": "string",
+                            "description": "Row identifier within the schedule, e.g. 'HR-2'.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["kind", "use", "zone"],
+                    "properties": {
+                        "kind": {"type": "string", "const": "permitted_use"},
+                        "use": {
+                            "type": "string",
+                            "description": "Use name, e.g. 'Restaurant use'.",
+                        },
+                        "zone": {
+                            "type": "string",
+                            "description": "Zone code, e.g. 'HR-2'.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ],
+        },
         "document_id": {"type": "integer"},
         "include_context": {"type": "boolean", "default": True},
         "include_cross_references": {"type": "boolean", "default": True},
         "include_tables": {"type": "boolean", "default": True},
     },
-    "required": ["citation_path"],
     "additionalProperties": False,
 }
 
@@ -206,9 +324,153 @@ _SCHEMA_SEARCH_BYLAW_EVIDENCE: dict[str, Any] = {
         "include_cross_references": {"type": "boolean", "default": True},
         "include_tables": {"type": "boolean", "default": True},
         "include_datasets": {"type": "boolean", "default": True},
-        "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 8},
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 5,
+            "description": (
+                "Maximum fragments to return. Default 5; bump to 15 when the question covers "
+                "multiple dimensions (e.g. zone feasibility); cap is 50."
+            ),
+        },
     },
     "required": ["query"],
+    "additionalProperties": False,
+}
+
+
+# --- get_address_profile -------------------------------------------------
+#
+# Thick case-open tool (ABS-273 / Phase 3). Description copied verbatim from
+# the MCP server's tool docstring headline so the LLM sees the same wording
+# across both surfaces. FR-3.5.
+_DESC_GET_ADDRESS_PROFILE = (
+    "Use this at the start of a case-bound conversation when the user "
+    "mentions an address, parcel, or named place. Returns the zone, overlay "
+    "precincts, heritage status, and citations in one call. Saves multiple "
+    "lookups.\n\n"
+    "The 'address' argument is free text in the same shape the "
+    "search_bylaw_evidence 'location' slot accepts — a civic address "
+    "(\"100 Robie Street\") or a parcel id (\"PID 00012345\"). The tool "
+    "resolves the address spatially, then composes the zone plus every "
+    "linked overlay (height precinct, FAR precinct, heritage district, "
+    "bonus zoning) into one AddressProfile.\n\n"
+    "If the address can't be resolved, the response carries "
+    "'unresolvable': true with empty citations rather than an error — fall "
+    "back to search_bylaw_evidence with the location slot in that case."
+)
+
+_SCHEMA_GET_ADDRESS_PROFILE: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "address": {
+            "type": "string",
+            "description": (
+                "Free-text address, parcel id, or named place to ground the "
+                "case on, e.g. '100 Robie Street' or 'PID 00012345'."
+            ),
+        },
+    },
+    "required": ["address"],
+    "additionalProperties": False,
+}
+
+
+# --- get_adjacent_zoning (ABS-375) ---------------------------------------
+#
+# Resolves the zone of the parcels ABUTTING a subject address's parcel.
+# Development-standards and variance reports punt rear/side setback verdicts
+# to the customer ("UNCERTAIN — depends on adjacent zoning") because the
+# governing setback is conditional on the neighbouring lot's zone, and the
+# agent had no mid-run way to resolve it. This tool closes that gap so the
+# report can give a definitive PASS/FAIL and a variance writer can pin the
+# governing setback provision instead of adopting the applicant's figure.
+# Description mirrored in mcp/bylaw_retrieval/server.py — keep in sync.
+_DESC_GET_ADJACENT_ZONING = (
+    "Use this when a setback (or any standard) is conditional on the ZONE OF "
+    "AN ABUTTING PROPERTY — e.g. a Downtown (DH) lot whose required side yard "
+    "is 0.0 m where it abuts another DH lot but greater where it abuts a "
+    "residential zone. Returns the subject parcel's own zone plus every "
+    "abutting parcel's zone (with a coarse compass direction), so you can "
+    "resolve the governing setback row and give a DEFINITIVE pass/fail "
+    "instead of deferring the abutting-zone question to the customer.\n\n"
+    "The 'address' argument is free text in the same shape the "
+    "search_bylaw_evidence 'location' slot accepts — a civic address "
+    "(\"1250 Robie Street\") or a parcel id (\"PID 00012345\").\n\n"
+    "Reading the response: 'distinct_neighbour_zones' is the set of zones "
+    "among the neighbours — a single-element list means every abutting lot "
+    "shares one zone, so the abutting-zone condition is unambiguous. A "
+    "neighbour whose 'zone' is null abuts but its centroid matched no zone "
+    "polygon (sliver / right-of-way) — treat it as non-determinative rather "
+    "than a residential abutment. If the address can't be resolved or no "
+    "parcels dataset is ingested, the response carries 'unresolvable': true "
+    "or a 'note' — fall back to search_bylaw_evidence in that case."
+)
+
+_SCHEMA_GET_ADJACENT_ZONING: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "address": {
+            "type": "string",
+            "description": (
+                "Free-text address or parcel id whose abutting parcels' "
+                "zoning to resolve, e.g. '1250 Robie Street' or "
+                "'PID 00012345'."
+            ),
+        },
+    },
+    "required": ["address"],
+    "additionalProperties": False,
+}
+
+
+# --- get_zone_profile (ABS-272 thick tool) --------------------------------
+#
+# Description copied verbatim from ``mcp/bylaw_retrieval/server.py``
+# (get_zone_profile docstring). FR-2.6: tell the model this is the
+# one-call path for a zone's standards, and point drill-down at
+# lookup_citation. Keep the two strings in sync.
+_DESC_GET_ZONE_PROFILE = (
+    "Use this when the user asks about a specific zone's standards "
+    "(height, lot coverage, setbacks, floor area ratio, permitted/"
+    "not-permitted uses, parking). Returns everything in one call as a "
+    "structured ZoneProfile — height, coverage, setbacks and FAR under "
+    "'dimensions'; permitted/not-permitted lists under 'uses'; parking "
+    "applicability under 'parking'; and a 'citations' list backing every "
+    "populated field.\n\n"
+    "Prefer this over issuing several search_bylaw_evidence calls for the "
+    "same zone — it collapses that sequence into one call. The internal "
+    "implementation still uses semantic retrieval, so edge cases the DTO "
+    "doesn't anticipate can fall back to search_bylaw_evidence.\n\n"
+    "Filter the response with 'include' (any of 'dimensions', 'uses', "
+    "'parking', 'citations'); omit it to get everything. A field is null "
+    "when the bylaw is silent or retrieval couldn't extract it "
+    "confidently, and 'unknown_zone' is true when the zone wasn't found "
+    "(no exception is raised). For drill-down on any single citation, "
+    "pass its citation_path to lookup_citation."
+)
+
+_SCHEMA_GET_ZONE_PROFILE: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "zone": {
+            "type": "string",
+            "description": "Zone code, e.g. 'HR-2', 'COR', 'CEN-2'.",
+        },
+        "include": {
+            "type": "array",
+            "description": (
+                "Optional list of sections to populate. Any of 'dimensions', "
+                "'uses', 'parking', 'citations'. Omit for all sections."
+            ),
+            "items": {
+                "type": "string",
+                "enum": ["dimensions", "uses", "parking", "citations"],
+            },
+        },
+    },
+    "required": ["zone"],
     "additionalProperties": False,
 }
 
@@ -316,6 +578,79 @@ _SCHEMA_EVALUATE_SUBMISSION: dict[str, Any] = {
         "persist_decision": {"type": "boolean", "default": False},
     },
     "required": ["attributes"],
+    "additionalProperties": False,
+}
+
+
+# --- bylaw_query (ABS-274 / Phase 4 intent-routed mega-tool) --------------
+#
+# Description per FR-4.5. Registered AFTER the thin tools and the Phase 2/3
+# thick tools (see build order below) so the model preferentially reaches
+# for the narrower tools when its intent is ambiguous; bylaw_query is the
+# explicit "I already know the location AND the intent" shortcut.
+#
+# The valid intents are listed inline (BYLAW_INTENTS — the shared
+# vocabulary) so the model sees them, but ``intent`` is deliberately NOT a
+# hard JSON-Schema enum: an out-of-vocabulary intent must still reach the
+# server so it can return unrecognized_intent=True with thin-tool
+# suggestions (FR-4.2) rather than being rejected at the schema layer.
+_DESC_BYLAW_QUERY = (
+    "Use this when the user has stated both a location AND a specific "
+    "intent (feasibility, use permission, dimensional check). Saves "
+    "multiple round-trips by composing the full answer server-side. For "
+    "exploratory questions where you don't yet know the intent, use the "
+    "thin tools.\n\n"
+    "Declare 'intent' as one of: "
+    + ", ".join(BYLAW_INTENTS)
+    + ".\n"
+    "  - zone_feasibility: pass 'zone' — returns the full ZoneProfile "
+    "(dimensions + uses + parking) in one call.\n"
+    "  - address_lookup: pass 'address' — returns the AddressProfile "
+    "(zone + overlays + citations).\n"
+    "  - use_check: pass 'zone' — returns the zone's permitted / "
+    "not-permitted use lists.\n"
+    "  - dimensional_check: pass 'zone' and 'proposed' (e.g. "
+    "{\"height_m\": 80}) — returns the dimensions plus a ConformanceCheck "
+    "flagging each proposed value as pass / fail / inconclusive.\n\n"
+    "An intent outside this list returns 'unrecognized_intent': true with "
+    "a 'suggested_tools' list to fall back to — never an error."
+)
+
+_SCHEMA_BYLAW_QUERY: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "intent": {
+            "type": "string",
+            "description": (
+                "The intent to route on. One of: " + ", ".join(BYLAW_INTENTS) + "."
+            ),
+        },
+        "address": {
+            "type": "string",
+            "description": (
+                "Free-text address / parcel / named place. Required for "
+                "intent='address_lookup'."
+            ),
+        },
+        "zone": {
+            "type": "string",
+            "description": (
+                "Zone code, e.g. 'HR-2'. Required for zone_feasibility, "
+                "use_check, and dimensional_check."
+            ),
+        },
+        "proposed": {
+            "type": "object",
+            "description": (
+                "Proposed dimensional values for intent='dimensional_check', "
+                "e.g. {\"height_m\": 80, \"front_setback_m\": 2}. Keys: "
+                "height_m, lot_coverage_pct, far, front_setback_m, "
+                "side_setback_m, rear_setback_m."
+            ),
+            "additionalProperties": True,
+        },
+    },
+    "required": ["intent"],
     "additionalProperties": False,
 }
 
@@ -440,13 +775,29 @@ def build_bylaw_tools(
             return json.dumps(compact_outline(outline))
 
     async def lookup_citation_handler(payload: dict[str, Any]) -> str:
+        # Some models serialize the nested ``structured`` argument as a JSON
+        # *string* (e.g. '{"kind": "permitted_use", "use": ..., "zone": ...}')
+        # instead of a nested object. model_validate then rejects it with
+        # "Input should be a valid dictionary" and the structured permitted-use
+        # path never reaches the resolver — the model thrashes re-issuing the
+        # call until it hits the iteration cap and falls back to ungrounded
+        # prose (ABS-280, observed with Opus on TC-005 T5). Coerce a stringified
+        # nested object back to a dict before validation.
+        payload = _coerce_stringified_object_arg(payload, "structured")
         # model_validate will raise ValidationError on missing required
         # fields; the tool loop catches that and surfaces it to the LLM
         # as a tool_result error so it can self-correct.
         request = CitationLookupRequest.model_validate(payload)
         with _resolve_cm() as service:
-            match = service.lookup_citation(request)
-            return json.dumps(compact_match(match))
+            response = service.lookup_citation(request)
+            # Before ABS-261 this called compact_match() directly and a
+            # missed path raised ValueError out of the service — the
+            # tool loop then thrashed re-issuing variants until it hit
+            # max_iterations. compact_citation_lookup now produces a
+            # match-or-suggestions envelope with an inline instruction
+            # telling the model exactly what to do next, eliminating
+            # the destructive retry pattern.
+            return json.dumps(compact_citation_lookup(response))
 
     async def search_bylaw_evidence_handler(payload: dict[str, Any]) -> str:
         # Mirror the MCP server's location-slot handling: a missing
@@ -473,11 +824,62 @@ def build_bylaw_tools(
             include_cross_references=payload.get("include_cross_references", True),
             include_tables=payload.get("include_tables", True),
             include_datasets=payload.get("include_datasets", True),
-            limit=payload.get("limit", 8),
+            limit=int(os.environ["ADVISOR_FORCE_SEARCH_LIMIT"]) if "ADVISOR_FORCE_SEARCH_LIMIT" in os.environ else payload.get("limit", 5),
         )
         with _resolve_cm() as service:
             response = service.search(request)
             return json.dumps(compact_search_response(response))
+
+    async def get_address_profile_handler(payload: dict[str, Any]) -> str:
+        """Resolve a free-text address into its zone + overlay profile.
+
+        Returns the compact projection so the (replayed-every-turn)
+        tool_result stays small; the unresolvable case carries an explicit
+        fall-back instruction the model can act on.
+        """
+        address = str(payload.get("address") or "")
+        with _resolve_cm() as service:
+            profile = service.get_address_profile(address)
+            return json.dumps(compact_address_profile(profile))
+
+    async def get_adjacent_zoning_handler(payload: dict[str, Any]) -> str:
+        """Resolve the zoning of the parcels abutting an address's parcel.
+
+        Returns the compact projection so the replayed-every-turn tool_result
+        stays small; the unresolvable / no-parcels case carries an explicit
+        fall-back instruction the model can act on (ABS-375).
+        """
+        address = str(payload.get("address") or "")
+        with _resolve_cm() as service:
+            profile = service.get_adjacent_zoning(address)
+            return json.dumps(compact_adjacent_zoning(profile))
+
+    async def get_zone_profile_handler(payload: dict[str, Any]) -> str:
+        # ABS-272 thick tool. ``zone`` is required; ``include`` filters
+        # which sections are populated. An unknown zone returns a DTO
+        # with unknown_zone=True rather than raising, so the tool loop
+        # never thrashes on a typo'd zone code.
+        zone = payload["zone"]
+        include = payload.get("include")
+        with _resolve_cm() as service:
+            profile = service.get_zone_profile(zone=zone, include=include)
+            return json.dumps(compact_zone_profile(profile))
+
+    async def bylaw_query_handler(payload: dict[str, Any]) -> str:
+        # ABS-274 / Phase 4 intent-routed composer. ``intent`` is required;
+        # the service dispatches to get_zone_profile / get_address_profile
+        # per intent (FR-4.2/4.4). An unrecognised intent or a missing
+        # required slot returns a fall-back envelope rather than raising,
+        # so the tool loop never thrashes.
+        intent = str(payload.get("intent") or "")
+        with _resolve_cm() as service:
+            response = service.bylaw_query(
+                intent=intent,
+                address=payload.get("address"),
+                zone=payload.get("zone"),
+                proposed=payload.get("proposed"),
+            )
+            return json.dumps(compact_bylaw_query(response))
 
     async def evaluate_submission_handler(payload: dict[str, Any]) -> str:
         """Run the compliance evaluator against the supplied attributes + location.
@@ -590,15 +992,39 @@ def build_bylaw_tools(
             input_schema=_SCHEMA_SEARCH_BYLAW_EVIDENCE,
         ),
         ToolDefinition(
+            name="get_address_profile",
+            description=_DESC_GET_ADDRESS_PROFILE,
+            input_schema=_SCHEMA_GET_ADDRESS_PROFILE,
+        ),
+        ToolDefinition(
+            name="get_adjacent_zoning",
+            description=_DESC_GET_ADJACENT_ZONING,
+            input_schema=_SCHEMA_GET_ADJACENT_ZONING,
+        ),
+        ToolDefinition(
+            name="get_zone_profile",
+            description=_DESC_GET_ZONE_PROFILE,
+            input_schema=_SCHEMA_GET_ZONE_PROFILE,
+        ),
+        ToolDefinition(
             name="evaluate_submission_against_bylaws",
             description=_DESC_EVALUATE_SUBMISSION,
             input_schema=_SCHEMA_EVALUATE_SUBMISSION,
         ),
+        # Phase 4 mega-tool — placed AFTER the thin + Phase 2/3 thick tools
+        # so the model tries the narrower tools first when intent is unclear.
         ToolDefinition(
-            name="request_tier_upgrade",
-            description=_DESC_REQUEST_TIER_UPGRADE,
-            input_schema=_SCHEMA_REQUEST_TIER_UPGRADE,
+            name="bylaw_query",
+            description=_DESC_BYLAW_QUERY,
+            input_schema=_SCHEMA_BYLAW_QUERY,
         ),
+        # ABS-383: ``request_tier_upgrade`` is intentionally NOT registered.
+        # The beta pivot retired tier upgrades — chat bills the account
+        # token wallet, not per-case tier credits — so the agent is no
+        # longer offered a tool to prompt one. The handler function and the
+        # ``_LAST_UPGRADE_REQUEST`` drain remain in this module as dormant
+        # no-ops (nothing appends to the buffer now); ``ChatSession`` still
+        # drains it each turn, harmlessly getting an empty list.
     ]
 
     handlers: dict[str, ToolHandler] = {
@@ -606,8 +1032,11 @@ def build_bylaw_tools(
         "get_document_outline": get_document_outline_handler,
         "lookup_citation": lookup_citation_handler,
         "search_bylaw_evidence": search_bylaw_evidence_handler,
+        "get_address_profile": get_address_profile_handler,
+        "get_adjacent_zoning": get_adjacent_zoning_handler,
+        "get_zone_profile": get_zone_profile_handler,
         "evaluate_submission_against_bylaws": evaluate_submission_handler,
-        "request_tier_upgrade": request_tier_upgrade_handler,
+        "bylaw_query": bylaw_query_handler,
     }
 
     return tool_defs, handlers

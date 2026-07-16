@@ -565,3 +565,130 @@ def test_article_a_after_numeric_section_is_not_joined_into_suffix():
     )
     assert fragments[0].fragment_type == FragmentType.SECTION
     assert fragments[0].citation_label == "41"
+
+
+def test_compound_subsection_finds_parent_when_stack_is_cleared():
+    """When a compound subsection like 28AO(1) appears after its parent section
+    28AO has been popped from the stack (e.g. by a later section), the builder
+    should fall back to scanning existing fragments for the base section."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("28AO Residential Requirements", 0, BlockType.HEADING),
+            block("29 Commercial Requirements", 1, BlockType.HEADING),
+            block("28AO(1) Minimum front setback shall be 6 metres.", 2, BlockType.LIST_ITEM),
+        ]
+    )
+    assert fragments[0].citation_label == "28AO"
+    assert fragments[2].citation_label == "28AO(1)"
+    assert fragments[2].fragment_type == FragmentType.SUBSECTION
+    assert fragments[2].parent_index == 0
+    assert fragments[2].citation_path == "28AO > 28AO(1)"
+    assert fragments[2].parse_status == ParseStatus.PARSED
+
+
+def test_compound_subsection_numeric_base_finds_parent():
+    """Compound labels like 7(3) should find parent section 7 even when
+    another section has replaced it on the stack."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("7 General Requirements", 0, BlockType.HEADING),
+            block("8 Height Requirements", 1, BlockType.HEADING),
+            block("7(3) No building shall exceed the permitted height.", 2, BlockType.LIST_ITEM),
+        ]
+    )
+    assert fragments[0].citation_label == "7"
+    assert fragments[2].citation_label == "7(3)"
+    assert fragments[2].parent_index == 0
+    assert fragments[2].citation_path == "7 > 7(3)"
+
+
+def test_compound_subsection_under_parent_on_stack_still_works():
+    """When the parent IS on the stack, the normal path should work —
+    the fallback should not interfere."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("28AO Residential Requirements", 0, BlockType.HEADING),
+            block("28AO(1) Minimum front setback shall be 6 metres.", 1, BlockType.LIST_ITEM),
+            block("28AO(2) Minimum side setback shall be 3 metres.", 2, BlockType.LIST_ITEM),
+        ]
+    )
+    assert fragments[1].parent_index == 0
+    assert fragments[1].citation_path == "28AO > 28AO(1)"
+    assert fragments[2].parent_index == 0
+    assert fragments[2].citation_path == "28AO > 28AO(2)"
+
+
+def test_orphan_subsection_without_compound_label_stays_orphan():
+    """A parenthesized numeric subsection like (2) without a matching base
+    section in the fragments should remain an orphan — the fallback only
+    applies to compound labels."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("(2) If no setback is specified, the minimum setback is 1.5 metres.", 0, BlockType.LIST_ITEM),
+        ]
+    )
+    assert fragments[0].fragment_type == FragmentType.SUBSECTION
+    assert fragments[0].parent_index is None
+
+
+def test_sibling_subsections_under_heading_get_heading_parent():
+    """Subsections like 1(2), 1(3) under a heading with no numbered section
+    parent should fall back to the heading context, not become orphans."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("ADMINISTRATION", 0, BlockType.HEADING),
+            block("1(1) This by-law shall be administered by the Development Officer.", 1, BlockType.PARAGRAPH),
+            block("1(2) No person shall undertake a development without a permit.", 2, BlockType.PARAGRAPH),
+            block("1(3) Every application shall be accompanied by required materials.", 3, BlockType.PARAGRAPH),
+        ]
+    )
+    heading = fragments[0]
+    assert heading.fragment_type == FragmentType.HEADING
+    subs = [f for f in fragments if f.fragment_type == FragmentType.SUBSECTION]
+    assert len(subs) == 3
+    assert subs[0].citation_label == "1(1)"
+    assert subs[0].parent_index == 0
+    for sub in subs[1:]:
+        assert sub.parent_index == 0, f"{sub.citation_label} should have heading as parent"
+        assert sub.parse_status == ParseStatus.PARSED
+
+
+def test_definition_section_preserves_container_for_list_items():
+    """A citation-matched section whose title is a definition intro (e.g.
+    '2 In this by-law:') should act as definition container so subsequent
+    definition-like list items get a parent instead of becoming orphans."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("DEFINITIONS", 0, BlockType.HEADING),
+            block("2 In this by-law:", 1, BlockType.HEADING),
+            block("' HEN ' means adult female chicken.", 2, BlockType.LIST_ITEM),
+            block("' Tower Portion ' means the portion of a building that exceeds 26 metres.", 3, BlockType.LIST_ITEM),
+        ]
+    )
+    section = next(f for f in fragments if f.citation_label == "2")
+    section_idx = fragments.index(section)
+    list_items = [f for f in fragments if f.fragment_type == FragmentType.LIST_ITEM]
+    assert len(list_items) == 2
+    for li in list_items:
+        assert li.parent_index == section_idx, f"definition list item should have section as parent"
+        assert li.parse_status == ParseStatus.PARSED
+
+
+def test_roman_numeral_parts_i_through_xx_all_captured():
+    # ABS-264: parser previously matched only the first letter of a Roman-numeral
+    # Part heading, so "Part IV" became "Part I" and "Part XVII" became "Part I".
+    # After the fix, every Part I–XX must appear as a distinct citation_path.
+    roman_parts = [
+        "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
+        "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX",
+    ]
+    blocks = []
+    for idx, numeral in enumerate(roman_parts):
+        blocks.append(block(f"Part {numeral} Title {numeral}", idx * 2, BlockType.HEADING))
+        blocks.append(block(f"Body text for Part {numeral}.", idx * 2 + 1))
+
+    fragments = reconstruct_hierarchy(blocks)
+    part_labels = {f.citation_label for f in fragments if f.fragment_type == FragmentType.PART}
+    expected = {f"Part {r}" for r in roman_parts}
+    missing = expected - part_labels
+    assert not missing, f"These Part labels were not captured: {sorted(missing)}"

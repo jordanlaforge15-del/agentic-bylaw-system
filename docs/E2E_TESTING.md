@@ -44,6 +44,8 @@ The FastAPI test server runs with no Clerk verifier, so its routes accept an `X-
 
 ```bash
 # 1. Python venv (only if not already done)
+#    dev-setup.sh installs [dev,advisor] extras by default, so uvicorn/fastapi
+#    are available for make e2e without any extra pip install step.
 ./scripts/dev-setup.sh
 
 # 2. JS deps + Playwright browsers
@@ -253,7 +255,7 @@ E2E_BASE_URL=http://localhost:3002 \
   make e2e
 ```
 
-`scripts/e2e-up.sh` derives `POSTGRES_HOST_PORT` from `PG_PORT` and exports it so `docker-compose.yml`'s `"${POSTGRES_HOST_PORT:-5432}:5432"` interpolation picks it up. `playwright.config.ts` already reads `E2E_BASE_URL` for `baseURL`, and `global-setup.ts` / `fixtures/test-env.ts` read `E2E_API_URL` for upstream calls.
+`scripts/e2e-up.sh` derives and exports `POSTGRES_HOST_PORT` from `PG_PORT` (for docker-compose), and also exports `DATABASE_URL` built from `PG_PORT` so Playwright's `global-setup.ts` and seed scripts inherit the correct URL automatically — no extra `DATABASE_URL` export needed. `playwright.config.ts` already reads `E2E_BASE_URL` for `baseURL`, and `global-setup.ts` / `fixtures/test-env.ts` read `E2E_API_URL` for upstream calls.
 
 The first worktree (using all defaults) and the second (using the overrides above) can each run the full suite end-to-end without seeing each other.
 
@@ -264,6 +266,15 @@ Note: the test database `layer1_test` lives inside each worktree's own Postgres 
 **`make e2e-up` says ports already in use.** A previous run didn't tear down cleanly. `pkill -9 -f advisor.api.e2e_server` and `pkill -9 -f "next dev -p 3001"`, then re-run. If another worktree is intentionally running e2e, use the override recipe in [Parallel worktrees](#parallel-worktrees) instead.
 
 **`alembic upgrade head` fails with `value too long for type character varying(32)`.** Revision id `0008_advisor_billing_subscription` is 33 chars and overflows the default `alembic_version.version_num`. `e2e-up.sh` pre-creates the table with `VARCHAR(255)` to work around this for fresh databases — confirm the pre-create ran by checking `\d alembic_version`.
+
+**`e2e-up` prints "Multiple Alembic heads detected" and exits 1.** Two concurrent feature branches both parented their migration to the same `down_revision`. `alembic upgrade head` would fail with "Multiple head revisions are present". Fix:
+```bash
+# From your feature-branch worktree root:
+python scripts/rechain_migration.py
+git log --oneline -3   # verify the [rechain] commit landed
+make e2e               # re-run; guard should pass now
+```
+The Night Manager's `merge_to_dev` runs this automatically before each merge, so this error should only appear when running `make e2e` on a branch that has not yet gone through the NM merge flow. See [docs/NIGHT_MANAGER.md — Alembic collision resistance](NIGHT_MANAGER.md#alembic-collision-resistance) for the full mechanism.
 
 **FastAPI logs show `database "layer1_test" does not exist` even though it was created.** Symptom of two worktrees both trying to bind `host:5432` — one container ends up unpublished and the host-side alembic / uvicorn hit the wrong Postgres. Use the parallel-worktrees recipe to give each worktree its own host port, or tear down the stack of the worktree you're not actively using.
 

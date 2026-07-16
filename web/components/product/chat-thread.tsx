@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AgentMarkdown } from "@/components/product/agent-markdown";
+import { PaidAnswerDisclaimer } from "@/components/product/paid-answer-disclaimer";
 import { HighlightWord } from "@/components/highlight-word";
 import { Mono } from "@/components/mono";
 import type {
@@ -15,6 +16,8 @@ import type {
   SystemMessage,
   UserMessage,
 } from "@/lib/mock";
+import { MessageFeedback, type SavedFeedback } from "@/components/product/message-feedback";
+import { ReadingIndicator } from "@/components/product/reading-indicator";
 import { cn } from "@/lib/cn";
 
 type Props = {
@@ -22,6 +25,8 @@ type Props = {
   thinking: boolean;
   thinkLabel: string;
   error?: string | null;
+  sessionId?: string | null;
+  feedbackMap?: Record<number, SavedFeedback>;
 };
 
 export function ChatThread({
@@ -29,6 +34,8 @@ export function ChatThread({
   thinking,
   thinkLabel,
   error,
+  sessionId,
+  feedbackMap,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const totalBodyLen = messages.reduce(
@@ -48,9 +55,9 @@ export function ChatThread({
       {messages.map((m, i) => {
         if (m.kind === "system") return <SystemMsg key={i} msg={m} />;
         if (m.kind === "user") return <UserMsg key={i} msg={m} />;
-        return <AgentMsg key={i} msg={m} idx={i} />;
+        return <AgentMsg key={i} msg={m} idx={i} sessionId={sessionId} feedbackMap={feedbackMap} />;
       })}
-      {thinking && <ThinkingMsg label={thinkLabel} />}
+      {thinking && <ReadingIndicator label={thinkLabel} />}
       {error && <ErrorMsg body={error} />}
     </div>
   );
@@ -96,7 +103,7 @@ function UserMsg({ msg }: { msg: UserMessage }) {
   );
 }
 
-function AgentMsg({ msg, idx }: { msg: AgentMessage; idx: number }) {
+function AgentMsg({ msg, idx, sessionId, feedbackMap }: { msg: AgentMessage; idx: number; sessionId?: string | null; feedbackMap?: Record<number, SavedFeedback> }) {
   const [open, setOpen] = useState(idx === 0);
   return (
     <div className="flex flex-col gap-3 mb-1">
@@ -199,41 +206,18 @@ function AgentMsg({ msg, idx }: { msg: AgentMessage; idx: number }) {
             ))}
           </div>
         )}
+
+        {msg.messageDbId != null && sessionId != null && (
+          <MessageFeedback
+            sessionId={sessionId}
+            messageId={msg.messageDbId}
+            savedFeedback={feedbackMap?.[msg.messageDbId]}
+          />
+        )}
+
+        <PaidAnswerDisclaimer />
       </div>
     </div>
   );
 }
 
-function ThinkingMsg({ label }: { label: string }) {
-  return (
-    <div className="flex flex-col gap-2.5 sm:gap-3 mb-1">
-      <div className="flex items-center gap-2">
-        <div
-          className="bg-accent flex items-center justify-center"
-          style={{ width: 22, height: 22 }}
-        >
-          <span
-            className="font-sans font-extrabold text-on-accent"
-            style={{ fontSize: 11, letterSpacing: "-0.04em" }}
-          >
-            a
-          </span>
-        </div>
-        <Mono muted>ABS · READING</Mono>
-        <span
-          className="abs-pulse-dot bg-accent"
-          style={{ width: 6, height: 6 }}
-        />
-      </div>
-      <div className="pl-7 sm:pl-8">
-        <div
-          className="flex items-center gap-2.5 font-mono text-[11.5px] sm:text-[12px]"
-          style={{ letterSpacing: "0.02em" }}
-        >
-          <span className="text-accent-ink">→</span>
-          <span>{label}</span>
-        </div>
-      </div>
-    </div>
-  );
-}

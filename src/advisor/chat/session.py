@@ -31,10 +31,13 @@ Frontends that consume this don't need to know it's synthetic.
 """
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from advisor.billing.packs import TIERS as _BILLING_TIERS
+from advisor.chat.hedging import apply_hedge
 from advisor.chat.history_compaction import (
     compact_history_for_submission,
     resolve_keep_recent,
@@ -49,20 +52,51 @@ from advisor.llm import (
     StreamEvent,
     TextBlock,
     TokenUsage,
+    ToolCallMetric,
     ToolDefinition,
+    ToolLoopMetricsEvent,
 )
-from advisor.llm.budget import CircuitTripInfo, default_token_budget
+from advisor.llm.budget import (
+    CircuitTripInfo,
+    default_cumulative_token_budget,
+    default_token_budget,
+)
 from advisor.llm.mock import MockGateway
 from advisor.llm.tool_loop import ToolHandler, run_tool_loop
 
 # Anthropic supports up to 4 cache breakpoints per request. The chat
 # session spends two on the request-level shared prefix (system,
-# tools) and reserves the remaining two for stable conversation
-# milestones — the first one or two assistant turns. Those turns are
-# byte-stable for every subsequent turn in the session, so caching
-# them turns multi-turn conversations into long prompt-cache reads
-# instead of full-cost replays.
-_MAX_CONVERSATION_CACHE_MILESTONES = 2
+# tools) and ONE on a stable conversation milestone — the first
+# assistant turn, which is byte-stable for every subsequent turn in
+# the session, so caching it turns multi-turn conversations into long
+# prompt-cache reads instead of full-cost replays.
+#
+# ABS-285: the fourth breakpoint is reallocated away from a second
+# session milestone to the rolling intra-loop breakpoint that
+# ``advisor.llm.tool_loop`` places on the latest tool_result turn.
+# Intra-loop growth (10–20 retrieval rounds for a single deep
+# question) dwarfs cross-turn growth (a handful of session
+# milestones), so the rolling breakpoint is the higher-value use of
+# the slot. Keep this at 1 to leave that fourth slot free for the
+# tool loop — bumping it back to 2 would push deep-question requests
+# to five breakpoints and Anthropic would reject the call.
+_MAX_CONVERSATION_CACHE_MILESTONES = 1
+
+# ABS-382: tool-loop iteration cap for tier-less (free) cases. Read at
+# call time so ops can tune it without a redeploy; defaults to 20 (the
+# beta business parameter). A malformed value falls back to the default.
+_DEFAULT_MAX_ITERATIONS = 20
+
+
+def _default_max_iterations() -> int:
+    raw = os.getenv("ADVISOR_CHAT_MAX_ITERATIONS")
+    if raw is None:
+        return _DEFAULT_MAX_ITERATIONS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_ITERATIONS
+    return value if value > 0 else _DEFAULT_MAX_ITERATIONS
 
 
 @dataclass
@@ -107,6 +141,17 @@ class ChatSession:
     # safety-net cap); tests can pin a small value to exercise the
     # trip path without env-var manipulation.
     token_budget: int = field(default_factory=default_token_budget)
+    # ABS-305: cumulative per-turn input-token ceiling enforced by the
+    # second cost breaker in ``run_tool_loop``. Bounds the SUM of every
+    # iteration's billed-equivalent estimate across one turn (the
+    # per-request ``token_budget`` only bounds a single gateway call),
+    # so a deep tool loop can't bill $10+ in aggregate. Default reads
+    # from ``ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET``; this is the cost
+    # primitive that bounds each paid answer in the priced-question
+    # catalog.
+    cumulative_token_budget: int = field(
+        default_factory=default_cumulative_token_budget
+    )
     # Set by ``send_user_message_blocking`` when the cost-circuit
     # breaker fires on the most recent turn — ``None`` for turns that
     # completed under budget. The chat route reads this to enrich the
@@ -125,6 +170,7 @@ class ChatSession:
     # Layer-3 upgrade prompts. ``None`` means this session isn't
     # case-billed (legacy / test path).
     case_id: int | None = field(default=None, compare=False)
+    case_number: int | None = field(default=None, compare=False)
     tier: str | None = field(default=None, compare=False)
     # Active case anchor (the address / project ref / DA the case was
     # opened against). Mirrored onto the in-memory session by the chat
@@ -147,6 +193,15 @@ class ChatSession:
     # without having to know about the tool registry's internals.
     last_turn_upgrade_requests: list[dict[str, str]] = field(
         default_factory=list, repr=False, compare=False
+    )
+    # ABS-266: Tool-loop observability event built at the end of the
+    # most recent ``send_user_message_blocking`` call. The streaming
+    # ``send_user_message`` yields this AFTER the synthetic content
+    # stream so out-of-band consumers (test runners, dev consoles) can
+    # see iteration count, per-iteration usage, and terminated reason
+    # without scraping server logs. ``None`` between turns.
+    last_tool_loop_metrics: ToolLoopMetricsEvent | None = field(
+        default=None, repr=False, compare=False
     )
     # How many recent user-prompt turns to keep intact when compacting
     # history for LLM submission. ``None`` defers to the
@@ -187,12 +242,20 @@ class ChatSession:
             keep_recent=resolve_keep_recent(self.compact_keep_recent),
         )
 
+        # A "refinement turn" is any turn after the first assistant response
+        # has been delivered — the user is following up on a paid answer.
+        # Detect this BEFORE appending the new user message: if the current
+        # message list already contains an assistant turn, the incoming
+        # message is a refinement, not a fresh question.
+        is_refinement = any(m.role == LLMRole.ASSISTANT for m in self.messages)
+
         request = CompletionRequest(
             model=self.model,
             system=_compose_system_prompt(
                 self.system_prompt,
                 anchor_label=self.case_anchor_label,
                 anchor_kind=self.case_anchor_kind,
+                is_refinement=is_refinement,
             ),
             messages=_mark_conversation_cache_milestones(submission_messages),
             tools=list(self.tool_defs),
@@ -204,12 +267,44 @@ class ChatSession:
             cache_system=True,
             cache_tools=True,
         )
+        # ABS-382: free (tier-less) cases have no per-tier cap, so fall back
+        # to the env-configurable default ``ADVISOR_CHAT_MAX_ITERATIONS``
+        # (20) rather than the legacy hardcoded 10 — enough headroom for a
+        # deep multi-round turn. Legacy tier'd cases keep their Tier cap.
+        _tier_def = _BILLING_TIERS.get(self.tier) if self.tier else None
         result = await run_tool_loop(
             gateway,
             request=request,
             handlers=self.tool_handlers,
             token_budget=self.token_budget,
+            cumulative_token_budget=self.cumulative_token_budget,
+            max_iterations=(
+                _tier_def.max_iterations
+                if _tier_def
+                else _default_max_iterations()
+            ),
         )
+
+        # ABS-263: deterministic safety net for high-liability answers. If the
+        # final turn is a feasibility-grade answer (multiple built-form
+        # dimensions stacked together) that forgot to point the user at HRM /
+        # a planner, append a templated qualifier. ``apply_hedge`` is a no-op
+        # for narrow lookups and already-hedged answers, so simple homeowner
+        # questions stay lean. We patch BOTH the response we stream back and
+        # the assistant turn we persist so the user sees, and we store, the
+        # same text. See ``advisor.chat.hedging``.
+        hedged_content = apply_hedge(result.final_response.content)
+        if hedged_content is not result.final_response.content:
+            result.final_response = result.final_response.model_copy(
+                update={"content": hedged_content}
+            )
+            if (
+                result.conversation
+                and result.conversation[-1].role == LLMRole.ASSISTANT
+            ):
+                result.conversation[-1] = result.conversation[-1].model_copy(
+                    update={"content": hedged_content}
+                )
 
         # Splice the loop's newly-appended messages back onto the
         # FULL prefix. ``result.conversation[:prefix_len]`` is the
@@ -228,6 +323,27 @@ class ChatSession:
         # value rather than carrying it forward.
         self.last_turn_usage = result.total_usage
         self.last_turn_circuit_trip = result.circuit_trip
+        # ABS-266: build the observability event once, here, so both
+        # the blocking and streaming entry points emit identical
+        # metrics. The flat ``tool_calls`` list mirrors loop dispatch
+        # order; we deliberately drop tool arguments and outputs from
+        # the event because they can be large and contain user data —
+        # the event is for cost/perf observability, not transcript
+        # capture (transcripts live in ``self.messages``).
+        self.last_tool_loop_metrics = ToolLoopMetricsEvent(
+            iterations=result.iterations,
+            terminated_reason=result.terminated_reason,
+            total_usage=result.total_usage,
+            per_iteration=list(result.per_iteration),
+            tool_calls=[
+                ToolCallMetric(
+                    name=inv.tool_name,
+                    is_error=inv.error is not None,
+                    latency_ms=inv.latency_ms,
+                )
+                for inv in result.tool_calls
+            ],
+        )
         self.updated_at = datetime.now(timezone.utc)
         # Drain any tier-upgrade requests fired by the
         # ``request_tier_upgrade`` tool during this turn. The chat
@@ -271,6 +387,13 @@ class ChatSession:
         incremental streaming during tool use will land when we drive
         ``gateway.stream()`` directly inside the loop, which is not
         yet implemented. See module docstring for rationale.
+
+        After the synthetic content stream finishes, ABS-266's
+        ``ToolLoopMetricsEvent`` is yielded as the very last event so
+        out-of-band consumers (test runners, dev consoles) can capture
+        true per-turn iteration count and per-iteration usage. The
+        chat UI ignores unknown event types, so this is invisible to
+        end users.
         """
         final_response = await self.send_user_message_blocking(gateway, text)
         # Reuse the mock's chunker so the event sequence exactly
@@ -278,6 +401,14 @@ class ChatSession:
         # frontend can't tell the difference from a real stream.
         async for event in MockGateway._stream_from_response(final_response):
             yield event
+        # ABS-266: emit the tool-loop rollup after the Anthropic-shape
+        # stream completes so message_stop still terminates the
+        # content stream from the UI's perspective. Skipped when no
+        # metrics were captured (e.g. a turn that errored before the
+        # loop populated them — defensive, shouldn't happen in
+        # practice).
+        if self.last_tool_loop_metrics is not None:
+            yield self.last_tool_loop_metrics
 
 
 _ANCHOR_KIND_LABELS = {
@@ -287,35 +418,68 @@ _ANCHOR_KIND_LABELS = {
 }
 
 
+_REFINEMENT_GUARDRAIL_BLOCK = """\
+## Active refinement turn
+
+The user is following up on an answer already delivered in this conversation. \
+The "Refinement window" rules from your standing instructions apply with full \
+force here:
+
+1. **EVIDENCE INTEGRITY** — you may reformat, condense, clarify, or expand \
+the explanation, but only over evidence already cited in this conversation. \
+Do NOT introduce any claim unsupported by a citation from the retrieved \
+evidence. If the user pushes for a conclusion the evidence does not support, \
+hold the grounded determination and say so clearly.
+
+2. **ANTI-NEW-REPORT** — if this message is asking about a materially \
+different address, parcel, use, or determination type from the original \
+purchased question, do NOT answer it. Acknowledge the new question, explain \
+that it requires a separate purchase, and direct the user to the question menu.\
+"""
+
+
 def _compose_system_prompt(
     persona: str,
     *,
     anchor_label: str | None,
     anchor_kind: str | None,
+    is_refinement: bool = False,
 ) -> str:
-    """Stitch the active-case anchor onto the persona prompt.
+    """Stitch the active-case anchor and optional refinement guardrails onto the
+    persona prompt.
 
-    Returns ``persona`` unchanged when no anchor is set (legacy / test
-    path). Otherwise appends a short block telling the LLM the case's
-    implicit subject — the agent then populates ``search_bylaw_evidence``'s
-    structured ``location`` slot from this anchor instead of asking the
-    user to repeat the address on every turn.
+    Returns ``persona`` unchanged when no anchor is set and not a refinement
+    (legacy / test path). Otherwise appends:
+
+    * An "Active case" block when an anchor is set, telling the LLM the case's
+      implicit subject so it doesn't ask the user to repeat the address.
+    * An "Active refinement turn" block when ``is_refinement=True``,
+      reinforcing the evidence-integrity and anti-new-report guardrails that
+      appear in the base persona. Double-injection makes these rules more
+      salient on follow-up turns where they matter most.
     """
-    if not anchor_label:
+    parts = [persona]
+
+    if anchor_label:
+        kind_label = _ANCHOR_KIND_LABELS.get(anchor_kind or "", "anchor")
+        parts.append(
+            "## Active case\n\n"
+            f"The user has opened a case for the following {kind_label}: "
+            f"{anchor_label}\n\n"
+            "Treat this anchor as the implicit subject of every question in "
+            "this conversation unless the user explicitly changes the "
+            "subject. When you call ``search_bylaw_evidence`` about this "
+            "property, parse the anchor into the structured ``location`` "
+            "slot (civic_number + street for addresses) rather than asking "
+            "the user to repeat it."
+        )
+
+    if is_refinement:
+        parts.append(_REFINEMENT_GUARDRAIL_BLOCK)
+
+    if len(parts) == 1:
         return persona
-    kind_label = _ANCHOR_KIND_LABELS.get(anchor_kind or "", "anchor")
-    return (
-        f"{persona}\n\n"
-        "## Active case\n\n"
-        f"The user has opened a case for the following {kind_label}: "
-        f"{anchor_label}\n\n"
-        "Treat this anchor as the implicit subject of every question in "
-        "this conversation unless the user explicitly changes the "
-        "subject. When you call ``search_bylaw_evidence`` about this "
-        "property, parse the anchor into the structured ``location`` "
-        "slot (civic_number + street for addresses) rather than asking "
-        "the user to repeat it."
-    )
+    return "\n\n".join(parts)
 
 
 def _mark_conversation_cache_milestones(messages: list[Message]) -> list[Message]:

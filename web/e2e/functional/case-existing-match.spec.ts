@@ -1,10 +1,13 @@
-// Functional: opening a case with an anchor that already exists in
-// the 30-day window surfaces the "EXISTING CASE FOUND" banner with a
-// Continue button. The match lookup runs on the anchor input's onBlur.
+// Functional: anchoring to an address that already has a case surfaces the
+// always-on in-window match block (ABS-385). The conversation product is the
+// primary surface now, so there is no `conversation_enabled` gate — the match
+// block renders whenever a case exists for the anchor, with the designed copy
+// and a "Continue conversation →" button. The match lookup runs on the anchor
+// input's onBlur.
 
 import { expect, openCaseViaApi, test } from "../fixtures/test-env";
 
-test("existing-case match banner appears for a re-open attempt", async ({
+test("existing-conversation match block appears for a re-open attempt", async ({
   page,
 }) => {
   const anchor = `dup-anchor-${Date.now()}`;
@@ -15,8 +18,13 @@ test("existing-case match banner appears for a re-open attempt", async ({
   await anchorInput.fill(anchor);
   await anchorInput.blur();
 
-  await expect(page.getByText(/EXISTING CASE FOUND/)).toBeVisible();
+  const match = page.getByTestId("existing-case-match");
+  await expect(match).toBeVisible();
+  await expect(match).toContainText("EXISTING CASE FOUND");
+  await expect(match).toContainText(
+    "You have a conversation for this address.",
+  );
   await expect(
-    page.getByRole("button", { name: /Continue case/ }),
+    match.getByRole("button", { name: /Continue conversation/ }),
   ).toBeVisible();
 });

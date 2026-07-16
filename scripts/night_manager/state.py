@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from .config import NM_DIR, LOGS_DIR, STATE_FILE
 
@@ -40,7 +40,23 @@ class IssueState:
     completed_at: str | None = None
     merged_at: str | None = None
     error: str | None = None
+    rate_limited: bool = False
+    agent_model: str = ""
+    agent_effort: str = ""
     linear_id: str = ""
+    # Compact summary of the issue produced by the planner so it can be
+    # reused for in-flight replans without re-sending the full description.
+    # Shape: {"areas": [str], "kind": str, "risk_tags": [str]}
+    touch_profile: dict | None = None
+    # True once this issue was added to a run after the initial plan via
+    # a rescan at a group boundary. Purely informational.
+    added_via_rescan: bool = False
+    # Byte offset into log_file captured BEFORE the current attempt wrote
+    # anything. The error_detail fallback in _run_agent_lifecycle reads
+    # from this offset to EOF so historical events from prior attempts
+    # in the same append-only log file can no longer false-positive
+    # _is_rate_limited (see ABS-146).
+    attempt_log_offset: int = 0
 
     def mark_started(self) -> None:
         self.status = "in_progress"
@@ -50,10 +66,25 @@ class IssueState:
     def mark_completed(self) -> None:
         self.status = "reviewing"
         self.completed_at = _now_iso()
+        # A later attempt succeeding scrubs the failure metadata from the
+        # earlier attempt — otherwise state.json reports `failed` reasons
+        # for an issue that actually completed (see ABS-148).
+        self.error = None
+        self.rate_limited = False
 
     def mark_merged(self) -> None:
         self.status = "merged"
         self.merged_at = _now_iso()
+        self.error = None
+        self.rate_limited = False
+
+    def mark_reverted(self, revert_sha: str = "") -> None:
+        """Mark the issue as reverted — merge landed on dev but was rolled back."""
+        self.status = "reverted"
+        self.merged_at = None
+        sha_note = f" (revert {revert_sha})" if revert_sha else ""
+        self.error = f"Post-merge regression: merge reverted{sha_note}"
+        self.rate_limited = False
 
     def mark_failed(self, error: str) -> None:
         self.status = "failed"
@@ -62,6 +93,32 @@ class IssueState:
     def mark_blocked(self, reason: str) -> None:
         self.status = "blocked"
         self.error = reason
+
+    # Statuses that `--resume` always picks up. `reviewing` is included
+    # because a kernel panic / OS kill can leave an issue in `reviewing`
+    # with a dead PID (see ABS-121 from run nm-20260526-004610 — killed
+    # mid-e2e by the stuck-watchdog). `queued` is NOT in this set: a
+    # never-started issue may already have been picked up out-of-band
+    # (hand-merged to dev), so it is opt-in via `--resume-queued`.
+    RESUMABLE_STATUSES: ClassVar[tuple[str, ...]] = ("failed", "blocked", "reviewing")
+    # Statuses that the resume sanity-check pass should reconcile against
+    # git reality. `queued` is included here even though it isn't in
+    # RESUMABLE_STATUSES — out-of-band merges happen for not-yet-started
+    # issues too (see ABS-125 in run nm-20260526-004610).
+    RECONCILABLE_STATUSES: ClassVar[tuple[str, ...]] = (
+        "queued", "in_progress", "reviewing", "failed", "blocked",
+    )
+
+    @property
+    def is_resumable(self) -> bool:
+        return self.status in self.RESUMABLE_STATUSES
+
+    def reset_for_retry(self) -> None:
+        self.status = "queued"
+        self.error = None
+        self.rate_limited = False
+        self.completed_at = None
+        self.merged_at = None
 
 
 @dataclass

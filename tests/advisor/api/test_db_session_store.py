@@ -522,6 +522,7 @@ def test_list_summaries_for_user_carries_anchor_and_first_message(
     try:
         case = DbCase(
             user_id=user_id,
+            user_case_number=1,
             anchor_label="1234 Main St, Halifax",
             anchor_key="1234 main st halifax",
             anchor_kind="address",
@@ -565,6 +566,7 @@ def test_list_summaries_for_user_carries_anchor_and_first_message(
     assert entry.first_user_message == "Can I build a 6-storey on this lot?"
     assert entry.user_message_count == 1
     assert entry.assistant_text_count == 1
+    assert entry.case_id == case.id
 
 
 def test_list_summaries_for_user_no_case_returns_null_anchor(
@@ -622,6 +624,7 @@ def test_list_summaries_for_user_empty_session_first_message_is_none(
     try:
         case = DbCase(
             user_id=user_id,
+            user_case_number=1,
             anchor_label="DA-2024-12345",
             anchor_key="da-2024-12345",
             anchor_kind="development_application",

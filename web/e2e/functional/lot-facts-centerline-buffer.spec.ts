@@ -75,9 +75,11 @@ function runSeed(): void {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const seed = path.join(repoRoot, "scripts", "seed_e2e_parcels.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
+  // ABS-207: honor PG_PORT for the parallel-worktree case.
+  const pgPort = process.env.PG_PORT || "5432";
   const databaseUrl =
     process.env.DATABASE_URL ||
-    "postgresql+psycopg://layer1:layer1@localhost:5432/layer1_test";
+    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
 
   execSync(`"${venvPython}" "${seed}"`, {
     env: {
@@ -94,9 +96,11 @@ function readCaseMetadata(caseId: number): Record<string, unknown> {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const inspect = path.join(repoRoot, "scripts", "inspect_case_metadata.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
+  // ABS-207: honor PG_PORT for the parallel-worktree case.
+  const pgPort = process.env.PG_PORT || "5432";
   const databaseUrl =
     process.env.DATABASE_URL ||
-    "postgresql+psycopg://layer1:layer1@localhost:5432/layer1_test";
+    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
 
   // stdio "pipe" so we can capture stdout; inherit stderr so a Python
   // traceback surfaces in the Playwright log if the inspect step fails.

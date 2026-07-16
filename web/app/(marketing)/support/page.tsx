@@ -23,7 +23,7 @@ const FAQS: Array<{ q: string; a: string }> = [
   },
   {
     q: "How is billing set up right now?",
-    a: "Pricing is published per case credit (Quick / Standard / Complex). On this deployment the purchase flow may be dormant — beta accounts are typically granted credits manually. See the Billing page once signed in.",
+    a: "You pay by the turn. Opening a conversation is free; each reply from the advisor draws turns from your balance, and you top up when you run low (the Pricing page has the details). On this deployment the purchase flow may be dormant — beta accounts are typically granted a starting balance manually. See the Billing page once signed in.",
   },
 ];
 

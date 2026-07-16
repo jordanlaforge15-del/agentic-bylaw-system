@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+import os
 import re
 from typing import Iterable
 
@@ -21,8 +22,15 @@ from layer1.db.base import (
     TableSemanticProfile,
 )
 from layer1.profiles import ParsingProfile
+from layer1.semantic.conventions import (
+    DEFAULT_IGNORED_CODEPOINTS,
+    DEFAULT_PERMITTED_CODEPOINTS,
+    SYMBOL_MATRIX,
+    EnrichmentConventions,
+)
 from layer1.semantic.extractors import (
     ProfileOverlay,
+    current_enrichment_conventions,
     extract_condition_refs,
     extract_development_contexts,
     extract_numeric_values,
@@ -34,12 +42,30 @@ from layer1.semantic.extractors import (
     looks_like_section_label,
     looks_like_use_label,
     normalize_use,
+    normalize_zone,
     reset_profile_overlay,
     use_profile_overlay,
 )
+from layer1.semantic.permission_markers import annotate_value_cells
+from layer1.semantic.use_matching import match_use
 
 EXTRACTOR_VERSION = "semantic-v1"
 REVIEW_AUTO = "auto_accepted"
+REVIEW_NEEDS = "needs_review"
+
+# ABS-278: axis bindings whose confidence is at or below this threshold are
+# flagged for human review (``metadata_json.review = "needs_review"``) rather
+# than trusted for automated (use, zone) → cell resolution. Recovered header-
+# bleed columns and ambiguous labels land here. Configurable via env so a
+# jurisdiction with noisier source tables can loosen/tighten the gate without a
+# code change.
+AXIS_REVIEW_CONFIDENCE_THRESHOLD = float(
+    os.environ.get("ABS_AXIS_REVIEW_THRESHOLD", "0.6")
+)
+# Confidence assigned to a zone column recovered from header-bleed (a bare zone
+# code found in the data region rather than the header row). Deliberately at/
+# below the review threshold — these are corrections, not first-class headers.
+HEADER_BLEED_CONFIDENCE = 0.55
 PERMISSION_MARKERS = {"●", "", "•", "■", "x", "X"}
 
 
@@ -105,6 +131,7 @@ def enrich_document_semantics(
             _extract_fragment_entities(session, report, cache, fragment)
             _extract_definition_fact(session, report, cache, fragment)
             _extract_condition_definition(session, report, cache, fragment)
+            _extract_mainland_permitted_uses(session, report, cache, fragment)
         for table in tables:
             _enrich_table(session, report, cache, table)
         _enrich_cross_references(session, report, cache, document_id=document_id)
@@ -119,16 +146,51 @@ def enrich_document_semantics(
 def _overlay_from_profile(profile: ParsingProfile | None) -> ProfileOverlay | None:
     if profile is None:
         return None
+    conventions = _conventions_from_profile(profile)
     if (
         profile.zone_pattern is None
         and profile.known_zone_codes is None
         and profile.use_class_map is None
+        and conventions is None
     ):
         return None
     return ProfileOverlay(
         zone_pattern=profile.zone_pattern,
         known_zone_codes=profile.known_zone_codes,
         use_class_map=profile.use_class_map,
+        enrichment=conventions,
+    )
+
+
+def _conventions_from_profile(
+    profile: ParsingProfile | None,
+) -> EnrichmentConventions | None:
+    """Build per-bylaw :class:`EnrichmentConventions` from a parsing profile.
+
+    Returns ``None`` when the profile declares no enrichment fields, so the
+    overlay stays minimal and enrichment classification falls back to the
+    Regional-Centre default (ABS-284 FR3).
+    """
+    if profile is None:
+        return None
+    if (
+        profile.permission_encoding is None
+        and profile.permitted_marker_codepoints is None
+        and profile.ignored_marker_codepoints is None
+    ):
+        return None
+    return EnrichmentConventions(
+        permission_encoding=profile.permission_encoding or SYMBOL_MATRIX,
+        permitted_codepoints=(
+            profile.permitted_marker_codepoints
+            if profile.permitted_marker_codepoints is not None
+            else DEFAULT_PERMITTED_CODEPOINTS
+        ),
+        ignored_codepoints=(
+            profile.ignored_marker_codepoints
+            if profile.ignored_marker_codepoints is not None
+            else DEFAULT_IGNORED_CODEPOINTS
+        ),
     )
 
 
@@ -329,6 +391,175 @@ def _extract_condition_definition(
         )
 
 
+# --------------------------------------------------------------------- ABS-283
+# Mainland permitted-use extraction. The Regional Centre LUB encodes permitted
+# uses in a symbol-font ●/circled-number matrix (Table 1A). The Halifax
+# Mainland LUB does NOT use that convention (0 U+F098 cells) — it lists permitted
+# uses as prose under each zone's section, e.g.:
+#
+#     "62EA(1) The following uses shall be permitted in any ICH Zone:
+#      (1) Single Unit Dwellings
+#      (2) Open Space Uses"
+#
+# plus an exhaustiveness clause ("No person shall ... carry out ... any
+# development for any purpose other than ... the uses set out in subsection
+# (1)"), which makes the list closed: a use absent from the list is *not
+# permitted*, not merely unknown. We detect the intro, parse the enumerated /
+# comma-separated use list, and emit one ``permitted_use_list`` fact per
+# (zone, fragment) carrying the permitted uses. :func:`resolve_mainland_
+# permitted_use` reads those facts to return a grounded (use, zone) verdict.
+_MAINLAND_PERMITTED_INTRO_RE = re.compile(
+    r"following\s+uses?\s+(?:shall\s+be\s+|are\s+|may\s+be\s+|will\s+be\s+)?"
+    r"permitted\s+in\s+(?:any|the|an|all|each)\s+"
+    r"([A-Za-z0-9][A-Za-z0-9\-]{0,11})\s+zones?\b\s*:?",
+    re.IGNORECASE,
+)
+# Split the use list into items: enumeration markers "(1)"/"(a)", bullets,
+# newlines, semicolons, or commas.
+_MAINLAND_LIST_SPLIT_RE = re.compile(
+    r"\(\s*\d{1,3}\s*\)|\(\s*[a-z]{1,3}\s*\)|[\n;,•]|(?<!\w)-\s+", re.IGNORECASE
+)
+# A trailing exhaustiveness/restriction clause marks the end of the use list.
+_MAINLAND_LIST_STOP_RE = re.compile(
+    r"\bno\s+person\s+shall\b|\bno\s+development\b|\bsubsection\b|"
+    r"\bexcept\s+as\b|\bprovided\s+that\b",
+    re.IGNORECASE,
+)
+
+
+def _loose_use_key(name: str) -> str:
+    """Plural/qualifier-insensitive match key for a Mainland use phrase.
+
+    Lists spell uses as title-case plurals ("Single Unit Dwellings", "Open
+    Space Uses") while a query arrives singular and may carry a trailing
+    "use" ("single unit dwelling", "single unit dwelling use"). Collapse both
+    sides to a common key: lowercase + alias-normalize, neutralize hyphenation
+    (``normalize_use`` aliases the singular "single unit dwelling" to the
+    hyphenated "single-unit dwelling" but leaves the plural list form spaced),
+    drop a trailing "use"/"uses" qualifier, then a single trailing plural "s".
+    """
+    key = normalize_use(name).replace("-", " ")
+    key = re.sub(r"\s+", " ", key).strip()
+    key = re.sub(r"\s+uses?$", "", key).strip()
+    key = re.sub(r"s$", "", key)
+    return key
+
+
+def _parse_mainland_use_list(tail: str) -> list[str]:
+    """Parse the enumerated/comma-separated use list following the intro."""
+    stop = _MAINLAND_LIST_STOP_RE.search(tail)
+    if stop is not None:
+        tail = tail[: stop.start()]
+    items: list[str] = []
+    for raw in _MAINLAND_LIST_SPLIT_RE.split(tail):
+        if raw is None:
+            continue
+        item = re.sub(r"\s+", " ", raw).strip().strip(".,;:()")
+        if len(item) < 3 or len(item) > 60:
+            continue
+        if not re.search(r"[A-Za-z]", item):
+            continue
+        # Drop bare section labels and connective fragments that aren't uses.
+        if looks_like_section_label(item):
+            continue
+        if item.lower() in {"and", "or", "and the following", "the following"}:
+            continue
+        items.append(item)
+    # De-duplicate, preserving order.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in items:
+        key = item.lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    return deduped
+
+
+def _extract_mainland_permitted_uses(
+    session: Session,
+    report: SemanticEnrichmentReport,
+    cache: dict[tuple[str, str], SemanticEntity],
+    fragment: SourceFragment,
+) -> None:
+    """ABS-283: emit a ``permitted_use_list`` fact from Mainland section prose.
+
+    Detects "The following uses shall be permitted in any <ZONE> Zone: ..."
+    style fragments, parses the enumerated use list, and records one fact per
+    (zone, fragment) so a (use, zone) query can be resolved without the
+    symbol-dot matrix the Mainland LUB doesn't use.
+    """
+    text = fragment.text or ""
+    match = _MAINLAND_PERMITTED_INTRO_RE.search(text)
+    if not match:
+        return
+    zone_raw = match.group(1)
+    zone_norm = normalize_zone(zone_raw)
+    if not zone_norm:
+        return
+    uses = _parse_mainland_use_list(text[match.end():])
+    if not uses:
+        return
+    zone_entity = _get_or_create_entity(
+        session,
+        report,
+        cache,
+        document_id=fragment.document_id,
+        entity_type="zone",
+        canonical_name=zone_norm,
+        source_text=zone_raw,
+        confidence=0.85,
+        metadata={"source_fragment_id": fragment.id},
+    )
+    use_keys: list[str] = []
+    use_entities: list[SemanticEntity] = []
+    for use_label in uses:
+        use_entity = _get_or_create_entity(
+            session,
+            report,
+            cache,
+            document_id=fragment.document_id,
+            entity_type="use",
+            canonical_name=normalize_use(use_label),
+            source_text=use_label,
+            confidence=0.8,
+            metadata={"source_fragment_id": fragment.id},
+        )
+        use_entities.append(use_entity)
+        use_keys.append(_loose_use_key(use_label))
+    fact = _create_fact(
+        session,
+        report,
+        document_id=fragment.document_id,
+        relation_type="permitted_use_list",
+        subject=zone_entity,
+        value_text=fragment.text,
+        normalized_value={
+            "permission_convention": "mainland_section_prose",
+            "zone": zone_norm,
+            "permitted_uses": uses,
+            "permitted_use_keys": sorted(set(use_keys)),
+        },
+        assertion_type="explicit",
+        confidence=0.8,
+        metadata={"source_fragment_ids": [fragment.id]},
+    )
+    _add_participant(session, report, fact, zone_entity, "zone", 0.85)
+    for use_entity in use_entities:
+        _add_participant(session, report, fact, use_entity, "use", 0.8)
+    _add_provenance(
+        session,
+        report,
+        document_id=fragment.document_id,
+        object_type="semantic_fact",
+        object_id=fact.id,
+        source_type="source_fragment",
+        source_id=fragment.id,
+        method="mainland_permitted_use_extractor",
+        confidence=0.8,
+    )
+
+
 def _enrich_table(
     session: Session,
     report: SemanticEnrichmentReport,
@@ -344,7 +575,10 @@ def _enrich_table(
     if not cells:
         return
     rows = _rows_by_index(cells)
-    profile_type, row_axis_type, column_axis_type, value_type, confidence = _classify_table(table, rows)
+    conventions = current_enrichment_conventions()
+    profile_type, row_axis_type, column_axis_type, value_type, confidence = _classify_table(
+        table, rows, conventions
+    )
     profile = TableSemanticProfile(
         table_id=table.id,
         profile_type=profile_type,
@@ -370,6 +604,12 @@ def _enrich_table(
         confidence=confidence,
     )
     if profile_type == "permission_matrix":
+        # ABS-281: recover the ●/circled-number permission markers into
+        # ``metadata_json.permission_marker`` now that this table is confirmed a
+        # permission matrix. This is the single annotation trigger — the old
+        # ingest-time hook (which ran before this profile existed and gated on
+        # captions that the corpus doesn't carry) is removed.
+        annotate_value_cells(cells, apply=True, conventions=conventions)
         _extract_permission_table_facts(session, report, cache, table, rows)
     elif profile_type == "parking_matrix":
         _extract_parking_table_facts(session, report, cache, table, rows)
@@ -462,11 +702,32 @@ def _extract_definition_fact(
 def _classify_table(
     table: SourceTable,
     rows: dict[int, list[SourceTableCell]],
+    conventions: EnrichmentConventions | None = None,
 ) -> tuple[str, str | None, str | None, str | None, float]:
+    # ABS-284: permission-matrix detection is now profile-driven. ``conventions``
+    # carries the active bylaw's encoding (``symbol_matrix`` vs
+    # ``section_indexed``) and its amendment-table disqualifier; ``None`` selects
+    # the Regional-Centre default so the no-profile path is byte-for-byte
+    # unchanged.
+    if conventions is None:
+        conventions = current_enrichment_conventions()
     caption = (table.caption or "").lower()
     row_labels = [_row_label(cells) for idx, cells in rows.items() if idx > 0]
     headers = [_cell_text(cell) for cell in rows.get(_header_row_index(rows), [])]
     zone_density = _zone_density(headers)
+    # ABS-283: a genuine permission/zone matrix carries *several* zone columns.
+    # An amendment/section-history table that happens to spill one stray zone
+    # code into its header would still clear the density gate when it has few
+    # columns, so additionally require an absolute count of zone-bearing data
+    # columns (header row, excluding the corner/row-label cell) before the
+    # section-indexed branch may fire.
+    zone_header_count = sum(1 for header in headers[1:] if extract_zones(header))
+    # ABS-283: section/amendment-history tables (e.g. Mainland LUB table 1117
+    # header "62(1)", table 1135 "14QB(2) | Sep 1/20 | Nov 7/20 | Case 21162")
+    # carry amendment-date and case-number columns that a permission matrix
+    # never has. Detecting them vetoes the false-positive permission_matrix
+    # classification that the marker backfill would otherwise stamp as garbage.
+    amendment_signal = _looks_like_amendment_table(headers, row_labels)
     use_density = sum(1 for label in row_labels if looks_like_use_label(label)) / max(len(row_labels), 1)
     # ABS-105: bylaws that index permission/parking matrices by section
     # number (e.g. Halifax Mainland LUB row labels: "11(1)", "5A", "28AO(1)")
@@ -482,11 +743,29 @@ def _classify_table(
         len(headers) + len(row_labels), 1
     )
     parking_signal = "parking" in caption or any("parking" in text.lower() for text in headers + row_labels)
+    # ABS-284: a bylaw that doesn't encode permissions in a symbol-dot matrix
+    # (``section_indexed`` — e.g. Halifax Mainland LUB, whose permissions live in
+    # section prose) must never classify a table as a permission matrix. Under
+    # that encoding the section×zone-shaped tables are amendment/section-history
+    # grids, and the prose extractor supplies the permitted uses instead. The
+    # amendment-table disqualifier is likewise profile-configurable (default on).
+    amendment_disqualifies = (
+        conventions.disqualify_amendment_tables and amendment_signal
+    )
     if (
-        "permitted uses by zone" in caption
-        or (zone_density >= 0.4 and use_density >= 0.35)
-        or (zone_density >= 0.3 and section_label_density >= 0.5)
-    ) and not parking_signal:
+        conventions.detects_symbol_matrix
+        and (
+            "permitted uses by zone" in caption
+            or (zone_density >= 0.4 and use_density >= 0.35)
+            or (
+                zone_density >= 0.3
+                and section_label_density >= 0.5
+                and zone_header_count >= 2
+            )
+        )
+        and not parking_signal
+        and not amendment_disqualifies
+    ):
         return "permission_matrix", "use", "zone", "permission_marker", 0.9
     if parking_signal and (zone_density >= 0.2 or standard_density >= 0.2):
         return "parking_matrix", "use", "standard", "requirement", 0.75
@@ -509,23 +788,54 @@ def _extract_permission_table_facts(
     header_idx = _header_row_index(rows)
     header_cells = rows.get(header_idx, [])
     column_entities: dict[int, SemanticEntity] = {}
-    for cell in header_cells[1:]:
-        zones = extract_zones(cell.text)
-        if not zones:
-            continue
+
+    def _bind_column_zone(
+        col_index: int,
+        zone_code: str,
+        raw_label: str,
+        cell: SourceTableCell,
+        confidence: float,
+    ) -> None:
         entity = _get_or_create_entity(
             session,
             report,
             cache,
             document_id=table.document_id,
             entity_type="zone",
-            canonical_name=zones[0],
-            source_text=cell.text,
-            confidence=0.95,
+            canonical_name=zone_code,
+            source_text=raw_label,
+            confidence=confidence,
             metadata={"source_table_id": table.id, "source_table_cell_id": cell.id},
         )
-        column_entities[cell.col_index] = entity
-        _add_axis_binding(session, report, table, "column", cell.col_index, entity, cell.text, 0.95)
+        column_entities[col_index] = entity
+        _add_axis_binding(
+            session, report, table, "column", col_index, entity, raw_label, confidence
+        )
+
+    # 1. Primary: zone codes sitting in the detected header row.
+    for cell in header_cells[1:]:
+        zones = extract_zones(cell.text)
+        if not zones:
+            # FR5: a populated header column we couldn't map to a zone is logged
+            # rather than silently dropped, so it surfaces for later review.
+            if _cell_text(cell):
+                report.warnings.append(
+                    f"table {table.id}: unmapped column header "
+                    f"{_cell_text(cell)!r} at col {cell.col_index} "
+                    "(no zone code resolved)"
+                )
+            continue
+        _bind_column_zone(cell.col_index, zones[0], cell.text, cell, 0.95)
+
+    # 2. ABS-278 Defect C: header-bleed correction. Some source tables spill a
+    # zone-header band into the body (e.g. table 1057 rows 8–9), so bare zone
+    # codes appear as data-cell values. Promote those to column bindings for any
+    # column still missing a zone, and flag the offending cells so they are not
+    # read as permission markers.
+    _correct_header_bleed(
+        session, report, table, rows, header_idx, column_entities, _bind_column_zone
+    )
+
     for row_index, row_cells in rows.items():
         if row_index == header_idx or _is_repeated_header_row(row_cells):
             continue
@@ -533,6 +843,13 @@ def _extract_permission_table_facts(
         is_use_label = looks_like_use_label(row_label)
         is_section_label = (not is_use_label) and looks_like_section_label(row_label)
         if not (is_use_label or is_section_label):
+            # FR5: a non-empty row label that maps to neither a use class nor a
+            # section reference is logged for review instead of dropped.
+            if row_label:
+                report.warnings.append(
+                    f"table {table.id}: unmapped row label {row_label!r} at "
+                    f"row {row_index} (neither use nor section label)"
+                )
             continue
         # ABS-105: when the row is a section-number label (no use-class
         # wording), still create a "use" entity but mark it section-keyed
@@ -561,6 +878,15 @@ def _extract_permission_table_facts(
         )
         _add_axis_binding(session, report, table, "row", row_index, use_entity, row_label, row_confidence)
         for cell in row_cells[1:]:
+            # ABS-278 Defect C: a bare zone code sitting in a use row's data
+            # region is bled header content, not a permission value. Re-attribute
+            # it to the column axis and flag the cell so it no longer reports the
+            # zone code as its value.
+            if (cell.metadata_json or {}).get("header_bleed") or _is_pure_zone_token(cell.text):
+                _flag_header_bleed_cell(
+                    session, report, table, cell, column_entities, _bind_column_zone
+                )
+                continue
             marker = cell.text.strip()
             if not marker:
                 continue
@@ -1104,6 +1430,11 @@ def _add_axis_binding(
     raw_label: str,
     confidence: float,
 ) -> None:
+    # FR5: bindings at/below the review threshold are flagged (not dropped) so a
+    # reviewer can confirm or correct the low-confidence resolution later.
+    metadata: dict = {}
+    if confidence <= AXIS_REVIEW_CONFIDENCE_THRESHOLD:
+        metadata["review"] = REVIEW_NEEDS
     binding = TableAxisBinding(
         table_id=table.id,
         axis=axis,
@@ -1111,7 +1442,7 @@ def _add_axis_binding(
         entity_id=entity.id,
         raw_label=raw_label,
         confidence=confidence,
-        metadata_json={},
+        metadata_json=metadata,
     )
     session.add(binding)
     session.flush()
@@ -1211,9 +1542,365 @@ def _zone_density(labels: list[str]) -> float:
     return sum(1 for label in labels if extract_zones(label)) / max(len(labels), 1)
 
 
+# ABS-283: amendment/section-history table detection. Mainland LUB carries
+# tables that track when a section was amended — their columns are amendment
+# dates ("Sep 1/20", "Nov 7/20") and council case numbers ("Case 21162"),
+# their rows section numbers ("62(1)", "14QB(2)"). The structural classifier
+# previously mistook these for section-indexed permission matrices; these
+# patterns let it veto that. A real permission matrix never carries an
+# amendment-date or case-number column, so even a couple of hits is decisive.
+_AMENDMENT_DATE_RE = re.compile(
+    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)\.?\s*\d{1,2}\s*/\s*\d{2,4}\b",
+    re.IGNORECASE,
+)
+_AMENDMENT_CASE_RE = re.compile(r"\bCase\s*(?:No\.?\s*)?\d{3,}\b", re.IGNORECASE)
+
+
+def _looks_like_amendment_cell(text: str) -> bool:
+    """True when a cell is an amendment-date or council-case-number column."""
+    if not text:
+        return False
+    return bool(_AMENDMENT_DATE_RE.search(text) or _AMENDMENT_CASE_RE.search(text))
+
+
+def _looks_like_amendment_table(
+    headers: list[str], row_labels: list[str]
+) -> bool:
+    """True when a table's labels expose it as an amendment/section-history grid.
+
+    Fires when at least two label cells carry amendment markers, or when a
+    single marker accounts for a meaningful share of a small label set — either
+    way a signal a permission matrix would never produce.
+    """
+    cells = [text for text in headers + row_labels if text]
+    if not cells:
+        return False
+    hits = sum(1 for text in cells if _looks_like_amendment_cell(text))
+    return hits >= 2 or (hits >= 1 and hits / len(cells) >= 0.25)
+
+
 def _is_repeated_header_row(row_cells: list[SourceTableCell]) -> bool:
     labels = [_cell_text(cell) for cell in row_cells]
     return len(labels) > 2 and _zone_density(labels[1:]) >= 0.5
+
+
+def _is_pure_zone_token(text: str | None) -> bool:
+    """True when ``text`` is *only* a single zone code (e.g. ``"DH"``, ``"CEN-2"``).
+
+    A permission-matrix data cell should hold a marker (●, a circled number,
+    blank, a condition ref) — never a bare zone code. When it does, that's
+    header-bleed: a zone header spilled into the body (ABS-278 Defect C).
+    """
+    stripped = re.sub(r"\s+", " ", (text or "")).strip()
+    if not stripped:
+        return False
+    zones = extract_zones(stripped)
+    return len(zones) == 1 and normalize_zone(stripped) == zones[0]
+
+
+def _row_is_bled_zone_header(row_cells: list[SourceTableCell]) -> bool:
+    """True when a body row is really a mis-attributed zone-header band.
+
+    Fires when the majority of the row's non-empty data cells (everything past
+    the row-label column) are bare zone codes — the signature of a header that
+    spilled into the table body.
+    """
+    data = sorted(row_cells, key=lambda item: item.col_index)[1:]
+    nonempty = [cell for cell in data if _cell_text(cell)]
+    if len(nonempty) < 2:
+        return False
+    pure = [cell for cell in nonempty if _is_pure_zone_token(cell.text)]
+    return len(pure) / len(nonempty) >= 0.6
+
+
+def _flag_header_bleed_cell(
+    session: Session,
+    report: SemanticEnrichmentReport,
+    table: SourceTable,
+    cell: SourceTableCell,
+    column_entities: dict[int, SemanticEntity],
+    bind_column_zone,
+) -> None:
+    """Re-attribute a bled zone-code cell to its column axis and flag it.
+
+    Marks ``metadata_json.header_bleed`` so downstream consumers (retrieval,
+    fact extraction) skip the cell as a value, records the recovered zone, and —
+    if the column has no zone yet — promotes the code to a low-confidence column
+    binding flagged for review.
+    """
+    zones = extract_zones(cell.text or "")
+    if not zones:
+        return
+    zone_code = zones[0]
+    meta = dict(cell.metadata_json or {})
+    if not meta.get("header_bleed") or meta.get("recovered_zone") != zone_code:
+        meta["header_bleed"] = True
+        meta["recovered_zone"] = zone_code
+        cell.metadata_json = meta
+    if cell.col_index not in column_entities:
+        bind_column_zone(
+            cell.col_index, zone_code, cell.text, cell, HEADER_BLEED_CONFIDENCE
+        )
+        report.warnings.append(
+            f"table {table.id}: recovered header-bleed zone {zone_code!r} for "
+            f"column {cell.col_index} (cell row {cell.row_index})"
+        )
+
+
+def _correct_header_bleed(
+    session: Session,
+    report: SemanticEnrichmentReport,
+    table: SourceTable,
+    rows: dict[int, list[SourceTableCell]],
+    header_idx: int,
+    column_entities: dict[int, SemanticEntity],
+    bind_column_zone,
+) -> None:
+    """Promote zone codes from fully-bled body rows to column bindings.
+
+    Per-cell bleed inside genuine use rows is handled inline in the marker loop;
+    this pass catches whole rows that are really repeated/mis-placed zone-header
+    bands (which the use-row loop skips via :func:`_is_repeated_header_row`), so
+    their zone codes would otherwise be lost entirely.
+    """
+    for row_index, row_cells in rows.items():
+        if row_index == header_idx:
+            continue
+        if not _row_is_bled_zone_header(row_cells):
+            continue
+        for cell in sorted(row_cells, key=lambda item: item.col_index)[1:]:
+            if not _is_pure_zone_token(cell.text):
+                continue
+            _flag_header_bleed_cell(
+                session, report, table, cell, column_entities, bind_column_zone
+            )
+
+
+def _use_row_bindings(
+    session: Session, table_id: int
+) -> list[tuple[TableAxisBinding, str]]:
+    """Return ``(binding, canonical_name)`` for every use-row axis binding.
+
+    Section-keyed placeholder rows (ABS-105 — canonical ``"section:..."``) are
+    excluded: they aren't real use classes, so they must never be a fuzzy-match
+    target for a permitted-use query.
+    """
+    rows = (
+        session.query(TableAxisBinding, SemanticEntity.canonical_name)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id == table_id,
+            TableAxisBinding.axis == "row",
+            SemanticEntity.entity_type == "use",
+        )
+        .order_by(TableAxisBinding.confidence.desc())
+        .all()
+    )
+    return [
+        (binding, name)
+        for binding, name in rows
+        if name and not name.startswith("section:")
+    ]
+
+
+def _resolve_use_row_by_key(
+    session: Session, table_id: int, use_name: str
+) -> TableAxisBinding | None:
+    """Resolve a use row by normalized-key equivalence (ABS-351).
+
+    Returns the highest-confidence row binding whose canonical name is a
+    :func:`~layer1.semantic.use_matching.use_match_key` equivalent of
+    ``use_name``, or ``None`` when the match is absent or ambiguous. Only the
+    unambiguous, deterministic key match resolves here — near misses that merely
+    *overlap* several rows are left for the caller to surface as suggestions.
+    """
+    candidates = _use_row_bindings(session, table_id)
+    if not candidates:
+        return None
+    match = match_use(use_name, [name for _binding, name in candidates])
+    if match.resolved is None:
+        return None
+    # Bindings are pre-sorted by descending confidence, so the first match wins.
+    for binding, name in candidates:
+        if name == match.resolved:
+            return binding
+    return None
+
+
+def use_row_labels(session: Session, table_ids: list[int]) -> list[str]:
+    """Distinct human-readable use-row labels across ``table_ids`` (ABS-351).
+
+    Feeds the advisory suggestion ranking when a ``(use, zone)`` query lands on
+    an unknown use: the caller ranks these labels against the query so a failed
+    lookup carries the closest real row names back. Prefers the row's
+    ``raw_label`` (what the bylaw actually prints, e.g. "Multi-unit dwelling
+    use") over the lowercased canonical name, and skips section-keyed
+    placeholders.
+    """
+    if not table_ids:
+        return []
+    rows = (
+        session.query(TableAxisBinding.raw_label, SemanticEntity.canonical_name)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id.in_(table_ids),
+            TableAxisBinding.axis == "row",
+            SemanticEntity.entity_type == "use",
+        )
+        .all()
+    )
+    labels: list[str] = []
+    for raw_label, canonical_name in rows:
+        if not canonical_name or canonical_name.startswith("section:"):
+            continue
+        label = (raw_label or "").strip() or canonical_name
+        labels.append(label)
+    return list(dict.fromkeys(labels))
+
+
+def resolve_permission_cell(
+    session: Session,
+    *,
+    table_id: int,
+    use_name: str,
+    zone: str,
+) -> dict | None:
+    """Resolve a (use, zone) pair to the addressed permission-matrix cell.
+
+    Uses the bound axes (ABS-278): the use resolves a ``row`` binding, the zone
+    resolves a ``column`` binding, and their indices address the cell. Returns
+    ``None`` when either axis can't be resolved. The returned dict carries the
+    resolved indices plus the cell's recovered ``permission_marker`` so callers
+    don't need a second query.
+    """
+    use_norm = normalize_use(use_name)
+    zone_norm = normalize_zone(zone)
+    # ABS-282: bound use entities carry whatever ``normalize_use`` produced for
+    # the raw row label — e.g. "Home occupation use" -> "home occupation use" —
+    # but a query may arrive bare ("home occupation"). ``normalize_use`` only
+    # appends "use" for aliased single-word uses, so a bare multi-word query
+    # misses the binding. Match the canonical name against both the given form
+    # and its "<...> use" / de-suffixed counterpart so either phrasing resolves.
+    use_candidates = {use_norm}
+    if use_norm.endswith(" use"):
+        use_candidates.add(use_norm[: -len(" use")])
+    else:
+        use_candidates.add(f"{use_norm} use")
+    row_binding = (
+        session.query(TableAxisBinding)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id == table_id,
+            TableAxisBinding.axis == "row",
+            SemanticEntity.entity_type == "use",
+            SemanticEntity.canonical_name.in_(use_candidates),
+        )
+        .order_by(TableAxisBinding.confidence.desc())
+        .first()
+    )
+    # ABS-351: an exact/aliased miss falls back to a normalized-key match against
+    # this matrix's bound use rows, so near-miss phrasings ("Multiple-unit
+    # dwelling", "multi unit dwelling") resolve to their canonical row
+    # ("Multi-unit dwelling use") without the caller burning a tool iteration
+    # guessing the spelling. This resolves ONLY on a deterministic key
+    # equivalence (see ``use_match_key``); genuinely ambiguous terms are left for
+    # the caller to surface as advisory suggestions rather than picked here.
+    if row_binding is None:
+        row_binding = _resolve_use_row_by_key(session, table_id, use_name)
+    col_binding = (
+        session.query(TableAxisBinding)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id == table_id,
+            TableAxisBinding.axis == "column",
+            SemanticEntity.entity_type == "zone",
+            SemanticEntity.canonical_name == zone_norm,
+        )
+        .order_by(TableAxisBinding.confidence.desc())
+        .first()
+    )
+    if row_binding is None or col_binding is None:
+        return None
+    cell = (
+        session.query(SourceTableCell)
+        .filter(
+            SourceTableCell.table_id == table_id,
+            SourceTableCell.row_index == row_binding.index,
+            SourceTableCell.col_index == col_binding.index,
+        )
+        .first()
+    )
+    meta = (cell.metadata_json or {}) if cell is not None else {}
+    return {
+        "table_id": table_id,
+        "row_index": row_binding.index,
+        "col_index": col_binding.index,
+        "use": use_norm,
+        "zone": zone_norm,
+        "cell_text": cell.text if cell is not None else None,
+        "permission_marker": meta.get("permission_marker"),
+        "footnote": meta.get("footnote"),
+    }
+
+
+def resolve_mainland_permitted_use(
+    session: Session,
+    *,
+    use_name: str,
+    zone: str,
+    document_id: int | None = None,
+) -> dict | None:
+    """Resolve a ``(use, zone)`` pair against Mainland section-prose use lists.
+
+    ABS-283. The Halifax Mainland LUB lists permitted uses as prose under each
+    zone's section rather than in a ●/circled-number matrix, so the symbol-dot
+    :func:`resolve_permission_cell` resolver can't address it. Enrichment records
+    those lists as ``permitted_use_list`` facts (subject = zone entity); this
+    reads them back.
+
+    Returns ``None`` when no permitted-use list exists for ``zone`` in scope (so
+    the caller can fall through to other resolvers). When a list *is* present the
+    verdict is grounded and closed: ``permitted`` if the use is in the list,
+    otherwise ``not_permitted`` (the Mainland exhaustiveness clause makes the
+    list closed). ``document_id`` pins the search to one bylaw; ``None`` searches
+    every document.
+    """
+    zone_norm = normalize_zone(zone)
+    query = (
+        session.query(SemanticFact)
+        .join(
+            SemanticEntity,
+            SemanticEntity.id == SemanticFact.primary_subject_entity_id,
+        )
+        .filter(
+            SemanticFact.relation_type == "permitted_use_list",
+            SemanticEntity.entity_type == "zone",
+            SemanticEntity.canonical_name == zone_norm,
+        )
+    )
+    if document_id is not None:
+        query = query.filter(SemanticFact.document_id == document_id)
+    facts = query.all()
+    if not facts:
+        return None
+    keys: set[str] = set()
+    display: list[str] = []
+    fragment_ids: list[int] = []
+    for fact in facts:
+        normalized = fact.normalized_value_json or {}
+        keys.update(normalized.get("permitted_use_keys", []))
+        display.extend(normalized.get("permitted_uses", []))
+        fragment_ids.extend((fact.metadata_json or {}).get("source_fragment_ids", []))
+    permitted = _loose_use_key(use_name) in keys
+    return {
+        "zone": zone_norm,
+        "use": normalize_use(use_name),
+        "permission": "permitted" if permitted else "not_permitted",
+        "convention": "mainland_section_prose",
+        "permitted_uses": sorted(set(display)),
+        "document_id": facts[0].document_id,
+        "source_fragment_ids": fragment_ids,
+    }
 
 
 def _normalize_permission_marker(marker: str) -> dict:

@@ -1,0 +1,52 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "complexity": "simple",
+    "turns_completed": 2,
+    "turns_expected": 2,
+    "tool_calls": 0,
+    "wall_s": 82.77,
+    "error": null
+  },
+  {
+    "id": "TC-002",
+    "title": "Homeowner secondary suite legality in ER-2",
+    "complexity": "simple",
+    "turns_completed": 3,
+    "turns_expected": 3,
+    "tool_calls": 0,
+    "wall_s": 159.01,
+    "error": null
+  },
+  {
+    "id": "TC-003",
+    "title": "Homeowner converting single-unit to multi-unit in ER-3",
+    "complexity": "medium",
+    "turns_completed": 4,
+    "turns_expected": 4,
+    "tool_calls": 0,
+    "wall_s": 212.95,
+    "error": null
+  },
+  {
+    "id": "TC-004",
+    "title": "Architect scoping a mid-rise residential building in HR-1",
+    "complexity": "complex",
+    "turns_completed": 5,
+    "turns_expected": 5,
+    "tool_calls": 0,
+    "wall_s": 245.19,
+    "error": null
+  },
+  {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "complexity": "complex",
+    "turns_completed": 6,
+    "turns_expected": 6,
+    "tool_calls": 0,
+    "wall_s": 385.03,
+    "error": null
+  }
+]

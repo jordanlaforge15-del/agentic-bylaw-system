@@ -1,0 +1,160 @@
+{
+  "id": "TC-003",
+  "title": "Homeowner converting single-unit to multi-unit in ER-3",
+  "zone": "ER-3",
+  "persona": {
+    "type": "homeowner",
+    "subtype": null,
+    "description": "Property owner looking to convert a larger home into a duplex or triplex"
+  },
+  "complexity": "medium",
+  "liability": "medium",
+  "address": "89 Jubilee Road, Halifax, NS",
+  "session_id": "130dce14-3e2b-4bb6-a9f6-310223bb9e49",
+  "model": "claude-opus-4-5-20251101",
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I have a large older home on Jubilee Road in the ER-3 zone in Halifax. I\u2019m thinking of converting it into a three-unit building \u2014 two upper units and a ground floor unit. Is a multi-unit dwelling permitted in ER-3?",
+      "assistant_text": "Based on my research, **yes, a multi-unit dwelling is permitted in the ER-3 zone** under the Regional Centre Land Use By-law, subject to specific conditions.\n\n## Key Findings\n\n**Multi-unit dwellings are permitted in ER-3**, and the bylaw includes detailed provisions for them. I found:\n\n1. **Section 57** governs the maximum number of bedrooms for multi-unit dwellings in ER-3 and ER-2 zones. For a **3-unit building**, the bylaw specifies bedroom limits per unit and per lot (Section 57(1)). The evidence shows a sliding scale \u2014 for example, a 5-unit building is limited to 4 bedrooms per unit and 14 bedrooms per lot (Section 57(g)).\n\n2. **Design requirements apply** (Section 366.5 \u2014 \"Design Requirement: Multi-Unit Dwelling Use in the ER Zones\"):\n   - Window bay projections up to 1.0 metre are permitted, subject to Clause 94.5(1)(d)\n   - A **covered porch of at least 2.0 m\u00b2** must be provided on the ground floor of a fa\u00e7ade facing a front lot line\n\n## What I Could Not Confirm\n\nI was unable to retrieve the specific **Table 1A footnote** that would confirm any lot-size or frontage conditions that may apply to multi-unit dwellings in ER-3. The permitted uses are listed in Tables 1A\u20131D (Section 32), and uses may be marked with a numbered footnote (e.g., \u2460) indicating additional conditions. To confirm the exact conditions for your property, I would need to retrieve the specific Table 1A entry for \"multi-unit dwelling\" in the ER-3 column.\n\n## Recommendation\n\nFor your **three-unit conversion on Jubilee Road**, the use appears permitted, but you should:\n\n1. Confirm the specific Table 1A footnote conditions (if any) that apply to multi-unit dwellings in ER-3\n2. Review the bedroom limits under Section 57 for a 3-unit building\n3. Ensure the design meets Section 366.5 requirements (covered porch, etc.)\n\nIf you'd like, provide your specific address and I can do a property-specific lookup to confirm the zoning and any overlays that apply.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 18045,
+        "output_tokens": 541,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "wall_time_s": 58.18,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Good to know. My lot is 650 square metres and the existing building footprint is about 200 square metres. Am I within the lot coverage limit for ER-3, and what are the setback requirements I\u2019ll need to work within?",
+      "assistant_text": "This is very helpful. Now I have comprehensive information. Let me compile the answer.\n\n## Lot Coverage and Setbacks for Your ER-3 Conversion\n\nGreat news \u2014 based on your numbers, **you're well within the lot coverage limit**, and the bylaw has specific provisions for internal conversions of existing buildings that may simplify your project.\n\n### Lot Coverage Analysis\n\n**Your situation:**\n- Lot area: 650 m\u00b2\n- Building footprint: ~200 m\u00b2\n- **Your coverage: ~30.8%**\n\n**Maximum permitted (Section 231):**\n- For lots **larger than 325 m\u00b2** with uses other than single-unit dwelling: **50%**\n- This means you could have up to **325 m\u00b2** of building footprint\n\n\u2705 **You're compliant** \u2014 with significant room to spare if you ever wanted to add an accessory structure.\n\n---\n\n### Setback Requirements (Chapter 9: ER-3, ER-2, ER-1 Zones)\n\n| Setback | Requirement | Source |\n|---------|-------------|--------|\n| **Front/Flanking** | As specified on **Schedule 18** (map-based, varies by location) | Section 228 |\n| **Side** | **1.25 metres** (unless in a Special Area with different requirements) | Section 229(c) |\n| **Rear** | **6.0 metres** | Section 230 |\n\n**Note on front setback:** Schedule 18 is a map that assigns specific front setbacks by location. Jubilee Road isn't in one of the named Special Areas I retrieved (Grant Street, Young Avenue, Oakland Road, etc.), so the standard Schedule 18 value would apply. I'd need to check Schedule 18 directly or do a spatial lookup with your civic address to confirm the exact front setback requirement.\n\n---\n\n### Internal Conversion Provisions \u2014 Key for Your Project\n\n**Section 63** specifically addresses internal conversions in ER-3/ER-2 zones. If your building existed when the bylaw came into force (September 2019), you can convert it to a three-unit dwelling **if**:\n\n1. **(a)** The building existed on the coming-into-force date of the bylaw\n2. **(b)** There is **no increase in the height or volume** of the building\n3. **(d)** No new exterior staircase is erected in the front yard (replacement of existing is OK)\n\nThis is significant because **internal conversions may not need to meet current setback or coverage requirements** \u2014 the existing building envelope is grandfathered. You're converting within the existing shell.\n\n---\n\n### Recommendation\n\nIf you provide your **civic address on Jubilee Road**, I can do a property-specific lookup to:\n1. Confirm the exact front setback from Schedule 18\n2. Check whether you're in any Special Areas with modified requirements\n3. Verify there are no heritage or other overlays affecting your lot\n\nFor an internal conversion of an older home, the Section 63 provisions are your friend \u2014 they allow the conversion without triggering a full compliance review of the existing building's siting.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 2017,
+        "output_tokens": 723,
+        "cache_creation_input_tokens": 3723,
+        "cache_read_input_tokens": 31594
+      },
+      "wall_time_s": 46.15,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 3,
+      "user_message": "The building is currently about 9 metres tall. If I add a small dormer to create one of the upper units, is there a height limit I need to stay under in ER-3?",
+      "assistant_text": "## Height Limits and Dormer Addition in ER-3\n\nThis is a critical question, and the answer depends on **which approval pathway you're using**.\n\n---\n\n### The Internal Conversion Problem\n\nIf you're relying on the **internal conversion provisions (Section 63)** to convert your existing building to a three-unit dwelling, adding a dormer creates a significant issue:\n\n> **Section 63(b)**: \"there is no increase in the height or volume of the building\"\n\nA dormer **increases the volume** of the building. This means:\n\n- \u26a0\ufe0f **Adding a dormer would disqualify your project from the internal conversion pathway**\n- You would no longer be able to rely on Section 63's relaxed requirements (which grandfather the existing building's siting)\n- Your conversion would instead need to comply with all current built-form standards as new construction/alteration\n\n---\n\n### Maximum Height in ER-3\n\n**Section 227** governs height in ER-3:\n> \"any main building shall not exceed the maximum required building height specified on **Schedule 15**\"\n\nSchedule 15 is a map that assigns height precincts across the Regional Centre. The evidence I retrieved references **8-metre and 11-metre height precincts** as typical for residential areas (Section 344 mentions these in the context of backyard suites).\n\nYour building at **9 metres** is:\n- **Within an 11-metre precinct**: compliant, with 2 m of headroom\n- **Within an 8-metre precinct**: already non-conforming (grandfathered)\n\nI was unable to retrieve the specific height precinct for Jubilee Road from Schedule 15 without your civic address for a spatial lookup.\n\n---\n\n### Your Options\n\n| Path | Dormer Allowed? | Trade-off |\n|------|-----------------|-----------|\n| **Internal conversion (Section 63)** | \u274c No \u2014 no increase in height or volume | Simplest approval; existing siting grandfathered |\n| **Standard three-unit dwelling** | \u2705 Yes, if within Schedule 15 height limit | Must meet all current setbacks, lot coverage, design requirements |\n\n---\n\n### Recommendation\n\n1. **If you want the dormer**: You'll need to pursue the standard three-unit dwelling pathway (not internal conversion). Confirm your height precinct on Schedule 15 \u2014 if you're in an 11-metre precinct, your 9 m building plus a modest dormer should fit.\n\n2. **If you want the simpler internal conversion**: Design your upper units within the existing roof volume \u2014 no dormers, no height or volume increase.\n\n3. **Provide your civic address** and I can do a spatial lookup to confirm your exact height precinct and whether any other overlays (heritage, view planes) affect your lot.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 45783,
+        "output_tokens": 644,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "wall_time_s": 60.15,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    },
+    {
+      "turn": 4,
+      "user_message": "Would I need a development permit for this kind of interior conversion and dormer addition?",
+      "assistant_text": "I have enough information to provide a comprehensive answer now.\n\n## Development Permit Requirements\n\nYes, **you will need a development permit** for both scenarios you're considering.\n\n---\n\n### The General Rule\n\n**Section 6** states clearly:\n> \"Subject to Section 9, no person shall undertake any development without first obtaining a development permit.\"\n\n---\n\n### What Triggers a Development Permit\n\nYour project involves:\n1. **A change of use** \u2014 from single-unit dwelling to three-unit dwelling\n2. **Exterior alterations** \u2014 if you add a dormer\n\nBoth of these constitute \"development\" under the bylaw and require a development permit.\n\n---\n\n### Are There Any Exemptions?\n\nI reviewed the **Section 9 exemptions** and found:\n\n| Exemption | Applies to You? |\n|-----------|-----------------|\n| **(r)** Internal conversion of commercial to multi-unit in DD/DH zones | \u274c No \u2014 you're in ER-3, not DD/DH, and your building is residential |\n| Home office uses, fences, temporary uses, etc. | \u274c No \u2014 these are minor/specific exemptions |\n\n**There is no exemption for residential-to-residential conversions in ER-3**, even if purely internal.\n\n---\n\n### Two Paths, Same Permit Requirement\n\n| Scenario | Development Permit Required? | What's Reviewed |\n|----------|------------------------------|-----------------|\n| **Internal conversion only** (no dormer, no volume change) | \u2705 Yes | Change of use; compliance with Section 63 conditions; parking (Section 435) |\n| **Conversion + dormer addition** | \u2705 Yes | Change of use; height compliance (Schedule 15); all current built-form standards; design requirements (Section 366.5) |\n\n---\n\n### What You'll Need for the Application\n\nPer **Section 10**, a development permit application requires:\n- Floor plans with dimensions and intended use of all rooms labelled\n- Elevation drawings with height measurements\n- Site plan (the ER-3 zone is exempt from landscape plan requirements per Section 10(m), which is helpful)\n\n---\n\n### Building Permit vs. Development Permit\n\nNote that the **development permit** (land use compliance) is separate from the **building permit** (Building Code compliance). You'll need both:\n\n1. **Development permit** \u2014 confirms the use and built form comply with the Land Use By-law\n2. **Building permit** \u2014 confirms the construction meets the Nova Scotia Building Code (fire separations, egress, structural, etc.)\n\nFor a three-unit conversion, the Building Code requirements are significant \u2014 you'll need proper fire separations between units, likely upgraded egress, and potentially sprinklers depending on the building's configuration.\n\n---\n\n### Bottom Line\n\n**Yes, a development permit is required** regardless of which path you take. The internal conversion path (no dormer) is simpler because you're not altering the building envelope, but you still need to apply. If you add the dormer, the application will be more involved because the project must meet all current built-form standards rather than relying on Section 63's grandfathering provisions.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 3391,
+        "output_tokens": 721,
+        "cache_creation_input_tokens": 167,
+        "cache_read_input_tokens": 46521
+      },
+      "wall_time_s": 48.47,
+      "raw_event_count": 10,
+      "error": null,
+      "body_excerpt": null
+    }
+  ],
+  "spec": {
+    "id": "TC-003",
+    "title": "Homeowner converting single-unit to multi-unit in ER-3",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Property owner looking to convert a larger home into a duplex or triplex"
+    },
+    "address": "89 Jubilee Road, Halifax, NS",
+    "zone": "ER-3",
+    "complexity": "medium",
+    "liability": "medium",
+    "tags": [
+      "renovation",
+      "residential",
+      "multi_unit",
+      "permitted_use",
+      "lot_coverage",
+      "conversion"
+    ],
+    "bylaw_features": [
+      "use_permission",
+      "setbacks",
+      "lot_coverage",
+      "height"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I have a large older home on Jubilee Road in the ER-3 zone in Halifax. I\u2019m thinking of converting it into a three-unit building \u2014 two upper units and a ground floor unit. Is a multi-unit dwelling permitted in ER-3?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Good to know. My lot is 650 square metres and the existing building footprint is about 200 square metres. Am I within the lot coverage limit for ER-3, and what are the setback requirements I\u2019ll need to work within?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "The building is currently about 9 metres tall. If I add a small dormer to create one of the upper units, is there a height limit I need to stay under in ER-3?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "Would I need a development permit for this kind of interior conversion and dormer addition?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Table 3",
+      "Table 5",
+      "Section 9"
+    ],
+    "expected_answer_keywords": [
+      "multi-unit dwelling",
+      "permitted",
+      "ER-3",
+      "45%",
+      "3.0 m",
+      "1.2 m",
+      "6.0 m",
+      "11.0 m",
+      "development permit"
+    ],
+    "expected_topics": [
+      "use_permission",
+      "setbacks",
+      "lot_coverage",
+      "height",
+      "development_permit"
+    ],
+    "notes": "Medium complexity: four distinct parameters across four turns. Construction risk is moderate (structural conversion + dormer)."
+  },
+  "case_wall_time_s": 212.95
+}

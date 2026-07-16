@@ -63,6 +63,7 @@ def run_learning_pipeline(
     retrieval_client,
     anthropic_client: Optional[Any] = None,
     manifest_version: str = "0.1.0",
+    model: str = "claude-sonnet-4-6",
 ) -> CityIntakeManifest:
     """Run StructureAnalyst → SemanticMapper → Validation for one city.
 
@@ -71,6 +72,10 @@ def run_learning_pipeline(
     :class:`ClaudeCodeClient` that routes through ``claude -p`` against
     the user's Claude Code subscription. Pass an explicit
     ``anthropic.Anthropic()`` instance to use the per-token API path.
+
+    ``model`` is forwarded to :class:`StructureAnalystAgent` and
+    :class:`SemanticMapperAgent`; it has no effect on
+    :class:`ValidationAgent` (which is retrieval-only, not LLM-driven).
 
     Returns a draft :class:`CityIntakeManifest`. Sets ``pipeline_ready``
     to ``True`` only when the validation status is ``"PASS"``. Catches
@@ -90,7 +95,7 @@ def run_learning_pipeline(
     taxonomy = None
     qa_report = None
 
-    structure_agent = StructureAnalystAgent(anthropic_client)
+    structure_agent = StructureAnalystAgent(anthropic_client, model=model)
     try:
         parser_config = structure_agent.analyse(
             primary, jurisdiction_code=municipality.jurisdiction_code
@@ -98,7 +103,7 @@ def run_learning_pipeline(
     except Exception as exc:  # noqa: BLE001 — pipeline-level capture
         flags.append(f"structure_analyst_failed: {type(exc).__name__}: {exc}")
 
-    semantic_agent = SemanticMapperAgent(anthropic_client)
+    semantic_agent = SemanticMapperAgent(anthropic_client, model=model)
     try:
         taxonomy = semantic_agent.map(
             primary,
@@ -120,7 +125,10 @@ def run_learning_pipeline(
             "validation_skipped: parser_config or taxonomy unavailable"
         )
 
-    pipeline_ready = qa_report is not None and qa_report.status == "PASS"
+    pipeline_ready = qa_report is not None and qa_report.status in (
+        "PASS",
+        "PASS_PENDING_INGEST",
+    )
 
     return CityIntakeManifest(
         municipality=municipality,

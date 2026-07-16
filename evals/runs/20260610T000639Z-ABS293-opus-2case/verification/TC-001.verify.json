@@ -1,0 +1,208 @@
+{
+  "id": "TC-001",
+  "title": "Homeowner rear deck addition in ER-1",
+  "zone": "ER-1",
+  "complexity": "simple",
+  "liability": "low",
+  "model": "claude-opus-4-5-20251101",
+  "grade": {
+    "verdict": "PARTIAL",
+    "reasons": [
+      "keyword rate 58% below 80% bar for simple cases"
+    ],
+    "citation_total": 7,
+    "citation_found": 7,
+    "citation_hallucinated": 0,
+    "keyword_expected": 12,
+    "keyword_hit": 7,
+    "keyword_rate": 0.5833333333333334,
+    "hedging_failed": false
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "wall_time_s": 75.93,
+      "stop_reason": "end_turn",
+      "citation_total": 3,
+      "citation_found": 3,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "part",
+          "value": "V",
+          "raw": "Part V",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 100,
+              "text_excerpt": "Part V: Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": null,
+              "page": 101,
+              "text_excerpt": "Part V, Chapter 1: General Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": "Part V > 88",
+              "page": 101,
+              "text_excerpt": "88 All regulations contained within this Part do not apply to buildings within heritage conservation districts, unless otherwise stated in Part VI."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "9",
+          "raw": "Section 9",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 9",
+              "page": 10,
+              "text_excerpt": "9 (1) Subject to Subsections 9(2) and 9(3), the following developments are exempt from the requirement to obtain a development permit:"
+            },
+            {
+              "citation_path": "Appendix 2 > 9",
+              "page": 445,
+              "text_excerpt": "9 Shadow diagrams shall:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "340",
+          "raw": "Section 340",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 340",
+              "page": 242,
+              "text_excerpt": "340 Any setback, stepback, or separation distance required in this Part for any main building shall be open and unobstructed except for the following:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 6,
+        "hit": 3,
+        "rate": 0.5,
+        "misses": [
+          "6.0 m",
+          "3.0 m",
+          "side setback"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm",
+          "verify",
+          "before proceeding",
+          "this is general"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 2,
+      "wall_time_s": 44.76,
+      "stop_reason": "end_turn",
+      "citation_total": 4,
+      "citation_found": 4,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "3C",
+          "raw": "Schedule 3C",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "V",
+          "raw": "Part V",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 100,
+              "text_excerpt": "Part V: Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": null,
+              "page": 101,
+              "text_excerpt": "Part V, Chapter 1: General Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": "Part V > 88",
+              "page": 101,
+              "text_excerpt": "88 All regulations contained within this Part do not apply to buildings within heritage conservation districts, unless otherwise stated in Part VI."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "229",
+          "raw": "Section 229",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 229",
+              "page": 189,
+              "text_excerpt": "229 (1) Subject to Subsection 229(2) and Section 234, the minimum required side setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "340",
+          "raw": "Section 340",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 340",
+              "page": 242,
+              "text_excerpt": "340 Any setback, stepback, or separation distance required in this Part for any main building shall be open and unobstructed except for the following:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 6,
+        "hit": 4,
+        "rate": 0.667,
+        "misses": [
+          "6.0 m",
+          "3.0 m"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm",
+          "i'd recommend"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    }
+  ]
+}

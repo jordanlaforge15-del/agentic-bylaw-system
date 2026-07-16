@@ -88,3 +88,63 @@ nonzero exit + log line when the container isn't running.
 ```bash
 .venv/bin/pytest tests/test_backup_dev_db.py
 ```
+
+---
+
+## Isolated clone DB for experiments
+
+Running experiments (new-city intake, schema changes, expensive enrichment
+runs) against a copy of the dev DB requires an isolated Postgres that you
+can throw away without touching the real dev database.
+
+### Create a clone
+
+```bash
+scripts/clone-dev-db.sh <experiment-name> [<host-port>]
+```
+
+| Argument          | Description                                              |
+| ----------------- | -------------------------------------------------------- |
+| `experiment-name` | Becomes the Docker Compose project name (e.g. `mainland-intake`). |
+| `host-port`       | Optional. If omitted, a free port in 5440-5480 is auto-selected. |
+
+**What happens:**
+
+1. Starts an isolated `postgres` container via `docker compose -p <name>`.
+2. Waits up to 30 s for `pg_isready`.
+3. Restores the most-recent `~/backups/agentic-bylaw-system/layer1-*.dump`.
+4. Writes `.env.clone.<name>` in the current directory with `DATABASE_URL` exported.
+5. Prints the URL and teardown one-liner.
+
+**Example:**
+
+```bash
+scripts/clone-dev-db.sh mainland-intake
+# => .env.clone.mainland-intake written
+source .env.clone.mainland-intake
+# DATABASE_URL now points at the isolated clone
+python -m advisor.ingest ...
+```
+
+Override the backup directory with `BYLAW_BACKUP_DIR` if your dumps live
+elsewhere.
+
+### Tear down the clone
+
+```bash
+scripts/destroy-clone-db.sh <experiment-name>
+```
+
+Runs `docker compose -p <name> down -v`, removing both the container and
+its data volume. Safe to run even if the containers are already stopped.
+
+### Tests
+
+`tests/test_clone_dev_db.py` fakes the `docker` CLI via a temp PATH shim
+and asserts: env file written, port reflected in URL, most-recent dump
+selected, nonzero exit when no backups exist, and `down -v` called by the
+destroy script.
+
+```bash
+.venv/bin/pytest tests/test_clone_dev_db.py
+```

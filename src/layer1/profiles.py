@@ -59,6 +59,15 @@ class ParsingProfile:
     known_zone_codes: frozenset[str] | None = None
     zone_pattern: re.Pattern[str] | None = None
     use_class_map: Mapping[str, str] | None = None
+    # ABS-284: enrichment classification conventions. When unset, enrichment
+    # falls back to the Regional-Centre default (symbol-dot matrix, U+F098
+    # permitted glyph), so existing call sites are unchanged. ``permission_
+    # encoding`` is one of ``layer1.semantic.conventions``'s ``SYMBOL_MATRIX`` /
+    # ``SECTION_INDEXED``; the codepoint sets replace the hardcoded module
+    # constants in ``layer1.semantic.permission_markers`` on a per-bylaw basis.
+    permission_encoding: str | None = None
+    permitted_marker_codepoints: frozenset[int] | None = None
+    ignored_marker_codepoints: frozenset[int] | None = None
 
     def applies_to(self, path: Path) -> bool:
         return False

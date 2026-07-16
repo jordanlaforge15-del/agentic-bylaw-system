@@ -27,6 +27,44 @@ English-heavy prompts; it under-estimates Claude's BPE on technical
 content (URLs, code, JSON), which is the right direction for a
 safety net — slightly conservative.
 
+Cache discounting (ABS-291)
+---------------------------
+After WI-1 (ABS-285) lands the rolling intra-loop cache breakpoint,
+most tokens on deep-question turns are cache reads at ~10% of the
+input rate. Without discounting, the cost-circuit breaker trips at
+the same raw-token count as before — prematurely forcing synthesis
+and degrading answers even though the actual billed cost is far lower.
+
+``estimate_request_input_tokens`` now returns a *billed-equivalent*
+token count instead of a raw token count.  Cache-read regions are
+weighted at ``_CACHE_READ_WEIGHT`` (~10%); the budget is therefore in
+billed-equivalent rather than raw terms.  The default (150 000) still
+represents a turn cap of ~$2.25 at Opus rates, but the effective raw
+token headroom is ~10× larger for cached turns — allowing the tool
+loop to run to its natural conclusion rather than hitting the breaker.
+
+Cumulative per-turn breaker (ABS-305)
+-------------------------------------
+The per-request breaker above bounds *one* gateway call (~150k
+billed-equivalent input tokens, ~$2.25 of input). It does NOT bound a
+turn's *cumulative* spend: a deep tool loop that makes many requests
+each under the per-request cap can still bill $10+ in aggregate — the
+runaway turns of 2026-05-11 ($12.93 / $9.30) are exactly this shape,
+and a Complex-tier turn (``max_iterations=55``) could plausibly reach
+$30–50.
+
+``run_tool_loop`` therefore also sums each iteration's
+billed-equivalent estimate and trips a *second* breaker when the
+running total would cross a turn-level ceiling. The default
+(165k billed-equivalent input tokens ≈ $2.50 at Opus rates) is read by
+``default_cumulative_token_budget()`` from
+``ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET``. The trip takes the same
+forced-synthesis path as the per-request breaker but records a distinct
+``terminated_reason`` (``cumulative_cost_trip``). This is the
+load-bearing cost primitive for the priced-question-catalog ("buy an
+answer") model: it bounds the cost of each PAID answer so a fixed-price
+question cannot overspend.
+
 Configuration
 -------------
 The default budget is read once from the ``ADVISOR_TURN_INPUT_TOKEN_BUDGET``
@@ -38,7 +76,8 @@ an explicit value without touching the environment.
 The default (150,000) is a deliberate safety-net level, NOT a primary
 cost lever:
 
-- At Opus 4.5's $15/M input rate, 150k tokens caps one turn at ~$2.25.
+- At Opus 4.5's $15/M input rate, 150k billed-equivalent tokens caps
+  one turn at ~$2.25.
 - The 95th-percentile turn on 2026-05-11 was 611k tokens; 4 of the
   10 recorded events that day were over 150k.
 - Parallel workstreams (prompt caching, retrieval-payload trimming,
@@ -70,11 +109,26 @@ logger = logging.getLogger(__name__)
 # them), which is the right bias for a safety net.
 _CHARS_PER_TOKEN = 4
 
-# Default safety-net cap: 150k input tokens per turn. At Opus 4.5's
-# $15/M input rate this caps a single turn at ~$2.25. Tuned to leave
-# headroom for normal multi-turn conversations while still catching
-# the runaways we observed in production logs.
+# Weight applied to tokens inside a cached prefix region. Anthropic
+# charges ~10% of the normal input-token rate for cache reads; we use
+# the same fraction so the estimator tracks *billed-equivalent* rather
+# than raw token counts (ABS-291).
+_CACHE_READ_WEIGHT = 0.1
+
+# Default safety-net cap: 150k billed-equivalent input tokens per turn.
+# At Opus 4.5's $15/M input rate this caps a single turn at ~$2.25.
+# After ABS-291 the budget is in billed-equivalent terms; cached turns
+# have ~10× the raw-token headroom before the breaker fires.
 _DEFAULT_TURN_INPUT_TOKEN_BUDGET = 150_000
+
+# Default cumulative per-turn cap (ABS-305): 165k billed-equivalent
+# input tokens summed across EVERY gateway request in one
+# ``run_tool_loop`` invocation. At Opus 4.5's $15/M input rate this
+# bounds a single turn's input spend at ~$2.50. Set slightly above the
+# per-request cap so a normal single-request turn never trips the
+# cumulative breaker first; it only fires when many sub-cap requests
+# accumulate (the runaway-deep-loop tail risk).
+_DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET = 165_000
 
 
 @dataclass(frozen=True)
@@ -82,12 +136,18 @@ class CircuitTripInfo:
     """Records a cost-circuit trip so callers can audit it.
 
     ``estimated_input_tokens`` is the pre-flight estimate that crossed
-    the budget. ``budget`` is the value the loop was configured with;
-    persisted alongside so a future threshold change doesn't make old
-    trip records ambiguous. ``iteration`` is the loop iteration the
-    trip happened on — useful for distinguishing "first prompt was
-    huge" (iteration 1) from "tool results accumulated past the cap"
-    (later iterations).
+    the budget. For the per-request breaker (``cost_circuit_trip``)
+    this is the single request that was too big; for the cumulative
+    breaker (``cumulative_cost_trip``, ABS-305) it is the *running
+    total* across the turn that would have crossed the ceiling.
+    ``budget`` is the value the loop was configured with — the
+    per-request cap or the cumulative cap respectively; persisted
+    alongside so a future threshold change doesn't make old trip
+    records ambiguous, and so the two breakers' records stay
+    distinguishable by their companion ``terminated_reason``.
+    ``iteration`` is the loop iteration the trip happened on — useful
+    for distinguishing "first prompt was huge" (iteration 1) from "tool
+    results accumulated past the cap" (later iterations).
     """
 
     estimated_input_tokens: int
@@ -153,31 +213,122 @@ def default_token_budget() -> int:
     return value
 
 
+@lru_cache(maxsize=1)
+def default_cumulative_token_budget() -> int:
+    """Return the env-configured cumulative per-turn budget (ABS-305).
+
+    Mirrors ``default_token_budget`` but reads
+    ``ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET`` and falls back to
+    ``_DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET`` (165k). Cached so the
+    env-var read happens once per process; tests needing a fresh read
+    call ``default_cumulative_token_budget.cache_clear()``. Non-integer,
+    zero, or negative values fall back to the module default with a
+    warning rather than crashing the chat layer.
+    """
+    raw = os.environ.get("ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET")
+    if raw is None:
+        return _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET=%r is not an integer; "
+            "falling back to default %d",
+            raw,
+            _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET,
+        )
+        return _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET
+    if value <= 0:
+        logger.warning(
+            "ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET=%d is non-positive; "
+            "falling back to default %d",
+            value,
+            _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET,
+        )
+        return _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET
+    return value
+
+
 def estimate_request_input_tokens(request: CompletionRequest) -> int:
-    """Estimate the input-token cost of ``request`` BEFORE sending it.
+    """Estimate the *billed-equivalent* input-token cost of ``request``.
 
     Sums character counts across every payload field the provider
     serializes (system prompt, tool definitions, message history) and
     divides by ``_CHARS_PER_TOKEN``. Returns an integer estimate; the
-    caller compares it to a budget.
+    caller compares it to a budget in billed-equivalent terms.
 
-    Deliberately ignores: ``max_tokens`` (output cap, not input),
-    ``temperature``, ``stop_sequences``, and ``metadata`` (negligible
-    contribution). Cache-related flags are also irrelevant — even a
-    cached read still counts toward the per-turn input ceiling we
-    care about here (cost on cache reads is ~10% of normal, but the
-    safety net measures the prompt size, not the bill).
+    **Cache discounting (ABS-291):** tokens inside cached prefix regions
+    are weighted at ``_CACHE_READ_WEIGHT`` (~10%), matching Anthropic's
+    cache-read pricing:
+
+    * ``cache_system=True`` → system prompt is already in the provider's
+      cache (stable across all iterations); charged at 10%.
+    * ``cache_tools=True`` → all tool definitions are cached; charged at
+      10%.
+    * The last ``cache=True`` content block in ``request.messages`` marks
+      a rolling intra-loop cache breakpoint (ABS-285). Every message
+      *before* the message that contains this block was written to cache
+      on the previous iteration and is now a cache read; charged at 10%.
+      The breakpoint message itself and any content after it are new
+      (uncached) and charged at full price.
+
+    Deliberately ignores: ``max_tokens`` (output cap), ``temperature``,
+    ``stop_sequences``, and ``metadata`` (negligible contribution).
     """
     chars = 0
     if request.system:
-        chars += len(request.system)
-    for tool in request.tools:
-        chars += len(tool.name)
-        chars += len(tool.description)
-        chars += _json_chars(tool.input_schema)
-    for message in request.messages:
-        chars += _message_chars(message)
+        weight = _CACHE_READ_WEIGHT if request.cache_system else 1.0
+        chars += int(len(request.system) * weight)
+    if request.tools:
+        tools_chars = 0
+        for tool in request.tools:
+            tools_chars += len(tool.name)
+            tools_chars += len(tool.description)
+            tools_chars += _json_chars(tool.input_schema)
+        weight = _CACHE_READ_WEIGHT if request.cache_tools else 1.0
+        chars += int(tools_chars * weight)
+    chars += _message_list_billed_chars(request.messages)
     return chars // _CHARS_PER_TOKEN
+
+
+def _message_list_billed_chars(messages: list[Message]) -> int:
+    """Character count across all messages with cache-read discounting.
+
+    Locates the last message that contains any block with ``cache=True``.
+    Every message *before* that message is treated as a cache read
+    (multiplied by ``_CACHE_READ_WEIGHT``); the breakpoint message and
+    any messages after it are charged at full price.
+
+    Returns the unscaled character total when no cache-marked block is
+    found (i.e. the request is fully uncached).
+
+    Background: the rolling intra-loop breakpoint (ABS-285) places
+    ``cache=True`` on the last block of the most recent tool_result turn.
+    Everything before that message was written to cache on the previous
+    loop iteration and is served as a cache read on this one.
+    Session-level milestone markers (``_mark_conversation_cache_milestones``
+    in ``advisor.chat.session``) also use ``cache=True`` on early assistant
+    turns; they appear before the rolling marker, so they are covered by
+    the same discount region.
+    """
+    last_cache_msg: int | None = None
+    for i, message in enumerate(messages):
+        if isinstance(message.content, list):
+            for block in message.content:
+                if getattr(block, "cache", False):
+                    last_cache_msg = i
+
+    if last_cache_msg is None:
+        return sum(_message_chars(m) for m in messages)
+
+    cached_chars = 0
+    uncached_chars = 0
+    for i, message in enumerate(messages):
+        if i < last_cache_msg:
+            cached_chars += _message_chars(message)
+        else:
+            uncached_chars += _message_chars(message)
+    return int(cached_chars * _CACHE_READ_WEIGHT) + uncached_chars
 
 
 def _message_chars(message: Message) -> int:

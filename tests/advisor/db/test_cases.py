@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from advisor.db.cases import (
+    FREE_QUESTION_GRANT,
     NoAvailableCreditError,
     REOPEN_WINDOW,
     STARTER_GRANT_QUANTITY,
@@ -14,6 +15,7 @@ from advisor.db.cases import (
     UnknownTierError,
     close_case,
     commit_credit_for_session,
+    consume_free_question,
     credit_balance_for,
     grant_admin_credits,
     grant_starter_credits_if_needed,
@@ -637,7 +639,7 @@ def test_open_case_records_open_event(tmp_path: Path) -> None:
 def test_grant_starter_credits_grants_default_pack_to_new_user(
     tmp_path: Path,
 ) -> None:
-    """A user with no credits gets the default starter pack."""
+    """A new user with no credits gets the free-question entitlement counter."""
     db_url = _db_url(tmp_path)
     create_all(db_url)
     user_id = _seed_user(db_url)
@@ -646,17 +648,27 @@ def test_grant_starter_credits_grants_default_pack_to_new_user(
         assert granted is True
 
     with session_scope(db_url) as s:
+        # No CaseCredit rows — the new model uses an entitlement counter.
         credits = list(s.query(CaseCredit).filter(CaseCredit.user_id == user_id))
-        assert len(credits) == STARTER_GRANT_QUANTITY
-        assert all(c.tier == STARTER_GRANT_TIER for c in credits)
-        assert all(c.state == "available" for c in credits)
-        assert all(c.source == "admin_grant" for c in credits)
+        assert len(credits) == 0
+        # The counter on the user row is set to FREE_QUESTION_GRANT.
+        user = s.get(User, user_id)
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT
+        assert user.metadata_json.get("free_question_grant_issued") is True
 
 
-def test_grant_starter_credits_is_noop_when_user_already_has_credits(
+def test_grant_starter_credits_issues_for_legacy_credit_user(
     tmp_path: Path,
 ) -> None:
-    """Existing credits — in any state — block a second starter grant."""
+    """ABS-323: a user holding legacy tier credits STILL gets the grant.
+
+    Pre-ABS-323 this was skipped on the "holds any CaseCredit ⇒ already
+    onboarded" assumption. After the tier→question pivot legacy tier
+    credits can't buy answers, so suppressing the grant locked every
+    existing user out of the free trial with payments off. The grant
+    must now issue regardless of legacy credits, gated only on the
+    idempotency flag.
+    """
     db_url = _db_url(tmp_path)
     create_all(db_url)
     user_id = _seed_user(db_url)
@@ -671,13 +683,101 @@ def test_grant_starter_credits_is_noop_when_user_already_has_credits(
 
     with session_scope(db_url) as s:
         granted = grant_starter_credits_if_needed(s, user=s.get(User, user_id))
-        assert granted is False
+        assert granted is True
 
     with session_scope(db_url) as s:
+        # The legacy tier credit is untouched and coexists with the grant.
         credits = list(s.query(CaseCredit).filter(CaseCredit.user_id == user_id))
-        # Only the seeded credit — no starter pack on top.
         assert len(credits) == 1
         assert credits[0].tier == "quick"
+        user = s.get(User, user_id)
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT
+        assert user.metadata_json.get("free_question_grant_issued") is True
+
+
+def test_grant_starter_credits_flag_is_sole_gate_even_with_legacy_credits(
+    tmp_path: Path,
+) -> None:
+    """ABS-323: once the flag is set, legacy credits don't re-trigger a grant.
+
+    The ``free_question_grant_issued`` flag is the only idempotency gate.
+    A user who already holds the grant AND legacy tier credits is a
+    no-op — the counter is not topped back up.
+    """
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        grant_admin_credits(s, user=user, tier="quick", quantity=1, reason="seed")
+        # Grant once, then consume so the counter sits below the default.
+        assert grant_starter_credits_if_needed(s, user=user) is True
+        consume_free_question(s, user=user)
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        # Flag set + legacy credits present → no-op, counter not restored.
+        assert grant_starter_credits_if_needed(s, user=user) is False
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT - 1
+
+
+def test_grant_starter_credits_is_noop_when_already_issued(
+    tmp_path: Path,
+) -> None:
+    """Calling grant twice for the same creditless user is a no-op on the second call."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        first = grant_starter_credits_if_needed(s, user=s.get(User, user_id))
+        assert first is True
+
+    with session_scope(db_url) as s:
+        second = grant_starter_credits_if_needed(s, user=s.get(User, user_id))
+        assert second is False
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        # Counter unchanged — not incremented a second time.
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT
+
+
+def test_consume_free_question_decrements_counter(
+    tmp_path: Path,
+) -> None:
+    """consume_free_question decrements the counter and returns True."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        grant_starter_credits_if_needed(s, user=s.get(User, user_id))
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        consumed = consume_free_question(s, user=user)
+        assert consumed is True
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        assert user.free_questions_remaining == FREE_QUESTION_GRANT - 1
+
+
+def test_consume_free_question_returns_false_when_counter_zero(
+    tmp_path: Path,
+) -> None:
+    """consume_free_question returns False when no free questions remain."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        assert user.free_questions_remaining == 0
+        consumed = consume_free_question(s, user=user)
+        assert consumed is False
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        assert user.free_questions_remaining == 0
 
 
 # ---------- refund_orphaned_case_reservations -----------------------------
@@ -834,6 +934,121 @@ def test_refund_orphaned_case_reservations_is_idempotent(
         assert second == 0
 
 
+def test_db_constraint_rejects_second_unsessioned_reservation_on_same_case(
+    tmp_path: Path,
+) -> None:
+    """The partial unique index ``uq_advisor_case_credit_one_unsessioned_reserve``
+    rejects a second ``reserved / session_id IS NULL`` credit on the same case.
+
+    Defence-in-depth for ABS-11: even if the application-level idempotency
+    guard in ``open_case`` were accidentally removed, the DB prevents the
+    double-reservation that leaks a credit.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+
+    # Seed credits and case, then reserve the first credit.
+    with session_scope(db_url) as s:
+        grant_admin_credits(
+            s,
+            user=s.get(User, user_id),
+            tier="standard",
+            quantity=2,
+            reason="t",
+        )
+        case = Case(
+            user_id=user_id,
+            anchor_label="addr",
+            anchor_key="addr",
+            anchor_kind="address",
+            status="open",
+            current_tier="standard",
+            tokens_consumed=0,
+            opened_at=datetime.now(timezone.utc),
+            last_activity_at=datetime.now(timezone.utc),
+        )
+        s.add(case)
+        s.flush()
+        credits = list(
+            s.query(CaseCredit)
+            .filter(CaseCredit.user_id == user_id, CaseCredit.state == "available")
+            .order_by(CaseCredit.id)
+            .all()
+        )
+        credits[0].case_id = case.id
+        credits[0].state = "reserved"
+        credits[0].session_id = None
+        credits[0].reserved_at = datetime.now(timezone.utc)
+        case_id = case.id
+        second_credit_id = credits[1].id
+
+    # Attempt a second unsessioned reservation in a fresh session — must fail.
+    with pytest.raises((IntegrityError, Exception)):
+        with session_scope(db_url) as s:
+            credit2 = s.get(CaseCredit, second_credit_id)
+            credit2.case_id = case_id
+            credit2.state = "reserved"
+            credit2.session_id = None
+            credit2.reserved_at = datetime.now(timezone.utc)
+            s.flush()
+
+
+def test_db_constraint_allows_sessioned_credit_alongside_unsessioned(
+    tmp_path: Path,
+) -> None:
+    """A sessioned credit (from chat start) can coexist with an
+    unsessioned reservation — the constraint only targets the
+    ``session_id IS NULL`` window."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        grant_admin_credits(
+            s,
+            user=s.get(User, user_id),
+            tier="standard",
+            quantity=2,
+            reason="t",
+        )
+        sess_id = _new_session_for(s, user_id=user_id)
+        case = Case(
+            user_id=user_id,
+            anchor_label="addr",
+            anchor_key="addr",
+            anchor_kind="address",
+            status="open",
+            current_tier="standard",
+            tokens_consumed=0,
+            opened_at=datetime.now(timezone.utc),
+            last_activity_at=datetime.now(timezone.utc),
+        )
+        s.add(case)
+        s.flush()
+
+        credits = list(
+            s.query(CaseCredit)
+            .filter(CaseCredit.user_id == user_id, CaseCredit.state == "available")
+            .order_by(CaseCredit.id)
+            .all()
+        )
+        # Credit 1: unsessioned reservation (from open_case).
+        credits[0].case_id = case.id
+        credits[0].state = "reserved"
+        credits[0].session_id = None
+        credits[0].reserved_at = datetime.now(timezone.utc)
+        s.flush()
+
+        # Credit 2: sessioned reservation (from chat start) — must succeed.
+        credits[1].case_id = case.id
+        credits[1].state = "reserved"
+        credits[1].session_id = sess_id
+        credits[1].reserved_at = datetime.now(timezone.utc)
+        s.flush()  # No error expected.
+
+
 def test_grant_admin_credits_creates_one_row_per_credit(tmp_path: Path) -> None:
     db_url = _db_url(tmp_path)
     create_all(db_url)
@@ -857,3 +1072,143 @@ def test_grant_admin_credits_creates_one_row_per_credit(tmp_path: Path) -> None:
         purchase = s.get(CasePurchase, next(iter(purchase_ids)))
         assert purchase.pack_sku == "admin_grant"
         assert purchase.quantity == 20
+
+
+# ---------- unlimited credits (ABS-12) ------------------------------------
+
+
+def _seed_unlimited_user(db_url: str, *, clerk_user_id: str = "u_test") -> int:
+    with session_scope(db_url) as s:
+        user = User(
+            clerk_user_id=clerk_user_id,
+            email=f"{clerk_user_id}@x.com",
+            unlimited_credits=True,
+        )
+        s.add(user)
+        s.flush()
+        return user.id
+
+
+def test_unlimited_credits_defaults_to_false(tmp_path: Path) -> None:
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        assert user.unlimited_credits is False
+
+
+def test_open_case_auto_mints_credit_for_unlimited_user(tmp_path: Path) -> None:
+    """An unlimited-credits user can open a case without pre-granted credits."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_unlimited_user(db_url)
+    with session_scope(db_url) as s:
+        case, credit = open_case(
+            s,
+            user=s.get(User, user_id),
+            anchor_label="123 Test St",
+            anchor_kind="address",
+            tier="standard",
+        )
+        assert credit.state == "reserved"
+        assert credit.source == "test"
+        assert credit.tier == "standard"
+        assert credit.case_id == case.id
+
+
+def test_unlimited_user_minted_credit_has_test_source(tmp_path: Path) -> None:
+    """Auto-minted credits are tagged with source='test' for analytics filtering."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_unlimited_user(db_url)
+    with session_scope(db_url) as s:
+        open_case(
+            s,
+            user=s.get(User, user_id),
+            anchor_label="456 Test St",
+            anchor_kind="address",
+            tier="quick",
+        )
+
+    with session_scope(db_url) as s:
+        credits = list(
+            s.query(CaseCredit).filter(CaseCredit.user_id == user_id)
+        )
+        assert len(credits) == 1
+        assert credits[0].source == "test"
+        purchase = s.get(CasePurchase, credits[0].purchase_id)
+        assert purchase.pack_sku == "test"
+        assert purchase.amount_paid_cents == 0
+
+
+def test_unlimited_user_can_open_multiple_cases(tmp_path: Path) -> None:
+    """Each case open auto-mints its own test credit."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_unlimited_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        case1, c1 = open_case(
+            s, user=user, anchor_label="A", anchor_kind="address", tier="standard"
+        )
+        case2, c2 = open_case(
+            s, user=user, anchor_label="B", anchor_kind="address", tier="standard"
+        )
+        assert c1.id != c2.id
+        assert c1.source == "test"
+        assert c2.source == "test"
+
+
+def test_unlimited_user_upgrade_auto_mints(tmp_path: Path) -> None:
+    """upgrade_case_credit auto-mints a higher-tier credit for unlimited users."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_unlimited_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        case, credit = open_case(
+            s, user=user, anchor_label="X", anchor_kind="address", tier="quick"
+        )
+        burned, new = upgrade_case_credit(
+            s, case=case, target_tier="standard", trigger="test_upgrade"
+        )
+        assert burned.state == "upgraded_out"
+        assert new.source == "test"
+        assert new.tier == "standard"
+        assert new.case_id == case.id
+
+
+def test_normal_user_still_gets_no_credit_error(tmp_path: Path) -> None:
+    """unlimited_credits=False (default) does not auto-mint."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        with pytest.raises(NoAvailableCreditError):
+            open_case(
+                s,
+                user=s.get(User, user_id),
+                anchor_label="No credits",
+                anchor_kind="address",
+                tier="standard",
+            )
+
+
+def test_unlimited_user_prefers_real_credits_over_minting(tmp_path: Path) -> None:
+    """If an unlimited user has real available credits, those are used first."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    user_id = _seed_unlimited_user(db_url)
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        grant_admin_credits(s, user=user, tier="standard", quantity=1, reason="test")
+
+    with session_scope(db_url) as s:
+        user = s.get(User, user_id)
+        _, credit = open_case(
+            s, user=user, anchor_label="R", anchor_kind="address", tier="standard"
+        )
+        assert credit.source == "admin_grant", (
+            "should use the real credit, not auto-mint"
+        )

@@ -1,0 +1,12 @@
+[
+  {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "complexity": "complex",
+    "turns_completed": 6,
+    "turns_expected": 6,
+    "tool_calls": 0,
+    "wall_s": 80.58,
+    "error": null
+  }
+]

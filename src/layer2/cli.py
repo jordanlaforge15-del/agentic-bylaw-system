@@ -20,7 +20,7 @@ from layer2.embeddings.clients import (
 from layer2.eval.harness import run_eval
 from layer2.feedback.service import submit_answer_feedback, submit_claim_feedback, submit_retrieval_feedback
 from layer2.llm.base import BaseLLMClient
-from layer2.llm.clients import MockLLMClient, OpenAICompatibleLLMClient
+from layer2.llm.clients import ClaudeCodeLLMClient, MockLLMClient, OpenAICompatibleLLMClient
 from layer2.pipeline.service import embed_document_fragments, run_answer_pipeline
 from layer2.retrieval.service import retrieve_context
 
@@ -50,13 +50,9 @@ def _resolve_embedding_client(model: str | None, settings: Layer2Settings) -> Ba
 
 def _resolve_llm_client(model: str | None, settings: Layer2Settings) -> BaseLLMClient:
     model_name = model or settings.llm_model
-    if model_name.startswith("mock") or not settings.llm_base_url:
+    if model_name.startswith("mock"):
         return MockLLMClient()
-    return OpenAICompatibleLLMClient(
-        base_url=settings.llm_base_url,
-        model_name=model_name,
-        api_key=settings.llm_api_key,
-    )
+    return ClaudeCodeLLMClient()
 
 
 def _json_print(payload: Any) -> None:

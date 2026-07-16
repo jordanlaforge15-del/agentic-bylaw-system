@@ -1,0 +1,172 @@
+{
+  "id": "TC-014",
+  "title": "Developer chasing bonus density in CEN-2",
+  "zone": "CEN-2",
+  "persona": {
+    "type": "real_estate_developer",
+    "subtype": null,
+    "description": "Developer exploring bonus zoning provisions to push height and FAR above as-of-right"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "1657 Barrington Street, Halifax, NS",
+  "session_id": "d9cbbcec-ce49-4408-a3a6-d87a9048db0d",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "We're looking at 1657 Barrington Street in Halifax \u2014 it's zoned CEN-2. We want to develop a mixed-use building and we've heard there are bonus density provisions available in that zone. Can you give me a rundown of what the base FAR and height allowances are for CEN-2, and what the ceiling looks like if we can trigger the bonusing?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.18,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "Okay, so what specific amenities or contributions actually unlock the bonus FAR? I want to know exactly what we'd need to provide \u2014 whether that's affordable housing units, publicly accessible space, heritage preservation, whatever the bylaw specifies \u2014 and how much additional FAR each one buys us.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.37,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "Let's talk about ground floor use requirements on Barrington Street specifically. I know CEN-2 typically has active-use mandates at grade \u2014 what uses are required, what's the minimum depth or frontage that has to be commercial or active, and are there any restrictions on things like parking garage entrances breaking up the streetwall?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "On the streetwall piece \u2014 what's the required streetwall height and percentage of frontage coverage on a primary street like Barrington? If we're going for bonus height, does the bylaw impose any additional stepback requirements above the streetwall level, and at what floor does that kick in?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 5,
+      "user_message": "Here's where it gets complicated for us: we're trying to stack as many bonus provisions as possible to hit maximum FAR. If we commit to, say, affordable units AND a publicly accessible through-block connection, does the bylaw allow those bonuses to stack additively, or is there a hard cap regardless of how many qualifying contributions we make? And is there any discretion for Council or a Development Officer to go above that cap?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 6,
+      "user_message": "Last question \u2014 if we go through site plan approval under Section 15 for this project, does the approval process give the municipality any ability to claw back or condition the bonus density we'd otherwise be entitled to as-of-right under the bonus zoning provisions? I want to understand our exposure before we commit to the pro forma.",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-014",
+    "title": "Developer chasing bonus density in CEN-2",
+    "persona": {
+      "type": "real_estate_developer",
+      "subtype": null,
+      "description": "Developer exploring bonus zoning provisions to push height and FAR above as-of-right"
+    },
+    "address": "1657 Barrington Street, Halifax, NS",
+    "zone": "CEN-2",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "mixed_use",
+      "bonus_zoning",
+      "height",
+      "FAR",
+      "ground_floor_use"
+    ],
+    "bylaw_features": [
+      "bonus_zoning",
+      "FAR",
+      "height",
+      "ground_floor_use",
+      "streetwall"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "We're looking at 1657 Barrington Street in Halifax \u2014 it's zoned CEN-2. We want to develop a mixed-use building and we've heard there are bonus density provisions available in that zone. Can you give me a rundown of what the base FAR and height allowances are for CEN-2, and what the ceiling looks like if we can trigger the bonusing?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "Okay, so what specific amenities or contributions actually unlock the bonus FAR? I want to know exactly what we'd need to provide \u2014 whether that's affordable housing units, publicly accessible space, heritage preservation, whatever the bylaw specifies \u2014 and how much additional FAR each one buys us."
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "Let's talk about ground floor use requirements on Barrington Street specifically. I know CEN-2 typically has active-use mandates at grade \u2014 what uses are required, what's the minimum depth or frontage that has to be commercial or active, and are there any restrictions on things like parking garage entrances breaking up the streetwall?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "On the streetwall piece \u2014 what's the required streetwall height and percentage of frontage coverage on a primary street like Barrington? If we're going for bonus height, does the bylaw impose any additional stepback requirements above the streetwall level, and at what floor does that kick in?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "Here's where it gets complicated for us: we're trying to stack as many bonus provisions as possible to hit maximum FAR. If we commit to, say, affordable units AND a publicly accessible through-block connection, does the bylaw allow those bonuses to stack additively, or is there a hard cap regardless of how many qualifying contributions we make? And is there any discretion for Council or a Development Officer to go above that cap?"
+      },
+      {
+        "turn": 6,
+        "role": "user",
+        "message": "Last question \u2014 if we go through site plan approval under Section 15 for this project, does the approval process give the municipality any ability to claw back or condition the bonus density we'd otherwise be entitled to as-of-right under the bonus zoning provisions? I want to understand our exposure before we commit to the pro forma."
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [
+      "CEN-2",
+      "permitted",
+      "Schedule 15",
+      "Schedule 17",
+      "bonus",
+      "floor area ratio",
+      "height precinct",
+      "Section 196",
+      "ground floor",
+      "active use",
+      "streetwall",
+      "Section 200"
+    ],
+    "expected_topics": [],
+    "notes": "Tests CEN-2 base FAR/height, bonus-zoning trigger menu, ground-floor active-use requirement, and streetwall standards. Adversarial \u2014 user pushes for max possible scenario and assumes bonuses are stackable."
+  },
+  "case_wall_time_s": 1.24
+}

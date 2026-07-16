@@ -140,7 +140,7 @@ test.describe("Night Manager — Dashboard", () => {
   test("renders KPI strip and execution plan", async ({ page }) => {
     await gotoNm(page);
     await expect(page.locator(".nm-topbar__title")).toHaveText("NIGHT MANAGER");
-    await expect(page.getByText("EXECUTION PLAN")).toBeVisible();
+    await expect(page.getByText("EXECUTION PLAN", { exact: true })).toBeVisible();
     await expect(page.getByText("ACTIVE AGENTS")).toBeVisible();
   });
 
@@ -150,7 +150,9 @@ test.describe("Night Manager — Dashboard", () => {
       page.locator(".nm-topbar__stat").filter({ hasText: "SYSTEM" }),
     ).toBeVisible();
     await expect(page.getByText("NOMINAL")).toBeVisible();
-    await expect(page.getByText(/nm-\d{8}-\d{4}/)).toBeVisible();
+    await expect(
+      page.getByTestId("nm-topbar-run-id").getByText(/nm-\d{8}-\d{4}/),
+    ).toBeVisible();
   });
 
   test("nav bar shows all four tabs", async ({ page }) => {
@@ -273,6 +275,86 @@ test.describe("Night Manager — Launch", () => {
   });
 });
 
+test.describe("Night Manager — Resume Last Run", () => {
+  test.beforeEach(async ({ context }) => {
+    await stubNmApis(context);
+  });
+
+  test("panel lists failed + reviewing issues, hides queued by default", async ({
+    page,
+  }) => {
+    await page.goto(`${NM_BASE}/launch`);
+    const panel = page.locator(".nm-panel").filter({ hasText: "RESUME LAST RUN" });
+    await expect(panel).toBeVisible();
+    // ABS-92 is failed, ABS-94 is reviewing — both must be listed.
+    await expect(panel.getByText("ABS-92", { exact: true })).toBeVisible();
+    await expect(panel.getByText("ABS-94", { exact: true })).toBeVisible();
+    // ABS-97 is queued — must NOT appear without the opt-in toggle.
+    await expect(panel.getByText("ABS-97", { exact: true })).toHaveCount(0);
+  });
+
+  test("include-queued checkbox surfaces queued issues", async ({ page }) => {
+    await page.goto(`${NM_BASE}/launch`);
+    const panel = page.locator(".nm-panel").filter({ hasText: "RESUME LAST RUN" });
+    const toggle = panel.getByTestId("resume-queued-toggle");
+    await expect(toggle).toBeVisible();
+    await toggle.locator("input[type=checkbox]").check();
+    await expect(panel.getByText("ABS-97", { exact: true })).toBeVisible();
+    // The RESUME ALL button count reflects the new total.
+    await expect(panel.getByRole("button", { name: /RESUME ALL 3 ISSUES/ })).toBeVisible();
+  });
+
+  test("per-issue RESUME button POSTs resumeIssue without resumeQueued", async ({
+    page,
+  }) => {
+    const captured: { value: Record<string, unknown> } = { value: {} };
+    let receivedCount = 0;
+    await page.route("**/api/nm/run/start", async (route) => {
+      captured.value = (await route.request().postDataJSON()) as Record<
+        string,
+        unknown
+      >;
+      receivedCount++;
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) });
+    });
+    await page.goto(`${NM_BASE}/launch`);
+    const panel = page.locator(".nm-panel").filter({ hasText: "RESUME LAST RUN" });
+    await page
+      .getByTestId("resume-row-ABS-94")
+      .getByRole("button", { name: "RESUME" })
+      .click();
+    void panel;
+    await expect.poll(() => receivedCount).toBeGreaterThan(0);
+    expect(captured.value).toMatchObject({ resumeIssue: "ABS-94", resume: false });
+    expect(captured.value.resumeQueued).toBe(false);
+  });
+
+  test("RESUME ALL with checkbox on POSTs resumeQueued: true", async ({
+    page,
+  }) => {
+    const captured: { value: Record<string, unknown> } = { value: {} };
+    let receivedCount = 0;
+    await page.route("**/api/nm/run/start", async (route) => {
+      captured.value = (await route.request().postDataJSON()) as Record<
+        string,
+        unknown
+      >;
+      receivedCount++;
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) });
+    });
+    await page.goto(`${NM_BASE}/launch`);
+    const panel = page.locator(".nm-panel").filter({ hasText: "RESUME LAST RUN" });
+    await panel
+      .getByTestId("resume-queued-toggle")
+      .locator("input[type=checkbox]")
+      .check();
+    await panel.getByRole("button", { name: /RESUME ALL/ }).click();
+    await expect.poll(() => receivedCount).toBeGreaterThan(0);
+    expect(captured.value).toMatchObject({ resume: true, resumeQueued: true });
+    expect(captured.value.resumeIssue).toBeUndefined();
+  });
+});
+
 test.describe("Night Manager — Reports", () => {
   test.beforeEach(async ({ context }) => {
     await stubNmApis(context);
@@ -286,7 +368,7 @@ test.describe("Night Manager — Reports", () => {
 
   test("shows in-progress stats for current run", async ({ page }) => {
     await gotoNm(page, "/reports");
-    await expect(page.getByText("Night Manager Run")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Night Manager Run/ })).toBeVisible();
     const strip = page.locator(".nm-stats-strip");
     await expect(strip.getByText("MERGED")).toBeVisible();
     await expect(strip.getByText("IN FLIGHT")).toBeVisible();
@@ -306,7 +388,7 @@ test.describe("Night Manager — No active run", () => {
       }),
     );
     await page.goto(NM_BASE);
-    await expect(page.getByText("NO ACTIVE RUN")).toBeVisible();
+    await expect(page.getByText("NO ACTIVE RUN").first()).toBeVisible();
     await expect(
       page.getByRole("link", { name: /NEW RUN/ }),
     ).toBeVisible();

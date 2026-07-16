@@ -1,0 +1,69 @@
+name: "Traditional Planning Consultants"
+slug: "traditional-planning-consultants"
+url: ""
+category: "adjacent"
+status: "active"
+discovered: "2026-05-27"
+last_analyzed: "2026-05-27"
+
+description: "Established planning and consulting firms in Atlantic Canada that provide bylaw interpretation, zoning analysis, and permit guidance as professional services."
+
+product:
+  type: "consulting"
+  target_market:
+    - "developers"
+    - "planners"
+    - "lawyers"
+  geography:
+    - "Atlantic Canada"
+    - "Nova Scotia"
+    - "Halifax Regional Municipality"
+  jurisdictions:
+    - "HRM"
+    - "Multiple Nova Scotia municipalities"
+  pricing_model: "per-query"
+  pricing_range: "$150-$400/hour professional rates"
+  key_features:
+    - "Expert bylaw interpretation"
+    - "Variance and rezoning application support"
+    - "Council hearing representation"
+    - "Site-specific feasibility studies"
+    - "Relationship with municipal planning staff"
+
+positioning:
+  tagline: "Various — established local expertise"
+  differentiators:
+    - "Deep local relationships and institutional knowledge"
+    - "Can represent clients at council hearings"
+    - "Handle edge cases and discretionary decisions"
+    - "Professional liability insurance"
+  weaknesses:
+    - "Expensive ($150-400/hr)"
+    - "Slow turnaround (days to weeks)"
+    - "Not scalable"
+    - "Knowledge trapped in individual consultants"
+    - "No self-serve option for quick lookups"
+
+funding:
+  stage: "bootstrapped"
+  total_raised: "unknown"
+  last_round_date: null
+  notable_investors: []
+
+signals:
+  - date: "2026-05-27"
+    type: "product-launch"
+    summary: "Category tracking entry — monitor for tech adoption or AI tool partnerships among local firms"
+    source_url: ""
+
+threat_assessment:
+  level: "low"
+  rationale: "Traditional consultants are the incumbent we're disrupting, not a competitive threat to our technology. ABS handles the quick-lookup segment they find unprofitable. Risk is if a major firm builds or licenses an AI tool specifically for HRM bylaws."
+  overlap_areas:
+    - "Bylaw interpretation"
+    - "Zoning feasibility"
+    - "HRM-specific expertise"
+  watch_triggers:
+    - "Local firm launching an AI-powered service"
+    - "Partnership between a planning firm and an AI/tech company"
+    - "HRM Planning department offering self-serve digital tools"

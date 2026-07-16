@@ -1,0 +1,173 @@
+{
+  "id": "TC-008",
+  "title": "City planner reviewing heritage demolition application in DH",
+  "zone": "DH",
+  "persona": {
+    "type": "city_agent",
+    "subtype": "planner",
+    "description": "Municipal planner processing a development application in the heritage downtown"
+  },
+  "complexity": "complex",
+  "liability": "high",
+  "address": "1801 Hollis Street, Halifax, NS",
+  "session_id": "8b22800f-82cd-4312-9577-9bda19c410d9",
+  "model": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I\u2019m a city planner reviewing an application for 1801 Hollis Street in the DH zone. The applicant wants to demolish an existing building and build a new multi-unit residential tower. What are the use permissions and base dimensional standards in DH?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 2,
+      "user_message": "The existing building is on the heritage register. The applicant is proposing demolition \u2014 what does the Heritage Conservation District Overlay require before a demolition permit can be issued for a registered heritage property?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 3,
+      "user_message": "Assuming demolition is approved, the new building would be 90 metres tall. Is height in the DH zone governed by Table 5 or by Schedule 15? And is 90 m a number I can evaluate against the bylaw itself, or does it depend on the height precinct map?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 4,
+      "user_message": "The new building would have 120 residential units. Is off-street parking required in the DH zone, or does the no-parking exemption apply?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    },
+    {
+      "turn": 5,
+      "user_message": "What would the floor area ratio limit be for this DH development, and what document or schedule controls it?",
+      "assistant_text": "",
+      "tool_calls": [],
+      "stop_reason": null,
+      "usage": null,
+      "wall_time_s": 0.17,
+      "raw_event_count": 2,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": null
+    }
+  ],
+  "spec": {
+    "id": "TC-008",
+    "title": "City planner reviewing heritage demolition application in DH",
+    "persona": {
+      "type": "city_agent",
+      "subtype": "planner",
+      "description": "Municipal planner processing a development application in the heritage downtown"
+    },
+    "address": "1801 Hollis Street, Halifax, NS",
+    "zone": "DH",
+    "complexity": "complex",
+    "liability": "high",
+    "tags": [
+      "heritage",
+      "demolition",
+      "downtown",
+      "overlay",
+      "development_permit",
+      "new_construction"
+    ],
+    "bylaw_features": [
+      "heritage_overlay",
+      "height_overlay",
+      "setbacks",
+      "lot_coverage",
+      "development_permit",
+      "parking"
+    ],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "I\u2019m a city planner reviewing an application for 1801 Hollis Street in the DH zone. The applicant wants to demolish an existing building and build a new multi-unit residential tower. What are the use permissions and base dimensional standards in DH?"
+      },
+      {
+        "turn": 2,
+        "role": "user",
+        "message": "The existing building is on the heritage register. The applicant is proposing demolition \u2014 what does the Heritage Conservation District Overlay require before a demolition permit can be issued for a registered heritage property?"
+      },
+      {
+        "turn": 3,
+        "role": "user",
+        "message": "Assuming demolition is approved, the new building would be 90 metres tall. Is height in the DH zone governed by Table 5 or by Schedule 15? And is 90 m a number I can evaluate against the bylaw itself, or does it depend on the height precinct map?"
+      },
+      {
+        "turn": 4,
+        "role": "user",
+        "message": "The new building would have 120 residential units. Is off-street parking required in the DH zone, or does the no-parking exemption apply?"
+      },
+      {
+        "turn": 5,
+        "role": "user",
+        "message": "What would the floor area ratio limit be for this DH development, and what document or schedule controls it?"
+      }
+    ],
+    "expected_bylaw_references": [
+      "Table 1B",
+      "Table 4",
+      "Table 5",
+      "Section 110",
+      "Section 111",
+      "Section 112",
+      "Section 120(b)",
+      "Schedule 15",
+      "Schedule 17",
+      "Schedule 22"
+    ],
+    "expected_answer_keywords": [
+      "DH",
+      "permitted",
+      "multi-unit dwelling",
+      "Schedule 15",
+      "Schedule 17",
+      "floor area ratio",
+      "heritage",
+      "heritage conservation district",
+      "demolition",
+      "not required"
+    ],
+    "expected_topics": [
+      "use_permission",
+      "setbacks",
+      "lot_coverage",
+      "heritage_overlay",
+      "height_overlay",
+      "parking",
+      "FAR_overlay"
+    ],
+    "notes": "Complex five-turn city planner workflow. Tests heritage demolition gate (HAC approval required), overlay hierarchy, and downtown parking exemption. High public liability: heritage demolition in downtown core."
+  },
+  "case_wall_time_s": 0.85
+}

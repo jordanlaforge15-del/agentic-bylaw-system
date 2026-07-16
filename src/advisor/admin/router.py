@@ -35,16 +35,29 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from collections import defaultdict
+from datetime import datetime, timedelta
+
+from sqlalchemy import Date, cast, func, select
 from sqlalchemy.orm import Session
 
 from advisor.db.cases import (
     UnknownTierError,
     credit_balance_for,
     grant_admin_credits,
+    grant_free_questions,
     refund_orphaned_case_reservations,
 )
-from advisor.db.models import Case, CaseEvent, User
+from advisor.db.models import (
+    Case,
+    CaseCredit,
+    CaseEvent,
+    CasePurchase,
+    ChatMessage,
+    ChatSession,
+    TermsAcceptance,
+    User,
+)
 from advisor.db.schemas import CaseOut
 
 logger = logging.getLogger(__name__)
@@ -95,6 +108,19 @@ class GrantCreditsResponse(BaseModel):
     reason: str
 
 
+class GrantFreeQuestionsRequest(BaseModel):
+    """Body of ``POST /v1/admin/users/{id}/free-questions`` (ABS-322)."""
+
+    quantity: int = Field(ge=1, le=1000)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class GrantFreeQuestionsResponse(BaseModel):
+    granted: int
+    free_questions_remaining: int
+    reason: str
+
+
 class AdminCaseListResponse(BaseModel):
     cases: list[CaseOut]
 
@@ -119,8 +145,72 @@ class UpgradeFunnelResponse(BaseModel):
     rows: list[UpgradeFunnelRow]
 
 
+class SetUnlimitedCreditsRequest(BaseModel):
+    enabled: bool
+
+
+class SetUnlimitedCreditsResponse(BaseModel):
+    user_id: int
+    unlimited_credits: bool
+
+
 class RefundOrphanedReservationsResponse(BaseModel):
     refunded: int
+
+
+class ActiveUsersDayRow(BaseModel):
+    date: str
+    count: int
+
+
+class ActiveUsersWeekRow(BaseModel):
+    week: str
+    count: int
+
+
+class ActiveUsersResponse(BaseModel):
+    daily: list[ActiveUsersDayRow]
+    weekly: list[ActiveUsersWeekRow]
+
+
+class EngagementWeekRow(BaseModel):
+    week: str
+    value: float
+
+
+class EngagementResponse(BaseModel):
+    sessions_per_user: list[EngagementWeekRow]
+    messages_per_session: list[EngagementWeekRow]
+
+
+class RetentionCohortRow(BaseModel):
+    cohort_week: str
+    signup_count: int
+    retention_pcts: list[float]
+
+
+class RetentionResponse(BaseModel):
+    cohorts: list[RetentionCohortRow]
+    week_labels: list[str]
+
+
+class CreditTrendRow(BaseModel):
+    date: str
+    tier: str
+    count: int
+
+
+class CreditTrendsResponse(BaseModel):
+    daily: list[CreditTrendRow]
+
+
+class FunnelStage(BaseModel):
+    name: str
+    count: int
+
+
+class FunnelResponse(BaseModel):
+    stages: list[FunnelStage]
 
 
 # -- Router factory ---------------------------------------------------------
@@ -234,6 +324,77 @@ def build_admin_router(
                 reason=body.reason,
             )
 
+    @router.post(
+        "/users/{user_id}/free-questions",
+        response_model=GrantFreeQuestionsResponse,
+    )
+    def post_grant_free_questions(
+        user_id: int,
+        body: GrantFreeQuestionsRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> GrantFreeQuestionsResponse:
+        """Top up a user's free-question entitlement (ABS-322 trial).
+
+        The admin-grant path for the payments-off trial: give a user N
+        more free questions on top of the one-time signup grant. Each
+        call adds ``quantity`` more (not idempotent). Used for support /
+        generosity while Stripe payments are still off.
+        """
+        with _open_db() as db:
+            caller = user_resolver(auth_session, db)
+            _require_admin(caller)
+            target = db.get(User, user_id)
+            if target is None:
+                raise HTTPException(
+                    status_code=404, detail={"code": "user_not_found"}
+                )
+            remaining = grant_free_questions(
+                db,
+                user=target,
+                quantity=body.quantity,
+                reason=f"admin:{caller.clerk_user_id}:{body.reason}",
+            )
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                commit()
+            return GrantFreeQuestionsResponse(
+                granted=body.quantity,
+                free_questions_remaining=remaining,
+                reason=body.reason,
+            )
+
+    @router.put(
+        "/users/{user_id}/unlimited-credits",
+        response_model=SetUnlimitedCreditsResponse,
+    )
+    def put_unlimited_credits(
+        user_id: int,
+        body: SetUnlimitedCreditsRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> SetUnlimitedCreditsResponse:
+        with _open_db() as db:
+            caller = user_resolver(auth_session, db)
+            _require_admin(caller)
+            target = db.get(User, user_id)
+            if target is None:
+                raise HTTPException(
+                    status_code=404, detail={"code": "user_not_found"}
+                )
+            target.unlimited_credits = body.enabled
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                commit()
+            logger.info(
+                "admin: set unlimited_credits=%s for user %d (caller=%s)",
+                body.enabled,
+                user_id,
+                caller.clerk_user_id,
+            )
+            return SetUnlimitedCreditsResponse(
+                user_id=target.id,
+                unlimited_credits=target.unlimited_credits,
+            )
+
     @router.get("/cases", response_model=AdminCaseListResponse)
     def get_cases(
         status_filter: str | None = Query(default=None, alias="status"),
@@ -262,11 +423,6 @@ def build_admin_router(
     def get_tier_distribution(
         auth_session: Any = Depends(user_dependency),
     ) -> TierDistributionResponse:
-        # One query: COUNT(*) grouped by (tier, source, state). Cheap
-        # at our scale; if the credit table grows past ~1M rows we'll
-        # add a materialised view.
-        from advisor.db.models import CaseCredit  # noqa: PLC0415
-
         with _open_db() as db:
             caller = user_resolver(auth_session, db)
             _require_admin(caller)
@@ -320,6 +476,239 @@ def build_admin_router(
                 ]
             )
 
+    @router.get(
+        "/analytics/active-users", response_model=ActiveUsersResponse
+    )
+    def get_active_users(
+        days: int = Query(default=30, ge=1, le=90),
+        auth_session: Any = Depends(user_dependency),
+    ) -> ActiveUsersResponse:
+        with _open_db() as db:
+            caller = user_resolver(auth_session, db)
+            _require_admin(caller)
+            cutoff = func.now() - timedelta(days=days)
+            day_col = cast(ChatSession.created_at, Date)
+            daily_rows = db.execute(
+                select(day_col, func.count(func.distinct(ChatSession.user_id)))
+                .where(ChatSession.created_at >= cutoff)
+                .group_by(day_col)
+                .order_by(day_col)
+            ).all()
+
+            weekly: dict[str, set[int]] = defaultdict(set)
+            for session in db.execute(
+                select(ChatSession.created_at, ChatSession.user_id)
+                .where(ChatSession.created_at >= cutoff)
+            ).all():
+                dt = session[0]
+                iso_week = dt.strftime("%G-W%V")
+                weekly[iso_week].add(session[1])
+
+            sorted_weeks = sorted(weekly.items())
+            return ActiveUsersResponse(
+                daily=[
+                    ActiveUsersDayRow(date=str(r[0]), count=int(r[1]))
+                    for r in daily_rows
+                ],
+                weekly=[
+                    ActiveUsersWeekRow(week=w, count=len(uids))
+                    for w, uids in sorted_weeks
+                ],
+            )
+
+    @router.get(
+        "/analytics/engagement", response_model=EngagementResponse
+    )
+    def get_engagement(
+        weeks: int = Query(default=12, ge=1, le=52),
+        auth_session: Any = Depends(user_dependency),
+    ) -> EngagementResponse:
+        with _open_db() as db:
+            caller = user_resolver(auth_session, db)
+            _require_admin(caller)
+            cutoff = func.now() - timedelta(weeks=weeks)
+
+            sessions = db.execute(
+                select(ChatSession.id, ChatSession.user_id, ChatSession.created_at)
+                .where(ChatSession.created_at >= cutoff)
+            ).all()
+
+            session_ids = [s[0] for s in sessions]
+            msg_counts: dict[int, int] = {}
+            if session_ids:
+                msg_rows = db.execute(
+                    select(
+                        ChatMessage.session_id,
+                        func.count(ChatMessage.id),
+                    )
+                    .where(ChatMessage.session_id.in_(session_ids))
+                    .group_by(ChatMessage.session_id)
+                ).all()
+                msg_counts = {r[0]: int(r[1]) for r in msg_rows}
+
+            week_sessions: dict[str, list[tuple[int, int]]] = defaultdict(list)
+            for sid, uid, created in sessions:
+                iso_week = created.strftime("%G-W%V")
+                week_sessions[iso_week].append((sid, uid))
+
+            spu_rows = []
+            mps_rows = []
+            for week_key in sorted(week_sessions):
+                entries = week_sessions[week_key]
+                unique_users = len({uid for _, uid in entries})
+                total_sessions = len(entries)
+                total_msgs = sum(msg_counts.get(sid, 0) for sid, _ in entries)
+                spu = round(total_sessions / max(unique_users, 1), 2)
+                mps = round(total_msgs / max(total_sessions, 1), 2)
+                spu_rows.append(EngagementWeekRow(week=week_key, value=spu))
+                mps_rows.append(EngagementWeekRow(week=week_key, value=mps))
+
+            return EngagementResponse(
+                sessions_per_user=spu_rows,
+                messages_per_session=mps_rows,
+            )
+
+    @router.get(
+        "/analytics/retention", response_model=RetentionResponse
+    )
+    def get_retention(
+        cohort_weeks: int = Query(default=8, ge=1, le=24),
+        auth_session: Any = Depends(user_dependency),
+    ) -> RetentionResponse:
+        with _open_db() as db:
+            caller = user_resolver(auth_session, db)
+            _require_admin(caller)
+
+            users = db.execute(
+                select(User.id, User.created_at)
+            ).all()
+
+            all_sessions = db.execute(
+                select(ChatSession.user_id, ChatSession.created_at)
+            ).all()
+
+            user_sessions: dict[int, list[datetime]] = defaultdict(list)
+            for uid, created in all_sessions:
+                user_sessions[uid].append(created)
+
+            cohorts: dict[str, list[int]] = defaultdict(list)
+            user_signup: dict[int, datetime] = {}
+            for uid, created in users:
+                iso_week = created.strftime("%G-W%V")
+                cohorts[iso_week].append(uid)
+                user_signup[uid] = created
+
+            sorted_cohort_keys = sorted(cohorts.keys())[-cohort_weeks:]
+
+            result_rows = []
+            max_follow_weeks = min(cohort_weeks, 8)
+            for cohort_key in sorted_cohort_keys:
+                user_ids = cohorts[cohort_key]
+                signup_count = len(user_ids)
+                retention = []
+                for offset in range(1, max_follow_weeks + 1):
+                    active = 0
+                    for uid in user_ids:
+                        signup = user_signup[uid]
+                        week_start = signup + timedelta(weeks=offset)
+                        week_end = week_start + timedelta(weeks=1)
+                        if any(
+                            week_start <= s < week_end
+                            for s in user_sessions.get(uid, [])
+                        ):
+                            active += 1
+                    pct = round(100 * active / max(signup_count, 1), 1)
+                    retention.append(pct)
+                result_rows.append(
+                    RetentionCohortRow(
+                        cohort_week=cohort_key,
+                        signup_count=signup_count,
+                        retention_pcts=retention,
+                    )
+                )
+
+            return RetentionResponse(
+                cohorts=result_rows,
+                week_labels=[f"W+{i}" for i in range(1, max_follow_weeks + 1)],
+            )
+
+    @router.get(
+        "/analytics/credit-trends", response_model=CreditTrendsResponse
+    )
+    def get_credit_trends(
+        days: int = Query(default=30, ge=1, le=90),
+        auth_session: Any = Depends(user_dependency),
+    ) -> CreditTrendsResponse:
+        with _open_db() as db:
+            caller = user_resolver(auth_session, db)
+            _require_admin(caller)
+            cutoff = func.now() - timedelta(days=days)
+            day_col = cast(CaseCredit.consumed_at, Date)
+            rows = db.execute(
+                select(day_col, CaseCredit.tier, func.count(CaseCredit.id))
+                .where(
+                    CaseCredit.state == "consumed",
+                    CaseCredit.consumed_at.is_not(None),
+                    CaseCredit.consumed_at >= cutoff,
+                )
+                .group_by(day_col, CaseCredit.tier)
+                .order_by(day_col)
+            ).all()
+            return CreditTrendsResponse(
+                daily=[
+                    CreditTrendRow(date=str(r[0]), tier=r[1], count=int(r[2]))
+                    for r in rows
+                ]
+            )
+
+    @router.get(
+        "/analytics/funnel", response_model=FunnelResponse
+    )
+    def get_funnel(
+        auth_session: Any = Depends(user_dependency),
+    ) -> FunnelResponse:
+        with _open_db() as db:
+            caller = user_resolver(auth_session, db)
+            _require_admin(caller)
+
+            signed_up = db.scalar(
+                select(func.count(User.id))
+            ) or 0
+
+            accepted_terms = db.scalar(
+                select(func.count(func.distinct(TermsAcceptance.user_id)))
+            ) or 0
+
+            first_question = db.scalar(
+                select(func.count(func.distinct(ChatSession.user_id)))
+                .join(ChatMessage, ChatMessage.session_id == ChatSession.id)
+                .where(ChatMessage.role == "user")
+            ) or 0
+
+            repeat_users = db.scalar(
+                select(func.count()).select_from(
+                    select(ChatSession.user_id)
+                    .group_by(ChatSession.user_id)
+                    .having(func.count(ChatSession.id) >= 2)
+                    .subquery()
+                )
+            ) or 0
+
+            purchased = db.scalar(
+                select(func.count(func.distinct(CasePurchase.user_id)))
+                .where(CasePurchase.pack_sku != "admin_grant")
+            ) or 0
+
+            return FunnelResponse(
+                stages=[
+                    FunnelStage(name="Signed up", count=int(signed_up)),
+                    FunnelStage(name="Accepted terms", count=int(accepted_terms)),
+                    FunnelStage(name="First question", count=int(first_question)),
+                    FunnelStage(name="Repeat user", count=int(repeat_users)),
+                    FunnelStage(name="Purchased", count=int(purchased)),
+                ]
+            )
+
     @router.post(
         "/maintenance/refund-orphaned-reservations",
         response_model=RefundOrphanedReservationsResponse,
@@ -362,9 +751,18 @@ def build_dormant_admin_router() -> APIRouter:
         )
 
     router.add_api_route("/users/{user_id}/credits", _disabled, methods=["GET", "POST"])
+    router.add_api_route(
+        "/users/{user_id}/free-questions", _disabled, methods=["POST"]
+    )
+    router.add_api_route("/users/{user_id}/unlimited-credits", _disabled, methods=["PUT"])
     router.add_api_route("/cases", _disabled, methods=["GET"])
     router.add_api_route("/analytics/tier-distribution", _disabled, methods=["GET"])
     router.add_api_route("/analytics/upgrade-funnel", _disabled, methods=["GET"])
+    router.add_api_route("/analytics/active-users", _disabled, methods=["GET"])
+    router.add_api_route("/analytics/engagement", _disabled, methods=["GET"])
+    router.add_api_route("/analytics/retention", _disabled, methods=["GET"])
+    router.add_api_route("/analytics/credit-trends", _disabled, methods=["GET"])
+    router.add_api_route("/analytics/funnel", _disabled, methods=["GET"])
     router.add_api_route(
         "/maintenance/refund-orphaned-reservations",
         _disabled,

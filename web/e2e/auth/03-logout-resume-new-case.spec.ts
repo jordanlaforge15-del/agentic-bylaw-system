@@ -35,9 +35,10 @@ test("logout / login + open a second case shows both on /cases", async ({
   await approveInviteForEmail(context, {
     email: identity.email,
     name: identity.fullName,
-    // Need at least two credits — one for each case we'll open.
-    starter_credits: 3,
-    starter_tier: "standard",
+    // Zero tier credits: both cases open free post-pivot. If case open
+    // still gated on a credit this would 402 the second open — proving
+    // the free-open path end-to-end across a logout/login.
+    starter_credits: 0,
   });
 
   // First login + first case.
@@ -50,26 +51,25 @@ test("logout / login + open a second case shows both on /cases", async ({
   // Sign out — clears all auth cookies.
   await signOut(context);
   await page.goto("/app");
-  await page.waitForURL(/\/access(\?|$)/);
+  await page.waitForURL(/\/sign-in/);
 
   // Sign in again as the same identity; advisor_user row reuse is
   // what makes the second case attach correctly.
   await signInAs(context, identity);
 
-  // Second case via the marketing form so the spec hits the open-
-  // case UI surface at least once. Unique anchor per identity so
-  // the 30-day match window doesn't collapse it onto the first
-  // case.
+  // Visit the migrated case-open surface so the spec still hits that UI
+  // seam (ABS-320: it now renders the priced-question menu rather than the
+  // tier selector + "Open case" button).
   await page.goto("/cases/new");
+  await expect(page.getByTestId("question-menu")).toBeVisible();
+
+  // Second case via the authenticated API (a case is a free container; the
+  // form sells answers rather than minting it). Unique anchor per identity
+  // so the 30-day match window doesn't collapse it onto the first case.
   const secondAnchor = `Resume New Second ${identity.subUserId}`;
-  await page
-    .getByPlaceholder(/1234 Main St, Halifax/)
-    .fill(secondAnchor);
-  await page
-    .getByPlaceholder(/Describe the inquiry/)
-    .fill("Different parcel, follow-up question after a logout cycle.");
-  await page.getByRole("button", { name: /^Open case$/ }).click();
-  await page.waitForURL(/\/app\?case_id=\d+/);
+  await openCaseAsIdentity(context, identity, {
+    anchorLabel: secondAnchor,
+  });
 
   // Both cases must appear on /cases for the *same* user. We
   // assert by anchor label, which is unique per spec run.

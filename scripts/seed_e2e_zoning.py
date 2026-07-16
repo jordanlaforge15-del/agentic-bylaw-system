@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature
 from layer1.db.session import session_scope
@@ -121,6 +121,13 @@ def main() -> int:
         work_dir = Path(tmp)
         cfg_path = _derive_config(work_dir)
         with session_scope() as db:
+            # ABS-207: serialise against concurrent Playwright workers
+            # so two seed runs don't race the drop-then-reingest path on
+            # the e2e_test_zoning dataset (the drop in one transaction
+            # would otherwise interleave with the ingest in another).
+            if db.bind.dialect.name == "postgresql":
+                db.execute(text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601204))
+
             _drop_existing(db)
             result = ingest_geo_dataset(db, cfg_path)
             summary = {

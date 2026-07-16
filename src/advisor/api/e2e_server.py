@@ -50,10 +50,12 @@ if _ABS_LEARNING_SRC.is_dir():
         sys.path.insert(0, _abs_learning_path)
 
 from advisor.api.app import create_app
+from advisor.api.metrics_middleware import MetricsMiddleware
 from advisor.db.models import InviteRequest, User
 from advisor.llm.mock import MockGateway
+from advisor.logging import CorrelationIdMiddleware, setup_logging
 from advisor.llm.mock_dispatcher import build_dispatcher
-from bylaw_retrieval.retrieval import LocationSlot, RetrievalService
+from bylaw_retrieval.retrieval import CitationLookupRequest, LocationSlot, RetrievalService
 from layer1.db.base import Document, SemanticEntity, SourceFragment, utcnow
 from layer1.db.session import session_scope
 from layer1.manifest_adapter import (
@@ -62,6 +64,7 @@ from layer1.manifest_adapter import (
     profile_from_manifest,
 )
 from layer1.models.enums import IngestionStatus, ParseStatus
+from layer1.pipeline.verify_coverage import compare_coverage_reports, verify_document_coverage
 from layer1.pipeline.ingest import ingest_file
 from layer1.profiles import HALIFAX_PROFILE
 from layer1.semantic.enrichment import enrich_document_semantics
@@ -78,7 +81,17 @@ logger = logging.getLogger(__name__)
 
 def build_e2e_app() -> FastAPI:
     """Construct the test FastAPI app wired for end-to-end UI tests."""
+    setup_logging(json_output=False)
     gateway = MockGateway(callable_=build_dispatcher())
+
+    # ABS-19: wire a real ClerkVerifier backed by an in-memory test RSA
+    # key so the e2e suite exercises the full JWT verification pipeline
+    # (ClerkVerifier → clerk_session_dependency → resolve_or_create_user).
+    # test_header_fallback=True keeps the X-Test-User-Id header path
+    # working for direct FastAPI calls from Playwright fixtures.
+    from advisor.auth.mock_clerk import build_mock_verifier  # noqa: PLC0415
+
+    mock_verifier = build_mock_verifier()
 
     # ABS-53: wire a real EvaluatorService into the submissions router
     # so the /submissions/{id}/evaluate endpoint actually evaluates. The
@@ -91,10 +104,17 @@ def build_e2e_app() -> FastAPI:
 
     app = create_app(
         gateway=gateway,
-        verifier=None,
+        verifier=mock_verifier,
         db_session_factory=session_scope,
         submissions_evaluator_factory=_submissions_evaluator_factory,
+        test_header_fallback=True,
     )
+    app.add_middleware(CorrelationIdMiddleware)
+    app.add_middleware(MetricsMiddleware)
+
+    from advisor.api.metrics import mount_metrics_routes  # noqa: PLC0415
+
+    mount_metrics_routes(app)
 
     origins_env = os.environ.get(
         "ADVISOR_E2E_CORS_ORIGINS", "http://localhost:3001"
@@ -112,8 +132,10 @@ def build_e2e_app() -> FastAPI:
             "X-Test-User-Full-Name",
             "Authorization",
             "Last-Event-ID",
+            "X-Correlation-ID",
+            "X-ABS-API-Key",
         ],
-        expose_headers=["X-Session-Id"],
+        expose_headers=["X-Session-Id", "X-Correlation-ID"],
     )
 
     _mount_test_router(app)
@@ -182,6 +204,42 @@ class _EvaluateBylawsBody(BaseModel):
     persist_decision: bool = False
 
 
+# ABS-273: test-only address-profile endpoint. Bypasses the chat / SSE
+# pipeline so the Playwright spec can assert directly on the AddressProfile
+# the get_address_profile MCP tool returns, exercised over real-stack HTTP +
+# Postgres/PostGIS so a missing migration, geometry-column gap, or proxy
+# misconfig trips e2e rather than staying invisible until production.
+class _AddressProfileBody(BaseModel):
+    address: str = Field(min_length=1, max_length=512)
+
+
+# ABS-163: test-only table-search endpoint. Verifies that SourceTable rows
+# with proper captions are found by the retrieval layer's
+# _structured_permission_table_candidates() path. The Playwright spec seeds
+# tables via seed_e2e_permission_tables.py, then hits this endpoint to
+# confirm the query finds them by caption pattern.
+class _SearchTablesBody(BaseModel):
+    bylaw_name: str = Field(min_length=1, max_length=256)
+    use_name: str = Field(min_length=1, max_length=256)
+    zone: str | None = None
+
+
+# ABS-278: test-only endpoint that runs semantic enrichment for a bylaw and
+# returns the resulting permission-matrix profiles + bound axes, plus an
+# optional (use, zone) -> cell resolution. The Playwright spec seeds a matrix
+# (including a header-bleed cell), hits this, and asserts axes are bound to zone/
+# use entities and the bleed is corrected.
+class _ProfilePermissionTablesBody(BaseModel):
+    bylaw_name: str = Field(min_length=1, max_length=256)
+    use_name: str | None = Field(default=None, max_length=256)
+    zone: str | None = Field(default=None, max_length=64)
+    # ABS-284: drive enrichment classification from a profile convention. When
+    # set (e.g. "section_indexed"), the bylaw's permission encoding is supplied
+    # to enrichment so its table classification is profile-driven rather than
+    # the hardcoded Regional-Centre default.
+    permission_encoding: str | None = Field(default=None, max_length=64)
+
+
 # ABS-75: test-only Discovery Agent endpoint. Exercises the classifier →
 # parent-resolution → SourceDocument assembly path through the real FastAPI
 # stack. The crawler half (HTTP fetch + link extraction) is unit-tested in
@@ -228,8 +286,77 @@ class _ManifestIngestBody(BaseModel):
     bylaw_name: str = Field(min_length=1, max_length=256)
 
 
+class _IssueApiKeyBody(BaseModel):
+    clerk_user_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(default="e2e-test-key", min_length=1, max_length=255)
+
+
+class _MintJwtBody(BaseModel):
+    sub: str = Field(min_length=1, max_length=255)
+    email: str | None = None
+    full_name: str | None = None
+    lifetime_s: int = Field(default=3600, ge=60, le=86400)
+
+
+class _VerifyCoverageBody(BaseModel):
+    document_id: int
+    low_coverage_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
+    compare_to: int | None = None
+
+
+# ABS-213: test-only prune-superseded endpoint.
+# Seeds synthetic Document rows for a named (municipality, bylaw_name) pair,
+# then exercises prune_superseded_documents so the Playwright spec can verify
+# dry-run scan, live delete, and municipal-filter targeting through the real
+# Postgres stack without touching production data.
+class _PruneSupersededBody(BaseModel):
+    bylaw_name: str = Field(min_length=1, max_length=256)
+    municipality: str = Field(default="Test Municipality ABS-213", min_length=1, max_length=255)
+    doc_count: int = Field(default=3, ge=1, le=10)
+    keep_latest: int = Field(default=1, ge=1, le=9)
+    dry_run: bool = True
+
+
+class _CorpusCoherenceOverlayDeclaration(BaseModel):
+    dataset_name: str
+    municipality: str
+    bylaw_name: str
+    fragment_citation: str
+
+
+class _CorpusCoherenceBody(BaseModel):
+    overlay_declarations: list[_CorpusCoherenceOverlayDeclaration] = Field(
+        default_factory=list,
+        description=(
+            "The overlay roles a spec's seed script declares (test-scoped, "
+            "not the real src/layer1/datasets/ configs, so this endpoint "
+            "never expects the beta-hardening real corpus's bonus_zoning / "
+            "shadow_impact overlays that an isolated e2e bylaw never seeds)."
+        ),
+    )
+
+
 def _mount_test_router(app: FastAPI) -> None:
     """Wire the ``/v1/_test/...`` lifecycle endpoints onto ``app``."""
+
+    @app.post("/v1/_test/mint-jwt")
+    async def mint_jwt(body: _MintJwtBody) -> dict[str, str]:
+        """Mint a test JWT signed by the e2e mock RSA key.
+
+        The returned token is accepted by the ``ClerkVerifier`` wired
+        into this e2e server. Playwright specs use this to get a JWT
+        they can set as a cookie, which the Next.js Clerk mock reads
+        and forwards as ``Authorization: Bearer <jwt>`` to FastAPI.
+        """
+        from advisor.auth.mock_clerk import mint_test_jwt  # noqa: PLC0415
+
+        token = mint_test_jwt(
+            sub=body.sub,
+            email=body.email,
+            full_name=body.full_name,
+            lifetime_s=body.lifetime_s,
+        )
+        return {"token": token}
 
     @app.post("/v1/_test/invite-approve")
     async def invite_approve(body: _ApproveInviteBody) -> dict[str, object]:
@@ -363,6 +490,257 @@ def _mount_test_router(app: FastAPI) -> None:
             response = evaluator.evaluate(request)
             return response.to_json()
 
+    @app.post("/v1/_test/address-profile")
+    async def address_profile(body: _AddressProfileBody) -> dict[str, object]:
+        """Resolve an address to its zone + overlay profile.
+
+        Mirrors the ``get_address_profile`` MCP tool over HTTP so the
+        Playwright spec can seed Postgres, hit the real proxy, and assert on
+        the structured ``AddressProfile`` (zone, height/FAR precincts,
+        heritage, citations) without standing up the chat-loop machinery.
+        Returns the full DTO (not the compact projection) so the spec can
+        assert on every field.
+        """
+        with session_scope() as session:
+            service = RetrievalService(session)
+            return service.get_address_profile(body.address).model_dump(mode="json")
+
+    @app.post("/v1/_test/address-profile-scoped")
+    async def address_profile_scoped(body: _AddressProfileBody) -> dict[str, object]:
+        """Resolve an address under the *production* latest-per-bylaw scoping.
+
+        The plain ``/address-profile`` endpoint deliberately runs with no
+        default-document resolver so it sees the full corpus regardless of
+        same-name collisions in the shared e2e DB (the ABS-349/350 concern).
+        This variant instead wires ``latest_per_bylaw_resolver`` — exactly what
+        ``advisor.api.app`` and the MCP ``server`` use in production — so the
+        ABS-355 spec reproduces the real amendment eviction: a layer still
+        pinned to the superseded document version falls out of scope and the
+        zone resolves to null. With the re-link fix in place the layer follows
+        the amendment onto the new version and the zone resolves again.
+        """
+        from bylaw_retrieval.retrieval import latest_per_bylaw_resolver  # noqa: PLC0415
+
+        with session_scope() as session:
+            service = RetrievalService(
+                session, default_document_id_resolver=latest_per_bylaw_resolver
+            )
+            return service.get_address_profile(body.address).model_dump(mode="json")
+
+    @app.post("/v1/_test/search-tables")
+    async def search_tables(body: _SearchTablesBody) -> dict[str, object]:
+        """Search for permission-table cells matching a use name.
+
+        Returns the table captions and matching cell texts found by the
+        retrieval layer's ``_structured_permission_table_candidates()``.
+        """
+        from sqlalchemy import select as sa_select
+
+        from layer1.db.base import SourceTable, SourceTableCell, TableSemanticProfile
+        from layer1.semantic.permission_markers import PERMISSION_MATRIX_PROFILE
+        from layer2.retrieval.api import _structured_permission_table_candidates
+
+        with session_scope() as db:
+            doc = db.execute(
+                sa_select(Document).where(Document.bylaw_name == body.bylaw_name)
+            ).scalars().first()
+            if doc is None:
+                raise HTTPException(status_code=404, detail=f"No document named '{body.bylaw_name}'")
+
+            candidates = _structured_permission_table_candidates(
+                db,
+                document_id=doc.id,
+                use_name=body.use_name,
+                zone=body.zone,
+            )
+
+            tables = (
+                db.execute(
+                    sa_select(SourceTable)
+                    .join(
+                        TableSemanticProfile,
+                        TableSemanticProfile.table_id == SourceTable.id,
+                    )
+                    .where(SourceTable.document_id == doc.id)
+                    .where(
+                        TableSemanticProfile.profile_type == PERMISSION_MATRIX_PROFILE
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            # ABS-277: surface the recovered permission_marker on each cell so
+            # the Playwright spec can assert the symbol-font ● (U+F098) was
+            # normalized to "permitted", circled numbers to "conditional", etc.
+            cells_out: list[dict[str, object]] = []
+            for table in tables:
+                table_cells = (
+                    db.execute(
+                        sa_select(SourceTableCell)
+                        .where(SourceTableCell.table_id == table.id)
+                        .order_by(
+                            SourceTableCell.row_index, SourceTableCell.col_index
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                for cell in table_cells:
+                    meta = cell.metadata_json or {}
+                    cells_out.append(
+                        {
+                            "table_id": table.id,
+                            "row_index": cell.row_index,
+                            "col_index": cell.col_index,
+                            "row_header_path": cell.row_header_path,
+                            "col_header_path": cell.col_header_path,
+                            "permission_marker": meta.get("permission_marker"),
+                            "footnote": meta.get("footnote"),
+                        }
+                    )
+
+            return {
+                "document_id": doc.id,
+                "table_count": len(tables),
+                "table_captions": [t.caption for t in tables],
+                "candidate_count": len(candidates),
+                "candidates": [
+                    {"text": c.text, "score": c.base_score, "citation_label": c.citation_label}
+                    for c in candidates
+                ],
+                "cells": cells_out,
+            }
+
+    @app.post("/v1/_test/profile-permission-tables")
+    async def profile_permission_tables(
+        body: _ProfilePermissionTablesBody,
+    ) -> dict[str, object]:
+        """Enrich a bylaw and return its permission-matrix profiles + axes.
+
+        ABS-278: proves the axes are bound to zone/use entities, that the
+        header-bleed correction fires, and that a (use, zone) pair resolves to
+        the addressed cell.
+        """
+        from sqlalchemy import select as sa_select
+
+        from layer1.db.base import (
+            SemanticEntity,
+            SourceTable,
+            TableAxisBinding,
+            TableSemanticProfile,
+        )
+        from layer1.semantic.enrichment import (
+            enrich_document_semantics,
+            resolve_permission_cell,
+        )
+        from layer1.semantic.permission_markers import PERMISSION_MATRIX_PROFILE
+
+        with session_scope() as db:
+            doc = db.execute(
+                sa_select(Document).where(Document.bylaw_name == body.bylaw_name)
+            ).scalars().first()
+            if doc is None:
+                raise HTTPException(
+                    status_code=404, detail=f"No document named '{body.bylaw_name}'"
+                )
+
+            # ABS-284: build a minimal profile carrying the requested permission
+            # encoding so enrichment classification is profile-driven. None keeps
+            # the historical Regional-Centre default behavior.
+            profile = None
+            if body.permission_encoding:
+                from layer1.profiles import ParsingProfile
+
+                profile = ParsingProfile(
+                    name=f"e2e:{body.permission_encoding}",
+                    permission_encoding=body.permission_encoding,
+                )
+            enrich_document_semantics(db, document_id=doc.id, profile=profile)
+
+            tables = (
+                db.execute(
+                    sa_select(SourceTable)
+                    .join(
+                        TableSemanticProfile,
+                        TableSemanticProfile.table_id == SourceTable.id,
+                    )
+                    .where(SourceTable.document_id == doc.id)
+                    .where(
+                        TableSemanticProfile.profile_type == PERMISSION_MATRIX_PROFILE
+                    )
+                    .order_by(SourceTable.page_start, SourceTable.id)
+                )
+                .scalars()
+                .all()
+            )
+
+            profiles_out: list[dict[str, object]] = []
+            for table in tables:
+                profile = (
+                    db.execute(
+                        sa_select(TableSemanticProfile).where(
+                            TableSemanticProfile.table_id == table.id
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                bindings = (
+                    db.execute(
+                        sa_select(TableAxisBinding, SemanticEntity)
+                        .join(
+                            SemanticEntity,
+                            SemanticEntity.id == TableAxisBinding.entity_id,
+                        )
+                        .where(TableAxisBinding.table_id == table.id)
+                        .order_by(TableAxisBinding.axis, TableAxisBinding.index)
+                    )
+                    .all()
+                )
+                profiles_out.append(
+                    {
+                        "table_id": table.id,
+                        "caption": table.caption,
+                        "profile_type": profile.profile_type if profile else None,
+                        "row_axis_type": profile.row_axis_type if profile else None,
+                        "column_axis_type": profile.column_axis_type if profile else None,
+                        "value_type": profile.value_type if profile else None,
+                        "axes": [
+                            {
+                                "axis": binding.axis,
+                                "index": binding.index,
+                                "entity_type": entity.entity_type,
+                                "canonical_name": entity.canonical_name,
+                                "raw_label": binding.raw_label,
+                                "confidence": binding.confidence,
+                                "review": (binding.metadata_json or {}).get("review"),
+                            }
+                            for binding, entity in bindings
+                        ],
+                    }
+                )
+
+            resolution: dict[str, object] | None = None
+            if body.use_name and body.zone and tables:
+                for table in tables:
+                    resolved = resolve_permission_cell(
+                        db,
+                        table_id=table.id,
+                        use_name=body.use_name,
+                        zone=body.zone,
+                    )
+                    if resolved is not None:
+                        resolution = resolved
+                        break
+
+            return {
+                "document_id": doc.id,
+                "table_count": len(tables),
+                "profiles": profiles_out,
+                "resolution": resolution,
+            }
+
     @app.post("/v1/_test/manifest-ingest")
     async def manifest_ingest(body: _ManifestIngestBody) -> dict[str, object]:
         """Drive Layer 1 ingest from a manifest path and return a summary.
@@ -467,6 +845,36 @@ def _mount_test_router(app: FastAPI) -> None:
                     else []
                 ),
                 "enrichment": enrich_report.model_dump(),
+            }
+
+    @app.post("/v1/_test/issue-api-key")
+    async def issue_api_key(body: _IssueApiKeyBody) -> dict[str, object]:
+        """Create a fresh API key for the given user (test-only).
+
+        Returns the raw key — the only time it is visible. The spec must
+        capture it immediately. Callers must first create the user via
+        ``/v1/_test/invite-approve`` + a first-login request so the
+        ``advisor_user`` row exists.
+        """
+        from advisor.api.api_key_auth import issue_api_key as _issue  # noqa: PLC0415
+
+        with session_scope() as db:
+            user = (
+                db.query(User)
+                .filter(User.clerk_user_id == body.clerk_user_id)
+                .one_or_none()
+            )
+            if user is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No user with clerk_user_id={body.clerk_user_id!r}.",
+                )
+            row, raw_key = _issue(db, user_id=user.id, name=body.name)
+            db.commit()
+            return {
+                "api_key_id": row.id,
+                "raw_key": raw_key,
+                "name": row.name,
             }
 
     @app.post("/v1/_test/discover")
@@ -589,8 +997,1049 @@ def _mount_test_router(app: FastAPI) -> None:
             "llm_call_count": fake_llm.messages.create.call_count,
         }
 
+    @app.post("/v1/_test/prune-superseded")
+    async def prune_superseded_test(body: _PruneSupersededBody) -> dict[str, object]:
+        """Seed synthetic Document rows then exercise prune_superseded_documents.
+
+        Creates ``doc_count`` Document rows for (municipality, bylaw_name) with
+        staggered ``ingestion_timestamp`` values (1-second apart, oldest first),
+        runs prune_superseded_documents with the given ``keep_latest`` / ``dry_run``
+        settings, and returns the full PruneResult summary.
+
+        Idempotent: all Document rows for (municipality, bylaw_name) are dropped
+        before seeding so repeated spec runs against a shared DB stay clean.
+        """
+        import hashlib
+        from datetime import timedelta
+
+        from layer1.db.base import Document as _Document, IngestionRun as _IngestionRun
+        from layer1.models.enums import IngestionStatus
+        from layer1.pipeline.prune import prune_superseded_documents
+
+        with session_scope() as db:
+            # Clean up any prior rows from a previous spec run.
+            db.query(_Document).filter(
+                _Document.municipality == body.municipality,
+                _Document.bylaw_name == body.bylaw_name,
+            ).delete(synchronize_session=False)
+            db.flush()
+
+            # Seed `doc_count` synthetic Document rows with staggered timestamps
+            # (oldest first, 1 second apart) so prune ordering is deterministic.
+            base_time = utcnow()
+            for i in range(body.doc_count):
+                ts = base_time - timedelta(seconds=(body.doc_count - 1 - i))
+                file_hash = hashlib.sha256(
+                    f"{body.bylaw_name}-{body.municipality}-{i}".encode()
+                ).hexdigest()[:64]
+                doc = _Document(
+                    municipality=body.municipality,
+                    bylaw_name=body.bylaw_name,
+                    source_path=f"/tmp/abs213-test-{i}.txt",
+                    file_hash=file_hash,
+                    mime_type="text/plain",
+                    page_count=1,
+                    ingestion_timestamp=ts,
+                )
+                db.add(doc)
+                db.flush()
+                run = _IngestionRun(
+                    document_id=doc.id,
+                    status=IngestionStatus.COMPLETED,
+                )
+                db.add(run)
+            db.flush()
+
+            result = prune_superseded_documents(
+                db,
+                municipality=body.municipality,
+                bylaw_name=body.bylaw_name,
+                keep_latest=body.keep_latest,
+                dry_run=body.dry_run,
+            )
+            return {
+                "dry_run": result.dry_run,
+                "entries_count": len(result.entries),
+                "deleted_count": result.deleted_count,
+                "entries": [
+                    {
+                        "id": e.id,
+                        "municipality": e.municipality,
+                        "bylaw_name": e.bylaw_name,
+                        "run_count": e.run_count,
+                    }
+                    for e in result.entries
+                ],
+            }
+
+    @app.post("/v1/_test/verify-coverage")
+    async def verify_coverage(body: _VerifyCoverageBody) -> dict[str, object]:
+        """Run ingest coverage verification for a document.
+
+        Returns the structured DocumentCoverageReport with per-page
+        overlap ratios, gap classifications, and a letter grade.
+        """
+        with session_scope() as db:
+            doc = db.get(Document, body.document_id)
+            if doc is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Document {body.document_id} not found",
+                )
+            report = verify_document_coverage(
+                db,
+                body.document_id,
+                low_coverage_threshold=body.low_coverage_threshold,
+            )
+            if body.compare_to is not None:
+                old_doc = db.get(Document, body.compare_to)
+                if old_doc is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"compare_to document {body.compare_to} not found",
+                    )
+                old_report = verify_document_coverage(
+                    db,
+                    body.compare_to,
+                    low_coverage_threshold=body.low_coverage_threshold,
+                )
+                report.comparison = compare_coverage_reports(old_report, report)
+            return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/corpus-coherence")
+    async def corpus_coherence(body: _CorpusCoherenceBody) -> dict[str, object]:
+        """Run the corpus-coherence audit (ABS-356) against the current DB state.
+
+        Mirrors the CLI (``scripts/corpus_coherence_audit.py``) and the
+        ``/v1/monitoring/corpus-coherence`` ops endpoint: scopes with
+        ``latest_per_bylaw_resolver`` — the same resolver production wires
+        into ``RetrievalService`` — so a Playwright spec can seed a coherent
+        corpus, assert the audit passes, break one link, and assert it fails
+        naming the missing role exactly as a real deployment would see it.
+        """
+        from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+            OverlayDeclaration,
+            audit_corpus_coherence,
+            latest_per_bylaw_resolver,
+        )
+
+        declarations = [
+            OverlayDeclaration(
+                dataset_name=d.dataset_name,
+                municipality=d.municipality,
+                bylaw_name=d.bylaw_name,
+                fragment_citation=d.fragment_citation,
+            )
+            for d in body.overlay_declarations
+        ]
+        with session_scope() as session:
+            report = audit_corpus_coherence(
+                session,
+                overlay_declarations=declarations,
+                default_document_id_resolver=latest_per_bylaw_resolver,
+            )
+        return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/lookup-citation")
+    async def test_lookup_citation(body: CitationLookupRequest) -> dict[str, object]:
+        """Invoke ``lookup_citation`` directly against the e2e test DB.
+
+        Accepts the same JSON body as ``CitationLookupRequest``:
+        - ``{"citation_path": "4.2"}``
+        - ``{"structured": {"kind": "zone_attribute", "zone": "HR-2", "attribute": "max_height"}}``
+        - ``{"structured": {"kind": "schedule_row", "schedule": "Table 1A", "row": "HR-2"}}``
+
+        Returns a ``CitationLookupResponse`` dict (``match`` + ``suggestions``).
+        Returns 422 when FastAPI/Pydantic rejects the body (missing required
+        field, both supplied, unknown attribute vocabulary violation) and 400
+        on ``ValueError`` (ambiguous across documents).
+        Scoped with no default document resolver so the full test corpus is
+        visible — tests can narrow scope via ``document_id`` in the body.
+        """
+        try:
+            with session_scope() as session:
+                service = RetrievalService(session)
+                response = service.lookup_citation(body)
+                return response.model_dump(mode="json")
+        except ValueError as exc:
+            # Semantic errors from the service: unknown attribute vocabulary,
+            # ambiguous-across-documents, etc. All are client input problems,
+            # so 422 is the right shape for this test-only endpoint.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    class _DeleteDocumentsBody(BaseModel):
+        bylaw_name: str = Field(min_length=1, max_length=512)
+
+    @app.post("/v1/_test/delete-documents")
+    async def delete_documents(body: _DeleteDocumentsBody) -> dict[str, object]:
+        """Delete all Document rows with the given bylaw_name.
+
+        Used by e2e specs that ingest a synthetic document during the test
+        and need to remove it afterwards so it does not pollute the
+        lookup_citation scope for concurrently-running specs.
+        """
+        with session_scope() as db:
+            deleted = (
+                db.query(Document)
+                .filter(Document.bylaw_name == body.bylaw_name)
+                .delete(synchronize_session=False)
+            )
+            return {"deleted_count": deleted}
+
+
+class _SeedSessionBody(BaseModel):
+    """Body for ``POST /v1/_test/seed-session``.
+
+    Inserts a ChatSession with synthetic tool_use + tool_result messages
+    that include ``linked_datasets`` and ``citation_path`` values. The
+    session simulates a completed search_bylaw_evidence round so the
+    right-pane ``extractParcelContext`` can reconstruct parcel + citation
+    data without requiring real bylaw content in the test DB.
+    """
+
+    case_id: int
+    user_id: str = "demo-user-1"
+    civic_number: str = "1234"
+    street: str = "Elm St"
+    citation_path: str = "4.2.1"
+    citation_label: str = "(1)"
+    bylaw_name: str = "Regional Centre Land Use By-Law"
+    clause_text: str = (
+        "The minimum front yard setback shall be 3.0 metres from the property line."
+    )
+
+
+def _mount_seed_session_endpoint(app: FastAPI) -> None:
+    @app.post("/v1/_test/seed-session")
+    async def seed_session(body: _SeedSessionBody) -> dict[str, object]:
+        """Seed a ChatSession with citation-bearing tool results.
+
+        Creates a DB-backed session for the given case so ``GET
+        /v1/chat/sessions/{id}`` returns messages that cause
+        ``extractParcelContext`` to populate the parcel pane with
+        ``cited`` entries — without requiring real bylaw text in the DB.
+        """
+        import json as _json
+
+        from advisor.db.models import (  # noqa: PLC0415
+            ChatMessage as _DbChatMessage,
+            ChatSession as _DbChatSession,
+            User as _User,
+        )
+
+        tool_result_payload = _json.dumps({
+            "matches": [
+                {
+                    "citation_path": body.citation_path,
+                    "citation_label": body.citation_label,
+                    "bylaw_name": body.bylaw_name,
+                    "fragment_type": "clause",
+                    "linked_datasets": [
+                        {
+                            "name": "halifax_zoning_boundaries",
+                            "location_resolver": "civic_number",
+                            "location_confidence": 0.92,
+                            "feature_matches": [
+                                {
+                                    "canonical_attributes": {
+                                        "zone_code": "C-2",
+                                        "zone_description": "General Commercial",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        })
+
+        with session_scope() as db:
+            user_row = (
+                db.query(_User)
+                .filter(_User.clerk_user_id == body.user_id)
+                .first()
+            )
+            if user_row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"User '{body.user_id}' not found",
+                )
+
+            session_row = _DbChatSession(
+                user_id=user_row.id,
+                case_id=body.case_id,
+                tier="standard",
+                updated_at=utcnow(),
+            )
+            db.add(session_row)
+            db.flush()
+
+            tool_use_id = f"t-seed-{session_row.id}"
+            messages = [
+                {
+                    "sequence": 0,
+                    "role": "user",
+                    "content_json": (
+                        f"What is the front yard setback for "
+                        f"{body.civic_number} {body.street}?"
+                    ),
+                },
+                {
+                    "sequence": 1,
+                    "role": "assistant",
+                    "content_json": [
+                        {"type": "text", "text": "Searching the bylaw…", "cache": False},
+                        {
+                            "type": "tool_use",
+                            "id": tool_use_id,
+                            "name": "search_bylaw_evidence",
+                            "input": {
+                                "query": "front yard setback",
+                                "top_k": 4,
+                                "location": {
+                                    "civic_number": body.civic_number,
+                                    "street": body.street,
+                                },
+                            },
+                            "cache": False,
+                        },
+                    ],
+                },
+                {
+                    "sequence": 2,
+                    "role": "user",
+                    "content_json": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": tool_result_payload,
+                            "is_error": False,
+                            "cache": False,
+                        }
+                    ],
+                },
+                {
+                    "sequence": 3,
+                    "role": "assistant",
+                    "content_json": (
+                        "Based on the bylaw evidence, the front yard setback is 3 m."
+                    ),
+                },
+            ]
+            for m in messages:
+                db.add(
+                    _DbChatMessage(
+                        session_id=session_row.id,
+                        sequence=m["sequence"],
+                        role=m["role"],
+                        content_json=m["content_json"],
+                    )
+                )
+            db.flush()
+            return {"session_id": str(session_row.id)}
+
+
+class _SearchEvidenceBody(BaseModel):
+    query: str
+    bylaw_name: str | None = None
+    municipality: str | None = None
+    limit: int = Field(default=5, ge=1, le=50)
+
+
+def _mount_search_evidence_endpoint(app: FastAPI) -> None:
+    """ABS-271: expose search_bylaw_evidence over HTTP for e2e limit tests.
+
+    Accepts ``query`` + optional ``bylaw_name`` / ``municipality`` scope and
+    a ``limit`` parameter (1–50). Returns the fragment IDs and scores in
+    ranked order so Playwright can assert on count and ordering invariants.
+    """
+    from bylaw_retrieval.retrieval import RetrievalRequest, RetrievalService  # noqa: PLC0415
+
+    @app.post("/v1/_test/search-evidence")
+    async def search_evidence(body: _SearchEvidenceBody) -> dict[str, object]:
+        with session_scope() as session:
+            service = RetrievalService(session)
+            request = RetrievalRequest(
+                query=body.query,
+                bylaw_name=body.bylaw_name,
+                municipality=body.municipality,
+                limit=body.limit,
+                include_context=False,
+                include_cross_references=False,
+                include_tables=False,
+                include_datasets=False,
+            )
+            response = service.search(request)
+            return {
+                "total_matches": response.total_matches,
+                "match_count": len(response.matches),
+                "fragment_ids": [m.fragment_id for m in response.matches],
+                "scores": [m.score for m in response.matches],
+            }
+
+
+class _ZoneProfileBody(BaseModel):
+    zone: str
+    include: list[str] | None = None
+    # Optional document scope. Production runs --latest-only (one document);
+    # the e2e corpus holds many bylaws, several staging the same zone codes,
+    # so a spec passes its own seeded document_id to isolate get_zone_profile
+    # to its data (mirrors the document_id scoping on lookup_citation).
+    document_id: int | None = None
+
+
+def _mount_zone_profile_endpoint(app: FastAPI) -> None:
+    """ABS-272: expose get_zone_profile over HTTP for e2e coverage.
+
+    Calls ``RetrievalService.get_zone_profile`` and returns the compact
+    projection plus the ``unknown_zone`` flag so Playwright can assert
+    the thick tool composes a full DTO for a known zone and degrades to
+    an unknown-zone marker (no 500) for a bogus one.
+    """
+    from advisor.chat.compact import compact_zone_profile  # noqa: PLC0415
+    from bylaw_retrieval.retrieval import RetrievalService  # noqa: PLC0415
+
+    @app.post("/v1/_test/zone-profile")
+    async def zone_profile(body: _ZoneProfileBody) -> dict[str, object]:
+        with session_scope() as session:
+            resolver = (
+                (lambda _session, _id=body.document_id: _id)
+                if body.document_id is not None
+                else None
+            )
+            service = RetrievalService(session, default_document_id_resolver=resolver)
+            profile = service.get_zone_profile(zone=body.zone, include=body.include)
+            return {
+                "unknown_zone": profile.unknown_zone,
+                "citation_count": len(profile.citations),
+                "profile": compact_zone_profile(profile),
+            }
+
+
+class _BylawQueryBody(BaseModel):
+    intent: str
+    address: str | None = None
+    zone: str | None = None
+    proposed: dict[str, Any] | None = None
+    # Scope zone-intent compositions to the spec's own seeded document so the
+    # shared e2e corpus (which stages the same zone codes) doesn't bleed in —
+    # mirrors the document_id scoping on /v1/_test/zone-profile.
+    document_id: int | None = None
+
+
+def _mount_bylaw_query_endpoint(app: FastAPI) -> None:
+    """ABS-274: expose the intent-routed bylaw_query mega-tool over HTTP.
+
+    Calls ``RetrievalService.bylaw_query`` and returns the compact
+    projection plus the ``unrecognized_intent`` flag and a conformance
+    summary so Playwright can assert the composer routes each intent to the
+    right Phase 2/3 composition over the real FastAPI ↔ Postgres boundary,
+    and degrades gracefully (no 500) on an unknown intent.
+    """
+    from advisor.chat.compact import compact_bylaw_query  # noqa: PLC0415
+    from bylaw_retrieval.retrieval import RetrievalService  # noqa: PLC0415
+
+    @app.post("/v1/_test/bylaw-query")
+    async def bylaw_query(body: _BylawQueryBody) -> dict[str, object]:
+        with session_scope() as session:
+            resolver = (
+                (lambda _session, _id=body.document_id: _id)
+                if body.document_id is not None
+                else None
+            )
+            service = RetrievalService(session, default_document_id_resolver=resolver)
+            response = service.bylaw_query(
+                intent=body.intent,
+                address=body.address,
+                zone=body.zone,
+                proposed=body.proposed,
+            )
+            return {
+                "intent": response.intent,
+                "unrecognized_intent": response.unrecognized_intent,
+                "suggested_tools": list(response.suggested_tools),
+                "conformance_overall": (
+                    response.conformance_check.overall
+                    if response.conformance_check is not None
+                    else None
+                ),
+                "compact": compact_bylaw_query(response),
+            }
+
+
+class _SpatialCandidateTextBody(BaseModel):
+    canonical_attributes: dict[str, Any]
+    citation_label: str = "(4.5)"
+
+
+def _mount_spatial_candidate_text_endpoint(app: FastAPI) -> None:
+    """ABS-276: expose _feature_to_candidate rendering over HTTP for e2e coverage.
+
+    Accepts a ``canonical_attributes`` dict and returns the ``text`` field that
+    ``_feature_to_candidate`` would produce, exercising the generic attribute
+    loop (which replaced the hardcoded height-only rendering) over the real
+    FastAPI stack without requiring a seeded ExternalDataset row.
+    """
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    from layer2.models.enums import RetrievalChannel, SourceType  # noqa: PLC0415
+    from layer2.models.schemas import CandidateFragment as _CandidateFragment  # noqa: PLC0415
+    from layer2.retrieval.spatial import FeatureMatch, _feature_to_candidate  # noqa: PLC0415
+    from layer2.retrieval.spatial import ResolvedLocation  # noqa: PLC0415
+
+    @app.post("/v1/_test/spatial-candidate-text")
+    async def spatial_candidate_text(body: _SpatialCandidateTextBody) -> dict[str, str]:
+        feature = MagicMock()
+        feature.canonical_attributes_json = body.canonical_attributes
+        feature.id = 9001
+        feature.feature_key = "e2e-test-feature"
+        feature.geometry_bbox_json = None
+        feature.external_dataset_id = 9001
+
+        match = FeatureMatch(feature=feature, overlap_area=500.0, contains_input=True)
+
+        parent = _CandidateFragment(
+            source_type=SourceType.DATASET.value,
+            retrieval_channel=RetrievalChannel.SPATIAL.value,
+            base_score=0.6,
+            text="(dataset parent)",
+            citation_label=body.citation_label,
+        )
+
+        location = ResolvedLocation(
+            kind="point",
+            geometry={"type": "Point", "coordinates": [-63.58, 44.64]},
+            source="e2e",
+            reference_text="e2e test point",
+        )
+
+        candidate = _feature_to_candidate(match, None, parent, location)
+        return {"text": candidate.text}
+
+
+def _mount_search_evidence_raw_endpoint(app: FastAPI) -> None:
+    """ABS-288: expose the raw RetrievalResponse envelope for e2e shape assertions.
+
+    Returns model_dump(mode="json") of the full response so Playwright can
+    verify that the request echo is absent and empty fields are omitted.
+    """
+    from bylaw_retrieval.retrieval import RetrievalRequest, RetrievalService  # noqa: PLC0415
+
+    @app.post("/v1/_test/search-evidence-raw")
+    async def search_evidence_raw(body: _SearchEvidenceBody) -> dict[str, object]:
+        with session_scope() as session:
+            service = RetrievalService(session)
+            request = RetrievalRequest(
+                query=body.query,
+                bylaw_name=body.bylaw_name,
+                municipality=body.municipality,
+                limit=body.limit,
+            )
+            response = service.search(request)
+            return response.model_dump(mode="json")
+
+
+def _mount_advisor_search_include_flags_endpoint(app: FastAPI) -> None:
+    """ABS-297: WI-7 / WI-3 drift guard.
+
+    Drives ``search_bylaw_evidence_handler`` (the actual advisor production
+    handler from ``advisor.chat.tools``) with a capturing stub service and
+    returns the ``include_*`` flags that the constructed ``RetrievalRequest``
+    carries. The Playwright spec POSTs a default payload (no ``include_*``)
+    and asserts all four come back ``True`` — that's the explicit
+    ``payload.get(..., True)`` fallback in ``chat/tools.py:774-777`` doing
+    its job, overriding the post-WI-7 ``False`` default on
+    ``RetrievalRequest``.
+
+    Why a capturing stub instead of the real ``RetrievalService``: the
+    drift is at request construction, not at search execution. Cutting the
+    DB out of the loop pins the assertion to the handler's flag-passing
+    contract and makes the guard independent of seed data (no e2e seed
+    currently populates ``linked_datasets``, so a "look at the response
+    shape" test would silently pass on an empty fixture).
+    """
+    from typing import Any  # noqa: PLC0415
+
+    from fastapi import Body  # noqa: PLC0415
+
+    from advisor.chat.tools import build_bylaw_tools  # noqa: PLC0415
+    from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+        RetrievalRequest,
+        RetrievalResponse,
+    )
+
+    class _CapturingRetrievalService:
+        def __init__(self) -> None:
+            self.last_request: RetrievalRequest | None = None
+
+        def search(self, request: RetrievalRequest) -> RetrievalResponse:
+            self.last_request = request
+            return RetrievalResponse(total_matches=0, matches=[], notes=[])
+
+    @app.post("/v1/_test/advisor-search-include-flags")
+    async def advisor_search_include_flags(
+        body: dict[str, Any] = Body(...),
+    ) -> dict[str, bool | None]:
+        if "query" not in body or not isinstance(body.get("query"), str):
+            from fastapi import HTTPException  # noqa: PLC0415
+
+            raise HTTPException(status_code=422, detail="missing 'query' (string) in body")
+        capturing = _CapturingRetrievalService()
+        _, handlers = build_bylaw_tools(capturing)
+        await handlers["search_bylaw_evidence"](body)
+        req = capturing.last_request
+        if req is None:  # pragma: no cover — handler must have called search
+            from fastapi import HTTPException  # noqa: PLC0415
+
+            raise HTTPException(status_code=500, detail="handler did not call service.search")
+        return {
+            "include_context": req.include_context,
+            "include_cross_references": req.include_cross_references,
+            "include_tables": req.include_tables,
+            "include_datasets": req.include_datasets,
+        }
+
+
+class _BuyAnswerCheckoutBody(BaseModel):
+    user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
+    question_slug: str = Field(min_length=1, max_length=64)
+    inputs: dict[str, str] = Field(default_factory=dict)
+
+
+class _BuyAnswerRunBody(BaseModel):
+    purchase_id: int
+
+
+class _BuyAnswerFreeBalanceBody(BaseModel):
+    user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
+
+
+class _BuyAnswerGrantFreeBody(BaseModel):
+    user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
+    quantity: int = Field(ge=1, le=1000)
+
+
+class _BuyAnswerRefineBody(BaseModel):
+    purchase_id: int
+    message: str = Field(min_length=1, max_length=2000)
+
+
+class _BuyAnswerQuoteBody(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+
+
+class _BuyAnswerCheckoutOtherBody(BaseModel):
+    user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
+    question: str = Field(min_length=1, max_length=2000)
+
+
+class _BuyAnswerIntakeBody(BaseModel):
+    # ABS-315: consultant-style intake detection. A catalog question slug,
+    # the user's free-form conversation so far, and any inputs already
+    # confirmed in earlier intake turns.
+    question_slug: str = Field(min_length=1, max_length=64)
+    conversation: str = Field(default="", max_length=4000)
+    inputs: dict[str, str] = Field(default_factory=dict)
+
+
+def _mount_buy_answer_test_router(app: FastAPI) -> None:
+    """ABS-312: drive the priced-question "buy an answer" flow over HTTP.
+
+    Billing stays dormant in the e2e stack (no Stripe), so these
+    ``/v1/_test/...`` endpoints exercise the REAL ``advisor.billing
+    .answers`` service — start checkout, authorize via the webhook
+    handler, run the answer (capture/void), and refine — against the
+    test Postgres + the e2e ``MockGateway``, using a ``MockStripeClient``
+    in place of live Stripe. This is the same pattern the evaluator /
+    address-profile test endpoints use to cover heavy or external-
+    dependency code paths through the real stack.
+    """
+    from advisor.billing import answers as answer_flow  # noqa: PLC0415
+    from advisor.billing.answers import (  # noqa: PLC0415
+        FreeQuestionsExhaustedError,
+        MissingRequiredInputsError,
+        NewQuestionError,
+        RefinementNotAvailableError,
+        UnknownQuestionError,
+        WindowExhaustedError,
+    )
+    from advisor.billing.client import (  # noqa: PLC0415
+        CheckoutSessionResult,
+        MockStripeClient,
+        StripeEvent,
+    )
+    from advisor.billing.intake import detect_intake  # noqa: PLC0415
+    from advisor.billing.questions import question_for  # noqa: PLC0415
+    from advisor.billing.quote import (  # noqa: PLC0415
+        EmptyQuestionError,
+        quote_question,
+    )
+    from advisor.billing.settings import AdvisorBillingSettings  # noqa: PLC0415
+    from advisor.billing.webhooks import handle_event  # noqa: PLC0415
+    from advisor.db.models import QuestionPurchase as _QP  # noqa: PLC0415
+    from advisor.db.models import User as _User  # noqa: PLC0415
+
+    def _settings() -> AdvisorBillingSettings:
+        # Configure every question's Price ID so start_question_checkout
+        # resolves a price. Enabled flag is irrelevant here — these
+        # endpoints call the service directly, not the gated router.
+        return AdvisorBillingSettings(
+            ADVISOR_BILLING_ENABLED=True,
+            STRIPE_PRICE_QUESTION_PERMITTED_USE="price_test_permitted_use",
+            STRIPE_PRICE_QUESTION_DEVELOPMENT_STANDARDS="price_test_dev_standards",
+            STRIPE_PRICE_QUESTION_DUE_DILIGENCE="price_test_due_diligence",
+            STRIPE_PRICE_QUESTION_LEGAL_NONCONFORMING="price_test_legal_nc",
+            STRIPE_PRICE_QUESTION_VARIANCE_JUSTIFICATION="price_test_variance",
+        )
+
+    def _mock_client(session_id: str = "cs_test_buy_answer") -> MockStripeClient:
+        # Real Stripe issues a unique session id per checkout; mirror that
+        # so concurrent e2e workers don't collide on the UNIQUE
+        # stripe_checkout_session_id column.
+        return MockStripeClient(
+            checkout_result=CheckoutSessionResult(
+                session_id=session_id, url="https://stripe.test/checkout"
+            )
+        )
+
+    def _resolve_user(db, user_id: str) -> _User:
+        user = (
+            db.query(_User).filter(_User.clerk_user_id == user_id).one_or_none()
+        )
+        if user is None:
+            user = _User(clerk_user_id=user_id, email=f"{user_id}@e2e.test")
+            db.add(user)
+            db.flush()
+        return user
+
+    from advisor.billing.report import build_report  # noqa: PLC0415
+
+    def _state(purchase: _QP) -> dict[str, object]:
+        return {
+            "purchase_id": purchase.id,
+            "question_slug": purchase.question_slug,
+            "status": purchase.status,
+            "answer": purchase.answer_text,
+            # ABS-359: the structured report the product surface renders,
+            # built by the REAL parser from this purchase's captured answer —
+            # so an e2e can assert the deliverable is monologue-free end-to-end
+            # rather than stubbing already-clean data at the network boundary.
+            "report": build_report(purchase),
+            "failure_reason": purchase.failure_reason,
+            "refinement_count": purchase.refinement_count,
+            "refinements_remaining": answer_flow.refinements_remaining(purchase),
+            "window_expires_at": (
+                purchase.window_expires_at.isoformat()
+                if purchase.window_expires_at is not None
+                else None
+            ),
+        }
+
+    @app.post("/v1/_test/buy-answer/intake")
+    async def buy_answer_intake(
+        body: _BuyAnswerIntakeBody,
+    ) -> dict[str, object]:
+        # ABS-315: consultant-style intake detection against the real
+        # advisor.billing.intake service + e2e MockGateway. No purchase
+        # row, no Stripe — detecting/asking for inputs never charges. The
+        # mock resolves a deterministic extraction from MOCK_INPUT[...]
+        # sentinels in the conversation.
+        try:
+            question = question_for(body.question_slug)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown question {body.question_slug!r}",
+            ) from exc
+        result = await detect_intake(
+            app.state.gateway,
+            question,
+            conversation=body.conversation,
+            provided_inputs=body.inputs,
+        )
+        return {
+            "question_slug": question.slug,
+            "complete": result.complete,
+            "inputs": result.inputs,
+            "missing_required": result.missing_required,
+            "missing_optional": result.missing_optional,
+            "prompt": result.prompt,
+        }
+
+    @app.post("/v1/_test/buy-answer/checkout")
+    async def buy_answer_checkout(
+        body: _BuyAnswerCheckoutBody,
+    ) -> dict[str, object]:
+        settings = _settings()
+        session_id = f"cs_test_{uuid.uuid4().hex[:16]}"
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            try:
+                purchase, _url = answer_flow.start_question_checkout(
+                    db,
+                    user,
+                    question_slug=body.question_slug,
+                    inputs=body.inputs,
+                    client=_mock_client(session_id),
+                    settings=settings,
+                )
+            except UnknownQuestionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except MissingRequiredInputsError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "missing_required_inputs", "missing": exc.missing},
+                ) from exc
+            purchase_id = purchase.id
+            # Simulate the checkout.session.completed webhook authorizing
+            # the manual-capture PaymentIntent — exercises the real
+            # webhook router path that flips the purchase to "authorized".
+            event = StripeEvent(
+                id=f"evt_test_{purchase_id}",
+                type="checkout.session.completed",
+                data={
+                    "id": session_id,
+                    "payment_intent": f"pi_test_{purchase_id}",
+                    "metadata": {
+                        "advisor_user_id": str(user.id),
+                        "question_purchase_id": str(purchase_id),
+                        "question_slug": body.question_slug,
+                    },
+                },
+            )
+            handle_event(db, event, settings)
+            db.flush()
+            purchase = db.get(_QP, purchase_id)
+            return _state(purchase)
+
+    @app.post("/v1/_test/buy-answer/checkout-free")
+    async def buy_answer_checkout_free(
+        body: _BuyAnswerCheckoutBody,
+    ) -> dict[str, object]:
+        # ABS-322: payments-off / free-trial checkout. Consumes one
+        # free-question credit and lands the purchase straight in
+        # "authorized" — NO Stripe, no webhook. Returns ok=False with
+        # code=free_questions_exhausted when the trial is used up so the
+        # spec can assert the exhaustion state.
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            try:
+                purchase = answer_flow.start_question_free(
+                    db,
+                    user,
+                    question_slug=body.question_slug,
+                    inputs=body.inputs,
+                )
+            except UnknownQuestionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except MissingRequiredInputsError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "missing_required_inputs",
+                        "missing": exc.missing,
+                    },
+                ) from exc
+            except FreeQuestionsExhaustedError:
+                return {
+                    "ok": False,
+                    "code": "free_questions_exhausted",
+                    "free_questions_remaining": user.free_questions_remaining,
+                }
+            purchase_id = purchase.id
+            remaining = user.free_questions_remaining
+            db.flush()
+            purchase = db.get(_QP, purchase_id)
+            return {
+                "ok": True,
+                "free_questions_remaining": remaining,
+                **_state(purchase),
+            }
+
+    @app.post("/v1/_test/buy-answer/free-balance")
+    async def buy_answer_free_balance(
+        body: _BuyAnswerFreeBalanceBody,
+    ) -> dict[str, object]:
+        # ABS-322: read the user's current free-question entitlement so a
+        # spec can assert grant / consume / refund deltas.
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            return {
+                "user_id": body.user_id,
+                "free_questions_remaining": user.free_questions_remaining,
+            }
+
+    @app.post("/v1/_test/buy-answer/grant-free-questions")
+    async def buy_answer_grant_free(
+        body: _BuyAnswerGrantFreeBody,
+    ) -> dict[str, object]:
+        # ABS-322: exercise the admin-grant-more-free-questions service
+        # path (advisor.db.cases.grant_free_questions) end-to-end.
+        from advisor.db.cases import grant_free_questions  # noqa: PLC0415
+
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            remaining = grant_free_questions(
+                db,
+                user=user,
+                quantity=body.quantity,
+                reason="e2e-grant",
+            )
+            return {
+                "user_id": body.user_id,
+                "granted": body.quantity,
+                "free_questions_remaining": remaining,
+            }
+
+    @app.post("/v1/_test/buy-answer/quote")
+    async def buy_answer_quote(
+        body: _BuyAnswerQuoteBody,
+    ) -> dict[str, object]:
+        # ABS-316: produce a FREE off-menu price quote against the real
+        # advisor.billing.quote service + e2e MockGateway. No purchase
+        # row, no Stripe — quoting never charges.
+        try:
+            quote = await quote_question(app.state.gateway, body.question)
+        except EmptyQuestionError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "empty_question", "message": str(exc)},
+            ) from exc
+        return {
+            "question": quote.question_text,
+            "difficulty": quote.difficulty,
+            "difficulty_display_name": quote.difficulty_display_name,
+            "price_cents": quote.price_cents,
+            "currency": quote.currency,
+            "rationale": quote.rationale,
+            "cumulative_token_budget": quote.cumulative_token_budget,
+            "band_low_cents": quote.band_low_cents,
+            "band_high_cents": quote.band_high_cents,
+        }
+
+    @app.post("/v1/_test/buy-answer/checkout-other")
+    async def buy_answer_checkout_other(
+        body: _BuyAnswerCheckoutOtherBody,
+    ) -> dict[str, object]:
+        # ABS-316: re-quote server-side, then authorize an ad-hoc
+        # manual-capture checkout for the quoted amount. Mirrors the
+        # catalog checkout endpoint: simulate the
+        # checkout.session.completed webhook so the purchase lands in
+        # "authorized" ready for /answer.
+        settings = _settings()
+        session_id = f"cs_test_{uuid.uuid4().hex[:16]}"
+        with session_scope() as db:
+            user = _resolve_user(db, body.user_id)
+            try:
+                quote = await quote_question(app.state.gateway, body.question)
+            except EmptyQuestionError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "empty_question", "message": str(exc)},
+                ) from exc
+            purchase, _url = answer_flow.start_other_checkout(
+                db,
+                user,
+                quote=quote,
+                client=_mock_client(session_id),
+                settings=settings,
+            )
+            purchase_id = purchase.id
+            event = StripeEvent(
+                id=f"evt_test_{purchase_id}",
+                type="checkout.session.completed",
+                data={
+                    "id": session_id,
+                    "payment_intent": f"pi_test_{purchase_id}",
+                    "metadata": {
+                        "advisor_user_id": str(user.id),
+                        "question_purchase_id": str(purchase_id),
+                        "question_slug": "other",
+                    },
+                },
+            )
+            handle_event(db, event, settings)
+            db.flush()
+            purchase = db.get(_QP, purchase_id)
+            return {
+                "price_cents": quote.price_cents,
+                "difficulty": quote.difficulty,
+                "rationale": quote.rationale,
+                **_state(purchase),
+            }
+
+    @app.post("/v1/_test/buy-answer/answer")
+    async def buy_answer_run(body: _BuyAnswerRunBody) -> dict[str, object]:
+        with session_scope() as db:
+            purchase = db.get(_QP, body.purchase_id)
+            if purchase is None:
+                raise HTTPException(status_code=404, detail="purchase not found")
+            purchase = await answer_flow.run_answer(
+                db,
+                purchase,
+                gateway=app.state.gateway,
+                persona=app.state.persona_text,
+                retrieval_factory=app.state.retrieval_factory,
+                client=_mock_client(),
+            )
+            return _state(purchase)
+
+    @app.post("/v1/_test/buy-answer/refine")
+    async def buy_answer_refine(body: _BuyAnswerRefineBody) -> dict[str, object]:
+        with session_scope() as db:
+            purchase = db.get(_QP, body.purchase_id)
+            if purchase is None:
+                raise HTTPException(status_code=404, detail="purchase not found")
+            try:
+                answer = await answer_flow.run_refinement(
+                    db,
+                    purchase,
+                    message=body.message,
+                    gateway=app.state.gateway,
+                    persona=app.state.persona_text,
+                    retrieval_factory=app.state.retrieval_factory,
+                )
+            except NewQuestionError as exc:
+                return {
+                    "ok": False,
+                    "code": "new_question",
+                    "suggested_slug": exc.suggested_slug,
+                    **_state(purchase),
+                }
+            except WindowExhaustedError as exc:
+                return {
+                    "ok": False,
+                    "code": "window_exhausted",
+                    "reason": exc.reason,
+                    **_state(purchase),
+                }
+            except RefinementNotAvailableError as exc:
+                return {
+                    "ok": False,
+                    "code": "refinement_unavailable",
+                    "message": str(exc),
+                    **_state(purchase),
+                }
+            return {"ok": True, "answer": answer, **_state(purchase)}
+
+    @app.post("/v1/_test/buy-answer/get")
+    async def buy_answer_get(body: _BuyAnswerRunBody) -> dict[str, object]:
+        with session_scope() as db:
+            purchase = db.get(_QP, body.purchase_id)
+            if purchase is None:
+                raise HTTPException(status_code=404, detail="purchase not found")
+            return _state(purchase)
+
 
 app = build_e2e_app()
+_mount_seed_session_endpoint(app)
+_mount_search_evidence_endpoint(app)
+_mount_search_evidence_raw_endpoint(app)
+_mount_zone_profile_endpoint(app)
+_mount_bylaw_query_endpoint(app)
+_mount_spatial_candidate_text_endpoint(app)
+_mount_advisor_search_include_flags_endpoint(app)
+_mount_buy_answer_test_router(app)
 
 
 if __name__ == "__main__":  # pragma: no cover

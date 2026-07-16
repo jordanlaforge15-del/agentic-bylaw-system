@@ -1,21 +1,27 @@
-"""FastAPI router for the billing endpoints — case-credit model.
+"""FastAPI router for the billing endpoints — token-wallet model (beta).
 
-Five endpoints replace the v1 subscription-style trio:
+The beta pivot (ABS-379 epic) replaced the case-credit tier×pack catalog
+with a turn-based token wallet plus per-slug priced reports. The surface:
 
-* ``GET /v1/billing/catalog`` — auth-required. Returns the 12-SKU
-  matrix (tier × pack) with prices and which SKUs have a Stripe Price
-  ID configured. The pricing page renders this.
-* ``POST /v1/billing/checkout/pack`` — auth-required. Creates a Stripe
-  Checkout session for one (tier, pack) combination and returns its
-  URL.
+* ``GET /v1/billing/wallet`` / ``GET /v1/billing/me`` — auth-required.
+  Return the user's token balance (and, on ``me``, stripe_customer_id
+  and the enabled flag).
+* ``GET /v1/billing/topups`` + ``POST /v1/billing/checkout/topup`` —
+  the public top-up catalog and the Stripe Checkout session that buys
+  turns. Top-ups are the only way money enters the wallet.
+* ``GET /v1/billing/questions`` + the ``questions/*`` answer flow —
+  the per-slug priced reports gated by ``ADVISOR_ENABLED_QUESTIONS``.
 * ``POST /v1/billing/webhook`` — no auth; verified via
-  ``Stripe-Signature``. Applies the event to the database (inserts
-  per-credit rows on ``checkout.session.completed``).
-* ``GET /v1/billing/me`` — auth-required. Returns the user's credit
-  balance grouped by tier, plus their stripe_customer_id and the
-  enabled flag.
-* ``GET /v1/billing/purchases`` — auth-required. Returns the user's
-  purchase history newest-first.
+  ``Stripe-Signature``. Applies the event to the database.
+* ``GET /v1/billing/purchases`` — auth-required. Purchase history
+  newest-first.
+
+RETIRED (ABS-390): the tier×pack catalog and
+``POST /v1/billing/checkout/pack`` are gone product-wide. The pack
+endpoint answers ``410 packs_retired`` on both the live and dormant
+routers so any lingering client sees an explicit, permanent retirement
+rather than a transient 503. The legacy ``STRIPE_PRICE_<TIER>_<PACK>``
+env vars configure nothing.
 
 Every endpoint short-circuits to HTTP 503 when ``settings.enabled`` is
 False — same dormant-by-default safety as v1.
@@ -23,27 +29,61 @@ False — same dormant-by-default safety as v1.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    status,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from advisor.billing import answers as answer_flow
+from advisor.billing.answers import (
+    FreeQuestionsExhaustedError,
+    MissingRequiredInputsError,
+    NewQuestionError,
+    PurchaseNotAuthorizedError,
+    QuestionPriceNotConfiguredError,
+    RefinementNotAvailableError,
+    UnknownQuestionError,
+    WindowExhaustedError,
+)
+from advisor.billing.report import build_report
 from advisor.billing.checkout import (
     PriceNotConfiguredError,
-    UnknownOfferError,
-    start_pack_checkout,
+    UnknownTopupError,
+    start_topup_checkout,
 )
 from advisor.billing.client import StripeClient
+from advisor.billing.intake import detect_intake
 from advisor.billing.packs import all_offers
+from advisor.billing.topups import all_topups
 from advisor.billing.pricing import get_pricing_settings
+from advisor.billing.questions import QUESTIONS, all_questions, question_for
+from advisor.billing.quote import EmptyQuestionError, quote_question
 from advisor.billing.settings import AdvisorBillingSettings
 from advisor.billing.webhooks import handle_event
+# ABS-324: this Answers-product router must NOT import the Conversation /
+# Case ledger helpers (``open_case_free`` / ``reserve_credit_for_session``).
+# The free-question "buy an answer" path consumes ONLY its own
+# entitlement, via ``advisor.billing.answers.start_question_free``. Only the
+# read-only ``credit_balance_for`` (for the shared ``GET /me`` balance view)
+# is borrowed. The import-boundary guard test pins this.
+from advisor.billing import turns
 from advisor.db.cases import credit_balance_for
-from advisor.db.models import CasePurchase, User
+from advisor.db.models import CasePurchase, QuestionPurchase, User
+from advisor.db.wallet import list_transactions
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +103,65 @@ class CheckoutPackRequest(BaseModel):
     )
 
 
+class CheckoutTopupRequest(BaseModel):
+    """Body of ``POST /v1/billing/checkout/topup`` (ABS-381)."""
+
+    sku: str = Field(
+        ...,
+        description="Top-up identifier (small / medium / large).",
+    )
+
+
 class CheckoutResponse(BaseModel):
     url: str = Field(..., description="Stripe Checkout redirect URL.")
+
+
+class TopupOption(BaseModel):
+    """One purchasable token top-up for the public pricing page (ABS-381)."""
+
+    sku: str
+    display_name: str
+    tokens: int = Field(
+        ..., description="Tokens credited to the wallet on purchase."
+    )
+    approx_turns: int = Field(
+        ...,
+        description=(
+            "floor(tokens / tokens_per_turn) — backend-owned turns "
+            "conversion so the UI never divides tokens itself."
+        ),
+    )
+    price_cents: int = Field(..., description="Price in CAD cents.")
+    available: bool = Field(
+        ...,
+        description=(
+            "True iff payments are enabled AND this SKU's Stripe Price ID is "
+            "configured. Disabled top-ups render as 'coming soon'."
+        ),
+    )
+
+
+class TopupCatalogResponse(BaseModel):
+    """Body of ``GET /v1/billing/topups`` — the public top-up catalog.
+
+    Unauthenticated (skipAuth) so the pricing page renders signed-out.
+    ``tokens_per_turn`` is echoed so the UI can present each top-up as
+    "~N turns" consistently with the wallet view; the per-option
+    ``approx_turns`` is the backend's own computation of that.
+    """
+
+    payments_enabled: bool = Field(
+        ...,
+        description=(
+            "Whether top-ups are purchasable (Stripe on). When False every "
+            "option is unavailable and the UI shows 'coming soon'."
+        ),
+    )
+    currency: str = "CAD"
+    tokens_per_turn: int = Field(
+        ..., description="ADVISOR_TOKENS_PER_TURN — the display divisor."
+    )
+    options: list[TopupOption]
 
 
 class CatalogOffer(BaseModel):
@@ -104,6 +201,308 @@ class CatalogResponse(BaseModel):
     offers: list[CatalogOffer]
 
 
+class QuestionInputField(BaseModel):
+    """One required-or-optional input for a catalog question."""
+
+    name: str
+    label: str
+    required: bool
+    description: str
+
+
+class QuestionMenuItem(BaseModel):
+    """One priced question on the launch menu."""
+
+    slug: str
+    display_name: str
+    price_cents: int
+    currency: str = "CAD"
+    summary: str
+    backing_calls: list[str]
+    required_inputs: list[QuestionInputField]
+    catalog_anchor: str
+    available: bool = Field(
+        ...,
+        description=(
+            "True iff the Stripe Price ID for this question is configured "
+            "and billing is enabled. Disabled questions render as 'coming "
+            "soon' on the menu."
+        ),
+    )
+
+
+class QuestionMenuResponse(BaseModel):
+    """Body of ``GET /v1/billing/questions`` — the priced-question menu."""
+
+    enabled: bool
+    payments_enabled: bool = Field(
+        default=False,
+        description=(
+            "ABS-322: when False the buy-an-answer flow consumes a "
+            "free-question credit (no Stripe); when True it runs the "
+            "Stripe authorize→capture path. The entry flow uses this to "
+            "decide between a free-trial CTA and a paid checkout."
+        ),
+    )
+    conversation_enabled: bool = Field(
+        default=False,
+        description=(
+            "ABS-324 launch posture: when False the in-app /cases/new entry "
+            "surfaces ONLY the Answers question menu. The Conversation "
+            "product (turn-based /app chat reached by continuing an existing "
+            "case) stays intact in the codebase but is hidden from this "
+            "primary entry until ADVISOR_CONVERSATION_ENTRY_ENABLED is "
+            "flipped true. The frontend uses this to gate the "
+            "continue-existing-case CTA."
+        ),
+    )
+    currency: str = "CAD"
+    cad_per_usd: float = Field(
+        ...,
+        description=(
+            "FX rate for displaying USD equivalents on marketing pages. "
+            "CAD is authoritative."
+        ),
+    )
+    questions: list[QuestionMenuItem]
+
+
+class CheckoutQuestionRequest(BaseModel):
+    """Body of ``POST /v1/billing/checkout/question``."""
+
+    question_slug: str = Field(
+        ..., description="Catalog question slug (see /v1/billing/questions)."
+    )
+    inputs: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Collected required-input values keyed by input name "
+            "(address, proposed_use, …)."
+        ),
+    )
+
+
+class QuestionCheckoutResponse(BaseModel):
+    url: str | None = Field(
+        default=None,
+        description=(
+            "Stripe Checkout redirect URL. NULL in payments-off mode "
+            "(ABS-322): no checkout session is created — the purchase is "
+            "already authorized via a free-question credit and the client "
+            "goes straight to POST .../answer."
+        ),
+    )
+    purchase_id: int = Field(
+        ..., description="Id of the pending QuestionPurchase row."
+    )
+    status: str = Field(
+        default="authorizing",
+        description=(
+            "Purchase status. 'authorizing' awaits the Stripe webhook; "
+            "'authorized' (payments-off) is immediately runnable."
+        ),
+    )
+    payments_enabled: bool = Field(
+        default=True,
+        description="False when this purchase was unlocked by a free credit.",
+    )
+
+
+class QuoteRequest(BaseModel):
+    """Body of ``POST /v1/billing/questions/quote`` (ABS-316)."""
+
+    question: str = Field(
+        ...,
+        min_length=1,
+        description="The free-form, off-menu question to price.",
+    )
+
+
+class QuoteResponse(BaseModel):
+    """A FREE off-menu price quote (ABS-316).
+
+    Producing this never charges the customer. ``price_cents`` is the
+    anchored price they would pay to buy the answer; ``difficulty`` /
+    ``rationale`` explain the price; the ``band_*`` fields give the
+    launch-menu envelope for context ("within the $79–$299 band").
+    """
+
+    question: str
+    difficulty: str
+    difficulty_display_name: str
+    price_cents: int
+    currency: str
+    rationale: str
+    band_low_cents: int
+    band_high_cents: int
+
+
+class IntakeRequest(BaseModel):
+    """Body of ``POST /v1/billing/questions/intake`` (ABS-315).
+
+    The consultant-style intake step that runs BEFORE checkout. Carries
+    the selected catalog question, whatever the user has said so far
+    (free-form), and any inputs already collected in earlier intake turns.
+    """
+
+    question_slug: str = Field(
+        ..., description="Catalog question slug (see /v1/billing/questions)."
+    )
+    conversation: str = Field(
+        default="",
+        description=(
+            "The user's free-form description so far — the LLM extracts "
+            "the question's required inputs from this."
+        ),
+    )
+    inputs: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Inputs already confirmed in earlier intake turns, keyed by "
+            "input name. These take precedence over freshly-extracted "
+            "values."
+        ),
+    )
+
+
+class IntakeResponse(BaseModel):
+    """Result of one consultant-style intake pass (ABS-315).
+
+    Producing this is FREE (a single tools-less LLM extraction; no charge,
+    no Stripe object). When ``complete`` is True the merged ``inputs`` are
+    ready to hand to ``POST /v1/billing/checkout/question``; otherwise
+    ``prompt`` is the consultant's follow-up asking for ``missing_required``.
+    """
+
+    question_slug: str
+    complete: bool
+    inputs: dict[str, str]
+    missing_required: list[str]
+    missing_optional: list[str]
+    prompt: str
+
+
+class CheckoutOtherRequest(BaseModel):
+    """Body of ``POST /v1/billing/checkout/other`` (ABS-316)."""
+
+    question: str = Field(
+        ...,
+        min_length=1,
+        description="The free-form, off-menu question to buy an answer to.",
+    )
+
+
+class OtherCheckoutResponse(BaseModel):
+    """Checkout for an off-menu question: URL + the server-bound quote."""
+
+    url: str = Field(..., description="Stripe Checkout redirect URL.")
+    purchase_id: int = Field(
+        ..., description="Id of the pending QuestionPurchase row."
+    )
+    price_cents: int = Field(
+        ..., description="The server-quoted price the card will hold."
+    )
+    currency: str = "CAD"
+    difficulty: str
+    rationale: str
+
+
+class RefineRequest(BaseModel):
+    """Body of ``POST /v1/billing/questions/purchases/{id}/refine``."""
+
+    message: str = Field(
+        ..., min_length=1, description="The refinement follow-up text."
+    )
+
+
+class ReportVerdict(BaseModel):
+    """Determination band — ``status`` drives the client's ``statusInfo()``
+    color/tag (``pass`` → accent; ``fail``/``conditional``/``attention`` →
+    brick); ``label`` is the verdict headline."""
+
+    status: str
+    label: str
+
+
+class ReportContent(BaseModel):
+    """Structured report deliverable (ABS-342).
+
+    The typed schema the ``ReportDocument`` client template renders: a
+    letterhead + title + meta grid + determination band + summary + a typed
+    ``blocks`` array + a verification footer. ``blocks`` is an
+    intentionally-loose list of block dicts (``keyvals | uses | finding |
+    table | flags | prose``) discriminated by each block's ``type`` field
+    and rendered by one shared switch — no per-report layout code. See
+    ``advisor.billing.report`` for the mapper.
+    """
+
+    ref: str
+    report_type: str
+    address: str
+    zone_subtitle: str
+    issued: str
+    prepared_for: str
+    bylaw_version: str
+    price_cents: int
+    currency: str
+    verdict: ReportVerdict
+    summary: str
+    blocks: list[dict]
+    footer: str
+
+
+class QuestionPurchaseResponse(BaseModel):
+    """State of a priced-question purchase + its answer.
+
+    ``answer`` is the raw engine markdown (retained for back-compat and as
+    the client's defensive fallback). ``report`` is the ABS-342 structured
+    deliverable — present only on a ``captured`` purchase — that the
+    ``ReportDocument`` template renders in place of the raw markdown."""
+
+    id: int
+    question_slug: str
+    status: str
+    price_cents: int
+    currency: str
+    answer: str | None = None
+    report: ReportContent | None = None
+    failure_reason: str | None = None
+    refinement_count: int = 0
+    refinements_remaining: int = 0
+    window_expires_at: str | None = None
+
+
+class ReportSummary(BaseModel):
+    """ABS-345: one priced "report" (Answers purchase) row for the sidebar.
+
+    The product sidebar merges these report rows with conversation
+    (chat-session) rows into a single case-aware list, so a report and a
+    conversation about the same property read side-by-side. Only the
+    fields the sidebar renders are projected — the full answer text and
+    transcript stay on the dedicated ``/app/answers/{id}`` view.
+
+    ``address`` / ``zone`` are pulled from the purchase inputs (an Answers
+    purchase carries its subject in ``inputs``, not a Case anchor); ``zone``
+    is present only for questions that collected it, so the sidebar omits
+    the caption when it is ``None``. ``answer_ready`` is True once the
+    engine has captured a grounded answer — the sidebar uses it to decide
+    whether opening the row lands on a ready answer.
+    """
+
+    id: int
+    question_slug: str
+    title: str
+    status: str
+    address: str | None = None
+    zone: str | None = None
+    answer_ready: bool = False
+    updated_at: str | None = None
+
+
+class ReportListResponse(BaseModel):
+    reports: list[ReportSummary]
+
+
 class TierBalance(BaseModel):
     tier: str
     available: int
@@ -113,9 +512,114 @@ class TierBalance(BaseModel):
 
 class BillingMeResponse(BaseModel):
     enabled: bool
+    payments_enabled: bool = Field(
+        default=False,
+        description=(
+            "ABS-322: False when answers are unlocked by free-question "
+            "credits (no Stripe). The entry flow combines this with "
+            "free_questions_remaining to show the 'free trial used — paid "
+            "answers coming soon' exhaustion state instead of a checkout "
+            "button."
+        ),
+    )
     stripe_customer_id: str | None
     tier_balances: list[TierBalance]
     total_available_credits: int
+    free_questions_remaining: int = 0
+    token_balance: int = Field(
+        default=0,
+        description=(
+            "ABS-380 token wallet balance (signed). Additive to the legacy "
+            "credit fields — the beta pivot bills chat by this token wallet, "
+            "surfaced to users as '~N turns'. See GET /v1/billing/wallet for "
+            "the full turns-conversion view."
+        ),
+    )
+
+
+class WalletResponse(BaseModel):
+    """Body of ``GET /v1/billing/wallet`` — the turns-aware balance view.
+
+    Turns conversion is backend-owned (design spec D6): the client renders
+    ``approx_turns_remaining`` / ``tokens_per_turn`` directly and never
+    divides tokens itself. Every threshold is echoed so the UI's "low
+    balance" and "out of turns" states match the server's pre-flight rules
+    exactly.
+    """
+
+    balance_tokens: int = Field(
+        ..., description="Signed wallet balance in tokens."
+    )
+    approx_turns_remaining: int = Field(
+        ...,
+        description=(
+            "floor(balance / tokens_per_turn), floored at 0 (negative "
+            "balances display as 0)."
+        ),
+    )
+    tokens_per_turn: int = Field(
+        ..., description="ADVISOR_TOKENS_PER_TURN — the display divisor."
+    )
+    low_balance: bool = Field(
+        ...,
+        description=(
+            "True when balance has fallen to the warn threshold "
+            "(ADVISOR_LOW_BALANCE_WARN_TOKENS). Always False for "
+            "unlimited_credits users."
+        ),
+    )
+    warn_threshold_tokens: int = Field(
+        ..., description="ADVISOR_LOW_BALANCE_WARN_TOKENS."
+    )
+    floor_tokens: int = Field(
+        ...,
+        description=(
+            "ADVISOR_CHAT_MIN_BALANCE_TOKENS — chat is refused at "
+            "balance <= floor (pre-flight)."
+        ),
+    )
+    chat_enabled: bool = Field(
+        ...,
+        description=(
+            "True when the user may start a chat turn: unlimited_credits "
+            "users at any balance, otherwise balance > floor_tokens."
+        ),
+    )
+    payments_enabled: bool = Field(
+        ...,
+        description=(
+            "Whether top-ups are purchasable (Stripe on). When False the "
+            "UI shows 'paid top-ups coming soon' at exhaustion."
+        ),
+    )
+
+
+class WalletTransaction(BaseModel):
+    """One append-only ledger row projected for the statement view."""
+
+    id: int
+    entry_type: str = Field(
+        ..., description="grant | topup | burn | adjust."
+    )
+    amount_tokens: int = Field(
+        ..., description="Signed delta this entry applied to the balance."
+    )
+    balance_after: int = Field(
+        ..., description="Wallet balance immediately after this entry."
+    )
+    reason: str | None = None
+    created_at: str
+
+
+class WalletTransactionsResponse(BaseModel):
+    """Body of ``GET /v1/billing/wallet/transactions`` — newest-first page.
+
+    ``next_before_id`` is the cursor for the following page: pass it back as
+    ``before_id``. It is ``None`` when this page is the last one.
+    """
+
+    transactions: list[WalletTransaction]
+    next_before_id: int | None = None
 
 
 class PurchaseSummary(BaseModel):
@@ -134,6 +638,724 @@ class PurchaseHistoryResponse(BaseModel):
     purchases: list[PurchaseSummary]
 
 
+class FreeStartRequest(BaseModel):
+    """Body of ``POST /v1/billing/questions/free-start``.
+
+    The payments-off (ABS-322) "buy an answer" entry, decoupled by ABS-324:
+    it consumes one free-question entitlement and opens a ``QuestionPurchase``
+    in the **Answers** product — it does NOT open a Case or touch the
+    Conversation CaseCredit ledger. The browser routes to the dedicated
+    answer/refine view (``/app/answers/{purchase_id}``).
+
+    ``anchor_label`` / ``anchor_kind`` are accepted for backward
+    compatibility (the form still posts them) but are no longer used: an
+    Answers purchase carries its subject in ``inputs``, not a Case anchor.
+    """
+
+    question_slug: str | None = None
+    inputs: dict[str, str] = Field(default_factory=dict)
+    anchor_label: str | None = None
+    anchor_kind: str = "address"
+
+
+class FreeStartResponse(BaseModel):
+    """ABS-324: the Answers free-start lands a runnable ``QuestionPurchase``,
+    not a Case. ``purchase_id`` is the answer-view target."""
+
+    purchase_id: int
+    status: str
+    free_questions_remaining: int
+
+
+# -- Shared builders --------------------------------------------------------
+
+
+def _build_question_menu(
+    *,
+    settings: AdvisorBillingSettings | None,
+    enabled: bool,
+    currency: str,
+    payments_enabled: bool = False,
+) -> list[QuestionMenuItem]:
+    """Render the priced-question catalog into menu items.
+
+    ``available`` means "this question can be unlocked right now":
+
+    * **payments-off (ABS-322):** True whenever billing is enabled —
+      every question is answerable by consuming a free-question credit,
+      independent of any Stripe Price ID. (Per-user exhaustion is a
+      separate, authenticated signal — ``GET /me``'s
+      ``free_questions_remaining`` — since this menu is public.)
+    * **payments-on:** True only when billing is enabled AND the
+      question's Stripe Price ID is configured on ``settings``.
+
+    When ``settings`` is None (minimal dormant setups), there are no
+    Price IDs, so payments-on questions render unavailable.
+    """
+    items: list[QuestionMenuItem] = []
+    for question in all_questions():
+        # ABS-384: a per-report gate — a slug not in
+        # ``ADVISOR_ENABLED_QUESTIONS`` vanishes from the menu entirely
+        # (deny-by-default). Read at request time so the toggle is a config
+        # flip with no redeploy.
+        if not _question_slug_enabled(question.slug):
+            continue
+        price_id = (
+            getattr(
+                settings, question.stripe_price_env_var.lower(), None
+            )
+            if settings is not None
+            else None
+        )
+        available = enabled and (
+            True if not payments_enabled else bool(price_id)
+        )
+        items.append(
+            QuestionMenuItem(
+                slug=question.slug,
+                display_name=question.display_name,
+                price_cents=question.price_cents,
+                currency=currency,
+                summary=question.summary,
+                backing_calls=list(question.backing_calls),
+                required_inputs=[
+                    QuestionInputField(
+                        name=f.name,
+                        label=f.label,
+                        required=f.required,
+                        description=f.description,
+                    )
+                    for f in question.required_inputs
+                ],
+                catalog_anchor=question.catalog_anchor,
+                available=available,
+            )
+        )
+    return items
+
+
+def _question_purchase_response(
+    purchase: QuestionPurchase,
+) -> QuestionPurchaseResponse:
+    return QuestionPurchaseResponse(
+        id=purchase.id,
+        question_slug=purchase.question_slug,
+        status=purchase.status,
+        price_cents=purchase.price_cents,
+        currency=purchase.currency,
+        answer=purchase.answer_text,
+        report=build_report(purchase),
+        failure_reason=purchase.failure_reason,
+        refinement_count=purchase.refinement_count,
+        refinements_remaining=answer_flow.refinements_remaining(purchase),
+        window_expires_at=(
+            purchase.window_expires_at.isoformat()
+            if purchase.window_expires_at is not None
+            else None
+        ),
+    )
+
+
+def _report_summary(purchase: QuestionPurchase) -> ReportSummary:
+    """Project a ``QuestionPurchase`` into a sidebar ``ReportSummary``.
+
+    The display title is the catalog question's ``display_name`` when the
+    slug is known; off-menu ("other", ABS-316) purchases fall back to the
+    verbatim free-form question text captured in ``inputs['question']``,
+    then to the raw slug. Address / zone come from the collected inputs.
+    """
+    inputs = purchase.inputs_json or {}
+    try:
+        title = question_for(purchase.question_slug).display_name
+    except KeyError:
+        title = str(inputs.get("question") or purchase.question_slug)
+    address = inputs.get("address")
+    zone = inputs.get("zone")
+    return ReportSummary(
+        id=purchase.id,
+        question_slug=purchase.question_slug,
+        title=title,
+        status=purchase.status,
+        address=str(address) if isinstance(address, str) and address else None,
+        zone=str(zone) if isinstance(zone, str) and zone else None,
+        answer_ready=bool(purchase.answer_text),
+        updated_at=(
+            purchase.updated_at.isoformat()
+            if purchase.updated_at is not None
+            else None
+        ),
+    )
+
+
+def _question_slug_enabled(slug: str) -> bool:
+    """ABS-384: is this report slug enabled for purchase right now?
+
+    Read at REQUEST time from ``ADVISOR_ENABLED_QUESTIONS`` (comma-separated
+    slugs; ``*`` = all; unset/empty = NONE, deny-by-default) so an operator
+    can enable or disable any of the five report SKUs with a config flip and
+    no redeploy. Disabled slugs vanish from the menu and reject new purchases;
+    already-purchased reports are unaffected — their delivery routes
+    (get / refine / reports-list) never consult this.
+    """
+    raw = os.environ.get("ADVISOR_ENABLED_QUESTIONS", "").strip()
+    if not raw:
+        return False
+    if raw == "*":
+        return True
+    return slug in {s.strip() for s in raw.split(",") if s.strip()}
+
+
+def _require_question_slug_enabled(slug: str) -> None:
+    """Reject a purchase / answer-run request for a disabled report slug.
+
+    Raises HTTP 503 ``question_disabled`` for a KNOWN catalog slug that is
+    toggled off. An unknown slug falls through untouched so the downstream
+    handler can raise its own 400 ``unknown_question``; the off-menu
+    ``other`` slug (its own kill switch) is likewise never blocked here.
+    """
+    if slug in QUESTIONS and not _question_slug_enabled(slug):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "question_disabled",
+                "message": (
+                    f"The '{slug}' report is not currently available. It has "
+                    "been disabled by the operator."
+                ),
+            },
+        )
+
+
+def _conversation_entry_enabled() -> bool:
+    """ABS-324: is the Conversation product exposed in the in-app entry?
+
+    Launch posture is Answers-only — ``/cases/new`` surfaces only the
+    question menu. The turn-based ``/app`` chat (Conversation) stays in the
+    codebase but its entry (continuing an existing case) is hidden until
+    ``ADVISOR_CONVERSATION_ENTRY_ENABLED`` is flipped true. Read from the
+    environment so the toggle is a config flip with no redeploy of logic.
+    """
+    return os.environ.get(
+        "ADVISOR_CONVERSATION_ENTRY_ENABLED", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_owned_purchase(db: Any, purchase_id: int, user: User) -> QuestionPurchase:
+    """Fetch a purchase that belongs to ``user`` or raise HTTP 404."""
+    purchase = db.get(QuestionPurchase, purchase_id)
+    if purchase is None or purchase.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "purchase_not_found",
+                "message": f"no question purchase {purchase_id}",
+            },
+        )
+    return purchase
+
+
+def _mount_answer_delivery_routes(
+    router: APIRouter,
+    *,
+    user_dependency: Callable[..., Any],
+    user_resolver: Callable[[Any, Session], User],
+    open_db: Callable[[], Any],
+    commit: Callable[[Any], None],
+    answer_gateway: Any | None,
+    answer_persona: str | None,
+    answer_retrieval_factory: Callable[[], Any] | None,
+    client_factory: Callable[[], StripeClient] | None = None,
+    payments_enabled: bool = False,
+    require_enabled: Callable[[], None] | None = None,
+) -> None:
+    """Mount the **Answers** delivery surface (ABS-321/312/317).
+
+    These three endpoints — run-answer, refine, get-purchase — are the
+    dedicated answer/refine view's backend. They are *payments-agnostic*:
+    a free-credit (payments-off) purchase runs with ``client_factory=None``
+    and never authorizes a card, while the Stripe path captures/voids the
+    hold. ABS-324 mounts this on BOTH the live and dormant routers so the
+    payments-off launch terminates the Answers flow in its own view instead
+    of routing through the Conversation ``/app`` chat.
+
+    Crucially, this surface consumes ONLY the Answers entitlement
+    (``QuestionPurchase`` + free-question credit) — it never reserves or
+    commits a CaseCredit. The import-boundary guard test enforces that.
+    """
+
+    def _require_runner() -> None:
+        if (
+            answer_gateway is None
+            or answer_persona is None
+            or answer_retrieval_factory is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "answer_runner_unavailable",
+                    "message": (
+                        "The answer engine is not wired into the billing "
+                        "router on this deployment."
+                    ),
+                },
+            )
+
+    def _guard() -> None:
+        if require_enabled is not None:
+            require_enabled()
+        _require_runner()
+
+    def _settle_if_stale(db: Any, purchase: QuestionPurchase) -> bool:
+        """ABS-354: force-settle a purchase orphaned in ``generating``.
+
+        In-memory ``BackgroundTasks`` (ABS-343) are lost on a server restart,
+        wedging the row in ``generating`` forever. Delegate the staleness
+        rule to ``answer_flow.settle_stale_generating`` — void the Stripe
+        hold (or refund the free credit) and flip to ``failed`` once the row
+        has sat untouched past the cutoff. The client then settles to the
+        error state and can retry instead of polling to its timeout. Does
+        NOT commit; the caller owns that. Returns True if it settled.
+        """
+        client = (
+            client_factory()
+            if payments_enabled and client_factory is not None
+            else None
+        )
+        return answer_flow.settle_stale_generating(db, purchase, client=client)
+
+    def _require_gateway() -> None:
+        if answer_gateway is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "answer_runner_unavailable",
+                    "message": (
+                        "The intake engine is not wired into the billing "
+                        "router on this deployment."
+                    ),
+                },
+            )
+
+    @router.post("/questions/intake", response_model=IntakeResponse)
+    async def post_question_intake(
+        body: IntakeRequest,
+        auth_session: Any = Depends(user_dependency),  # noqa: ARG001
+    ) -> IntakeResponse:
+        """Detect missing inputs for a question and ask for them (ABS-315).
+
+        The consultant-style step BEFORE the purchase: an LLM reads the
+        conversation, extracts whatever inputs it can, and the server
+        decides completeness against the question's required-input schema.
+        ALWAYS FREE — a single tools-less extraction, no charge, no Stripe
+        object. Part of the Answers product, so it is mounted in payments-off
+        (dormant) mode too: it only needs the LLM gateway, which is wired
+        regardless of whether Stripe is configured.
+        """
+        if require_enabled is not None:
+            require_enabled()
+        _require_gateway()
+        try:
+            question = question_for(body.question_slug)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "unknown_question",
+                    "message": f"unknown question {body.question_slug!r}",
+                },
+            ) from exc
+        # ABS-384: a disabled slug rejects intake too (503), so the
+        # consultant-style step never front-runs a report the operator has
+        # turned off.
+        _require_question_slug_enabled(question.slug)
+        result = await detect_intake(
+            answer_gateway,
+            question,
+            conversation=body.conversation,
+            provided_inputs=body.inputs,
+        )
+        return IntakeResponse(
+            question_slug=question.slug,
+            complete=result.complete,
+            inputs=result.inputs,
+            missing_required=result.missing_required,
+            missing_optional=result.missing_optional,
+            prompt=result.prompt,
+        )
+
+    async def _run_generation_job(purchase_id: int) -> None:
+        """Settle a ``generating`` purchase off the request path (ABS-343).
+
+        The answer engine turn is long (~tens of seconds) and must not be
+        tied to the browser tab that started it. ``post_run_answer`` flips
+        the purchase to ``generating`` and dispatches this as a background
+        task, so the HTTP POST returns immediately and the run continues
+        even if the user leaves — the answer saves to the case regardless.
+
+        Idempotent-by-guard: it only runs a purchase still in
+        ``generating`` (a settled row is skipped). ``run_answer`` itself
+        catches engine failures and voids the hold → ``failed``; the outer
+        ``except`` only guards infra-level errors (DB, Stripe) so a stuck
+        row still resolves to ``failed`` and the client stops polling.
+        """
+        try:
+            with open_db() as db:
+                purchase = db.get(QuestionPurchase, purchase_id)
+                if purchase is None or purchase.status != "generating":
+                    return
+                await answer_flow.run_answer(
+                    db,
+                    purchase,
+                    gateway=answer_gateway,
+                    persona=answer_persona,
+                    retrieval_factory=answer_retrieval_factory,
+                    client=client_factory() if client_factory else None,
+                )
+                commit(db)
+        except Exception:  # noqa: BLE001 — never leave a row wedged in generating
+            logger.exception(
+                "generation job failed for purchase %s", purchase_id
+            )
+            try:
+                with open_db() as db:
+                    purchase = db.get(QuestionPurchase, purchase_id)
+                    if purchase is not None and purchase.status == "generating":
+                        purchase.status = "failed"
+                        purchase.failure_reason = "internal_error"
+                        commit(db)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "could not mark purchase %s failed after job error",
+                    purchase_id,
+                )
+
+    @router.post(
+        "/questions/purchases/{purchase_id}/answer",
+        response_model=QuestionPurchaseResponse,
+    )
+    async def post_run_answer(
+        purchase_id: int,
+        background_tasks: BackgroundTasks,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionPurchaseResponse:
+        _guard()
+        # Payments-off (ABS-322) runs answers with no Stripe client; the
+        # Stripe path still requires one.
+        if payments_enabled and client_factory is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "billing_misconfigured",
+                    "message": "no Stripe client factory wired",
+                },
+            )
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase = _load_owned_purchase(db, purchase_id, user)
+            # ABS-354: a POST landing on a row orphaned in ``generating`` by
+            # a server restart force-settles it here too, so a client that
+            # retries via POST (not just GET) also escapes the wedged state.
+            if _settle_if_stale(db, purchase):
+                commit(db)
+                return _question_purchase_response(purchase)
+            # ABS-343: the engine runs as a background job. A settled OR
+            # already-generating purchase is returned as-is so a repeat POST
+            # (React StrictMode double-mount, a retry, a second tab) never
+            # fires a second engine run.
+            if purchase.status in {
+                "captured",
+                "voided",
+                "failed",
+                "generating",
+            }:
+                return _question_purchase_response(purchase)
+            if purchase.status != "authorized":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "not_authorized",
+                        "message": (
+                            f"purchase {purchase.id} is "
+                            f"{purchase.status!r}, not authorized"
+                        ),
+                    },
+                )
+            # ABS-384: an ``authorized`` (uncaptured-hold) purchase of a
+            # now-disabled slug must NOT run — 503 with the status left
+            # untouched so the hold can be drained/refunded by the operator.
+            # Already-settled purchases short-circuited above, so this only
+            # blocks a fresh run, never an existing report.
+            _require_question_slug_enabled(purchase.question_slug)
+            # Persist ``generating`` BEFORE returning so a poll / the sidebar
+            # / a second tab observe the in-flight state, then hand the run
+            # to a background task that outlives this request.
+            purchase.status = "generating"
+            response = _question_purchase_response(purchase)
+            commit(db)
+        background_tasks.add_task(_run_generation_job, purchase_id)
+        return response
+
+    @router.post(
+        "/questions/purchases/{purchase_id}/refine",
+        response_model=QuestionPurchaseResponse,
+    )
+    async def post_refine(
+        purchase_id: int,
+        body: RefineRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionPurchaseResponse:
+        _guard()
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase = _load_owned_purchase(db, purchase_id, user)
+            try:
+                await answer_flow.run_refinement(
+                    db,
+                    purchase,
+                    message=body.message,
+                    gateway=answer_gateway,
+                    persona=answer_persona,
+                    retrieval_factory=answer_retrieval_factory,
+                )
+            except NewQuestionError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "new_question",
+                        "message": (
+                            "This is a different question — please purchase "
+                            "a new answer."
+                        ),
+                        "suggested_slug": exc.suggested_slug,
+                    },
+                ) from exc
+            except WindowExhaustedError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "window_exhausted",
+                        "message": (
+                            "The refinement window for this answer is "
+                            "closed — please purchase a new answer."
+                        ),
+                        "reason": exc.reason,
+                    },
+                ) from exc
+            except RefinementNotAvailableError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "refinement_unavailable",
+                        "message": str(exc),
+                    },
+                ) from exc
+            response = _question_purchase_response(purchase)
+            commit(db)
+            return response
+
+    @router.get(
+        "/questions/purchases",
+        response_model=ReportListResponse,
+    )
+    def list_question_purchases(
+        auth_session: Any = Depends(user_dependency),
+    ) -> ReportListResponse:
+        """ABS-345: list the caller's priced "report" purchases, newest-first.
+
+        Feeds the product sidebar, which merges these report rows with the
+        conversation (chat-session) rows into one case-aware list. Read-only
+        and deliberately NOT gated by ``require_enabled``: payments-off
+        deployments still issue free-question ``QuestionPurchase`` rows
+        (ABS-322 free-start), and the user must be able to see them. Rows in
+        the pre-answer ``authorizing`` state are excluded — they have no
+        subject worth showing until checkout completes.
+        """
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            rows = (
+                db.execute(
+                    select(QuestionPurchase)
+                    .where(QuestionPurchase.user_id == user.id)
+                    .where(QuestionPurchase.status != "authorizing")
+                    .order_by(QuestionPurchase.updated_at.desc())
+                )
+                .scalars()
+                .all()
+            )
+            return ReportListResponse(
+                reports=[_report_summary(p) for p in rows]
+            )
+
+    @router.get(
+        "/questions/purchases/{purchase_id}",
+        response_model=QuestionPurchaseResponse,
+    )
+    def get_question_purchase(
+        purchase_id: int,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionPurchaseResponse:
+        if require_enabled is not None:
+            require_enabled()
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase = _load_owned_purchase(db, purchase_id, user)
+            # ABS-354: rescue a purchase orphaned in ``generating`` by a
+            # server restart (in-memory BackgroundTasks are lost on reload).
+            # Past the staleness cutoff the read force-settles it to
+            # ``failed`` and voids any hold, so the polling client stops
+            # looping instead of grinding to its 2-minute timeout.
+            if _settle_if_stale(db, purchase):
+                commit(db)
+            return _question_purchase_response(purchase)
+
+
+# -- Token wallet read surface (ABS-380) ------------------------------------
+
+
+_WALLET_TXN_DEFAULT_LIMIT = 50
+_WALLET_TXN_MAX_LIMIT = 200
+
+
+def _build_topup_catalog(
+    *,
+    settings: AdvisorBillingSettings | None,
+    payments_enabled: bool,
+) -> TopupCatalogResponse:
+    """Render the token top-up catalog for ``GET /v1/billing/topups``.
+
+    ``available`` is ``payments_enabled AND price id configured`` — a top-up
+    is purchasable only when Stripe is on *and* its Price ID is wired. On the
+    dormant router ``settings`` is ``None`` and ``payments_enabled`` False, so
+    every option is unavailable but still rendered (the pricing page shows
+    "coming soon"). Turns conversion is backend-owned (design spec D6): the
+    per-option ``approx_turns`` and the top-level ``tokens_per_turn`` are
+    computed here, never client-side.
+    """
+    pricing = get_pricing_settings()
+    per_turn = turns.tokens_per_turn()
+    options: list[TopupOption] = []
+    for topup in all_topups():
+        price_id = (
+            getattr(settings, topup.stripe_price_env_var.lower(), None)
+            if settings is not None
+            else None
+        )
+        options.append(
+            TopupOption(
+                sku=topup.sku,
+                display_name=topup.display_name,
+                tokens=topup.tokens,
+                approx_turns=turns.approx_turns_remaining(topup.tokens),
+                price_cents=topup.price_cents,
+                available=payments_enabled and bool(price_id),
+            )
+        )
+    return TopupCatalogResponse(
+        payments_enabled=payments_enabled,
+        currency=pricing.display_currency,
+        tokens_per_turn=per_turn,
+        options=options,
+    )
+
+
+def _wallet_response(user: User, *, payments_enabled: bool) -> WalletResponse:
+    """Project a ``User`` into the turns-aware wallet view.
+
+    All thresholds are read fresh from the environment (via
+    ``advisor.billing.turns``) so a re-calibration of the per-turn token
+    size / floor / warn threshold takes effect without a restart. ``low_balance``
+    and ``chat_enabled`` are computed here — never client-side — so the UI's
+    states line up with the server's pre-flight rules.
+    """
+    balance = int(user.token_balance or 0)
+    floor = turns.chat_min_balance_tokens()
+    warn = turns.low_balance_warn_tokens()
+    unlimited = bool(getattr(user, "unlimited_credits", False))
+    return WalletResponse(
+        balance_tokens=balance,
+        approx_turns_remaining=turns.approx_turns_remaining(balance),
+        tokens_per_turn=turns.tokens_per_turn(),
+        # unlimited_credits users never run "low"; everyone else flips at
+        # the warn threshold.
+        low_balance=(not unlimited) and balance <= warn,
+        warn_threshold_tokens=warn,
+        floor_tokens=floor,
+        # unlimited_credits users can always chat; everyone else needs a
+        # balance strictly above the floor (pre-flight refuses at <= floor).
+        chat_enabled=unlimited or balance > floor,
+        payments_enabled=payments_enabled,
+    )
+
+
+def _mount_wallet_read_routes(
+    router: APIRouter,
+    *,
+    user_dependency: Callable[..., Any],
+    user_resolver: Callable[[Any, Session], User],
+    open_db: Callable[[], Any],
+    payments_enabled: bool,
+) -> None:
+    """Mount ``GET /wallet`` and ``GET /wallet/transactions`` (ABS-380).
+
+    Read-only and deliberately NOT gated by ``_require_enabled``: the token
+    wallet is the beta product's balance, so it must be visible on the
+    dormant (payments-off) router too — mounted on both flavours, same as
+    ``GET /me``. Both endpoints are ownership-scoped: a caller only ever
+    reads their own balance and their own ledger rows.
+    """
+
+    @router.get("/wallet", response_model=WalletResponse)
+    def get_wallet(
+        auth_session: Any = Depends(user_dependency),
+    ) -> WalletResponse:
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            return _wallet_response(user, payments_enabled=payments_enabled)
+
+    @router.get(
+        "/wallet/transactions", response_model=WalletTransactionsResponse
+    )
+    def get_wallet_transactions(
+        auth_session: Any = Depends(user_dependency),
+        limit: int = Query(
+            default=_WALLET_TXN_DEFAULT_LIMIT,
+            ge=1,
+            le=_WALLET_TXN_MAX_LIMIT,
+            description="Page size (newest-first).",
+        ),
+        before_id: int | None = Query(
+            default=None,
+            ge=1,
+            description=(
+                "Exclusive id cursor — pass the previous page's "
+                "next_before_id to fetch older rows."
+            ),
+        ),
+    ) -> WalletTransactionsResponse:
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            rows = list_transactions(
+                db, user_id=user.id, limit=limit, before_id=before_id
+            )
+            transactions = [
+                WalletTransaction(
+                    id=r.id,
+                    entry_type=r.entry_type,
+                    amount_tokens=r.amount_tokens,
+                    balance_after=r.balance_after,
+                    reason=r.reason,
+                    created_at=r.created_at.isoformat(),
+                )
+                for r in rows
+            ]
+            # A full page means there may be more — hand back the oldest id
+            # as the next cursor. A short page is the end of the ledger.
+            next_before_id = rows[-1].id if len(rows) == limit else None
+            return WalletTransactionsResponse(
+                transactions=transactions, next_before_id=next_before_id
+            )
+
+
 # -- Router factory ---------------------------------------------------------
 
 
@@ -147,8 +1369,18 @@ def build_billing_router(
     db_session_factory: Callable[[], Any],
     user_dependency: Callable[..., Any],
     user_resolver: UserResolver,
+    answer_gateway: Any | None = None,
+    answer_persona: str | None = None,
+    answer_retrieval_factory: Callable[[], Any] | None = None,
 ) -> APIRouter:
-    """Assemble the billing router."""
+    """Assemble the billing router.
+
+    ``answer_gateway`` / ``answer_persona`` / ``answer_retrieval_factory``
+    wire the priced-question "buy an answer" run/refine endpoints
+    (ABS-312). When any is missing those endpoints return 503 — the
+    catalog/checkout/webhook endpoints still work, so the flow degrades
+    to "purchasable but not yet runnable" rather than crashing.
+    """
     router = APIRouter(prefix="/v1/billing", tags=["billing"])
 
     def _require_enabled() -> None:
@@ -178,6 +1410,11 @@ def build_billing_router(
                 close = getattr(result, "close", None)
                 if callable(close):
                     close()
+
+    def _commit(db: Any) -> None:
+        commit = getattr(db, "commit", None)
+        if callable(commit):
+            commit()
 
     @router.get("/catalog", response_model=CatalogResponse)
     def get_catalog() -> CatalogResponse:
@@ -215,12 +1452,88 @@ def build_billing_router(
             offers=offers,
         )
 
-    @router.post("/checkout/pack", response_model=CheckoutResponse)
+    @router.get("/questions", response_model=QuestionMenuResponse)
+    def get_questions() -> QuestionMenuResponse:
+        """Return the priced-question launch menu.
+
+        Public by design — the question menu is shown to anonymous
+        visitors. ``payments_enabled`` tells the frontend which unlock
+        path is live (free credit vs Stripe), and the per-question
+        ``available`` flag whether that path can run the question.
+        """
+        pricing = get_pricing_settings()
+        return QuestionMenuResponse(
+            enabled=settings.enabled,
+            payments_enabled=settings.payments_enabled,
+            conversation_enabled=_conversation_entry_enabled(),
+            currency=pricing.display_currency,
+            cad_per_usd=pricing.cad_per_usd,
+            questions=_build_question_menu(
+                settings=settings,
+                enabled=settings.enabled,
+                currency=pricing.display_currency,
+                payments_enabled=settings.payments_enabled,
+            ),
+        )
+
+    @router.post("/checkout/pack")
     def post_checkout_pack(
-        body: CheckoutPackRequest,
+        body: CheckoutPackRequest,  # noqa: ARG001 — retired; body ignored
+        auth_session: Any = Depends(user_dependency),  # noqa: ARG001
+    ) -> Any:
+        """RETIRED (ABS-390). The beta pivot replaced the case-credit
+        tier×pack catalog with the turn-based token wallet + per-slug
+        reports. The pack checkout is gone product-wide: this endpoint
+        answers 410 Gone so any lingering client sees an explicit,
+        permanent retirement rather than a transient 503. Buy turns via
+        ``POST /checkout/topup`` instead.
+        """
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={
+                "code": "packs_retired",
+                "message": (
+                    "Credit packs are retired. The turn-based token wallet "
+                    "replaced them — buy turns via POST "
+                    "/v1/billing/checkout/topup."
+                ),
+            },
+        )
+
+    # -- Token top-up catalog + checkout (ABS-381) ------------------------
+
+    @router.get("/topups", response_model=TopupCatalogResponse)
+    def get_topups() -> TopupCatalogResponse:
+        """Return the public token top-up catalog.
+
+        Unauth-accessible by design (skipAuth at the proxy): the pricing page
+        renders top-ups to signed-out visitors. ``payments_enabled`` and each
+        option's ``available`` flag tell the frontend whether checkout will
+        actually work.
+        """
+        return _build_topup_catalog(
+            settings=settings, payments_enabled=settings.payments_enabled
+        )
+
+    @router.post("/checkout/topup", response_model=CheckoutResponse)
+    def post_checkout_topup(
+        body: CheckoutTopupRequest,
         auth_session: Any = Depends(user_dependency),
     ) -> CheckoutResponse:
-        _require_enabled()
+        # Top-ups are a payments-ON feature: the trial-only posture
+        # (payments off) sells nothing, so refuse before touching Stripe.
+        if not settings.payments_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "payments_disabled",
+                    "message": (
+                        "Paid top-ups are not available on this deployment. "
+                        "The trial grants a starting balance; paid top-ups "
+                        "unlock when payments are enabled."
+                    ),
+                },
+            )
         if client_factory is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -232,19 +1545,18 @@ def build_billing_router(
         with _open_db() as db:
             user = user_resolver(auth_session, db)
             try:
-                url = start_pack_checkout(
+                url = start_topup_checkout(
                     db,
                     user,
-                    tier=body.tier,
-                    pack_sku=body.pack_sku,
+                    sku=body.sku,
                     client=client_factory(),
                     settings=settings,
                 )
-            except UnknownOfferError as exc:
+            except UnknownTopupError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
-                        "code": "unknown_offer",
+                        "code": "unknown_topup",
                         "message": str(exc),
                     },
                 ) from exc
@@ -257,6 +1569,274 @@ def build_billing_router(
                     },
                 ) from exc
             return CheckoutResponse(url=url)
+
+    # -- Priced-question "buy an answer" flow (ABS-312) --------------------
+
+    def _require_other_question_enabled() -> None:
+        # ABS-325: the off-menu "Other" free-form path is disabled at
+        # launch. Keep the engine wired but reject the public quote /
+        # checkout-other endpoints until ADVISOR_OTHER_QUESTION_ENABLED is
+        # flipped true. Catalog questions are unaffected.
+        if not settings.other_question_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "other_question_disabled",
+                    "message": (
+                        "The off-menu free-form question path is disabled "
+                        "on this deployment. Set "
+                        "ADVISOR_OTHER_QUESTION_ENABLED=true to enable it."
+                    ),
+                },
+            )
+
+    def _require_answer_gateway() -> None:
+        # The off-menu quote (ABS-316) needs only the LLM gateway — no
+        # retrieval/persona — so it gates on the gateway alone.
+        if answer_gateway is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "answer_runner_unavailable",
+                    "message": (
+                        "The quote engine is not wired into the billing "
+                        "router on this deployment."
+                    ),
+                },
+            )
+
+    @router.post(
+        "/checkout/question", response_model=QuestionCheckoutResponse
+    )
+    def post_checkout_question(
+        body: CheckoutQuestionRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> QuestionCheckoutResponse:
+        """Open a buy-an-answer purchase for one catalog question.
+
+        Branches on ``settings.payments_enabled`` (ABS-322):
+
+        * **off (default):** consume a free-question credit and return an
+          already-``authorized`` purchase with ``url=None`` — the client
+          proceeds straight to ``.../answer``. No Stripe object created.
+          A trial with no credits left → HTTP 402 (exhaustion).
+        * **on:** the unchanged Stripe authorize→capture path — create a
+          manual-capture Checkout session and return its URL.
+        """
+        _require_enabled()
+        # ABS-384: reject a disabled report slug BEFORE any credit is
+        # consumed or Stripe object is created (unknown slugs fall through
+        # to the downstream 400 unknown_question).
+        _require_question_slug_enabled(body.question_slug)
+        # Payments-off: free-credit path, no Stripe.
+        if not settings.payments_enabled:
+            with _open_db() as db:
+                user = user_resolver(auth_session, db)
+                try:
+                    purchase = answer_flow.start_question_free(
+                        db,
+                        user,
+                        question_slug=body.question_slug,
+                        inputs=body.inputs,
+                    )
+                except UnknownQuestionError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": "unknown_question",
+                            "message": str(exc),
+                        },
+                    ) from exc
+                except MissingRequiredInputsError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": "missing_required_inputs",
+                            "message": str(exc),
+                            "missing": exc.missing,
+                        },
+                    ) from exc
+                except FreeQuestionsExhaustedError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail={
+                            "code": "free_questions_exhausted",
+                            "message": (
+                                "Your free trial questions are used up. "
+                                "Paid answers are coming soon."
+                            ),
+                        },
+                    ) from exc
+                purchase_id = purchase.id
+                purchase_status = purchase.status
+                _commit(db)
+                return QuestionCheckoutResponse(
+                    url=None,
+                    purchase_id=purchase_id,
+                    status=purchase_status,
+                    payments_enabled=False,
+                )
+
+        # Payments-on: Stripe authorize→capture path.
+        if client_factory is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "billing_misconfigured",
+                    "message": "no Stripe client factory wired",
+                },
+            )
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            try:
+                purchase, url = answer_flow.start_question_checkout(
+                    db,
+                    user,
+                    question_slug=body.question_slug,
+                    inputs=body.inputs,
+                    client=client_factory(),
+                    settings=settings,
+                )
+            except UnknownQuestionError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"code": "unknown_question", "message": str(exc)},
+                ) from exc
+            except MissingRequiredInputsError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "missing_required_inputs",
+                        "message": str(exc),
+                        "missing": exc.missing,
+                    },
+                ) from exc
+            except QuestionPriceNotConfiguredError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "price_not_configured",
+                        "message": str(exc),
+                    },
+                ) from exc
+            purchase_id = purchase.id
+            purchase_status = purchase.status
+            _commit(db)
+            return QuestionCheckoutResponse(
+                url=url,
+                purchase_id=purchase_id,
+                status=purchase_status,
+                payments_enabled=True,
+            )
+
+    # -- Consultant-style intake detection (ABS-315) ----------------------
+
+    # -- Off-menu "Other" question: free quote → buy (ABS-316) ------------
+
+    @router.post(
+        "/questions/quote", response_model=QuoteResponse
+    )
+    async def post_quote_question(
+        body: QuoteRequest,
+        auth_session: Any = Depends(user_dependency),  # noqa: ARG001
+    ) -> QuoteResponse:
+        """Quote a price for an off-menu question. ALWAYS FREE.
+
+        Producing a quote never charges the customer and never creates a
+        Stripe object — it is a single (free) LLM difficulty
+        classification mapped to an anchored price. Auth-gated so it
+        can't be scraped anonymously, but no money moves.
+        """
+        _require_enabled()
+        _require_other_question_enabled()
+        _require_answer_gateway()
+        try:
+            quote = await quote_question(answer_gateway, body.question)
+        except EmptyQuestionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "empty_question", "message": str(exc)},
+            ) from exc
+        return QuoteResponse(
+            question=quote.question_text,
+            difficulty=quote.difficulty,
+            difficulty_display_name=quote.difficulty_display_name,
+            price_cents=quote.price_cents,
+            currency=quote.currency,
+            rationale=quote.rationale,
+            band_low_cents=quote.band_low_cents,
+            band_high_cents=quote.band_high_cents,
+        )
+
+    @router.post(
+        "/checkout/other", response_model=OtherCheckoutResponse
+    )
+    async def post_checkout_other(
+        body: CheckoutOtherRequest,
+        auth_session: Any = Depends(user_dependency),
+    ) -> OtherCheckoutResponse:
+        """Buy an answer to an off-menu question at the quoted price.
+
+        Re-quotes the question SERVER-SIDE (never trusting a
+        client-supplied price), then authorizes a manual-capture
+        PaymentIntent for that amount. The answer-run flow later captures
+        on a grounded answer / voids on a failed one — same
+        failed-question rule as catalog questions.
+        """
+        _require_enabled()
+        _require_other_question_enabled()
+        _require_answer_gateway()
+        if client_factory is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "billing_misconfigured",
+                    "message": "no Stripe client factory wired",
+                },
+            )
+        try:
+            quote = await quote_question(answer_gateway, body.question)
+        except EmptyQuestionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "empty_question", "message": str(exc)},
+            ) from exc
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            purchase, url = answer_flow.start_other_checkout(
+                db,
+                user,
+                quote=quote,
+                client=client_factory(),
+                settings=settings,
+            )
+            purchase_id = purchase.id
+            _commit(db)
+            return OtherCheckoutResponse(
+                url=url,
+                purchase_id=purchase_id,
+                price_cents=quote.price_cents,
+                currency=quote.currency,
+                difficulty=quote.difficulty,
+                rationale=quote.rationale,
+            )
+
+    # ABS-321/312/317: the Answers delivery surface (run / refine / get).
+    # Shared with the dormant router so the payments-off launch terminates
+    # in the dedicated answer view, not the Conversation /app chat.
+    _mount_answer_delivery_routes(
+        router,
+        user_dependency=user_dependency,
+        user_resolver=user_resolver,
+        open_db=_open_db,
+        commit=_commit,
+        answer_gateway=answer_gateway,
+        answer_persona=answer_persona,
+        answer_retrieval_factory=answer_retrieval_factory,
+        client_factory=client_factory,
+        payments_enabled=settings.payments_enabled,
+        require_enabled=_require_enabled,
+    )
 
     @router.post("/webhook")
     async def post_webhook(
@@ -333,12 +1913,26 @@ def build_billing_router(
             ]
             return BillingMeResponse(
                 enabled=settings.enabled,
+                payments_enabled=settings.payments_enabled,
                 stripe_customer_id=user.stripe_customer_id,
                 tier_balances=tier_balances,
                 total_available_credits=sum(
                     b.available for b in tier_balances
                 ),
+                free_questions_remaining=user.free_questions_remaining,
+                token_balance=int(user.token_balance or 0),
             )
+
+    # ABS-380: the token-wallet read surface (balance + ledger). Not gated by
+    # _require_enabled — the wallet is the beta product's balance and must
+    # render whenever a user is resolvable.
+    _mount_wallet_read_routes(
+        router,
+        user_dependency=user_dependency,
+        user_resolver=user_resolver,
+        open_db=_open_db,
+        payments_enabled=settings.payments_enabled,
+    )
 
     @router.get("/purchases", response_model=PurchaseHistoryResponse)
     def get_purchases(
@@ -375,15 +1969,38 @@ def build_billing_router(
     return router
 
 
-def build_dormant_billing_router() -> APIRouter:
-    """Mount a stub router that returns 503 on every billing path
-    except ``GET /catalog``, which still serves the price list so the
-    pricing page renders during the pre-Stripe phase (with
-    ``enabled=False`` so the frontend hides "Buy" buttons)."""
+def build_dormant_billing_router(
+    *,
+    db_session_factory: Callable[[], Any] | None = None,
+    user_dependency: Callable[..., Any] | None = None,
+    user_resolver: Callable[[Any, Any], Any] | None = None,
+    answer_gateway: Any | None = None,
+    answer_persona: str | None = None,
+    answer_retrieval_factory: Callable[[], Any] | None = None,
+) -> APIRouter:
+    """Mount the dormant (Stripe-off) billing router.
+
+    Conversation product (packs / Stripe checkout / webhook) is fully
+    dormant here — those endpoints 503 until Stripe is wired up. But the
+    **Answers** product is its own thing (ABS-324): when the answer engine
+    is wired (``answer_gateway`` / ``answer_persona`` /
+    ``answer_retrieval_factory``), the payments-off "buy an answer" path is
+    live — ``POST /questions/free-start`` consumes a free-question credit and
+    opens a ``QuestionPurchase`` (NOT a Case), and the answer/refine/get
+    endpoints serve the dedicated answer view. This is the decoupling: the
+    Answers free path no longer routes through the Conversation ``/app``
+    chat or reserves a CaseCredit.
+
+    ``GET /catalog`` always works (price list for the pricing page).
+    ``GET /me`` returns real per-tier credit counts when ``db_session_factory``,
+    ``user_dependency``, and ``user_resolver`` are all provided; otherwise
+    it returns an empty-balance response so the page still renders without
+    crashing.
+    """
     router = APIRouter(prefix="/v1/billing", tags=["billing"])
     pricing = get_pricing_settings()
 
-    detail = {
+    checkout_detail = {
         "code": "billing_disabled",
         "message": (
             "Billing is not enabled on this deployment. Set "
@@ -419,28 +2036,259 @@ def build_dormant_billing_router() -> APIRouter:
             offers=offers,
         )
 
+    @router.get("/questions", response_model=QuestionMenuResponse)
+    def get_questions_disabled() -> QuestionMenuResponse:
+        # The question menu renders without Stripe configured — every
+        # question's ``available`` flag is False so the frontend shows
+        # the menu but disables the "Buy" button.
+        return QuestionMenuResponse(
+            enabled=False,
+            conversation_enabled=_conversation_entry_enabled(),
+            currency=pricing.display_currency,
+            cad_per_usd=pricing.cad_per_usd,
+            questions=_build_question_menu(
+                settings=None, enabled=False, currency=pricing.display_currency
+            ),
+        )
+
     @router.post("/checkout/pack")
     def post_checkout_disabled() -> Any:
+        # ABS-390: packs are retired product-wide — the same 410 as the live
+        # router, not a transient 503, so the retirement reads identically in
+        # every posture.
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
+            status_code=status.HTTP_410_GONE,
+            detail={
+                "code": "packs_retired",
+                "message": (
+                    "Credit packs are retired. The turn-based token wallet "
+                    "replaced them — buy turns via POST "
+                    "/v1/billing/checkout/topup."
+                ),
+            },
+        )
+
+    # ABS-381: the top-up catalog renders on the dormant router too (the
+    # pricing page is public), but with payments off every option is
+    # unavailable — "coming soon" until Stripe is wired.
+    @router.get("/topups", response_model=TopupCatalogResponse)
+    def get_topups_disabled() -> TopupCatalogResponse:
+        return _build_topup_catalog(settings=None, payments_enabled=False)
+
+    @router.post("/checkout/topup")
+    def post_checkout_topup_disabled() -> Any:
+        # Trial-only posture: paid top-ups aren't purchasable until payments
+        # are enabled. Mirror the live router's ``payments_disabled`` code so
+        # the frontend renders the same "coming soon" state.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "payments_disabled",
+                "message": (
+                    "Paid top-ups are not available on this deployment. The "
+                    "trial grants a starting balance; paid top-ups unlock "
+                    "when payments are enabled."
+                ),
+            },
         )
 
     @router.post("/webhook")
     def post_webhook_disabled() -> Any:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=checkout_detail,
         )
 
-    @router.get("/me")
-    def get_me_disabled() -> Any:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
+    # ``GET /me`` — return real credit balances even when billing is
+    # dormant so the billing page shows the accurate tier breakdown for
+    # admin-granted credits. Two flavours depending on whether DB deps
+    # are wired: with deps we read from Postgres; without deps we return
+    # an empty response that the frontend renders as all-zero balances.
+    if (
+        db_session_factory is not None
+        and user_dependency is not None
+        and user_resolver is not None
+    ):
+        @contextmanager
+        def _open_db_dormant() -> Any:
+            result = db_session_factory()
+            if hasattr(result, "__enter__"):
+                with result as session:
+                    yield session
+            else:
+                try:
+                    yield result
+                finally:
+                    close = getattr(result, "close", None)
+                    if callable(close):
+                        close()
+
+        def _commit_dormant(db: Any) -> None:
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                commit()
+
+        @router.get("/me", response_model=BillingMeResponse)
+        def get_me_dormant(
+            auth_session: Any = Depends(user_dependency),
+        ) -> BillingMeResponse:
+            with _open_db_dormant() as db:
+                user = user_resolver(auth_session, db)
+                balances = credit_balance_for(db, user_id=user.id)
+                tier_balances = [
+                    TierBalance(
+                        tier=b.tier,
+                        available=b.available,
+                        reserved=b.reserved,
+                        consumed=b.consumed,
+                    )
+                    for b in balances
+                ]
+                return BillingMeResponse(
+                    enabled=False,
+                    stripe_customer_id=None,
+                    tier_balances=tier_balances,
+                    total_available_credits=sum(
+                        b.available for b in tier_balances
+                    ),
+                    free_questions_remaining=user.free_questions_remaining,
+                    token_balance=int(user.token_balance or 0),
+                )
+
+        @router.post("/questions/free-start", response_model=FreeStartResponse)
+        def post_free_start(
+            body: FreeStartRequest,
+            auth_session: Any = Depends(user_dependency),
+        ) -> FreeStartResponse:
+            """Open a free-trial **Answers** purchase (ABS-324 decoupled).
+
+            Called by the case-open form for the payments-off launch. It
+            consumes one free-question credit and opens a
+            ``QuestionPurchase`` straight in ``authorized`` state — ready
+            for ``.../answer`` — via the Answers engine
+            (``start_question_free``). It does NOT open a Case, does NOT
+            touch the Conversation CaseCredit ledger, and returns a
+            ``purchase_id`` so the browser routes to the dedicated answer
+            view (``/app/answers/{purchase_id}``), never the ``/app`` chat.
+
+            Order of operations honours the failed-question rule:
+            unworkable inputs raise BEFORE a credit is reserved. Returns
+            402 (``free_questions_exhausted``) when the trial is used up.
+            """
+            if body.question_slug is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "unknown_question",
+                        "message": "question_slug is required",
+                    },
+                )
+            # ABS-384: reject a disabled slug (503) before the free-question
+            # credit is reserved.
+            _require_question_slug_enabled(body.question_slug)
+            with _open_db_dormant() as db:
+                user = user_resolver(auth_session, db)
+                try:
+                    purchase = answer_flow.start_question_free(
+                        db,
+                        user,
+                        question_slug=body.question_slug,
+                        inputs=body.inputs,
+                    )
+                except UnknownQuestionError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={"code": "unknown_question", "message": str(exc)},
+                    ) from exc
+                except MissingRequiredInputsError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": "missing_required_inputs",
+                            "message": str(exc),
+                            "missing": exc.missing,
+                        },
+                    ) from exc
+                except FreeQuestionsExhaustedError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail={
+                            "code": "free_questions_exhausted",
+                            "message": (
+                                "Your free trial questions are used up. "
+                                "Paid answers are coming soon."
+                            ),
+                        },
+                    ) from exc
+                purchase_id = purchase.id
+                purchase_status = purchase.status
+                # Read the post-decrement count inside the transaction —
+                # the resolver may return a detached User instance, distinct
+                # from the row start_question_free actually decremented.
+                remaining = (
+                    db.scalar(
+                        select(User.free_questions_remaining).where(
+                            User.id == user.id
+                        )
+                    )
+                    or 0
+                )
+                db.commit()
+                return FreeStartResponse(
+                    purchase_id=purchase_id,
+                    status=purchase_status,
+                    free_questions_remaining=remaining,
+                )
+
+        # ABS-324: mount the Answers delivery surface (run / refine / get)
+        # on the dormant router too, wired to the same engine the chat route
+        # uses. This is what lets the payments-off free-trial answer land in
+        # its own view (/app/answers/{id}) end-to-end without billing being
+        # "enabled" in the Stripe sense.
+        _mount_answer_delivery_routes(
+            router,
+            user_dependency=user_dependency,
+            user_resolver=user_resolver,
+            open_db=_open_db_dormant,
+            commit=_commit_dormant,
+            answer_gateway=answer_gateway,
+            answer_persona=answer_persona,
+            answer_retrieval_factory=answer_retrieval_factory,
+            client_factory=None,
+            payments_enabled=False,
+            require_enabled=None,
         )
+
+        # ABS-380: the token wallet is the beta product's balance, so its
+        # read surface must be live on the dormant (payments-off) router too.
+        # payments_enabled=False here — top-ups aren't purchasable until
+        # Stripe is wired, and the wallet view reports that so the UI shows
+        # "paid top-ups coming soon" at exhaustion.
+        _mount_wallet_read_routes(
+            router,
+            user_dependency=user_dependency,
+            user_resolver=user_resolver,
+            open_db=_open_db_dormant,
+            payments_enabled=False,
+        )
+
+    else:
+        @router.get("/me", response_model=BillingMeResponse)
+        def get_me_dormant_no_db() -> BillingMeResponse:
+            # No DB wired (minimal test setups). Return empty balances
+            # rather than 503 so the frontend still renders gracefully.
+            return BillingMeResponse(
+                enabled=False,
+                stripe_customer_id=None,
+                tier_balances=[],
+                total_available_credits=0,
+            )
 
     @router.get("/purchases")
     def get_purchases_disabled() -> Any:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=checkout_detail,
         )
 
     return router

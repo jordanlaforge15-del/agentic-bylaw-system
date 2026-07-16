@@ -118,11 +118,34 @@ Standard recipe for a code change to web or advisor:
    # or for advisor:
    ssh bylaw-prod "sed -i 's|bylaw-advisor:OLD|bylaw-advisor:NEW|' /srv/bylaw/docker-compose.yml"
    ```
+5a. **Advisor image preflight smoke (HARD GATE — advisor deploys only)**:
+    Pull the new image, then run `scripts/preflight_advisor_image.sh` before swapping
+    the container. If the smoke exits non-zero, **abort the deploy** — the old
+    container is still running and no rollback is needed.
+    ```bash
+    # Pull the new image on the server (layers stay cached for the actual up -d)
+    ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml pull advisor"
+
+    # Run the import smoke under prod-mirroring runtime constraints
+    ssh bylaw-prod "docker run --rm \
+      --read-only \
+      --tmpfs /tmp:size=64m,mode=1777 \
+      --env-file /srv/bylaw/.env \
+      --network bylaw_default \
+      --cap-drop ALL \
+      --security-opt no-new-privileges:true \
+      ghcr.io/jordanlaforge15-del/bylaw-advisor:NEW \
+      python -c 'import advisor.api.main'"
+    # Expect: exit 0. Any non-zero exit means a missing import or startup-time
+    # filesystem violation — do NOT proceed to step 6.
+    ```
+    See `scripts/preflight_advisor_image.sh` for the canonical script form with
+    help text and override env vars.
 6. **Pull & restart just that service**:
    ```bash
    ssh bylaw-prod "cd /srv/bylaw && docker compose pull web && docker compose up -d web"
-   # or advisor / both:
-   ssh bylaw-prod "cd /srv/bylaw && docker compose pull && docker compose up -d advisor"
+   # Advisor: pull was already done in step 5a; just recreate the container
+   ssh bylaw-prod "cd /srv/bylaw && docker compose up -d advisor"
    ```
 7. **Verify**: `curl` against the public endpoint, check `docker compose ps`, tail logs (`docker compose logs --tail 30 <svc>`). For chat changes, send a real query.
 8. **Merge to main** and push: `git checkout main && git merge --no-ff fix/... && git push origin main`.
@@ -177,9 +200,29 @@ GOOGLE_MAPS_COMPONENTS=country:CA|administrative_area:NS|locality:Halifax
 # Advisor server bind
 ADVISOR_HOST=0.0.0.0, ADVISOR_PORT=8000
 
-# Stripe (dormant; ADVISOR_BILLING_ENABLED=false)
-ADVISOR_BILLING_ENABLED, STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PRO, STRIPE_PRICE_TEAM,
+# Billing posture (beta pivot, ABS-379). Go-live: billing ON, payments OFF.
+ADVISOR_BILLING_ENABLED=true          # master switch; false → /v1/billing/* 503
+ADVISOR_PAYMENTS_ENABLED=false        # false → paid top-ups 503; wallet funded by signup grant only
+ADVISOR_CONVERSATION_ENTRY_ENABLED=true   # /cases/new leads with the turn-based chat
+ADVISOR_OTHER_QUESTION_ENABLED=false  # off-menu free-form question kill switch
+STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET # required only when ADVISOR_PAYMENTS_ENABLED=true
+STRIPE_PRICE_TOPUP_SMALL, STRIPE_PRICE_TOPUP_MEDIUM, STRIPE_PRICE_TOPUP_LARGE  # token top-up Price IDs (ABS-381)
 ADVISOR_BILLING_SUCCESS_URL, ADVISOR_BILLING_CANCEL_URL
+# RETIRED: the legacy STRIPE_PRICE_<TIER>_<PACK> credit-pack Price IDs (quick/
+# standard/complex × payg/starter/pro/enterprise). The token wallet replaced
+# them; POST /v1/billing/checkout/pack now answers 410 packs_retired. Do NOT
+# configure them — they sell nothing.
+
+# Token wallet / turns parameters (ABS-380). Read fresh per request — a
+# re-calibration takes effect on `docker compose up -d advisor`, no rebuild.
+ADVISOR_TOKENS_PER_TURN=2500          # display divisor (backend-owned "~N turns")
+ADVISOR_SIGNUP_TOKEN_GRANT=25000      # one-time new-user wallet grant (~10 turns)
+ADVISOR_CHAT_MIN_BALANCE_TOKENS=0     # pre-flight floor: chat 402s at balance <= floor
+ADVISOR_LOW_BALANCE_WARN_TOKENS=5000  # wallet flips to "low balance" at <= warn
+ADVISOR_CHAT_MAX_ITERATIONS=20        # tool-loop cap per chat turn
+
+# Per-report gate (ABS-384): which of the five report SKUs are on sale
+ADVISOR_ENABLED_QUESTIONS   # csv slugs; `*` = all; unset/empty = NONE (deny-by-default)
 
 # Shared-password gate
 DEMO_PASSWORD=$$<password>    # NB: literal $ in value must be escaped as $$ for compose
@@ -194,6 +237,26 @@ Values referenced from the YAML as `${VAR}` are interpolated from `.env`. **Any 
 1. Add to `/srv/bylaw/.env`.
 2. **Advisor / postgres:** nothing else to do — both use `env_file: .env`. `docker compose up -d advisor` recreates the container with the new var. (Note: editing `.env` causes compose to also recreate `postgres` on the next `up -d` because it shares the same `env_file`. Postgres data lives in a named volume, so there's no data loss, but expect a brief DB restart.)
 3. **Web:** add to the `environment:` block in `/srv/bylaw/docker-compose.yml` *and* rebuild the image if it's a `NEXT_PUBLIC_*` value (those are baked at build time). Server-only web env vars only need a `docker compose up -d web`.
+
+### Enabling / disabling a report SKU (ABS-384)
+
+`ADVISOR_ENABLED_QUESTIONS` gates the five priced-report slugs
+(`permitted_use`, `development_standards`, `due_diligence`,
+`legal_nonconforming`, `variance_justification`) independently. It is read
+at **request time**, so editing `/srv/bylaw/.env` and recreating the advisor
+container (`docker compose up -d advisor`) is enough — no image rebuild.
+Format: comma-separated slugs; `*` enables all; **unset/empty enables NONE**
+(deny-by-default). A disabled slug vanishes from the `/v1/billing/questions`
+menu and its purchase paths (`checkout/question`, `questions/intake`,
+`questions/free-start`, and running an `authorized` purchase's answer) return
+`503 {code:"question_disabled"}`.
+
+**Drain before disabling.** Already-`captured` reports stay fully accessible
+regardless of this flag (the answer-delivery routes are ungated). But a
+purchase can sit in `authorized` — a Stripe hold placed, the answer not yet
+run. Disabling that slug makes its `.../answer` run 503, stranding the hold.
+So before turning a slug off, drain (run or void) any `authorized`
+(uncaptured-hold) purchases for it; then flip the flag.
 
 ## Database operations
 
@@ -286,6 +349,29 @@ docker compose -f /srv/bylaw/docker-compose.yml exec -T postgres \
 ```
 
 Tracked as a deploy follow-up: schedule this in cron and ship to a Hetzner Storage Box. For now, run by hand before risky migrations.
+
+### Running ops scripts
+
+Data processing scripts (e.g. `scripts/backfill_parcels.py`, `scripts/inspect_zoning_canonical.py`, `scripts/pilot_variance_report.py`) are built into the advisor image and can be run against the production database via:
+
+```bash
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor python scripts/<name>.py"
+```
+
+Examples:
+
+```bash
+# Backfill parcels from the GIS layer
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor python scripts/backfill_parcels.py"
+
+# Inspect the zoning bylaw canonical names
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor python scripts/inspect_zoning_canonical.py"
+
+# Generate variance report
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor python scripts/pilot_variance_report.py"
+```
+
+Scripts inherit the same database connection and environment variables (`.env` keys) as the running advisor container, so any `DATABASE_URL`, `GOOGLE_MAPS_API_KEY`, or other credentials needed are already available.
 
 ## Auth modes
 

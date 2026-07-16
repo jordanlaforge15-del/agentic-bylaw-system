@@ -1,6 +1,7 @@
 .env
 .venv
 .venv/
+backups/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -25,10 +26,14 @@ openai_apikey
 # artifacts that the URL-based ingester writes.
 data/.cache/
 
+# Clone-DB env files written by scripts/clone-dev-db.sh.
+.env.clone.*
+
 # Local scratch — never committed
 tmp/
 .claude/*
-# …except shared skills, which ship with the repo.
+# …except shared config and skills, which ship with the repo.
+!.claude/settings.json
 !.claude/skills/
 .DS_Store
 *.swp
@@ -38,3 +43,18 @@ tmp/
 
 # Night Manager runtime state (logs, state, reports)
 .night-manager/
+
+# Typo guard: a stray .claire/ directory appeared in the past (vs .claude/).
+.claire/
+
+# Layer1 audit + pipeline runtime outputs (separate from .night-manager/).
+logs/
+abs-learning/output/
+
+# Per-user submission storage written by the advisor app at runtime.
+data/submissions/
+
+# Regenerated on every e2e run by scripts/seed_e2e_submission_ifc.py;
+# tracking it would dirty the worktree every `make e2e` and trip the
+# Night Manager merge precondition (see ABS-157).
+web/e2e/fixtures/submission-demo.ifc

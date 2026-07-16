@@ -69,6 +69,18 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             "location={civic_number: '6321', street: 'Quinpool Road'}. "
             "If the response contains a 'notes' array warning that the "
             "location was missing, re-issue the call with the slot set.\n\n"
+            "CASE-OPEN SHORTCUT — get_address_profile.\n"
+            "When a case-bound conversation opens on a specific address, "
+            "parcel, or named place, call get_address_profile(address) FIRST. "
+            "It resolves the address and returns the zone, overlay precincts "
+            "(height, FAR), heritage status, bonus-zoning eligibility, whether "
+            "the lot abuts a Schedule 7 pedestrian-oriented commercial street "
+            "(the s.38(2)-vs-s.69(d) ground-floor-use branch), and "
+            "citations in a single call — collapsing what would otherwise be "
+            "several search_bylaw_evidence round-trips into one. Spend the "
+            "rest of the tool budget on the actual question. If the profile "
+            "comes back with unresolvable=true, fall back to "
+            "search_bylaw_evidence with the location slot.\n\n"
             "WHEN TO USE evaluate_submission_against_bylaws.\n"
             "Use this fifth tool ONLY when the user has stated specific "
             "proposed attribute values (height, setbacks, use class, "
@@ -112,15 +124,38 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
 
     @mcp.tool()
     def lookup_citation(
-        citation_path: str,
+        citation_path: str | None = None,
+        structured: dict[str, Any] | None = None,
         document_id: int | None = None,
         include_context: bool = True,
         include_cross_references: bool = True,
         include_tables: bool = True,
     ) -> dict:
-        """Use this when the user or agent already knows a citation and needs the authoritative source fragment."""
+        """Retrieve the authoritative source fragment for a citation.
+
+        Provide EXACTLY ONE of:
+          - ``citation_path``: the exact path string, e.g. '4.2' or
+            'Schedule B > 3'. Use when you already know the path.
+          - ``structured``: a structured query that the server resolves
+            internally, so you don't have to guess the format:
+              * {"kind": "zone_attribute", "zone": "HR-2", "attribute": "max_height"}
+              * {"kind": "schedule_row", "schedule": "Table 1A", "row": "HR-2"}
+              * {"kind": "permitted_use", "use": "Restaurant use", "zone": "HR-2"}
+
+        Supplying both, or neither, is a validation error. Accepted
+        ``attribute`` values: max_height, max_height_storeys,
+        max_lot_coverage, min_front_setback, min_side_setback,
+        min_rear_setback, max_far, permitted_uses, parking_requirement.
+
+        The ``permitted_use`` kind addresses a single use × zone cell of the
+        permission matrix and returns its result under the ``permitted_use``
+        key — a typed permission (permitted / conditional / not_permitted)
+        plus any footnote condition, or a typed indeterminate result with a
+        reason when the use or zone isn't in the matrix.
+        """
         request = CitationLookupRequest(
             citation_path=citation_path,
+            structured=structured,
             document_id=document_id,
             include_context=include_context,
             include_cross_references=include_cross_references,
@@ -128,7 +163,12 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         )
         with session_scope(db_url) as session:
             service = _service(session)
-            return service.lookup_citation(request).model_dump(mode="json")
+            response = service.lookup_citation(request)
+            # ABS-261: envelope unwrapping for MCP backward compat —
+            # see openai_tools.py for the rationale.
+            if response.match is not None:
+                return response.match.model_dump(mode="json")
+            return response.model_dump(mode="json")
 
     @mcp.tool()
     def search_bylaw_evidence(
@@ -142,10 +182,10 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         page_end: int | None = None,
         location: dict[str, Any] | None = None,
         attribute_tag_filter: list[str] | None = None,
-        include_context: bool = True,
-        include_cross_references: bool = True,
-        include_tables: bool = True,
-        include_datasets: bool = True,
+        include_context: bool = False,
+        include_cross_references: bool = False,
+        include_tables: bool = False,
+        include_datasets: bool = False,
         limit: int = 8,
     ) -> dict:
         """Search for citation-grounded bylaw evidence.
@@ -222,6 +262,89 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         with session_scope(db_url) as session:
             service = _service(session)
             return service.search(request).model_dump(mode="json")
+
+    @mcp.tool()
+    def get_address_profile(address: str) -> dict:
+        """Use this at the start of a case-bound conversation when the user mentions an address, parcel, or named place.
+
+        Returns the zone, overlay precincts, heritage status, and citations
+        in one call. Saves multiple lookups.
+
+        The ``address`` argument is free text in the same shape the
+        ``search_bylaw_evidence`` ``location`` slot accepts — a civic address
+        ("100 Robie Street") or a parcel id ("PID 00012345"). The tool
+        resolves the address spatially, then composes the zone plus every
+        linked overlay (height precinct, FAR precinct, heritage district,
+        bonus zoning, Schedule 7 pedestrian-oriented commercial street) into a
+        single ``AddressProfile``. ``abuts_pedestrian_street`` is a definitive
+        true/false (not just null) whenever a Schedule 7 dataset is in scope,
+        so the ground-floor-use answer can pick s.38(2) or s.69(d) without
+        hedging both scenarios.
+
+        If the address can't be resolved, the response carries
+        ``unresolvable: true`` with empty citations rather than an error —
+        fall back to the thin tools (``search_bylaw_evidence``) in that case.
+        """
+        with session_scope(db_url) as session:
+            service = _service(session)
+            return service.get_address_profile(address).model_dump(mode="json")
+
+    @mcp.tool()
+    def get_adjacent_zoning(address: str) -> dict:
+        """Use this when a setback (or any standard) is conditional on the zone of an ABUTTING property.
+
+        Returns the subject parcel's own zone plus every abutting parcel's
+        zone (with a coarse compass direction), so you can resolve the
+        governing setback row and give a DEFINITIVE pass/fail instead of
+        deferring the abutting-zone question to the customer — e.g. a Downtown
+        (DH) lot whose required side yard is 0.0 m where it abuts another DH
+        lot but greater where it abuts a residential zone.
+
+        The ``address`` argument is free text in the same shape the
+        ``search_bylaw_evidence`` ``location`` slot accepts — a civic address
+        ("1250 Robie Street") or a parcel id ("PID 00012345").
+
+        ``distinct_neighbour_zones`` is the set of zones among the neighbours:
+        a single-element list means every abutting lot shares one zone, so the
+        abutting-zone condition is unambiguous. A neighbour whose ``zone`` is
+        null abuts but its centroid matched no zone polygon (sliver /
+        right-of-way). If the address can't be resolved or no parcels dataset
+        is ingested, the response carries ``unresolvable: true`` or a ``note``
+        — fall back to ``search_bylaw_evidence`` in that case.
+        """
+        with session_scope(db_url) as session:
+            service = _service(session)
+            return service.get_adjacent_zoning(address).model_dump(mode="json")
+
+    @mcp.tool()
+    def get_zone_profile(
+        zone: str,
+        include: list[str] | None = None,
+    ) -> dict:
+        """Use this when the user asks about a specific zone's standards.
+
+        Returns a one-call structured ``ZoneProfile`` — height, lot
+        coverage, setbacks and floor area ratio under ``dimensions``;
+        permitted / not-permitted use lists under ``uses``; parking
+        applicability under ``parking``; and a ``citations`` list that
+        backs every populated field.
+
+        Prefer this over issuing several ``search_bylaw_evidence`` calls
+        for the same zone — it collapses that sequence into one call.
+        The implementation still composes semantic retrieval internally,
+        so edge cases the DTO doesn't anticipate can fall back to
+        ``search_bylaw_evidence``.
+
+        ``include`` filters the sections (any of ``dimensions``, ``uses``,
+        ``parking``, ``citations``); omit it for everything. A field is
+        ``null`` when the bylaw is silent or retrieval couldn't extract it
+        confidently; ``unknown_zone`` is ``true`` when the zone wasn't
+        found (no exception is raised). For drill-down on a single
+        citation, pass its ``citation_path`` to ``lookup_citation``.
+        """
+        with session_scope(db_url) as session:
+            service = _service(session)
+            return service.get_zone_profile(zone=zone, include=include).model_dump(mode="json")
 
     @mcp.tool()
     def evaluate_submission_against_bylaws(
@@ -333,6 +456,46 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             )
             response = evaluator.evaluate(request)
             return response.to_json()
+
+    @mcp.tool()
+    def bylaw_query(
+        intent: str,
+        address: str | None = None,
+        zone: str | None = None,
+        proposed: dict[str, Any] | None = None,
+    ) -> dict:
+        """Use this when the user has stated both a location AND a specific intent (feasibility, use permission, dimensional check).
+
+        Saves multiple round-trips by composing the full answer
+        server-side. For exploratory questions where you don't yet know the
+        intent, use the thin tools.
+
+        ``intent`` is one of ``zone_feasibility``, ``address_lookup``,
+        ``use_check``, ``dimensional_check``:
+
+        * ``zone_feasibility`` (pass ``zone``) — full ``ZoneProfile``
+          (dimensions + uses + parking) in one call.
+        * ``address_lookup`` (pass ``address``) — the ``AddressProfile``
+          (zone + overlays + citations).
+        * ``use_check`` (pass ``zone``) — the zone's permitted /
+          not-permitted use lists.
+        * ``dimensional_check`` (pass ``zone`` and ``proposed`` such as
+          ``{"height_m": 80}``) — the dimensions plus a ``ConformanceCheck``
+          flagging each proposed value pass / fail / inconclusive.
+
+        Internally dispatches to ``get_zone_profile`` / ``get_address_profile``
+        (no duplicated retrieval logic). An ``intent`` outside the list
+        returns ``unrecognized_intent: true`` with a ``suggested_tools``
+        list rather than an error.
+        """
+        with session_scope(db_url) as session:
+            service = _service(session)
+            return service.bylaw_query(
+                intent=intent,
+                address=address,
+                zone=zone,
+                proposed=proposed,
+            ).model_dump(mode="json")
 
     @mcp.resource("bylaw://documents")
     def documents_resource() -> str:

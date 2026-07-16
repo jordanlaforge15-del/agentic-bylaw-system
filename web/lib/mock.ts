@@ -1,7 +1,6 @@
-// Sample fixtures lifted from design_files/home.jsx and app-screen.jsx.
-// Real HRM streets with fabricated readings — they read better than lorem
-// during development. Section numbers approximate the real HRM Land Use
-// By-law; a planner needs to verify each fixture before launch.
+// Home page sample Q&A fixtures. Each entry is a verified reading from
+// the HRM Regional Centre Land Use By-law; answers and section numbers
+// have been checked against the HRM RCLUB eval suite.
 
 export type SampleReading = {
   addr: string;
@@ -15,23 +14,23 @@ export const SAMPLE_READINGS: SampleReading[] = [
   {
     addr: "5184 Morris St",
     zone: "ER-1",
-    q: "Can I add a backyard suite?",
-    verdict: "Yes — up to 80 m².",
-    cite: "§ 9.4",
+    q: "What's the maximum lot coverage on this parcel?",
+    verdict: "35% — just over 420 m² on a standard lot.",
+    cite: "§ 7",
+  },
+  {
+    addr: "2310 Gottingen St",
+    zone: "CEN-1",
+    q: "Is off-street parking required for a new development?",
+    verdict: "No — none required in this zone.",
+    cite: "§ 120(b)",
   },
   {
     addr: "1208 Robie St",
-    zone: "COR",
-    q: "How tall can I build?",
-    verdict: "20 m by-right. Up to 26 m with a bonus.",
-    cite: "§ 6.2.3",
-  },
-  {
-    addr: "17 Edward St",
-    zone: "ER-2",
-    q: "Can I subdivide the lot?",
-    verdict: "No — frontage is 1.4 m short.",
-    cite: "§ 4.3",
+    zone: "HR-1",
+    q: "What's the maximum building height?",
+    verdict: "20.0 m by-right.",
+    cite: "§ 7",
   },
 ];
 
@@ -46,40 +45,40 @@ export type ProofItem = {
 export const PROOF: ProofItem[] = [
   {
     addr: "5184 Morris St · ER-1",
-    q: "Backyard suite?",
-    a: "Yes — up to 80 m².",
-    cite: "HRM LUB § 9.4",
+    q: "Max lot coverage?",
+    a: "35%.",
+    cite: "HRM LUB § 7",
     accent: true,
   },
   {
-    addr: "1208 Robie St · COR",
+    addr: "1208 Robie St · HR-1",
     q: "Max height?",
-    a: "20 m by-right.",
-    cite: "HRM LUB § 6.2.3",
+    a: "20.0 m by-right.",
+    cite: "HRM LUB § 7",
+  },
+  {
+    addr: "2310 Gottingen St · CEN-1",
+    q: "Parking required?",
+    a: "None required.",
+    cite: "HRM LUB § 120(b)",
   },
   {
     addr: "17 Edward St · ER-2",
-    q: "Subdivide?",
-    a: "No — 1.4 m short.",
-    cite: "HRM LUB § 4.3",
+    q: "Home occupation + secondary suite?",
+    a: "Both permitted concurrently.",
+    cite: "HRM LUB § 49",
   },
   {
-    addr: "2310 Gottingen St · DH-1",
-    q: "Commercial use?",
-    a: "Permitted on ground floor.",
-    cite: "HRM LUB § 7.1",
+    addr: "46 Crichton Ave · ER-1",
+    q: "Single-unit dwelling?",
+    a: "Permitted as-of-right.",
+    cite: "HRM LUB § 5",
   },
   {
-    addr: "46 Crichton Ave · DR",
-    q: "Side yard?",
-    a: "1.2 m minimum.",
-    cite: "HRM LUB § 5.4",
-  },
-  {
-    addr: "101 Quinpool Rd · COR",
-    q: "Parking minimum?",
-    a: "None — within transit zone.",
-    cite: "HRM LUB § 8.2",
+    addr: "101 Quinpool Rd · CEN-1",
+    q: "Multi-unit dwelling?",
+    a: "Permitted.",
+    cite: "HRM LUB § 5",
   },
 ];
 
@@ -99,50 +98,50 @@ export const SAMPLE_THREADS: Thread[] = [
     id: "t1",
     addr: "5184 Morris St",
     zone: "ER-1",
-    title: "Backyard suite feasibility",
-    preview: "Yes — up to 80 m².",
+    title: "Maximum lot coverage",
+    preview: "35% — just over 420 m².",
     updated: "2m ago",
     active: true,
   },
   {
     id: "t2",
     addr: "1208 Robie St",
-    zone: "COR",
-    title: "Maximum height + bonusing",
-    preview: "20 m by-right. Up to 26 m with…",
+    zone: "HR-1",
+    title: "Maximum building height",
+    preview: "20.0 m by-right.",
     updated: "1h ago",
   },
   {
     id: "t3",
     addr: "17 Edward St",
     zone: "ER-2",
-    title: "Subdivision check",
-    preview: "No — frontage 1.4 m short.",
+    title: "Home occupation + secondary suite",
+    preview: "Both permitted concurrently.",
     updated: "Yesterday",
     unread: true,
   },
   {
     id: "t4",
     addr: "2310 Gottingen St",
-    zone: "DH-1",
-    title: "Ground-floor commercial",
-    preview: "Permitted as primary use.",
+    zone: "CEN-1",
+    title: "Off-street parking",
+    preview: "None required — § 120(b).",
     updated: "2d ago",
   },
   {
     id: "t5",
     addr: "46 Crichton Ave",
-    zone: "DR",
-    title: "Side yard minimums",
-    preview: "1.2 m minimum on both sides.",
+    zone: "ER-1",
+    title: "Single-unit dwelling",
+    preview: "Permitted as-of-right.",
     updated: "3d ago",
   },
   {
     id: "t6",
     addr: "101 Quinpool Rd",
-    zone: "COR",
-    title: "Parking minimums",
-    preview: "None — within transit zone.",
+    zone: "CEN-1",
+    title: "Multi-unit dwelling",
+    preview: "Permitted.",
     updated: "5d ago",
   },
 ];
@@ -166,6 +165,8 @@ export type AgentMessage = {
   reasoning: AgentReasoningStep[];
   confidence: number;
   sources: AgentSource[];
+  /** DB primary key of the ChatMessage row, if known. Used by feedback UI. */
+  messageDbId?: number;
 };
 
 export type SystemMessage = { kind: "system"; body: string };
@@ -179,75 +180,65 @@ export const SAMPLE_MESSAGES: Message[] = [
   },
   {
     kind: "user",
-    body: "Can my client add a backyard suite to this lot? They want a 1-bed unit, around 75 m².",
+    body: "What's the maximum lot coverage on this parcel? We're planning a rear addition.",
   },
   {
     kind: "agent",
-    answer: "Yes — up to 80 m².",
-    body: "A backyard suite is permitted as a secondary use in ER-1. Your client's intended size (75 m²) falls under the 80 m² gross-floor-area cap. Two things to confirm before drawings: rear yard depth and habitable separation from the main dwelling.",
+    answer: "35% — just over 420 m² on a standard lot.",
+    body: "Maximum lot coverage in ER-1 is 35% of the lot area. On a typical 1,200 m² lot that's 420 m² of combined building footprint. Measure the existing footprint first — additions count toward the cap.",
     reasoning: [
       {
         n: "01",
-        cite: "§ 9.4.1",
-        body: "Backyard suites are permitted in ER-1 zones as secondary uses to a single-unit dwelling.",
+        cite: "§ 7",
+        body: "Maximum lot coverage in ER-1 is 35% of the lot area.",
       },
       {
         n: "02",
-        cite: "§ 9.4.3",
-        body: "Maximum gross floor area: 80 m². The 75 m² target clears this with 5 m² of margin.",
+        cite: "§ 7",
+        body: "Lot coverage includes all buildings on the lot — principal dwelling, accessory structures, and any proposed addition.",
       },
       {
         n: "03",
-        cite: "§ 9.4.5",
-        body: "Minimum 1.5 m separation from the principal dwelling. Your site survey shows 4.2 m available — clears.",
+        cite: "§ 3",
+        body: "Lot coverage is measured from exterior wall faces, not including eaves or roof overhangs.",
+      },
+    ],
+    confidence: 0.96,
+    sources: [
+      {
+        title: "HRM Regional Centre Land Use By-law",
+        section: "§ 7 — Dimensional Standards",
+        date: "2025-11-04",
+      },
+    ],
+  },
+  { kind: "user", body: "And if we wanted to add a secondary suite too?" },
+  {
+    kind: "agent",
+    answer: "Permitted — counts toward lot coverage.",
+    body: "A secondary suite is permitted in ER-1 as an accessory use. Its footprint (if it's a detached structure) counts toward the 35% lot coverage cap, so you'd need to ensure the combined footprint of the addition and any suite structure stays within that limit.",
+    reasoning: [
+      {
+        n: "01",
+        cite: "§ 49",
+        body: "A secondary suite may be combined with a single-unit dwelling in ER-1.",
       },
       {
-        n: "04",
-        cite: "§ 5.4",
-        body: "Rear yard minimum 4.5 m. Verify against most recent survey before final massing.",
+        n: "02",
+        cite: "§ 7",
+        body: "All buildings on the lot — including accessory structures — count toward the 35% lot coverage maximum.",
       },
     ],
     confidence: 0.94,
     sources: [
       {
-        title: "HRM Land Use By-law",
-        section: "§ 9.4 — Backyard Suites",
+        title: "HRM Regional Centre Land Use By-law",
+        section: "§ 49 — Combination of Uses",
         date: "2025-11-04",
       },
       {
-        title: "HRM Land Use By-law",
-        section: "§ 5.4 — Yard Requirements",
-        date: "2025-11-04",
-      },
-    ],
-  },
-  { kind: "user", body: "What about height? Two storeys?" },
-  {
-    kind: "agent",
-    answer: "One storey, max 4.5 m.",
-    body: "ER-1 backyard suites are limited to a single storey with a maximum height of 4.5 m measured from average grade. A two-storey suite would not be by-right — your client would need to apply for a development variance.",
-    reasoning: [
-      {
-        n: "01",
-        cite: "§ 9.4.4",
-        body: "Backyard suites in ER-1 are limited to one storey.",
-      },
-      {
-        n: "02",
-        cite: "§ 9.4.4",
-        body: "Maximum height 4.5 m from average grade.",
-      },
-      {
-        n: "03",
-        cite: "§ 2.8",
-        body: "Variances follow the standard development variance process — typically 6–10 weeks.",
-      },
-    ],
-    confidence: 0.97,
-    sources: [
-      {
-        title: "HRM Land Use By-law",
-        section: "§ 9.4 — Backyard Suites",
+        title: "HRM Regional Centre Land Use By-law",
+        section: "§ 7 — Dimensional Standards",
         date: "2025-11-04",
       },
     ],

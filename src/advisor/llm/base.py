@@ -201,6 +201,82 @@ class MessageStopEvent(BaseModel):
     type: Literal["message_stop"] = "message_stop"
 
 
+# ABS-266: Tool-loop observability.
+#
+# The synthetic SSE stream above mirrors a single Anthropic Messages
+# API call — perfect for the chat UI but blind to the multi-iteration
+# tool-use loop running underneath. The events that follow surface the
+# loop's structure (iterations, per-iteration usage, terminated reason,
+# tool-call list) so test runners and dev tooling can audit cost and
+# behaviour without scraping server logs.
+#
+# Why per-iteration usage matters: a single user turn may produce many
+# `gateway.complete()` calls (one per loop iteration). The final
+# `MessageDeltaEvent.usage` only reflects the LAST call. Without
+# per-iteration usage, an out-of-band caller would under-report token
+# spend by the size of the (iterations - 1) hidden calls — measured at
+# ~1.89× on a 6-turn TC-005 run.
+
+
+class ToolCallMetric(BaseModel):
+    """One tool invocation as it happened inside the loop.
+
+    ``latency_ms`` is handler-only wall time (gateway round-trips are
+    on ``IterationMetric``). Order in the parent event mirrors the
+    order the loop dispatched the calls; for an iteration that asked
+    for multiple tools at once, they appear in the order returned by
+    the model's response content.
+    """
+
+    name: str
+    is_error: bool = False
+    latency_ms: int = 0
+
+
+class IterationMetric(BaseModel):
+    """One ``gateway.complete()`` round inside the tool loop.
+
+    ``iteration`` is 1-indexed and matches the iteration counter in
+    ``advisor.llm.tool_loop.run_tool_loop``. ``usage`` is the LLM
+    provider's reported usage for this specific round (NOT cumulative);
+    sum across the list to get the turn's total.
+    """
+
+    iteration: int
+    usage: TokenUsage | None = None
+    latency_ms: int = 0
+    tool_call_count: int = 0
+
+
+class ToolLoopMetricsEvent(BaseModel):
+    """End-of-turn rollup of every internal LLM call and tool dispatch.
+
+    Emitted ONCE per user message, after the tool loop has settled and
+    the synthetic content stream has finished. The chat UI ignores it
+    (Anthropic-shape parser doesn't recognise the type); test runners
+    and dev consoles use it to compute true cost, diagnose iteration
+    caps, and surface tool-error patterns.
+
+    ``terminated_reason``:
+        ``"end_turn"`` — model produced a natural text answer
+        ``"iteration_cap"`` — we hit ``max_iterations`` and forced synthesis
+        ``"cost_circuit_trip"`` — the pre-flight token estimator caught
+            a runaway turn before submitting it
+
+    ``total_usage`` is the sum of every ``per_iteration[i].usage``,
+    including the forced-synthesis round when one happened. Use this
+    for billing-attribution; use ``per_iteration`` to debug staircase
+    growth in context size.
+    """
+
+    type: Literal["tool_loop_metrics"] = "tool_loop_metrics"
+    iterations: int
+    terminated_reason: str
+    total_usage: TokenUsage | None = None
+    per_iteration: list[IterationMetric] = Field(default_factory=list)
+    tool_calls: list[ToolCallMetric] = Field(default_factory=list)
+
+
 StreamEvent = (
     MessageStartEvent
     | ContentBlockStartEvent
@@ -208,6 +284,7 @@ StreamEvent = (
     | ContentBlockStopEvent
     | MessageDeltaEvent
     | MessageStopEvent
+    | ToolLoopMetricsEvent
 )
 
 

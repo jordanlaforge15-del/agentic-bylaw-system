@@ -88,23 +88,94 @@ export const E2E_DEMO_PASSWORD =
   process.env.E2E_DEMO_PASSWORD || "e2e-demo-pw";
 
 /**
- * Test fixture that auto-mints an `abs_demo` cookie on every browser
- * context before the first navigation. The legacy shared-password
- * gate in `web/proxy.ts` redirects /app and /admin to /access without
- * this cookie; the e2e suite sets `DEMO_PASSWORD` on the dev server
- * so the gate has a known value to authenticate against.
+ * Test fixture that auto-mints auth cookies on every browser context
+ * before the first navigation. Sets both the legacy abs_demo cookie
+ * (fallback for /api/access) AND a Clerk mock JWT for the demo user
+ * so the Clerk middleware branch in proxy.ts and the JWT verification
+ * path in FastAPI are exercised on every test.
  */
+async function postWithRetry(
+  context: any,
+  url: string,
+  data: any,
+  maxAttempts: number = 3,
+): Promise<any> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await context.request.post(url, { data });
+      if (res.ok()) {
+        return res;
+      }
+      const text = await res.text();
+      lastError = new Error(
+        `HTTP ${res.status()} ${text}`,
+      );
+      // Only retry on 5xx or transient errors; don't retry 4xx
+      if (res.status() < 500) {
+        throw lastError;
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxAttempts - 1) {
+        // Wait before retrying: 100ms * (attempt + 1)
+        await new Promise((resolve) =>
+          setTimeout(resolve, 100 * (attempt + 1)),
+        );
+      }
+    }
+  }
+  throw lastError || new Error("POST request failed");
+}
+
 export const test = base.extend<{ authedContext: void }>({
   authedContext: [
     async ({ context, baseURL }, use) => {
       const target = baseURL ?? E2E_BASE_URL;
-      const res = await context.request.post(`${target}/api/access`, {
-        data: { gate: "demo", password: E2E_DEMO_PASSWORD },
-      });
+      // Mint the legacy password-gate cookie.
+      const res = await postWithRetry(
+        context,
+        `${target}/api/access`,
+        { gate: "demo", password: E2E_DEMO_PASSWORD },
+      );
       if (!res.ok()) {
         throw new Error(
           `failed to mint abs_demo cookie: HTTP ${res.status()} ${await res.text()}`,
         );
+      }
+      // Mint a test JWT for the demo user so requests through the
+      // Next.js proxy exercise the Clerk JWT auth path end-to-end.
+      const jwtRes = await postWithRetry(
+        context,
+        `${E2E_API_URL}/v1/_test/mint-jwt`,
+        {
+          sub: DEMO_USER_ID,
+          email: `${DEMO_USER_ID}@e2e.test`,
+        },
+      );
+      if (jwtRes.ok()) {
+        const { token } = (await jwtRes.json()) as { token: string };
+        const url = new URL(target);
+        await context.addCookies([
+          {
+            name: "abs_test_sub_user_id",
+            value: DEMO_USER_ID,
+            domain: url.hostname,
+            path: "/",
+            httpOnly: false,
+            secure: false,
+            sameSite: "Lax",
+          },
+          {
+            name: "abs_test_clerk_jwt",
+            value: token,
+            domain: url.hostname,
+            path: "/",
+            httpOnly: false,
+            secure: false,
+            sameSite: "Lax",
+          },
+        ]);
       }
       await use();
     },

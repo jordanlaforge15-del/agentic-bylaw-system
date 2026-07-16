@@ -1,0 +1,122 @@
+{
+  "type": "FeatureCollection",
+  "crs": { "type": "name", "properties": { "name": "EPSG:4326" } },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "SEGMENT_ID": "S7-QUINPOOL-01",
+        "STREET": "Quinpool Road",
+        "SCHEDULE": "Schedule 7",
+        "EXTENT": "Armdale Rotary to Robie Street",
+        "SOURCE": "RCLUB Schedule 7 (Map 19) — digitized from the map-only schedule"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-63.610450, 44.645980],
+          [-63.605200, 44.646190],
+          [-63.599800, 44.646360],
+          [-63.594100, 44.646520],
+          [-63.588300, 44.646690],
+          [-63.585900, 44.646760]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "SEGMENT_ID": "S7-SPRINGGARDEN-01",
+        "STREET": "Spring Garden Road",
+        "SCHEDULE": "Schedule 7",
+        "EXTENT": "Robie Street to Barrington Street",
+        "SOURCE": "RCLUB Schedule 7 (Map 19) — digitized from the map-only schedule"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-63.585600, 44.641900],
+          [-63.581000, 44.642550],
+          [-63.576600, 44.643150],
+          [-63.573300, 44.643620],
+          [-63.571500, 44.643880]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "SEGMENT_ID": "S7-GOTTINGEN-01",
+        "STREET": "Gottingen Street",
+        "SCHEDULE": "Schedule 7",
+        "EXTENT": "Cogswell Street to North Street",
+        "SOURCE": "RCLUB Schedule 7 (Map 19) — digitized from the map-only schedule"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-63.586400, 44.652400],
+          [-63.587100, 44.655100],
+          [-63.587900, 44.657900],
+          [-63.588600, 44.660300]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "SEGMENT_ID": "S7-AGRICOLA-01",
+        "STREET": "Agricola Street",
+        "SCHEDULE": "Schedule 7",
+        "EXTENT": "North Street to Young Street",
+        "SOURCE": "RCLUB Schedule 7 (Map 19) — digitized from the map-only schedule"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-63.592300, 44.658700],
+          [-63.593100, 44.661000],
+          [-63.593900, 44.663400],
+          [-63.594700, 44.665700]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "SEGMENT_ID": "S7-BARRINGTON-01",
+        "STREET": "Barrington Street",
+        "SCHEDULE": "Schedule 7",
+        "EXTENT": "Spring Garden Road to Cornwallis Street",
+        "SOURCE": "RCLUB Schedule 7 (Map 19) — digitized from the map-only schedule"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-63.571300, 44.643950],
+          [-63.573000, 44.647800],
+          [-63.574800, 44.651600],
+          [-63.576600, 44.655300]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "SEGMENT_ID": "S7-DUTCHVILLAGE-01",
+        "STREET": "Dutch Village Road",
+        "SCHEDULE": "Schedule 7",
+        "EXTENT": "Joseph Howe Drive to Chebucto Road",
+        "SOURCE": "RCLUB Schedule 7 (Map 19) — digitized from the map-only schedule"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-63.628900, 44.649300],
+          [-63.629400, 44.651600],
+          [-63.629900, 44.653900]
+        ]
+      }
+    }
+  ]
+}

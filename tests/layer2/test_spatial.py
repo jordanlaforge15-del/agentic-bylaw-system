@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -13,7 +14,9 @@ from layer2.models.enums import RetrievalChannel, SourceType
 from layer2.models.schemas import CandidateFragment
 from layer2.retrieval.datasets import expand_datasets
 from layer2.retrieval.spatial import (
+    FeatureMatch,
     ResolvedLocation,
+    _feature_to_candidate,
     expand_spatial,
     query_features,
 )
@@ -274,3 +277,60 @@ def test_invalid_location_geometry_returns_empty_match_list(linked_dataset):
             session, dataset_id=linked_dataset["dataset_id"], location=bogus
         )
     assert matches == []
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _feature_to_candidate text rendering (no DB required)
+# ---------------------------------------------------------------------------
+
+def _make_match(canonical: dict, feature_key: str = "F1") -> FeatureMatch:
+    feature = MagicMock()
+    feature.id = 1
+    feature.external_dataset_id = 99
+    feature.feature_key = feature_key
+    feature.canonical_attributes_json = canonical
+    feature.geometry_bbox_json = None
+    return FeatureMatch(feature=feature, overlap_area=0.001, contains_input=True)
+
+
+def _make_parent() -> CandidateFragment:
+    return CandidateFragment(
+        source_fragment_id=1,
+        source_type=SourceType.FRAGMENT.value,
+        retrieval_channel=RetrievalChannel.FULL_TEXT.value,
+        base_score=0.8,
+        text="parent",
+        citation_label="Schedule 16",
+    )
+
+
+def _make_location() -> ResolvedLocation:
+    return ResolvedLocation(
+        kind="point",
+        geometry={"type": "Point", "coordinates": [-63.59, 44.65]},
+        source="test",
+    )
+
+
+def test_far_feature_renders_max_far_no_height_message():
+    """FAR-precinct feature must include max_far and must NOT say 'no maximum height specified'."""
+    match = _make_match({"max_far": 1.75, "source_case": "HAF"})
+    fc = _feature_to_candidate(match, dataset=None, parent_candidate=_make_parent(), location=_make_location())
+    assert "max_far=1.75" in fc.text
+    assert "no maximum height specified" not in fc.text
+
+
+def test_height_feature_still_renders_max_height_m():
+    """Height-precinct feature must include max_height_m (regression guard)."""
+    match = _make_match({"max_height_m": 25.0, "max_height_storeys": 7})
+    fc = _feature_to_candidate(match, dataset=None, parent_candidate=_make_parent(), location=_make_location())
+    assert "max_height_m=25" in fc.text
+    assert "max_height_storeys=7" in fc.text
+
+
+def test_feature_with_both_height_and_far_renders_both():
+    """A feature carrying both height and FAR must include both in text."""
+    match = _make_match({"max_height_m": 30.0, "max_far": 9.0})
+    fc = _feature_to_candidate(match, dataset=None, parent_candidate=_make_parent(), location=_make_location())
+    assert "max_height_m=30" in fc.text
+    assert "max_far=9" in fc.text

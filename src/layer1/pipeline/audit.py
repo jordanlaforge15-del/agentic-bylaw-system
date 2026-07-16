@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from layer1.config import get_settings
 from layer1.db.base import CrossReference, Document, PageBlock, SourceFragment, SourceTable, SourceTableCell
-from layer1.models.enums import BlockType, ParseStatus, ResolutionStatus
+from layer1.models.enums import BlockType, FragmentType, ParseStatus, ResolutionStatus
 from layer1.models.schemas import (
     DeterministicPageCheck,
     DocumentAuditReport,
@@ -19,6 +20,13 @@ from layer1.models.schemas import (
 )
 
 NON_FRAGMENT_BLOCK_TYPES = {BlockType.TABLE_REGION, BlockType.HEADER, BlockType.FOOTER}
+
+_NON_NORMATIVE_TYPES = {FragmentType.SCHEDULE, FragmentType.APPENDIX}
+
+_AMENDMENT_HISTORY_RE = re.compile(
+    r"amendment\s*hist|schedule\s*a\b.*amendment|amend.*record|history\s*of\s*amend",
+    re.IGNORECASE,
+)
 
 
 def audit_document_pages(
@@ -39,6 +47,11 @@ def audit_document_pages(
     by_page = {snapshot.page_number: snapshot for snapshot in snapshots}
     selected_pages = page_numbers or select_audit_pages(snapshots, sample_size=sample_size)
     selected_snapshots = [by_page[page] for page in selected_pages if page in by_page]
+
+    # All required data is now in memory as plain Pydantic models. Release
+    # the DB connection before the LLM loop so Postgres idle-in-transaction
+    # timeout cannot kill the session mid-audit (ABS-114).
+    session.commit()
 
     reviewer = ClaudeCodeLayer1Auditor(model=llm_model or get_settings().audit_llm_model) if use_llm else None
     page_results: list[PageAuditResult] = []
@@ -216,11 +229,15 @@ def score_page_risk(
     if unusual_roots:
         score += len(unusual_roots) * 2
         reasons.append(f"{len(unusual_roots)} unusual root fragments")
+        root_details = "; ".join(
+            f"#{f.id} {f.fragment_type.value} path={f.citation_path!r} p{f.page_start}"
+            for f in unusual_roots
+        )
         checks.append(
             DeterministicPageCheck(
                 name="unusual_root_fragments",
                 severity="warning",
-                detail=f"Page contains {len(unusual_roots)} root fragments with low-level types.",
+                detail=f"Unusual root fragments: {root_details}",
             )
         )
 
@@ -301,10 +318,73 @@ def score_page_risk(
             )
         )
 
+    if _is_non_normative_page(page_fragments):
+        score = max(score // 10, 1) if score > 0 else 0
+        reasons.append("non-normative (amendment-history/schedule appendix) — score discounted")
+        checks.append(
+            DeterministicPageCheck(
+                name="non_normative_discount",
+                severity="info",
+                detail="Page detected as non-normative content (amendment history / schedule appendix); risk score heavily discounted.",
+            )
+        )
+
     if not reasons:
         reasons.append("low structural risk")
 
     return score, reasons, checks
+
+
+def _is_non_normative_page(page_fragments: list[SourceFragment]) -> bool:
+    """Detect pages dominated by non-normative content (amendment-history tables,
+    schedule appendix metadata) that inflate risk scores without audit value.
+
+    A page is non-normative if ALL fragments on it are rooted in a schedule or
+    appendix AND any of the following hold:
+      - A root fragment's text or citation matches amendment-history keywords
+      - The root fragment type is schedule/appendix with no normative sub-structure
+        (i.e. no section/clause children on this page)
+    """
+    if not page_fragments:
+        return False
+
+    has_normative_root = False
+    has_amendment_signal = False
+
+    for fragment in page_fragments:
+        if fragment.parent_fragment_id is None:
+            if fragment.fragment_type not in _NON_NORMATIVE_TYPES:
+                has_normative_root = True
+                break
+            text_to_check = " ".join(
+                filter(None, [fragment.text, fragment.citation_label, fragment.citation_path])
+            )
+            if _AMENDMENT_HISTORY_RE.search(text_to_check):
+                has_amendment_signal = True
+
+    if has_normative_root:
+        return False
+
+    if has_amendment_signal:
+        return True
+
+    # All fragments parented under schedule/appendix — check if the page has
+    # only leaf-level fragments (list_item, prose, heading) with no normative
+    # structure (section, clause, subsection). Table-dominated schedule pages
+    # that aren't amendment history still get partial discount if they lack
+    # normative descendants.
+    normative_child_types = {
+        FragmentType.SECTION,
+        FragmentType.SUBSECTION,
+        FragmentType.CLAUSE,
+        FragmentType.SUBCLAUSE,
+    }
+    for fragment in page_fragments:
+        if fragment.fragment_type in normative_child_types:
+            return False
+
+    # All roots are schedule/appendix, no normative children — non-normative page
+    return True
 
 
 def load_source_page_text(source_path: str, page_numbers: list[int]) -> dict[int, str]:

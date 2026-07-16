@@ -1,0 +1,334 @@
+{
+  "id": "TC-002",
+  "title": "Homeowner secondary suite legality in ER-2",
+  "zone": "ER-2",
+  "complexity": "simple",
+  "liability": "low",
+  "model": "claude-opus-4-5-20251101",
+  "grade": {
+    "verdict": "FAIL",
+    "reasons": [
+      "keyword rate 0.4166666666666667"
+    ],
+    "citation_total": 13,
+    "citation_found": 13,
+    "citation_hallucinated": 0,
+    "keyword_expected": 24,
+    "keyword_hit": 10,
+    "keyword_rate": 0.4166666666666667,
+    "hedging_failed": false
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "wall_time_s": 54.33,
+      "stop_reason": "end_turn",
+      "citation_total": 4,
+      "citation_found": 4,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "table",
+          "value": "1A",
+          "raw": "Table 1A",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "XVII",
+          "raw": "Part XVII",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 378,
+              "text_excerpt": "Part XVII: Definitions"
+            },
+            {
+              "citation_path": null,
+              "page": 379,
+              "text_excerpt": "Part XVII, Chapter 1: Definitions"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "54",
+          "raw": "Section 54",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 54",
+              "page": 66,
+              "text_excerpt": "54 Within an ER-3, ER-2, ER-1, CH-2, or CH-1 zone, a daycare use shall meet the following requirements:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "499",
+          "raw": "Section 499",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 499",
+              "page": 379,
+              "text_excerpt": "499 This By-law uses the following terms as defined within this Section:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 8,
+        "hit": 3,
+        "rate": 0.375,
+        "misses": [
+          "home occupation",
+          "combination of uses",
+          "6.0 m",
+          "1.5 m",
+          "7.5 m"
+        ]
+      },
+      "hedging": {
+        "hedged": false,
+        "markers": []
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 2,
+      "wall_time_s": 54.74,
+      "stop_reason": "end_turn",
+      "citation_total": 2,
+      "citation_found": 2,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "section",
+          "value": "51",
+          "raw": "Section 51",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 51",
+              "page": 63,
+              "text_excerpt": "51 (1) Excluding a home occupation use contained within a graderelated dwelling unit use, a home occupation use shall:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "469",
+          "raw": "Section 469",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 469",
+              "page": 360,
+              "text_excerpt": "469 In any ER-3, ER-2, ER-1, CH-2, or CH-1 zone, the following requirements shall apply to any sign advertising a home occupation use, daycare use, or the sale of urban agricultural products as an acc"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 8,
+        "hit": 4,
+        "rate": 0.5,
+        "misses": [
+          "combination of uses",
+          "6.0 m",
+          "1.5 m",
+          "7.5 m"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm",
+          "i'd recommend",
+          "before proceeding"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 3,
+      "wall_time_s": 49.94,
+      "stop_reason": "end_turn",
+      "citation_total": 7,
+      "citation_found": 7,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "18",
+          "raw": "Schedule 18",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "19",
+          "raw": "Schedule 19",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "3C",
+          "raw": "Schedule 3C",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "V",
+          "raw": "Part V",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 100,
+              "text_excerpt": "Part V: Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": null,
+              "page": 101,
+              "text_excerpt": "Part V, Chapter 1: General Built Form and Siting Requirements"
+            },
+            {
+              "citation_path": "Part V > 88",
+              "page": 101,
+              "text_excerpt": "88 All regulations contained within this Part do not apply to buildings within heritage conservation districts, unless otherwise stated in Part VI."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "228",
+          "raw": "Section 228",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 228",
+              "page": 189,
+              "text_excerpt": "228 (1) Subject to Subsection 228(2), any portion of a main building, either above or below grade, shall have a minimum required front or flanking setback as specified on Schedule 18."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "229",
+          "raw": "Section 229",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 229",
+              "page": 189,
+              "text_excerpt": "229 (1) Subject to Subsection 229(2) and Section 234, the minimum required side setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "230",
+          "raw": "Section 230",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 230",
+              "page": 190,
+              "text_excerpt": "230 The minimum required rear setback shall be 6.0 metres."
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 8,
+        "hit": 3,
+        "rate": 0.375,
+        "misses": [
+          "secondary suite",
+          "permitted",
+          "home occupation",
+          "combination of uses",
+          "7.5 m"
+        ]
+      },
+      "hedging": {
+        "hedged": false,
+        "markers": []
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    }
+  ]
+}

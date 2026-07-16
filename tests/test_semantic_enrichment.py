@@ -396,6 +396,402 @@ def test_abs106_prose_condition_rejects_short_fragments():
     assert _detect_prose_condition_markers(frag) == []
 
 
+# --------------------------------------------------------------------- ABS-283
+# Mainland LUB permitted-use extraction (not symbol-dot) + classifier
+# false-positive fix. The Mainland LUB does NOT use the symbol-font ●
+# convention (0 U+F098 cells); it lists permitted uses as prose under each
+# zone's section. The structural classifier also false-positived two Mainland
+# section/amendment-history tables as permission_matrix.
+
+
+def _classify_rows(caption: str, rows: list[list[str]], conventions=None):
+    """Run ``_classify_table`` on lightweight in-memory cells (no DB)."""
+    from layer1.semantic.enrichment import _classify_table, _rows_by_index
+
+    cells = []
+    for row_index, row in enumerate(rows):
+        for col_index, text in enumerate(row):
+            cells.append(
+                SourceTableCell(
+                    table_id=1,
+                    row_index=row_index,
+                    col_index=col_index,
+                    text=text,
+                    metadata_json={},
+                )
+            )
+    table = SourceTable(document_id=1, caption=caption, metadata_json={})
+    return _classify_table(table, _rows_by_index(cells), conventions)
+
+
+def test_abs283_amendment_history_table_not_classified_permission_matrix():
+    """AC3: an amendment/section-history table — section-number rows plus
+    amendment-date and council-case columns ("Sep 1/20", "Case 21162") — must
+    NOT classify as permission_matrix."""
+    rows = [
+        ["Section", "Sep 1/20", "Nov 7/20", "Case 21162"],
+        ["14QB(2)", "", "x", ""],
+        ["62(1)", "x", "", ""],
+        ["28AO(1)", "", "", "x"],
+    ]
+    profile_type, *_ = _classify_rows(caption="", rows=rows)
+    assert profile_type != "permission_matrix"
+
+
+def test_abs283_section_table_with_single_stray_zone_not_permission_matrix():
+    """AC1: a section-indexed table with section-number rows but only ONE stray
+    zone-bearing column (the false-positive shape) must not classify as a
+    permission matrix — a real zone×section grid carries several zone columns."""
+    rows = [
+        # Only one column ("DD") resolves to a zone; the rest are amendment meta.
+        ["Section", "DD", "Sep 1/20", "Case 30551"],
+        ["62(1)", "x", "", ""],
+        ["62EA(1)", "", "x", ""],
+        ["28AO(1)", "x", "", ""],
+    ]
+    profile_type, *_ = _classify_rows(caption="", rows=rows)
+    assert profile_type != "permission_matrix"
+
+
+def test_abs283_genuine_section_indexed_zone_grid_still_classifies():
+    """The tightened heuristic must not collateral-damage a real section-indexed
+    permission grid — multiple zone columns, section-number rows, no amendment
+    markers — which still classifies as permission_matrix."""
+    rows = [
+        ["Section", "DD", "DH", "CEN-2", "HR-1"],
+        ["11(1)", "●", "●", "", "③"],
+        ["28AO(1)", "●", "", "●", "●"],
+        ["62EA(1)", "", "●", "●", "●"],
+    ]
+    profile_type, *_ = _classify_rows(caption="", rows=rows)
+    assert profile_type == "permission_matrix"
+
+
+# --------------------------------------------------------------------- ABS-284
+# Profile-driven enrichment classification. The permission-encoding convention
+# now rides on the active profile/overlay instead of being hardcoded: a
+# ``symbol_matrix`` bylaw detects use×zone / section×zone symbol matrices, while
+# a ``section_indexed`` bylaw (permissions in section prose) never classifies a
+# table as a permission_matrix.
+
+
+def _rc_shaped_rows() -> list[list[str]]:
+    """A Regional-Centre-shaped use×zone symbol matrix (● permitted markers)."""
+    return [
+        ["Use", "DD", "DH", "CEN-2", "HR-1"],
+        ["Restaurant use", "●", "●", "", "③"],
+        ["Cluster housing use", "", "●", "●", "●"],
+        ["Office use", "●", "", "●", "●"],
+    ]
+
+
+def test_abs284_symbol_matrix_profile_classifies_and_recovers_markers():
+    """AC1: under a ``symbol_matrix`` profile, an RC-shaped fixture classifies as
+    permission_matrix and its ● markers are recovered as ``permitted``."""
+    from layer1.semantic.conventions import SYMBOL_MATRIX, EnrichmentConventions
+    from layer1.semantic.permission_markers import (
+        annotate_value_cells,
+        classify_permission_marker,
+    )
+
+    from types import SimpleNamespace
+
+    conventions = EnrichmentConventions(permission_encoding=SYMBOL_MATRIX)
+    profile_type, row_axis, col_axis, *_ = _classify_rows(
+        caption="", rows=_rc_shaped_rows(), conventions=conventions
+    )
+    assert profile_type == "permission_matrix"
+    assert (row_axis, col_axis) == ("use", "zone")
+    # ● recovers as permitted under the symbol-matrix glyph set.
+    assert classify_permission_marker("●", conventions) == {
+        "permission_marker": "permitted"
+    }
+    cells = [
+        SimpleNamespace(row_index=0, col_index=0, text="Use", metadata_json={}),
+        SimpleNamespace(row_index=0, col_index=1, text="DD", metadata_json={}),
+        SimpleNamespace(row_index=1, col_index=0, text="Restaurant use", metadata_json={}),
+        SimpleNamespace(row_index=1, col_index=1, text="●", metadata_json={}),
+    ]
+    assert annotate_value_cells(cells, conventions=conventions) == 1
+    assert cells[3].metadata_json == {"permission_marker": "permitted"}
+
+
+def test_abs284_section_indexed_profile_does_not_classify_permission_matrix():
+    """AC1: under a ``section_indexed`` profile, a section×zone grid that WOULD
+    classify as permission_matrix under the default symbol-matrix encoding does
+    NOT — that bylaw's permissions live in section prose, so the table is not a
+    permission matrix."""
+    from layer1.semantic.conventions import SECTION_INDEXED, EnrichmentConventions
+
+    rows = [
+        ["Section", "DD", "DH", "CEN-2", "HR-1"],
+        ["11(1)", "●", "●", "", "③"],
+        ["28AO(1)", "●", "", "●", "●"],
+        ["62EA(1)", "", "●", "●", "●"],
+    ]
+    # Sanity: this exact grid classifies as a permission matrix under the default
+    # (symbol_matrix) encoding — that's the behavior section_indexed overrides.
+    default_type, *_ = _classify_rows(caption="", rows=rows)
+    assert default_type == "permission_matrix"
+
+    section_type, *_ = _classify_rows(
+        caption="",
+        rows=rows,
+        conventions=EnrichmentConventions(permission_encoding=SECTION_INDEXED),
+    )
+    assert section_type != "permission_matrix"
+
+
+def test_abs284_amendment_table_not_permission_matrix_under_either_encoding():
+    """AC1: an amendment/section-history fixture never classifies as a permission
+    matrix — under the symbol-matrix default (via the amendment disqualifier) or
+    under section_indexed (no symbol-matrix detection at all)."""
+    from layer1.semantic.conventions import SECTION_INDEXED, EnrichmentConventions
+
+    rows = [
+        ["Section", "DD", "Sep 1/20", "Case 21162"],
+        ["14QB(2)", "●", "", ""],
+        ["62(1)", "", "x", ""],
+        ["28AO(1)", "", "", "x"],
+    ]
+    default_type, *_ = _classify_rows(caption="", rows=rows)
+    assert default_type != "permission_matrix"
+    section_type, *_ = _classify_rows(
+        caption="",
+        rows=rows,
+        conventions=EnrichmentConventions(permission_encoding=SECTION_INDEXED),
+    )
+    assert section_type != "permission_matrix"
+
+
+def test_abs284_no_profile_path_reproduces_default_classification():
+    """AC4: passing no conventions reproduces the historical (default-encoding)
+    classification exactly, across the matrix shapes the corpus exercises."""
+    from layer1.semantic.conventions import DEFAULT_CONVENTIONS
+
+    fixtures = [
+        ("", _rc_shaped_rows()),
+        ("Table 1A: Permitted uses by zone", _rc_shaped_rows()),
+        ("", [["Zone", "Minimum Lot Area", "Building Height"], ["R1", "400 m2", "11 metres"]]),
+        ("", [["Section", "DD", "Sep 1/20", "Case 21162"], ["62(1)", "x", "", ""]]),
+    ]
+    for caption, rows in fixtures:
+        assert _classify_rows(caption, rows) == _classify_rows(
+            caption, rows, conventions=DEFAULT_CONVENTIONS
+        )
+
+
+def test_abs283_looks_like_amendment_cell_recognizes_dates_and_cases():
+    from layer1.semantic.enrichment import _looks_like_amendment_cell
+
+    assert _looks_like_amendment_cell("Sep 1/20")
+    assert _looks_like_amendment_cell("Nov 7/20")
+    assert _looks_like_amendment_cell("Case 21162")
+    assert _looks_like_amendment_cell("Case No. 30551")
+    # Not amendment markers.
+    assert not _looks_like_amendment_cell("Restaurant use")
+    assert not _looks_like_amendment_cell("DD")
+    assert not _looks_like_amendment_cell("●")
+
+
+def test_abs283_mainland_intro_regex_and_use_list_parsing():
+    from layer1.semantic.enrichment import (
+        _MAINLAND_PERMITTED_INTRO_RE,
+        _parse_mainland_use_list,
+    )
+
+    text = (
+        "62EA(1) The following uses shall be permitted in any ICH Zone:\n"
+        "(1) Single Unit Dwellings\n"
+        "(2) Open Space Uses\n"
+        "62EA(2) No person shall in any ICH Zone carry out any development "
+        "for any purpose other than the uses set out in subsection (1)."
+    )
+    match = _MAINLAND_PERMITTED_INTRO_RE.search(text)
+    assert match is not None
+    assert match.group(1) == "ICH"
+    uses = _parse_mainland_use_list(text[match.end():])
+    assert "Single Unit Dwellings" in uses
+    assert "Open Space Uses" in uses
+    # The trailing exhaustiveness clause must not leak into the use list.
+    assert all("No person" not in use for use in uses)
+
+
+@pytest.fixture()
+def mainland_db(tmp_path: Path) -> dict:
+    """A Mainland-shaped doc: prose permitted-use section + a section/amendment
+    table that the classifier previously false-positived as permission_matrix.
+    No U+F098 cells anywhere (the whole point of the Mainland convention)."""
+    db_url = f"sqlite:///{tmp_path / 'mainland.db'}"
+    create_all(db_url)
+    with session_scope(db_url) as session:
+        document = Document(
+            municipality="Halifax",
+            bylaw_name="Halifax Mainland Land Use By-law",
+            source_path="mainland.pdf",
+            file_hash="abs283-mainland",
+            mime_type="application/pdf",
+            ingestion_timestamp=datetime.now(timezone.utc),
+            parser_version="test",
+        )
+        session.add(document)
+        session.flush()
+        # Prose permitted-use section (the Mainland convention).
+        session.add(
+            SourceFragment(
+                document_id=document.id,
+                fragment_type=FragmentType.PROSE,
+                citation_path="Section 62EA(1)",
+                citation_label="62EA(1)",
+                page_start=133,
+                page_end=133,
+                text=(
+                    "62EA(1) The following uses shall be permitted in any ICH "
+                    "Zone:\n(1) Single Unit Dwellings\n(2) Open Space Uses\n"
+                    "62EA(2) No person shall in any ICH Zone carry out any "
+                    "development for any purpose other than one or more of the "
+                    "uses set out in subsection (1)."
+                ),
+                parse_status=ParseStatus.PARSED,
+                source_block_ids_json=[],
+                metadata_json={},
+            )
+        )
+        # Amendment/section-history table — the false-positive shape.
+        amendment = SourceTable(
+            document_id=document.id,
+            caption="",
+            page_start=199,
+            page_end=199,
+            parse_status=ParseStatus.PARSED,
+            metadata_json={},
+        )
+        session.add(amendment)
+        session.flush()
+        _add_table_rows(
+            session,
+            amendment.id,
+            [
+                ["Section", "DD", "Sep 1/20", "Case 21162"],
+                ["14QB(2)", "x", "", ""],
+                ["62(1)", "", "x", ""],
+                ["28AO(1)", "", "", "x"],
+            ],
+        )
+        document_id = document.id
+    return {"db_url": db_url, "document_id": document_id}
+
+
+def test_abs283_mainland_enrichment_produces_no_false_permission_matrix(mainland_db):
+    """AC1: re-enriching the Mainland doc produces 0 permission_matrix profiles
+    on the amendment/section table."""
+    with session_scope(mainland_db["db_url"]) as session:
+        enrich_document_semantics(session, document_id=mainland_db["document_id"])
+        enrich_document_semantics(session, document_id=mainland_db["document_id"])
+        matrices = (
+            session.query(TableSemanticProfile)
+            .join(SourceTable, SourceTable.id == TableSemanticProfile.table_id)
+            .filter(
+                SourceTable.document_id == mainland_db["document_id"],
+                TableSemanticProfile.profile_type == "permission_matrix",
+            )
+            .count()
+        )
+        assert matrices == 0
+
+
+def test_abs283_mainland_permitted_use_resolves_via_section_prose(mainland_db):
+    """AC2: a Mainland (use, zone) query resolves via the section-prose path,
+    not the symbol-dot resolver."""
+    from layer1.semantic.enrichment import resolve_mainland_permitted_use
+
+    with session_scope(mainland_db["db_url"]) as session:
+        enrich_document_semantics(session, document_id=mainland_db["document_id"])
+
+        permitted = resolve_mainland_permitted_use(
+            session, use_name="single unit dwelling", zone="ICH"
+        )
+        assert permitted is not None
+        assert permitted["permission"] == "permitted"
+        assert permitted["convention"] == "mainland_section_prose"
+
+        # Plural / "use"-suffixed phrasing still resolves.
+        permitted_suffixed = resolve_mainland_permitted_use(
+            session, use_name="Open Space use", zone="ICH"
+        )
+        assert permitted_suffixed["permission"] == "permitted"
+
+        # A use absent from the closed list is grounded not_permitted (the
+        # Mainland exhaustiveness clause), not a silent miss.
+        denied = resolve_mainland_permitted_use(
+            session, use_name="restaurant", zone="ICH"
+        )
+        assert denied is not None
+        assert denied["permission"] == "not_permitted"
+
+        # A zone with no permitted-use list returns None (fall-through), so the
+        # caller can report indeterminate rather than a bogus verdict.
+        unknown_zone = resolve_mainland_permitted_use(
+            session, use_name="single unit dwelling", zone="CEN-2"
+        )
+        assert unknown_zone is None
+
+
+def test_abs284_section_indexed_profile_threads_through_enrichment(mainland_db):
+    """AC3: enriching the Mainland doc under a ``section_indexed`` profile yields
+    0 permission_matrix profiles — the profile threads end-to-end through
+    ``enrich_document_semantics`` (not just ``_classify_table`` in isolation)."""
+    from layer1.profiles import ParsingProfile
+    from layer1.semantic.conventions import SECTION_INDEXED
+
+    profile = ParsingProfile(name="mainland-test", permission_encoding=SECTION_INDEXED)
+    with session_scope(mainland_db["db_url"]) as session:
+        enrich_document_semantics(
+            session, document_id=mainland_db["document_id"], profile=profile
+        )
+        matrices = (
+            session.query(TableSemanticProfile)
+            .join(SourceTable, SourceTable.id == TableSemanticProfile.table_id)
+            .filter(
+                SourceTable.document_id == mainland_db["document_id"],
+                TableSemanticProfile.profile_type == "permission_matrix",
+            )
+            .count()
+        )
+        assert matrices == 0
+        # The prose permitted-use path still resolves under the profile.
+        from layer1.semantic.enrichment import resolve_mainland_permitted_use
+
+        permitted = resolve_mainland_permitted_use(
+            session, use_name="single unit dwelling", zone="ICH"
+        )
+        assert permitted is not None
+        assert permitted["permission"] == "permitted"
+
+
+def test_abs284_symbol_matrix_profile_still_classifies_rc_matrix(semantic_db):
+    """The symbol_matrix encoding (RC default behavior) still produces a
+    permission_matrix when threaded through enrichment as an explicit profile."""
+    from layer1.profiles import ParsingProfile
+    from layer1.semantic.conventions import SYMBOL_MATRIX
+
+    profile = ParsingProfile(name="rc-test", permission_encoding=SYMBOL_MATRIX)
+    with session_scope(semantic_db["db_url"]) as session:
+        enrich_document_semantics(
+            session, document_id=semantic_db["document_id"], profile=profile
+        )
+        matrices = (
+            session.query(TableSemanticProfile)
+            .join(SourceTable, SourceTable.id == TableSemanticProfile.table_id)
+            .filter(
+                SourceTable.document_id == semantic_db["document_id"],
+                TableSemanticProfile.profile_type == "permission_matrix",
+            )
+            .count()
+        )
+        assert matrices == 1
+
+
 def _add_table_rows(session, table_id: int, rows: list[list[str]]) -> None:
     for row_index, row in enumerate(rows):
         for col_index, text in enumerate(row):

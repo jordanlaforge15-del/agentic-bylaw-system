@@ -3,6 +3,7 @@ zero or more tool round-trips before the assistant gives a final
 answer."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -357,6 +358,153 @@ async def test_cost_circuit_trip_after_tool_round():
     assert text_of(result.final_response) == "answered from evidence above"
 
 
+# ----------------------------------------------------------------------
+# ABS-305: cumulative per-turn cost breaker
+#
+# The per-request breaker above bounds ONE gateway call; these pin the
+# SECOND breaker that bounds the running billed-equivalent total across
+# every request in a single ``run_tool_loop`` invocation — the load-
+# bearing cost ceiling on a paid answer.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cumulative_cost_breaker_trips_across_sub_cap_rounds():
+    """A deep loop whose individual requests each stay UNDER the
+    per-request budget can still blow the turn-level cumulative ceiling.
+    With a generous per-request budget but a tiny cumulative budget, the
+    running total crosses on a later round and the loop forces synthesis
+    with the distinct ``cumulative_cost_trip`` reason."""
+    calls = {"i": 0}
+
+    def script(req: CompletionRequest):
+        calls["i"] += 1
+        if not req.tools:
+            return text_response("answered from evidence above")
+        return tool_use_response(
+            tool_id=f"tu_{calls['i']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def fat_handler(_payload):
+        # Each round appends a chunky tool_result so the per-request
+        # estimate climbs round over round; no SINGLE request is large
+        # enough to trip the (default, huge) per-request breaker.
+        return "x" * 400
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": fat_handler},
+        cumulative_token_budget=100,
+    )
+
+    assert result.terminated_reason == "cumulative_cost_trip"
+    assert result.circuit_trip is not None
+    assert result.circuit_trip.budget == 100
+    # The recorded estimate is the RUNNING TOTAL that crossed the cap,
+    # not a single request — so it exceeds the cumulative budget.
+    assert result.circuit_trip.estimated_input_tokens > 100
+    # First round flowed through; the trip fired on a later iteration.
+    assert result.circuit_trip.iteration >= 2
+    # Synthesis still saw the retrieved evidence and produced an answer.
+    assert text_of(result.final_response) == "answered from evidence above"
+
+
+@pytest.mark.asyncio
+async def test_cumulative_cost_breaker_pass_through_under_budget():
+    """A normal two-round tool loop stays well under a generous
+    cumulative budget — no trip, ``circuit_trip`` is ``None``, and the
+    organic answer lands."""
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+            ),
+            text_response("organic answer."),
+        ]
+    )
+
+    async def handler(_payload):
+        return "small result"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+        cumulative_token_budget=10_000_000,
+    )
+
+    assert result.terminated_reason == "end_turn"
+    assert result.circuit_trip is None
+    assert text_of(result.final_response) == "organic answer."
+
+
+@pytest.mark.asyncio
+async def test_per_request_breaker_takes_precedence_over_cumulative():
+    """When BOTH breakers would fire on the same iteration, the
+    per-request check runs first, so a single oversized request is
+    reported as ``cost_circuit_trip`` — not ``cumulative_cost_trip``.
+    This keeps the two audit reasons unambiguous: ``cumulative`` means
+    'accumulated across rounds', never 'one giant request'."""
+    gateway = MockGateway(scripted=[text_response("bounded synthesis")])
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={},
+        token_budget=1,
+        cumulative_token_budget=1,
+    )
+
+    assert result.terminated_reason == "cost_circuit_trip"
+    assert result.circuit_trip is not None
+
+
+@pytest.mark.asyncio
+async def test_cumulative_breaker_records_synthesis_round_in_metrics():
+    """On a cumulative trip the forced-synthesis round is appended to
+    ``per_iteration`` so the metric sequence stays monotonic and the
+    final billable round is visible to observability."""
+    calls = {"i": 0}
+
+    def script(req: CompletionRequest):
+        calls["i"] += 1
+        if not req.tools:
+            return text_response("synth answer")
+        return tool_use_response(
+            tool_id=f"tu_{calls['i']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def fat_handler(_payload):
+        return "y" * 400
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": fat_handler},
+        cumulative_token_budget=100,
+    )
+
+    assert result.terminated_reason == "cumulative_cost_trip"
+    # At least one loop round ran before the trip, plus the synthesis
+    # round — iterations stay monotonic from 1.
+    iters = [m.iteration for m in result.per_iteration]
+    assert iters == sorted(iters)
+    assert iters[0] == 1
+    # The last recorded round is the tools-stripped synthesis call.
+    assert result.per_iteration[-1].tool_call_count == 0
+
+
 @pytest.mark.asyncio
 async def test_total_usage_aggregates_across_iterations():
     """``total_usage`` sums ``CompletionResponse.usage`` from every
@@ -385,3 +533,189 @@ async def test_total_usage_aggregates_across_iterations():
     assert result.total_usage is not None
     assert result.total_usage.input_tokens == 20
     assert result.total_usage.output_tokens == 40
+
+
+# ----------------------------------------------------------------------
+# ABS-266: per-iteration metrics on ToolLoopResult
+#
+# These pin the observability contract that ``ChatSession`` and the
+# SSE-yielded ``ToolLoopMetricsEvent`` rely on. Each test exercises a
+# different ``terminated_reason`` so all three audit paths stay
+# instrumented.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_per_iteration_metrics_capture_end_turn_path():
+    """On a normal end_turn loop, ``per_iteration`` records one entry
+    per gateway round in order, with the round's usage and a
+    non-negative latency. ``tool_call_count`` mirrors how many
+    tool_use blocks that round produced (0 for the final turn)."""
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+            ),
+            text_response("done."),
+        ]
+    )
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return "ok"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+    )
+
+    assert result.terminated_reason == "end_turn"
+    assert len(result.per_iteration) == 2
+    assert [m.iteration for m in result.per_iteration] == [1, 2]
+    assert result.per_iteration[0].tool_call_count == 1
+    assert result.per_iteration[1].tool_call_count == 0
+    assert all(m.latency_ms >= 0 for m in result.per_iteration)
+    # Per-iteration usage matches MockGateway's default 10/20.
+    assert result.per_iteration[0].usage is not None
+    assert result.per_iteration[0].usage.input_tokens == 10
+    assert result.per_iteration[1].usage is not None
+    assert result.per_iteration[1].usage.input_tokens == 10
+
+
+@pytest.mark.asyncio
+async def test_per_iteration_metrics_include_synthesis_round_on_iteration_cap():
+    """When the loop forces a synthesis turn after max_iterations,
+    the forced call shows up in ``per_iteration`` with
+    iteration = max_iterations + 1 so the sequence stays monotonic."""
+    # Build a script that always returns tool_use so the loop runs
+    # straight to the cap. max_iterations=2 keeps the test fast.
+    def script(_req):
+        return tool_use_response(
+            tool_id="tu_x",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "loop"},
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def handler(_payload):
+        return "ok"
+
+    # Override the script for the forced-synthesis call (gateway is
+    # called once more with tools stripped). Using a sentinel script
+    # that distinguishes synthesis from loop rounds keeps the test
+    # narrowly scoped.
+    call_count = {"n": 0}
+
+    def counting_script(req):
+        call_count["n"] += 1
+        if not req.tools:
+            return text_response("forced synthesis answer.")
+        return tool_use_response(
+            tool_id=f"tu_{call_count['n']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "loop"},
+        )
+
+    gateway = MockGateway(callable_=counting_script)
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+        max_iterations=2,
+    )
+
+    assert result.terminated_reason == "iteration_cap"
+    # Two loop rounds + one synthesis round.
+    assert len(result.per_iteration) == 3
+    assert [m.iteration for m in result.per_iteration] == [1, 2, 3]
+    # Synthesis round has tools stripped, so tool_call_count is 0.
+    assert result.per_iteration[2].tool_call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_per_iteration_metrics_on_cost_circuit_trip():
+    """A circuit trip before any gateway call still records the
+    forced-synthesis round as iteration 1. ``iterations=0`` on
+    ``ToolLoopResult`` reflects loop rounds that completed; the
+    synthesis call is in addition."""
+    # Pin a budget so small the very first request trips it.
+    gateway = MockGateway(scripted=[text_response("synth answer")])
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={},
+        token_budget=1,
+    )
+    assert result.terminated_reason == "cost_circuit_trip"
+    # Loop made zero successful rounds; synthesis call is iteration 1.
+    assert result.iterations == 0
+    assert len(result.per_iteration) == 1
+    assert result.per_iteration[0].iteration == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_invocation_records_handler_latency():
+    """ToolInvocation.latency_ms is populated regardless of whether
+    the handler succeeded or raised. Used by ChatSession to build
+    per-tool entries in ToolLoopMetricsEvent."""
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_ok",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+            ),
+            text_response("done"),
+        ]
+    )
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        return "ok"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+    )
+
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].latency_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_tool_invocation_records_latency_on_handler_error():
+    """Latency capture must work even when the handler raises —
+    otherwise a flaky tool would be invisible in per-tool perf."""
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_boom",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+            ),
+            text_response("apologies."),
+        ]
+    )
+
+    async def handler(_payload: dict[str, Any]) -> str:
+        raise RuntimeError("boom")
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+    )
+
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].error is not None
+    assert "boom" in result.tool_calls[0].error
+    assert result.tool_calls[0].latency_ms >= 0
+
+
+# ABS-304: WI-1 (rolling cache breakpoint) and WI-4 (in-flight tool_result
+# compaction) tests removed alongside the reverted production code. See
+# evals/token_savings/20260610-ABS303-real-api-validation/ROLLUP.md for the
+# evidence that drove the revert (both optimizations were net-negative).

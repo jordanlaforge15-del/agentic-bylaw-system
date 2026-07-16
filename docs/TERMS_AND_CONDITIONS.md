@@ -1,7 +1,7 @@
 # Terms and Conditions
 
-**Effective date:** [Insert effective date]
-**Last updated:** [Insert last-updated date]
+**Effective date:** 2026-05-28
+**Last updated:** 2026-06-14
 
 > **Pre-counsel review draft.** This document has not been reviewed by a
 > Nova Scotia lawyer. It is the live document the application serves to
@@ -46,6 +46,32 @@ reading, and interpreting** such materials for **research and
 informational purposes only**. The Service uses artificial intelligence
 ("AI"), large language models, retrieval-augmented generation, and other
 automated systems to produce its responses.
+
+## 2a. Priced Questions; payment does not change liability posture
+
+The Service may designate certain queries as "**Priced Questions**" and
+charge a fee for the Output returned in response to such a query.
+Payment of any fee associated with a Priced Question:
+
+1. does **not** create any professional, fiduciary, advisory, or
+   licensed relationship between you and the Provider or any of its
+   personnel;
+2. does **not** constitute a retainer of, or engagement with, a licensed
+   professional planner, lawyer, engineer, architect, surveyor, or any
+   other regulated professional;
+3. does **not** constitute the work product, determination, or opinion of
+   any regulated professional; and
+4. does **not** transform any Output into a licensed professional
+   determination, a municipal decision, a development permit, a building
+   permit, a rezoning approval, or any other instrument of any
+   governmental or regulatory authority.
+
+The no-warranty provisions (§6), liability limitations (§7), verification
+obligations (§4), and indemnification obligations (§8) apply to Priced
+Questions with equal force as they apply to any other use of the Service.
+Paying a fee does not provide additional assurance of accuracy, currency,
+or completeness, and does not modify the obligation in §4 to
+independently verify every Output before acting on it.
 
 ## 3. Not legal, professional, or expert advice
 
@@ -321,7 +347,7 @@ Terms.
 ## 13. Privacy
 
 Your use of the Service is also governed by the Provider's privacy
-policy, available at [Insert privacy-policy URL]. To the extent of any
+policy, available at https://agenticbylawsystems.com/privacy. To the extent of any
 conflict between these Terms and the privacy policy on a matter of
 personal-information handling, the privacy policy controls. Acceptance
 of these Terms includes acceptance of the privacy policy as it stands
@@ -407,9 +433,8 @@ period under the Nova Scotia *Limitation of Actions Act*.
 5. **Force majeure.** The Provider is not liable for any failure or
    delay in performance caused by events beyond its reasonable control.
 6. **Notices.** Notices to the Provider must be sent to
-   **info@agenticbylawsystems.com** with a copy by post to
-   [Insert mailing address]. Notices to you may be sent to the email
-   address on your account or posted in the Service.
+   **info@agenticbylawsystems.com**. Notices to you may be sent to the
+   email address on your account or posted in the Service.
 7. **Language.** The parties have requested that these Terms be drawn
    up in English. Les parties ont demandé que ces conditions soient
    rédigées en anglais.
@@ -428,6 +453,10 @@ By clicking **I Agree** below, you confirm that:
 - You understand that the Service does not provide legal, planning,
   engineering, architectural, or other professional advice (§3) and
   that you must independently verify every Output (§4).
+- You understand that paying a fee for a Priced Question does not create
+  any professional relationship, does not constitute the work product of
+  any licensed professional, and does not change the verification
+  obligations or liability limitations in §4, §6, and §7 (§2a).
 - You understand that AI-generated and automation-generated Outputs may
   contain hallucinations, citation errors, wrong-municipality or
   wrong-zone errors, and other material errors (§5).

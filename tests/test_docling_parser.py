@@ -116,6 +116,152 @@ def test_docling_pdf_uses_native_docling_items_for_blocks_and_tables(monkeypatch
     assert parsed.raw["docling_tables"] == 1
 
 
+def test_docling_table_caption_extracted_from_docling_api(monkeypatch, tmp_path: Path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    doc = DoclingDocument(name="sample", pages={1: PageItem(size=Size(width=612, height=792), page_no=1)})
+    table = TableItem(
+        self_ref="#/tables/0",
+        parent=None,
+        children=[],
+        prov=_prov(1, 72, 500, 500, 350),
+        data=DoclingTableData(
+            num_rows=1,
+            num_cols=1,
+            table_cells=[
+                TableCell(start_row_offset_idx=0, end_row_offset_idx=1, start_col_offset_idx=0, end_col_offset_idx=1, text="Dwelling"),
+            ],
+        ),
+        source=[],
+        comments=[],
+    )
+    items = [(table, 1)]
+
+    class FakeDocument:
+        pages = doc.pages
+
+        def iterate_items(self, page_no=None, with_groups=False, **kwargs):
+            return iter(items)
+
+    class FakeConversionResult:
+        document = FakeDocument()
+
+    class FakeConverter:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def convert(self, path_str: str) -> FakeConversionResult:
+            return FakeConversionResult()
+
+    monkeypatch.setattr("docling.document_converter.DocumentConverter", FakeConverter)
+    monkeypatch.setattr(
+        "layer1.parsers.pdf._docling_caption_text",
+        lambda table, doc: "Table 1A: Permitted uses by zone",
+    )
+
+    parsed = DoclingParser().parse(pdf_path)
+
+    assert parsed.tables[0].caption == "Table 1A: Permitted uses by zone"
+
+
+def test_docling_table_caption_fallback_from_preceding_block(monkeypatch, tmp_path: Path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    doc = DoclingDocument(name="sample", pages={1: PageItem(size=Size(width=612, height=792), page_no=1)})
+    caption_heading = TextItem(
+        self_ref="#/texts/0",
+        parent=None,
+        children=[],
+        label=DocItemLabel.TEXT,
+        prov=_prov(1, 72, 550, 400, 530),
+        orig="Table 1B: Permitted uses by zone for ER-3",
+        text="Table 1B: Permitted uses by zone for ER-3",
+        source=[],
+        comments=[],
+    )
+    table = TableItem(
+        self_ref="#/tables/0",
+        parent=None,
+        children=[],
+        prov=_prov(1, 72, 500, 500, 350),
+        data=DoclingTableData(
+            num_rows=1,
+            num_cols=1,
+            table_cells=[
+                TableCell(start_row_offset_idx=0, end_row_offset_idx=1, start_col_offset_idx=0, end_col_offset_idx=1, text="Dwelling"),
+            ],
+        ),
+        source=[],
+        comments=[],
+    )
+    items = [(caption_heading, 1), (table, 1)]
+
+    class FakeDocument:
+        pages = doc.pages
+
+        def iterate_items(self, page_no=None, with_groups=False, **kwargs):
+            return iter(items)
+
+    class FakeConversionResult:
+        document = FakeDocument()
+
+    class FakeConverter:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def convert(self, path_str: str) -> FakeConversionResult:
+            return FakeConversionResult()
+
+    monkeypatch.setattr("docling.document_converter.DocumentConverter", FakeConverter)
+
+    parsed = DoclingParser().parse(pdf_path)
+
+    assert parsed.tables[0].caption == "Table 1B: Permitted uses by zone for ER-3"
+
+
+def test_docling_pdf_enables_table_structure_from_profile(monkeypatch, tmp_path: Path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    captured = {}
+
+    class FakeDocument:
+        pages = {1: PageItem(size=Size(width=612, height=792), page_no=1)}
+
+        def iterate_items(self, page_no=None, with_groups=False, **kwargs):
+            text = TextItem(
+                self_ref="#/texts/0",
+                parent=None,
+                children=[],
+                label=DocItemLabel.TEXT,
+                prov=_prov(1, 72, 700, 200, 680),
+                orig="Body text",
+                text="Body text",
+                source=[],
+                comments=[],
+            )
+            return iter([(text, 0)])
+
+    class FakeConversionResult:
+        document = FakeDocument()
+
+    class FakeConverter:
+        def __init__(self, *, format_options=None, **kwargs):
+            captured["format_options"] = format_options
+
+        def convert(self, path_str: str) -> FakeConversionResult:
+            return FakeConversionResult()
+
+    monkeypatch.setattr("docling.document_converter.DocumentConverter", FakeConverter)
+
+    DoclingParser().parse(pdf_path)
+
+    pdf_option = next(iter(captured["format_options"].values()))
+    assert pdf_option.pipeline_options.do_table_structure is True
+
+
 def test_docling_definition_like_items_become_paragraphs(monkeypatch, tmp_path: Path):
     pdf_path = tmp_path / "sample.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n")

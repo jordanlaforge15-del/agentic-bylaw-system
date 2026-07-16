@@ -1,0 +1,6 @@
+[2026-06-03 07:15:42] WARNING advisor.api.dev [None] advisor.api.dev is running in PERMISSIVE mode — X-Test-User-Id header is the only auth. Do NOT expose this server to the public internet. Set CLERK_JWKS_URL to enable real Clerk JWT verification.
+INFO:     Started server process [41059]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+[2026-06-03 07:16:17] WARNING advisor.llm.tool_loop [73b66aca9dc5452f8321200e992c94b4] tool-use loop hit max_iterations=10; forced synthesis turn

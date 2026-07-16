@@ -39,37 +39,71 @@ stop_pid() {
   # (or external processes squatting on the port) won't have one — the
   # lsof lookup ensures teardown still finds and kills the holder.
   if { [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; } && [[ -n "$fallback_port" ]]; then
-    local lsof_pid
-    lsof_pid="$(lsof -iTCP:"$fallback_port" -sTCP:LISTEN -tnP 2>/dev/null | head -1)"
+    # ABS-170: trailing `|| true` keeps the substitution rc=0 when lsof
+    # finds no listener on the port. Without it, `set -euo pipefail`
+    # treats the failed pipeline as a script-level error and e2e-down
+    # exits silently after "Stopping Next.js" — leaving the postgres
+    # container alive and reproducing the symptom we set out to fix.
+    local lsof_pid=""
+    lsof_pid="$(lsof -iTCP:"$fallback_port" -sTCP:LISTEN -tnP 2>/dev/null | head -1 || true)"
     if [[ -n "$lsof_pid" ]]; then
       echo "${label}: pidfile missing/stale — using :${fallback_port} holder PID ${lsof_pid}"
       pid="$lsof_pid"
     fi
   fi
-  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    # Send the kill to the whole process group so npx-spawned children
+    # also exit (next dev is a tree, not a single process).
+    if kill -- "-$pid" 2>/dev/null; then
+      echo "${label}: sent SIGTERM to process group -${pid}"
+    else
+      kill "$pid" 2>/dev/null || true
+      echo "${label}: sent SIGTERM to PID ${pid}"
+    fi
+    for _ in $(seq 1 15); do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+      echo "${label}: SIGKILLed PID ${pid}"
+    fi
+  else
     echo "${label}: nothing to kill (pidfile=${pidfile}${fallback_port:+, port=${fallback_port}})"
-    rm -f "$pidfile"
+  fi
+  rm -f "$pidfile"
+
+  # ABS-176: post-kill verification by port. Killing the recorded PID
+  # is not enough when the parent was a wrapper shell (nohup + disown
+  # + subshell wrapping make macOS process-group semantics flaky); the
+  # actual server child gets reparented to init and survives. Next
+  # e2e-up then prints REUSING-EXISTING-LISTENER and silently adopts
+  # the stale process — the failure mode this script is supposed to
+  # prevent. Always verify the port is free at the end of stop_pid;
+  # this also catches the "nothing to kill via pidfile but port is
+  # still bound from a sibling process" case.
+  if [[ -z "$fallback_port" ]]; then
     return 0
   fi
-  # Send the kill to the whole process group so npx-spawned children
-  # also exit (next dev is a tree, not a single process).
-  if kill -- "-$pid" 2>/dev/null; then
-    echo "${label}: sent SIGTERM to process group -${pid}"
-  else
-    kill "$pid" 2>/dev/null || true
-    echo "${label}: sent SIGTERM to PID ${pid}"
+  local survivor=""
+  survivor="$(lsof -iTCP:"$fallback_port" -sTCP:LISTEN -tnP 2>/dev/null | head -1 || true)"
+  if [[ -z "$survivor" ]]; then
+    return 0
   fi
-  for _ in $(seq 1 15); do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      break
+  echo "${label}: :${fallback_port} still bound after SIGTERM — killing survivor PID ${survivor}"
+  kill "$survivor" 2>/dev/null || true
+  for _ in $(seq 1 5); do
+    if ! lsof -iTCP:"$fallback_port" -sTCP:LISTEN >/dev/null 2>&1; then
+      return 0
     fi
     sleep 1
   done
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -9 "$pid" 2>/dev/null || true
-    echo "${label}: SIGKILLed PID ${pid}"
+  if lsof -iTCP:"$fallback_port" -sTCP:LISTEN >/dev/null 2>&1; then
+    kill -9 "$survivor" 2>/dev/null || true
+    echo "${label}: SIGKILLed survivor PID ${survivor}"
   fi
-  rm -f "$pidfile"
 }
 
 log "Stopping Next.js"
@@ -78,17 +112,26 @@ stop_pid "${PID_DIR}/web.pid" "web" "$E2E_WEB_PORT"
 log "Stopping FastAPI"
 stop_pid "${PID_DIR}/fastapi.pid" "fastapi" "$E2E_FASTAPI_PORT"
 
+docker_compose_cmd() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  else
+    docker-compose "$@"
+  fi
+}
+
 if [[ "$DROP_DB" -eq 1 ]]; then
   log "Dropping test database ${E2E_TEST_DB}"
-  docker_compose_cmd() {
-    if docker compose version >/dev/null 2>&1; then
-      docker compose "$@"
-    else
-      docker-compose "$@"
-    fi
-  }
   docker_compose_cmd exec -T postgres psql -U "$PG_USER" -d postgres -c \
     "DROP DATABASE IF EXISTS \"${E2E_TEST_DB}\""
 fi
+
+# ABS-170: Remove the postgres container so the next `e2e-up` cannot attach
+# to it with a stale port mapping. The compose project's named volume is
+# preserved (no -v), so DB content survives container recreation. Without
+# this, a worktree relaunched with a different PG_PORT silently keeps the
+# old port and NM's reviewer e2e fails at startup with no useful signal.
+log "Removing Postgres container (volume preserved)"
+docker_compose_cmd rm -fs postgres >/dev/null 2>&1 || true
 
 log "E2E stack is down"

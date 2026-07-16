@@ -20,6 +20,8 @@ from layer1.models.enums import IngestionStatus
 from layer1.pipeline.audit import audit_document_pages
 from layer1.pipeline.export import export_document_json
 from layer1.pipeline.ingest import ingest_file
+from layer1.pipeline.prune import prune_superseded_documents
+from layer1.pipeline.verify_coverage import compare_coverage_reports, verify_document_coverage
 from layer1.datasets.linker import find_orphan_datasets, relink_orphan_datasets
 from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 from layer1.profiles import (
@@ -30,9 +32,14 @@ from layer1.profiles import (
 )
 from layer1.semantic.enrichment import enrich_document_semantics, validate_document_semantics
 from layer1.validators.structural import validate_document_objects
+from layer1.learn_city_cmd import learn_city_command, validate_manifest_command
 
 app = typer.Typer(help="Layer 1 bylaw source normalization CLI")
 console = Console()
+
+# Register learn-city as a top-level command on the shared app.
+app.command("learn-city")(learn_city_command)
+app.command("validate-manifest")(validate_manifest_command)
 
 
 @app.callback()
@@ -278,9 +285,9 @@ def dataset_orphans(
 def audit_pages(
     document_id: int,
     sample: int = typer.Option(5, "--sample", min=1, help="Number of high-risk pages to audit"),
-    pages: str | None = typer.Option(None, "--pages", help="Comma-separated explicit pages, e.g. 5,12,26"),
+    pages: str | None = typer.Option(None, "--pages", help="Comma-separated pages and/or inclusive ranges, e.g. 5,12,26 or 10-25,30-35"),
     llm: bool = typer.Option(False, "--llm", help="Run structured LLM review on each selected page"),
-    model: str | None = typer.Option(None, "--model", help="LLM model override for --llm mode"),
+    model: str | None = typer.Option(None, "--model", help="(advisory; Claude Code routes the actual model internally)"),
     out: Path | None = typer.Option(None, "--out", help="Write JSON audit report to a file"),
     db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
 ) -> None:
@@ -302,7 +309,7 @@ def audit_page(
     document_id: int,
     page: int = typer.Argument(..., min=1),
     llm: bool = typer.Option(False, "--llm", help="Run structured LLM review for the page"),
-    model: str | None = typer.Option(None, "--model", help="LLM model override for --llm mode"),
+    model: str | None = typer.Option(None, "--model", help="(advisory; Claude Code routes the actual model internally)"),
     out: Path | None = typer.Option(None, "--out", help="Write JSON audit report to a file"),
     db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
 ) -> None:
@@ -316,6 +323,121 @@ def audit_page(
             llm_model=model,
         )
     _emit_json_report(report.model_dump(mode="json"), out)
+
+
+@app.command("verify-coverage")
+def verify_coverage(
+    document_id: int,
+    out: Path | None = typer.Option(None, "--out", "-o", help="Write JSON coverage report to a file"),
+    low_coverage_threshold: float = typer.Option(0.3, "--threshold", help="Page overlap ratio below which a page is flagged as low-coverage"),
+    compare_to: int | None = typer.Option(None, "--compare-to", help="Old document ID to diff against (regression check)"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    """Verify that a bylaw document was fully ingested into the database.
+
+    Compares source PDF text page-by-page against persisted fragments,
+    tables, and cross-references. Outputs a structured coverage report
+    with per-page overlap ratios, gap classifications, and a letter grade.
+
+    Pass --compare-to <old_doc_id> to attach a regression diff showing which
+    gaps were resolved or introduced relative to a prior ingest of the same bylaw.
+    Exit code is 1 when the grade is D/F *or* when --compare-to finds new gaps.
+    """
+    with session_scope(db_url) as session:
+        report = verify_document_coverage(
+            session,
+            document_id,
+            low_coverage_threshold=low_coverage_threshold,
+        )
+        if compare_to is not None:
+            old_report = verify_document_coverage(
+                session,
+                compare_to,
+                low_coverage_threshold=low_coverage_threshold,
+            )
+            report.comparison = compare_coverage_reports(old_report, report)
+
+    payload = report.model_dump(mode="json")
+    _emit_json_report(payload, out)
+    grade = report.summary.grade
+    gap_count = len(report.gaps)
+    introduced = len(report.comparison.gaps_introduced) if report.comparison else 0
+    if grade in ("D", "F") or introduced > 0:
+        if introduced > 0:
+            console.print(f"[red]Grade {grade} — {introduced} new gap type(s) introduced.[/red]")
+        else:
+            console.print(f"[red]Grade {grade} — {gap_count} gap(s) found.[/red]")
+        raise typer.Exit(code=1)
+    elif gap_count > 0:
+        console.print(f"[yellow]Grade {grade} — {gap_count} gap(s) found.[/yellow]")
+    else:
+        console.print(f"[green]Grade {grade} — no gaps found.[/green]")
+
+
+@app.command("prune-superseded")
+def prune_superseded(
+    municipality: str | None = typer.Option(None, "--municipality", help="Filter by municipality"),
+    bylaw_name: str | None = typer.Option(None, "--bylaw-name", help="Filter by bylaw name"),
+    keep_latest: int = typer.Option(1, "--keep-latest", min=1, help="Number of latest ingests to keep per bylaw"),
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run", help="Print plan without deleting (default: on)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    """Delete stale Document rows after re-ingest, keeping the N newest per bylaw."""
+    with session_scope(db_url) as session:
+        result = prune_superseded_documents(
+            session,
+            municipality=municipality,
+            bylaw_name=bylaw_name,
+            keep_latest=keep_latest,
+            dry_run=True,
+        )
+
+    if not result.entries:
+        console.print("[green]No superseded documents found.[/green]")
+        return
+
+    for entry in result.entries:
+        console.print(
+            {
+                "id": entry.id,
+                "municipality": entry.municipality,
+                "bylaw_name": entry.bylaw_name,
+                "ingestion_timestamp": entry.ingestion_timestamp.isoformat(),
+                "file_hash": entry.file_hash,
+                "page_count": entry.page_count,
+                "cascaded_rows": {
+                    "fragments": entry.fragment_count,
+                    "blocks": entry.block_count,
+                    "tables": entry.table_count,
+                    "cross_references": entry.cross_reference_count,
+                    "images": entry.image_count,
+                    "ingestion_runs": entry.run_count,
+                },
+            }
+        )
+
+    if dry_run:
+        console.print(f"[yellow]Dry run — {len(result.entries)} document(s) would be deleted.[/yellow]")
+        return
+
+    if not yes:
+        confirmed = typer.confirm(
+            f"Permanently delete {len(result.entries)} superseded document(s)? This cannot be undone."
+        )
+        if not confirmed:
+            console.print("[yellow]Aborted.[/yellow]")
+            return
+
+    with session_scope(db_url) as session:
+        final = prune_superseded_documents(
+            session,
+            municipality=municipality,
+            bylaw_name=bylaw_name,
+            keep_latest=keep_latest,
+            dry_run=False,
+        )
+    console.print(f"[green]Deleted {final.deleted_count} superseded document(s).[/green]")
 
 
 def _validate_from_db(session: Session, document_id: int):
@@ -349,15 +471,32 @@ def _print_ingest_result(document_id: int, status: str, warnings: list[str], err
 def _parse_pages_option(pages: str | None) -> list[int] | None:
     if not pages:
         return None
-    parsed = []
-    for raw in pages.split(","):
-        raw = raw.strip()
-        if not raw:
+    seen: set[int] = set()
+    parsed: list[int] = []
+    for token in pages.split(","):
+        token = token.strip()
+        if not token:
             continue
-        try:
-            parsed.append(int(raw))
-        except ValueError as exc:
-            raise typer.BadParameter(f"Invalid page number: {raw}") from exc
+        if "-" in token:
+            parts = token.split("-", 1)
+            try:
+                start, end = int(parts[0].strip()), int(parts[1].strip())
+            except ValueError as exc:
+                raise typer.BadParameter(f"Invalid range: {token}") from exc
+            if end < start:
+                raise typer.BadParameter(f"Invalid range {token}: end before start")
+            for page in range(start, end + 1):
+                if page not in seen:
+                    seen.add(page)
+                    parsed.append(page)
+        else:
+            try:
+                page = int(token)
+            except ValueError as exc:
+                raise typer.BadParameter(f"Invalid page number: {token}") from exc
+            if page not in seen:
+                seen.add(page)
+                parsed.append(page)
     return parsed or None
 
 

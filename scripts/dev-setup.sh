@@ -9,6 +9,8 @@ Creates a local Python virtual environment, installs the project, starts the
 Postgres/pgvector container, waits for it, and runs Alembic migrations.
 
 Options:
+  --with-advisor      Install advisor extras (FastAPI, uvicorn, pyproj, ifcopenshell …).
+                      Required when running the advisor API or the e2e test suite.
   --with-parsers      Install heavy parser extras such as Docling, Camelot, and PaddleOCR.
   --skip-db          Do not start Postgres or run Alembic.
   --python PATH      Python executable to use for the virtual environment.
@@ -16,17 +18,23 @@ Options:
 
 Examples:
   ./scripts/dev-setup.sh
+  ./scripts/dev-setup.sh --with-advisor
   ./scripts/dev-setup.sh --with-parsers
   ./scripts/dev-setup.sh --python python3.12
 EOF
 }
 
+WITH_ADVISOR=1
 WITH_PARSERS=0
 SKIP_DB=0
 PYTHON_BIN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --with-advisor)
+      WITH_ADVISOR=1
+      shift
+      ;;
     --with-parsers)
       WITH_PARSERS=1
       shift
@@ -128,12 +136,17 @@ fi
 
 log "Installing Python package"
 "$VENV_PYTHON" -m pip install --upgrade pip "setuptools<82" wheel
+EXTRAS="dev"
+if [[ "$WITH_ADVISOR" -eq 1 ]]; then
+  EXTRAS="${EXTRAS},advisor"
+fi
 if [[ "$WITH_PARSERS" -eq 1 ]]; then
-  "$VENV_PYTHON" -m pip install -e ".[dev,parsers]"
+  EXTRAS="${EXTRAS},parsers"
+  "$VENV_PYTHON" -m pip install -e ".[${EXTRAS}]"
   "$VENV_PYTHON" -m pip uninstall -y opencv-python opencv_python >/dev/null 2>&1 || true
   "$VENV_PYTHON" -m pip install --force-reinstall opencv-python-headless
 else
-  "$VENV_PYTHON" -m pip install -e ".[dev]"
+  "$VENV_PYTHON" -m pip install -e ".[${EXTRAS}]"
 fi
 
 if [[ "$SKIP_DB" -eq 0 ]]; then

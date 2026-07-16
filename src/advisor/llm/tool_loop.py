@@ -23,6 +23,7 @@ and recover, rather than the whole conversation aborting.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,6 +32,7 @@ from advisor.llm.base import (
     CompletionRequest,
     CompletionResponse,
     ContentBlock,
+    IterationMetric,
     LLMGateway,
     LLMRole,
     Message,
@@ -41,9 +43,16 @@ from advisor.llm.base import (
 )
 from advisor.llm.budget import (
     CircuitTripInfo,
+    default_cumulative_token_budget,
     default_token_budget,
     estimate_request_input_tokens,
 )
+
+# NOTE: ``advisor.chat.history_compaction`` is imported lazily inside
+# ``run_tool_loop`` (not at module load) to break the import cycle —
+# ``advisor.chat`` re-exports ``ChatSession``, which imports
+# ``run_tool_loop`` from this module. By the time the loop actually
+# runs, both packages are fully initialised.
 
 logger = logging.getLogger(__name__)
 
@@ -69,15 +78,19 @@ class ToolLoopResult:
 
     ``terminated_reason`` is ``"end_turn"`` when the model produced a
     natural text response, ``"iteration_cap"`` when we hit
-    ``max_iterations`` and forced a text-only synthesis turn, or
-    ``"cost_circuit_trip"`` when the pre-flight token estimator caught
-    a runaway turn before it shipped. Callers can surface a UI hint
-    when the answer was forced rather than organic, and persist the
-    distinction in the audit trail.
+    ``max_iterations`` and forced a text-only synthesis turn,
+    ``"cost_circuit_trip"`` when the pre-flight token estimator caught a
+    single oversized request before it shipped, or
+    ``"cumulative_cost_trip"`` (ABS-305) when the turn's running
+    billed-equivalent total would have crossed the cumulative per-turn
+    ceiling. Callers can surface a UI hint when the answer was forced
+    rather than organic, and persist the distinction in the audit trail.
 
-    ``circuit_trip`` carries the estimate and budget when the breaker
-    fired, so the chat route can record both in the UsageEvent
-    metadata. ``None`` when the turn terminated normally.
+    ``circuit_trip`` carries the estimate and budget when either cost
+    breaker fired (the single request for ``cost_circuit_trip``, the
+    running turn total for ``cumulative_cost_trip``), so the chat route
+    can record both in the UsageEvent metadata. ``None`` when the turn
+    terminated normally.
     """
 
     final_response: CompletionResponse
@@ -92,18 +105,31 @@ class ToolLoopResult:
     total_usage: TokenUsage | None = None
     terminated_reason: str = "end_turn"
     circuit_trip: CircuitTripInfo | None = None
+    # ABS-266: One entry per gateway round, in dispatch order. Carries
+    # the round's reported ``usage`` and wall-clock ``latency_ms`` so
+    # callers can reconstruct the staircase of context growth instead
+    # of seeing only the aggregate. Includes the forced-synthesis round
+    # when the loop terminated on ``iteration_cap``,
+    # ``cost_circuit_trip``, or ``cumulative_cost_trip``.
+    per_iteration: list[IterationMetric] = field(default_factory=list)
 
 
 @dataclass
 class ToolInvocation:
     """One tool call within the loop. Records what the LLM asked for
-    and what the handler returned (or raised)."""
+    and what the handler returned (or raised).
+
+    ``latency_ms`` is the handler's wall-clock execution time, NOT
+    including the gateway round-trip that requested the tool. Used by
+    ABS-266 to expose per-tool perf in ``ToolLoopMetricsEvent``.
+    """
 
     tool_use_id: str
     tool_name: str
     input: dict[str, Any]
     output: str | list[ContentBlock] | None
     error: str | None = None
+    latency_ms: int = 0
 
 
 class ToolLoopError(Exception):
@@ -145,6 +171,13 @@ _COST_CIRCUIT_NUDGE = (
     "find an answer' — be specific about what was missing."
 )
 
+# Nudge appended when the CUMULATIVE per-turn input-token budget
+# (ABS-305) would be exceeded by the next gateway call. The cause is
+# total spend across the whole turn rather than one oversized request,
+# but the recovery the model must perform is identical to the
+# per-request ceiling, so the wording matches ``_COST_CIRCUIT_NUDGE``.
+_CUMULATIVE_COST_NUDGE = _COST_CIRCUIT_NUDGE
+
 
 async def run_tool_loop(
     gateway: LLMGateway,
@@ -153,6 +186,7 @@ async def run_tool_loop(
     handlers: dict[str, ToolHandler],
     max_iterations: int = 10,
     token_budget: int | None = None,
+    cumulative_token_budget: int | None = None,
 ) -> ToolLoopResult:
     """Drive a Messages API conversation through any number of tool-use
     rounds and return when the LLM stops asking for tools.
@@ -163,15 +197,17 @@ async def run_tool_loop(
     an error to the LLM (``is_error=True`` tool_result) so it can
     recover or apologise.
 
-    ``max_iterations`` is a safety cap. Most chats settle in 1–3
-    rounds; anything higher than 5 in practice usually means a
-    handler is misbehaving. When the cap is hit we don't raise —
-    instead we make one more model call with tools stripped, forcing
-    a text-only synthesis from whatever evidence was already
-    retrieved. That converts a hard error ("agent gave up") into a
-    real answer ("the LUB doesn't cover this; see the Subdivision
-    By-law"), and keeps the partial conversation persistable so the
-    audit trail isn't lost.
+    ``max_iterations`` is a per-tier safety cap. ``ChatSession``
+    derives it from the active ``Tier.max_iterations`` (Quick=8,
+    Standard=20, Complex=55) so the cap matches each tier's advertised
+    reasoning-step range. The default of 10 is only a fallback for
+    non-tier sessions (tests, legacy paths). When the cap is hit we
+    don't raise — instead we make one more model call with tools
+    stripped, forcing a text-only synthesis from whatever evidence was
+    already retrieved. That converts a hard error ("agent gave up")
+    into a real answer ("the LUB doesn't cover this; see the
+    Subdivision By-law"), and keeps the partial conversation
+    persistable so the audit trail isn't lost.
 
     ``token_budget`` is the cost-circuit ceiling on input tokens for
     the whole turn. Each iteration's request is estimated (cheap
@@ -181,16 +217,49 @@ async def run_tool_loop(
     different nudge. ``None`` reads the default from
     ``default_token_budget()`` (env-overridable). The breaker is
     always on; tests pin a small budget to exercise the trip.
+
+    ``cumulative_token_budget`` (ABS-305) is the *turn-level* cost
+    ceiling: the running sum of every iteration's billed-equivalent
+    estimate. The per-request ``token_budget`` bounds one gateway call;
+    this bounds the whole ``run_tool_loop`` invocation, so a deep loop
+    of many sub-cap requests can't silently bill $10+ in aggregate.
+    When adding the next iteration's estimate to the running total would
+    cross this ceiling, the loop takes the same synthesis-fallback path
+    with ``terminated_reason="cumulative_cost_trip"``. ``None`` reads
+    the default from ``default_cumulative_token_budget()``
+    (``ADVISOR_TURN_CUMULATIVE_TOKEN_BUDGET``-overridable). This is the
+    cost primitive that bounds each PAID answer in the
+    priced-question-catalog ("buy an answer") model.
+
+    NOTE: WI-1 (rolling cache breakpoint placement) and WI-4 (in-flight
+    tool_result compaction) were reverted in ABS-304 after ABS-303
+    showed they were net-negative in production. The function no longer
+    places ``cache_control`` markers on tool_result blocks nor compacts
+    older tool_result turns inside the loop. See
+    ``evals/token_savings/20260610-ABS303-real-api-validation/ROLLUP.md``
+    and the post-mortem in ``docs/TOKEN_COST_REDUCTION_FINDINGS.md``
+    for the evidence.
     """
     budget = token_budget if token_budget is not None else default_token_budget()
+    cumulative_budget = (
+        cumulative_token_budget
+        if cumulative_token_budget is not None
+        else default_cumulative_token_budget()
+    )
     conversation = list(request.messages)
     tool_calls: list[ToolInvocation] = []
     total_usage: TokenUsage | None = None
+    # ABS-266: capture per-round metrics in dispatch order.
+    per_iteration: list[IterationMetric] = []
+    # ABS-305: running sum of every iteration's billed-equivalent input
+    # estimate, used by the cumulative cost breaker below.
+    cumulative_estimated = 0
 
     for iteration in range(1, max_iterations + 1):
-        current_request = request.model_copy(
-            update={"messages": list(conversation)}
-        )
+        # Snapshot the live conversation into the per-iteration request so
+        # later appends (the assistant turn from this round, the next
+        # tool_result turn) don't retroactively mutate the sent payload.
+        current_request = request.model_copy(update={"messages": list(conversation)})
 
         estimated = estimate_request_input_tokens(current_request)
         if estimated > budget:
@@ -216,9 +285,49 @@ async def run_tool_loop(
                 nudge=_COST_CIRCUIT_NUDGE,
                 terminated_reason="cost_circuit_trip",
                 circuit_trip=trip,
+                per_iteration=per_iteration,
             )
 
+        # ABS-305 cumulative breaker: would shipping THIS request push the
+        # turn's running billed-equivalent total past the turn-level
+        # ceiling? Checked after the per-request breaker so a single
+        # oversized request still reports as ``cost_circuit_trip``; this
+        # fires only when many sub-cap requests accumulate. Pre-flight
+        # like the per-request breaker — we never submit the request that
+        # would cross the line.
+        if cumulative_estimated + estimated > cumulative_budget:
+            running_total = cumulative_estimated + estimated
+            trip = CircuitTripInfo(
+                estimated_input_tokens=running_total,
+                budget=cumulative_budget,
+                iteration=iteration,
+            )
+            logger.warning(
+                "cumulative cost breaker tripped: turn total %d "
+                "billed-equivalent input tokens (this request %d) exceeds "
+                "cumulative budget %d on iteration %d; forcing synthesis turn",
+                running_total,
+                estimated,
+                cumulative_budget,
+                iteration,
+            )
+            return await _force_synthesis(
+                gateway,
+                request=request,
+                conversation=conversation,
+                tool_calls=tool_calls,
+                total_usage=total_usage,
+                iterations=iteration - 1,
+                nudge=_CUMULATIVE_COST_NUDGE,
+                terminated_reason="cumulative_cost_trip",
+                circuit_trip=trip,
+                per_iteration=per_iteration,
+            )
+        cumulative_estimated += estimated
+
+        gateway_t0 = time.monotonic()
         response = await gateway.complete(current_request)
+        gateway_latency_ms = int((time.monotonic() - gateway_t0) * 1000)
         total_usage = _accumulate_usage(total_usage, response.usage)
 
         # Always append the assistant turn to the conversation, even
@@ -230,6 +339,14 @@ async def run_tool_loop(
         )
 
         tool_use_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
+        per_iteration.append(
+            IterationMetric(
+                iteration=iteration,
+                usage=response.usage,
+                latency_ms=gateway_latency_ms,
+                tool_call_count=len(tool_use_blocks),
+            )
+        )
         if not tool_use_blocks:
             return ToolLoopResult(
                 final_response=response,
@@ -238,6 +355,7 @@ async def run_tool_loop(
                 iterations=iteration,
                 total_usage=total_usage,
                 terminated_reason="end_turn",
+                per_iteration=per_iteration,
             )
 
         result_blocks: list[ContentBlock] = []
@@ -272,6 +390,7 @@ async def run_tool_loop(
         conversation=conversation,
         tool_calls=tool_calls,
         total_usage=total_usage,
+        per_iteration=per_iteration,
         iterations=max_iterations,
         nudge=_ITERATION_CAP_NUDGE,
         terminated_reason="iteration_cap",
@@ -290,6 +409,7 @@ async def _force_synthesis(
     nudge: str,
     terminated_reason: str,
     circuit_trip: CircuitTripInfo | None,
+    per_iteration: list[IterationMetric] | None = None,
 ) -> ToolLoopResult:
     """Tack a stop-and-answer nudge onto the last user message and
     make one final tools-stripped call.
@@ -332,10 +452,24 @@ async def _force_synthesis(
     synthesis_request = request.model_copy(
         update={"messages": list(conversation), "tools": []}
     )
+    syn_t0 = time.monotonic()
     final_response = await gateway.complete(synthesis_request)
+    syn_latency_ms = int((time.monotonic() - syn_t0) * 1000)
     total_usage = _accumulate_usage(total_usage, final_response.usage)
     conversation.append(
         Message(role=LLMRole.ASSISTANT, content=list(final_response.content))
+    )
+    metrics = list(per_iteration) if per_iteration else []
+    # The forced-synthesis call is itself a billable round; record it
+    # under ``iteration = iterations + 1`` so per_iteration[].iteration
+    # remains monotonic even when the loop terminated abnormally.
+    metrics.append(
+        IterationMetric(
+            iteration=iterations + 1,
+            usage=final_response.usage,
+            latency_ms=syn_latency_ms,
+            tool_call_count=0,  # tools were stripped for synthesis
+        )
     )
     return ToolLoopResult(
         final_response=final_response,
@@ -345,6 +479,7 @@ async def _force_synthesis(
         total_usage=total_usage,
         terminated_reason=terminated_reason,
         circuit_trip=circuit_trip,
+        per_iteration=metrics,
     )
 
 
@@ -368,6 +503,7 @@ async def _run_one_handler(
             output=None,
             error=message,
         )
+    t0 = time.monotonic()
     try:
         output = await handler(block.input)
     except Exception as exc:  # noqa: BLE001 — surface the error to the LLM
@@ -378,12 +514,14 @@ async def _run_one_handler(
             input=dict(block.input),
             output=None,
             error=f"{type(exc).__name__}: {exc}",
+            latency_ms=int((time.monotonic() - t0) * 1000),
         )
     return ToolInvocation(
         tool_use_id=block.id,
         tool_name=block.name,
         input=dict(block.input),
         output=output,
+        latency_ms=int((time.monotonic() - t0) * 1000),
     )
 
 

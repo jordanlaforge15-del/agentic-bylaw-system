@@ -1,0 +1,202 @@
+services:
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    image: bylaw-caddy:latest
+    container_name: bylaw-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      ACME_AGREE: "true"
+    networks:
+      - default
+    cap_drop:
+      - ALL
+    read_only: true
+    mem_limit: 256m
+    pids_limit: 100
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    image: ghcr.io/jordanlaforge15-del/bylaw-web:${WEB_VERSION}
+    container_name: bylaw-web
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      ADVISOR_API_URL: http://advisor:8000
+      ADVISOR_DEMO_USER_ID: ${ADVISOR_DEMO_USER_ID:-demo-user-1}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    depends_on:
+      advisor:
+        condition: service_healthy
+    networks:
+      - default
+    cap_drop:
+      - ALL
+    read_only: true
+    mem_limit: 512m
+    pids_limit: 200
+    user: "1001:1001"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  advisor:
+    image: ghcr.io/jordanlaforge15-del/bylaw-advisor:${ADVISOR_VERSION}
+    container_name: bylaw-advisor
+    restart: unless-stopped
+    ports:
+      - "8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://layer1:${POSTGRES_PASSWORD}@postgres:5432/layer1
+      ADVISOR_LLM_PROVIDER: ${ADVISOR_LLM_PROVIDER:-anthropic}
+      ADVISOR_LLM_MODEL: ${ADVISOR_LLM_MODEL:-claude-opus-4-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLERK_JWKS_URL: ${CLERK_JWKS_URL:-}
+      CLERK_AUDIENCE: ${CLERK_AUDIENCE:-}
+      CLERK_ISSUER: ${CLERK_ISSUER:-}
+      CLERK_WEBHOOK_SECRET: ${CLERK_WEBHOOK_SECRET:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      # Beta pivot billing matrix (ABS-379) — turn-based token wallet +
+      # per-slug gated reports. See .env.example for the full annotation.
+      ADVISOR_BILLING_ENABLED: ${ADVISOR_BILLING_ENABLED:-true}
+      ADVISOR_PAYMENTS_ENABLED: ${ADVISOR_PAYMENTS_ENABLED:-false}
+      ADVISOR_CONVERSATION_ENTRY_ENABLED: ${ADVISOR_CONVERSATION_ENTRY_ENABLED:-true}
+      ADVISOR_OTHER_QUESTION_ENABLED: ${ADVISOR_OTHER_QUESTION_ENABLED:-false}
+      # Per-report gate (ABS-384). Deny-by-default when unset; disable a slug
+      # only after draining its `authorized` holds (see docs/DEPLOYMENT.md).
+      ADVISOR_ENABLED_QUESTIONS: ${ADVISOR_ENABLED_QUESTIONS:-}
+      # Token wallet / turns parameters (ABS-380).
+      ADVISOR_TOKENS_PER_TURN: ${ADVISOR_TOKENS_PER_TURN:-2500}
+      ADVISOR_SIGNUP_TOKEN_GRANT: ${ADVISOR_SIGNUP_TOKEN_GRANT:-25000}
+      ADVISOR_CHAT_MIN_BALANCE_TOKENS: ${ADVISOR_CHAT_MIN_BALANCE_TOKENS:-0}
+      ADVISOR_LOW_BALANCE_WARN_TOKENS: ${ADVISOR_LOW_BALANCE_WARN_TOKENS:-5000}
+      ADVISOR_CHAT_MAX_ITERATIONS: ${ADVISOR_CHAT_MAX_ITERATIONS:-20}
+      # Stripe — required only when ADVISOR_PAYMENTS_ENABLED=true. Token
+      # top-up Price IDs (ABS-381). Legacy STRIPE_PRICE_<TIER>_<PACK> IDs are
+      # RETIRED (checkout/pack → 410); do not configure them.
+      STRIPE_API_KEY: ${STRIPE_API_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_TOPUP_SMALL: ${STRIPE_PRICE_TOPUP_SMALL:-}
+      STRIPE_PRICE_TOPUP_MEDIUM: ${STRIPE_PRICE_TOPUP_MEDIUM:-}
+      STRIPE_PRICE_TOPUP_LARGE: ${STRIPE_PRICE_TOPUP_LARGE:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - default
+    cap_drop:
+      - ALL
+    read_only: true
+    mem_limit: 1024m
+    pids_limit: 300
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    image: bylaw-postgres:latest
+    container_name: bylaw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: layer1
+      POSTGRES_USER: layer1
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - bylaw-postgres-data:/var/lib/postgresql/data
+    networks:
+      - default
+    cap_drop:
+      - ALL
+    read_only: true
+    mem_limit: 1024m
+    pids_limit: 200
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U layer1 -d layer1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  monitor:
+    image: ghcr.io/jordanlaforge15-del/bylaw-advisor:${ADVISOR_VERSION}
+    container_name: bylaw-monitor
+    restart: unless-stopped
+    command: ["python", "-m", "advisor.monitoring.main"]
+    environment:
+      MONITOR_TARGET_URL: http://advisor:8000/healthz
+      MONITOR_PROBE_INTERVAL_SECONDS: "60"
+      MONITOR_FAILURE_THRESHOLD: "2"
+      MONITOR_SLACK_WEBHOOK_URL: ${MONITOR_SLACK_WEBHOOK_URL:-}
+      MONITOR_ALERT_EMAIL_TO: ${MONITOR_ALERT_EMAIL_TO:-}
+      MONITOR_SMTP_HOST: ${MONITOR_SMTP_HOST:-}
+      MONITOR_SMTP_PORT: ${MONITOR_SMTP_PORT:-587}
+      MONITOR_SMTP_USER: ${MONITOR_SMTP_USER:-}
+      MONITOR_SMTP_PASSWORD: ${MONITOR_SMTP_PASSWORD:-}
+      MONITOR_SMTP_FROM: ${MONITOR_SMTP_FROM:-monitor@agenticbylawsystems.com}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    depends_on:
+      advisor:
+        condition: service_healthy
+    networks:
+      - default
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 128m
+    pids_limit: 50
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  default:
+    name: bylaw-network
+    driver: bridge
+
+volumes:
+  caddy-data:
+  caddy-config:
+  bylaw-postgres-data:
+    name: bylaw_bylaw_postgres_data

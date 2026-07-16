@@ -1,0 +1,186 @@
+{
+  "id": "ABS303-TC001-T1-rep07",
+  "title": "TC-001 turn 1 \u2014 rep 07",
+  "zone": "ER-1",
+  "persona": {
+    "type": "homeowner",
+    "subtype": null,
+    "description": "Retired homeowner planning a modest backyard deck"
+  },
+  "complexity": "simple",
+  "liability": "low",
+  "address": "1234 Oxford Street, Halifax, NS",
+  "session_id": "154c3b10-58ed-47fb-8ae3-f06d8435b9c2",
+  "model": "claude-opus-4-5-20251101",
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "Hi, I own a home at 1234 Oxford Street in Halifax \u2014 it's in the ER-1 zone. I want to build an attached wooden deck off the back of my house. My plan puts the deck edge about 4 metres from my rear property line. Do I need a development permit for this, and is 4 metres enough clearance from the rear lot line?",
+      "assistant_text": "Now I have all the information I need. Here's the complete picture:\n\n---\n\n## Important: Zone Clarification\n\nThe spatial data shows that **1234 Oxford Street is actually zoned HR-1** (Higher-Order Residential 1), not ER-1 as you mentioned. This is a significant difference \u2014 HR-1 is a higher-density residential zone that permits multi-unit buildings. You should confirm your zoning via [HRM's online mapping tools](https://www.halifax.ca/home/maps) to be certain.\n\nThe geocode confidence was 0.85, which is borderline \u2014 the address resolved but may be near a zone boundary.\n\n---\n\n## Your Questions Answered\n\n### 1. Rear Setback Requirement\n\nUnder the **Regional Centre Land Use By-law**, the rear setback for your lot in the **HR-1 zone** depends on what's behind your property:\n\n| Abutting Zone | Minimum Rear Setback |\n|---------------|---------------------|\n| ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK | **6.0 metres** |\n| All other zones | **3.0 metres** |\n\n*(Section 199(1)(a)\u2013(b), Part V, Chapter 7)*\n\n**Your 4-metre setback:**\n- \u2705 **Compliant** if the lot behind you is zoned COR, HR-1, HR-2, CEN, or similar higher-density zone \u2014 the requirement is only 3.0 m.\n- \u274c **Non-compliant** if the lot behind you is zoned ER-1, ER-2, ER-3, CH-1, CH-2, PCF, or RPK \u2014 you'd need 6.0 m, not 4 m.\n\nYou'll need to check the zoning of the property directly behind yours to know which applies.\n\n### 2. Can a Deck Encroach into the Required Setback?\n\n**Yes, but with limits.** Section 340 lists permitted encroachments into required setbacks:\n\n| Structure Type | Encroachment Allowed |\n|----------------|---------------------|\n| **Patios less than 0.6 m in height** | Fully permitted in any setback |\n| **Uncovered steps, staircases, walkways** | Fully permitted in any setback |\n| **Access ramps** | Fully permitted in any setback |\n\n*(Section 340(a)\u2013(b), Part V, Chapter 19)*\n\n**A raised wooden deck** (typically 0.6 m or higher) is **not** explicitly listed as a permitted encroachment. This means your deck must stay outside the required setback \u2014 it cannot project into the 3.0 m or 6.0 m zone.\n\n### 3. Do You Need a Development Permit?\n\n**Yes, you likely do.** The exemption in Section 9(c) only covers:\n\n> \"uncovered structures less than 0.6 metre in height, such as balconies and patios\"\n\nA typical raised wooden deck attached to a house exceeds 0.6 m in height (floor-to-grade), so it **does not qualify for the exemption** and requires a development permit.\n\n---\n\n## Summary for Your Project\n\n| Question | Answer |\n|----------|--------|\n| **Required rear setback** | 3.0 m or 6.0 m depending on abutting zone |\n| **Your proposed 4.0 m** | Compliant only if rear neighbour is NOT in ER-1/2/3, CH-1/2, PCF, or RPK |\n| **Deck encroachment allowed?** | Only if under 0.6 m height; raised decks must stay outside the setback |\n| **Development permit required?** | Yes, for a deck over 0.6 m in height |\n\n---\n\n## Recommended Next Steps\n\n1. **Verify your zone** \u2014 confirm HR-1 (not ER-1) via HRM's online maps or by calling HRM Planning.\n2. **Check the zone behind you** \u2014 this determines whether you need 3.0 m or 6.0 m rear setback.\n3. **Apply for a development permit** \u2014 contact HRM Planning & Development to submit your application.\n\nIf your rear neighbour is in a lower-density zone (ER-1, etc.) and you're set on the 4 m setback, you'd need a **variance** \u2014 a discretionary process that adds time and isn't guaranteed approval.",
+      "tool_calls": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 3463,
+        "output_tokens": 1071,
+        "cache_creation_input_tokens": 464,
+        "cache_read_input_tokens": 16579
+      },
+      "wall_time_s": 43.02,
+      "raw_event_count": 11,
+      "error": null,
+      "body_excerpt": null,
+      "tool_loop_metrics": {
+        "type": "tool_loop_metrics",
+        "iterations": 5,
+        "terminated_reason": "end_turn",
+        "total_usage": {
+          "input_tokens": 21688,
+          "output_tokens": 2135,
+          "cache_creation_input_tokens": 8030,
+          "cache_read_input_tokens": 53913
+        },
+        "per_iteration": [
+          {
+            "iteration": 1,
+            "usage": {
+              "input_tokens": 3,
+              "output_tokens": 287,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 9497
+            },
+            "latency_ms": 5101,
+            "tool_call_count": 3
+          },
+          {
+            "iteration": 2,
+            "usage": {
+              "input_tokens": 6913,
+              "output_tokens": 239,
+              "cache_creation_input_tokens": 403,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 5583,
+            "tool_call_count": 2
+          },
+          {
+            "iteration": 3,
+            "usage": {
+              "input_tokens": 7547,
+              "output_tokens": 395,
+              "cache_creation_input_tokens": 403,
+              "cache_read_input_tokens": 9094
+            },
+            "latency_ms": 5448,
+            "tool_call_count": 5
+          },
+          {
+            "iteration": 4,
+            "usage": {
+              "input_tokens": 3762,
+              "output_tokens": 143,
+              "cache_creation_input_tokens": 6760,
+              "cache_read_input_tokens": 9649
+            },
+            "latency_ms": 3656,
+            "tool_call_count": 1
+          },
+          {
+            "iteration": 5,
+            "usage": {
+              "input_tokens": 3463,
+              "output_tokens": 1071,
+              "cache_creation_input_tokens": 464,
+              "cache_read_input_tokens": 16579
+            },
+            "latency_ms": 21722,
+            "tool_call_count": 0
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 524
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 292
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 304
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 21
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 8
+          },
+          {
+            "name": "search_bylaw_evidence",
+            "is_error": false,
+            "latency_ms": 311
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 6
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 6
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 6
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 6
+          },
+          {
+            "name": "lookup_citation",
+            "is_error": false,
+            "latency_ms": 13
+          }
+        ]
+      }
+    }
+  ],
+  "spec": {
+    "id": "ABS303-TC001-T1-rep07",
+    "title": "TC-001 turn 1 \u2014 rep 07",
+    "persona": {
+      "type": "homeowner",
+      "subtype": null,
+      "description": "Retired homeowner planning a modest backyard deck"
+    },
+    "address": "1234 Oxford Street, Halifax, NS",
+    "zone": "ER-1",
+    "complexity": "simple",
+    "liability": "low",
+    "tags": [],
+    "bylaw_features": [],
+    "turns": [
+      {
+        "turn": 1,
+        "role": "user",
+        "message": "Hi, I own a home at 1234 Oxford Street in Halifax \u2014 it's in the ER-1 zone. I want to build an attached wooden deck off the back of my house. My plan puts the deck edge about 4 metres from my rear property line. Do I need a development permit for this, and is 4 metres enough clearance from the rear lot line?"
+      }
+    ],
+    "expected_bylaw_references": [],
+    "expected_answer_keywords": [],
+    "expected_topics": [],
+    "notes": "ABS-303 N=10 variance characterization rep 07"
+  },
+  "case_wall_time_s": 43.02
+}

@@ -1,0 +1,79 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "zone": "ER-1",
+    "complexity": "simple",
+    "liability": "low",
+    "verdict": "FAIL",
+    "kw_rate": 0.4166666666666667,
+    "citation_found": 5,
+    "citation_total": 5,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate 0.4166666666666667"
+    ]
+  },
+  {
+    "id": "TC-002",
+    "title": "Homeowner secondary suite legality in ER-2",
+    "zone": "ER-2",
+    "complexity": "simple",
+    "liability": "low",
+    "verdict": "FAIL",
+    "kw_rate": 0.4166666666666667,
+    "citation_found": 13,
+    "citation_total": 13,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate 0.4166666666666667"
+    ]
+  },
+  {
+    "id": "TC-003",
+    "title": "Homeowner converting single-unit to multi-unit in ER-3",
+    "zone": "ER-3",
+    "complexity": "medium",
+    "liability": "medium",
+    "verdict": "FAIL",
+    "kw_rate": 0.25,
+    "citation_found": 21,
+    "citation_total": 21,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate 0.25"
+    ]
+  },
+  {
+    "id": "TC-004",
+    "title": "Architect scoping a mid-rise residential building in HR-1",
+    "zone": "HR-1",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "PARTIAL",
+    "kw_rate": 0.4,
+    "citation_found": 47,
+    "citation_total": 47,
+    "hallucinated": 0,
+    "reasons": [
+      "missing hedging on high-liability turn",
+      "keyword rate 40% below 60% bar for complex"
+    ]
+  },
+  {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "zone": "HR-2",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "PARTIAL",
+    "kw_rate": 0.3611111111111111,
+    "citation_found": 52,
+    "citation_total": 52,
+    "hallucinated": 0,
+    "reasons": [
+      "missing hedging on high-liability turn",
+      "keyword rate 36% below 60% bar for complex"
+    ]
+  }
+]

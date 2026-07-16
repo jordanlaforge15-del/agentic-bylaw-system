@@ -1,0 +1,66 @@
+name: "Zoneomics"
+slug: "zoneomics"
+url: "https://zoneomics.com"
+category: "direct"
+status: "active"
+discovered: "2026-05-27"
+last_analyzed: "2026-05-27"
+
+description: "AI-powered zoning analysis platform providing instant zoning reports and development feasibility assessments across US jurisdictions."
+
+product:
+  type: "saas"
+  target_market:
+    - "developers"
+    - "planners"
+    - "lawyers"
+    - "citizens"
+  geography:
+    - "United States"
+  jurisdictions:
+    - "Multiple US metros"
+  pricing_model: "subscription"
+  pricing_range: "Per-report and subscription tiers"
+  key_features:
+    - "Instant zoning reports by address"
+    - "Permitted use lookups"
+    - "Setback and dimensional requirements"
+    - "Zoning map visualization"
+    - "Bulk analysis for portfolios"
+
+positioning:
+  tagline: "Instant Zoning Intelligence"
+  differentiators:
+    - "Broad US jurisdiction coverage"
+    - "Instant report generation"
+    - "Address-based lookup (consumer-friendly UX)"
+    - "Portfolio-scale bulk analysis"
+  weaknesses:
+    - "US-only market"
+    - "Report-based (not conversational)"
+    - "May lack depth on complex overlay zones or conditional uses"
+    - "No citation back to source bylaw text"
+
+funding:
+  stage: "seed"
+  total_raised: "unknown"
+  last_round_date: null
+  notable_investors: []
+
+signals:
+  - date: "2026-05-27"
+    type: "product-launch"
+    summary: "Initial competitor profile created during ABS competitive monitoring setup"
+    source_url: "https://zoneomics.com"
+
+threat_assessment:
+  level: "medium"
+  rationale: "Similar AI-zoning product concept but US-focused. Their breadth-first approach (many jurisdictions, shallower coverage) contrasts with our depth-first approach. Would become high threat if they enter Canadian market."
+  overlap_areas:
+    - "Zoning interpretation"
+    - "AI-powered analysis"
+    - "Developer market"
+  watch_triggers:
+    - "Canadian expansion"
+    - "Deep bylaw text citation feature"
+    - "Major funding round"

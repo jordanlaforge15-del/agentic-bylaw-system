@@ -37,6 +37,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -93,6 +94,21 @@ class User(Base):
     stripe_customer_id: Mapped[str | None] = mapped_column(
         String(255), index=True
     )
+    unlimited_credits: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    free_questions_remaining: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    # ABS-380 token wallet: the user's prepaid token balance, presented to
+    # the UI as "~N turns". BigInteger and **signed** on purpose — a chat
+    # turn burns *actual* usage with no floor at settlement time, so a turn
+    # that overshoots the remaining balance drives it negative. Overdraw is
+    # by design (the floor is a pre-flight concern, not a ledger invariant);
+    # ``advisor.db.wallet`` keeps ``SUM(amount_tokens) == token_balance``.
+    token_balance: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
     metadata_json: Mapped[dict] = mapped_column(
         MutableDict.as_mutable(json_type()), nullable=False, default=dict
     )
@@ -112,6 +128,102 @@ class User(Base):
     terms_acceptances: Mapped[list["TermsAcceptance"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    api_keys: Mapped[list["AdvisorApiKey"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    token_transactions: Mapped[list["TokenTransaction"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class TokenTransaction(Base):
+    """One append-only entry in the token wallet ledger (ABS-380).
+
+    The wallet is a running signed balance on ``User.token_balance``; this
+    table is the immutable audit trail behind it. Every balance-changing
+    operation writes exactly one row here inside the same transaction that
+    moves the balance, so the invariant ``SUM(amount_tokens) ==
+    User.token_balance`` holds for all time (verified by the wallet-service
+    tests). Rows are never updated or deleted — corrections are new
+    ``adjust`` entries, not edits.
+
+    ``entry_type`` is one of:
+
+    * ``grant`` — the signup free-trial grant (and any admin gift). Positive.
+    * ``topup`` — a Stripe top-up purchase (ABS-381). Positive.
+    * ``burn`` — chat-turn settlement burns actual token usage (ABS-383).
+      Negative; may drive the balance below zero (overdraw by design).
+    * ``adjust`` — a manual correction (support / reconciliation). Signed.
+
+    ``amount_tokens`` is the signed delta; ``balance_after`` is the wallet
+    balance immediately after this entry was applied — cheap to read for a
+    statement view without re-summing the whole ledger.
+
+    ``stripe_checkout_session_id`` is UNIQUE (nullable) so a Stripe webhook
+    that fires twice for the same checkout credits the wallet exactly once:
+    the second insert trips the unique index and the service absorbs the
+    ``IntegrityError`` rather than double-crediting.
+
+    The optional ``session_id`` / ``case_id`` / ``usage_event_id`` FKs
+    attribute a burn to the chat turn / case / usage event that caused it
+    (all ``ON DELETE SET NULL`` — losing the source row must not erase the
+    ledger entry).
+    """
+
+    __tablename__ = "advisor_token_transaction"
+    __table_args__ = (
+        # Newest-first pagination for the statement view is
+        # ``WHERE user_id = ? ORDER BY id DESC`` — this composite index
+        # serves both the filter and the sort.
+        Index(
+            "ix_advisor_token_transaction_user_id_id",
+            "user_id",
+            "id",
+        ),
+    )
+
+    # BigInteger PK on Postgres (this ledger is high-volume and append-only),
+    # but sqlite only auto-increments an ``INTEGER PRIMARY KEY`` (its rowid
+    # alias) — a ``BIGINT PRIMARY KEY`` there won't autoincrement. The
+    # variant gives sqlite (unit tests) a plain Integer PK while production
+    # Postgres keeps the 64-bit id space.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # 'grant' | 'topup' | 'burn' | 'adjust'.
+    entry_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    amount_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    balance_after: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Machine-readable provenance (``signup_grant`` / ``topup_medium`` /
+    # ``chat_turn`` / ``support_correction`` …). NULL when unattributed.
+    reason: Mapped[str | None] = mapped_column(String(64))
+    stripe_checkout_session_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True
+    )
+    session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("advisor_chat_session.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    case_id: Mapped[int | None] = mapped_column(
+        ForeignKey("advisor_case.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    usage_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("advisor_usage_event.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    metadata_json: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(json_type()), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, index=True
+    )
+
+    user: Mapped[User] = relationship(back_populates="token_transactions")
 
 
 class Case(Base):
@@ -146,6 +258,10 @@ class Case(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Per-user sequential label (1, 2, 3 …). Assigned within the same
+    # transaction as the case row, so it rolls back on failure — the
+    # user always sees contiguous "Case #N" regardless of gaps in ``id``.
+    user_case_number: Mapped[int] = mapped_column(Integer, nullable=False)
     user_id: Mapped[int] = mapped_column(
         ForeignKey("advisor_user.id", ondelete="CASCADE"),
         nullable=False,
@@ -275,6 +391,10 @@ class CaseCredit(Base):
     Partial unique index on ``(session_id) WHERE state IN
     ('reserved','consumed')`` enforces "at most one live credit per
     session" at the DB layer — the upgrade transaction relies on this.
+
+    Partial unique index on ``(case_id) WHERE state = 'reserved' AND
+    session_id IS NULL`` enforces "at most one unsessioned reservation
+    per case" — defence-in-depth for the ABS-11 double-reservation fix.
     """
 
     __tablename__ = "advisor_case_credit"
@@ -291,6 +411,17 @@ class CaseCredit(Base):
             unique=True,
             postgresql_where=text("state IN ('reserved', 'consumed')"),
             sqlite_where=text("state IN ('reserved', 'consumed')"),
+        ),
+        Index(
+            "uq_advisor_case_credit_one_unsessioned_reserve",
+            "case_id",
+            unique=True,
+            postgresql_where=text(
+                "state = 'reserved' AND session_id IS NULL"
+            ),
+            sqlite_where=text(
+                "state = 'reserved' AND session_id IS NULL"
+            ),
         ),
     )
 
@@ -393,6 +524,127 @@ class CaseEvent(Base):
     )
 
     case: Mapped["Case | None"] = relationship(back_populates="events")
+
+
+class QuestionPurchase(Base):
+    """One priced-question "buy an answer" purchase (ABS-312).
+
+    The launch product (``docs/decisions/2026-06-priced-question-catalog
+    .md``) sells answers to fixed-price catalog questions — NOT case
+    credits and NOT a balance. This table is deliberately independent of
+    the ``Case`` / ``CaseCredit`` ledger: there is exactly one Stripe
+    charge per question, authorized at checkout and captured only if we
+    deliver a grounded answer (the failed-question rule).
+
+    Lifecycle of ``status`` (the failed-question mechanism is
+    authorize-then-capture):
+
+    * ``authorizing`` — checkout session created, card not yet
+      authorized (no webhook received). Inserted by
+      ``advisor.billing.answers.start_question_checkout``.
+    * ``authorized`` — ``checkout.session.completed`` arrived; the card
+      hold exists (manual-capture PaymentIntent) but is uncaptured.
+    * ``generating`` — the answer engine is running (ABS-343). The
+      ``.../answer`` endpoint flips ``authorized`` → ``generating`` and
+      persists it BEFORE the engine run so a poll / the sidebar / a second
+      tab all see the in-flight state, and so the run — dispatched as a
+      background job — survives the user leaving the page. Settles to
+      ``captured``/``voided``/``failed`` when the job completes.
+    * ``captured`` — the engine produced a grounded answer and we
+      captured the authorization. The customer is charged.
+    * ``voided`` — the question failed (ungroundable / zero-evidence /
+      cost-ceiling) so we voided the authorization. The customer is
+      never charged.
+    * ``failed`` — an internal error occurred while running the answer
+      AFTER authorization; we void the hold and record the reason. From
+      the customer's perspective identical to ``voided`` (no charge).
+
+    ``inputs_json`` holds the required-input values collected at
+    checkout (address, proposed use, …). ``transcript_json`` is the
+    serialized Anthropic-shape conversation (``Message.model_dump()``
+    list) so refinement turns can resume the same context. The
+    refinement window (ABS-312) is bounded by ``refinement_count`` (max
+    follow-ups) and ``window_expires_at`` (24h from the answer).
+    """
+
+    __tablename__ = "advisor_question_purchase"
+
+    __table_args__ = (
+        Index(
+            "ix_advisor_question_purchase_user_status",
+            "user_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Catalog question slug (see ``advisor.billing.questions``). Stored
+    # as a string and round-tripped through Stripe metadata; never
+    # rename a slug without a data migration.
+    question_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Required-input values collected at checkout, keyed by
+    # ``InputField.name``.
+    inputs_json: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(json_type()), nullable=False, default=dict
+    )
+    price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="CAD"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="authorizing"
+    )
+    stripe_checkout_session_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True
+    )
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(
+        String(255), index=True
+    )
+    # The grounded answer text (raw engine output, no report formatting
+    # at launch). NULL until captured.
+    answer_text: Mapped[str | None] = mapped_column(Text)
+    # Machine-readable reason a question failed (``zero_evidence`` /
+    # ``cost_ceiling`` / ``internal_error``). NULL on success.
+    failure_reason: Mapped[str | None] = mapped_column(String(64))
+    # Serialized conversation (list of ``Message.model_dump()`` dicts)
+    # so in-window refinements resume the same tool-loop context.
+    transcript_json: Mapped[list] = mapped_column(
+        MutableList.as_mutable(json_type()), nullable=False, default=list
+    )
+    # Number of refinement follow-ups served so far (bounds the window).
+    refinement_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    # End of the refinement window (24h from the answer). NULL until
+    # captured.
+    window_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+    authorized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    answered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    metadata_json: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(json_type()), nullable=False, default=dict
+    )
+
+    user: Mapped[User] = relationship()
 
 
 class ChatSession(Base):
@@ -501,6 +753,79 @@ class ChatMessage(Base):
     )
 
     session: Mapped[ChatSession] = relationship(back_populates="messages")
+    feedback: Mapped[list["ChatMessageFeedback"]] = relationship(
+        back_populates="message", cascade="all, delete-orphan"
+    )
+
+
+class ChatMessageFeedback(Base):
+    """User feedback on a single chat message (thumbs up/down + flag).
+
+    Keyed by ``(message_id, user_id)`` so each user can submit at most
+    one feedback row per message. Re-submitting overwrites the previous
+    rating/flag rather than creating duplicates.
+
+    ``rating`` is ``'up'`` or ``'down'`` (thumbs). ``flag_reason`` is
+    set when the user reports a problem: ``'bad_citation'``,
+    ``'wrong_zone'``, ``'hallucination'``, or ``'other'``.
+    ``flag_notes`` carries free-text detail when ``flag_reason`` is set.
+    """
+
+    __tablename__ = "advisor_chat_message_feedback"
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "user_id",
+            name="uq_advisor_chat_message_feedback_msg_user",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_chat_message.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    rating: Mapped[str | None] = mapped_column(String(8))
+    flag_reason: Mapped[str | None] = mapped_column(String(32))
+    flag_notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    message: Mapped[ChatMessage] = relationship(back_populates="feedback")
+
+
+class GeneralFeedback(Base):
+    """App-wide feedback submitted by an authenticated user.
+
+    Not tied to any specific message or session — captures UX issues,
+    feature requests, general satisfaction, and other non-message
+    feedback. ``category`` is one of ``'ux_issue'``, ``'feature_request'``,
+    ``'general_satisfaction'``, or ``'other'``. ``message`` is required
+    free text (max 2000 chars).
+    """
+
+    __tablename__ = "advisor_general_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
 
 class UsageEvent(Base):
@@ -675,3 +1000,42 @@ class TermsAcceptance(Base):
     user_agent: Mapped[str | None] = mapped_column(String(500))
 
     user: Mapped[User] = relationship(back_populates="terms_acceptances")
+
+
+class AdvisorApiKey(Base):
+    """An API key for machine-to-machine access to ABS integration endpoints.
+
+    Secrets are never stored in plaintext — only the SHA-256 hex digest
+    is persisted. The raw key is shown once at creation time and then
+    gone. Authentication checks derive the hash from the incoming
+    ``X-ABS-API-Key`` header and compare against ``key_hash``.
+
+    Each key is scoped to a single ``advisor_user`` so submitted models
+    appear as that user's submissions in the dashboard.  Used today by
+    the Speckle Automate function (ABS-59); the same table supports any
+    future M2M caller (CI scripts, IDP webhooks, etc.).
+    """
+
+    __tablename__ = "advisor_api_key"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("advisor_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    user: Mapped[User] = relationship(back_populates="api_keys")

@@ -397,3 +397,99 @@ def _invoke_claude_p_once(
             f"Got keys: {list(payload.keys())}"
         )
     return structured
+
+
+# --------------------------------------------------------------------- plain helper
+def call_claude_p_plain(
+    prompt: str,
+    *,
+    timeout_s: int = DEFAULT_TIMEOUT_S,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    cli_path: str | None = None,
+) -> str:
+    """Call ``claude -p --output-format json`` without ``--json-schema`` and
+    return the raw ``result`` string from the response.
+
+    Use this when the caller expects free-form text (not structured JSON) —
+    e.g. the Layer 2 RAG pipeline where the prompt asks for JSON but the
+    protocol contract is ``generate(...) -> str``.
+
+    Retries up to ``max_retries`` times. On exhaustion raises
+    :class:`ClaudeCodeBackendError` — NEVER falls back to any other provider.
+    """
+    resolved_cli = cli_path or shutil.which(CLAUDE_CLI) or CLAUDE_CLI
+    last_error: str | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return _invoke_claude_p_plain_once(
+                prompt,
+                cli_path=resolved_cli,
+                timeout_s=timeout_s,
+                attempt=attempt,
+            )
+        except ClaudeCodeBackendError as exc:
+            last_error = str(exc)
+            logger.warning(
+                "call_claude_p_plain attempt %d/%d failed: %s",
+                attempt, max_retries, exc,
+            )
+    raise ClaudeCodeBackendError(
+        f"Claude Code backend (plain) failed after {max_retries} attempts. "
+        f"Last error: {last_error}"
+    )
+
+
+def _invoke_claude_p_plain_once(
+    prompt: str,
+    *,
+    cli_path: str,
+    timeout_s: int,
+    attempt: int,
+) -> str:
+    """Single subprocess invocation without --json-schema. Returns the
+    ``result`` field as a string."""
+    cmd = [
+        cli_path, "-p", prompt,
+        "--output-format", "json",
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ClaudeCodeBackendError(
+            f"`claude -p` timed out after {timeout_s}s (attempt {attempt})"
+        ) from exc
+    except FileNotFoundError as exc:
+        raise ClaudeCodeBackendError(
+            f"`claude` CLI not found at {cli_path!r}. "
+            f"Install Claude Code or pass cli_path explicitly."
+        ) from exc
+
+    if result.returncode != 0:
+        raise ClaudeCodeBackendError(
+            f"`claude -p` exited {result.returncode}: "
+            f"stderr={result.stderr.strip()[:500]!r}"
+        )
+
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ClaudeCodeBackendError(
+            f"`claude -p` stdout was not valid JSON: {exc}. "
+            f"Stdout prefix: {result.stdout[:300]!r}"
+        ) from exc
+
+    if payload.get("is_error"):
+        raise ClaudeCodeBackendError(
+            f"`claude -p` reported is_error=true: "
+            f"{payload.get('result') or payload.get('api_error_status') or 'no details'}"
+        )
+
+    text = payload.get("result")
+    if not isinstance(text, str):
+        raise ClaudeCodeBackendError(
+            "`claude -p` response missing string 'result' field. "
+            f"Got keys: {list(payload.keys())}"
+        )
+    return text

@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from advisor.chat.tools import build_bylaw_tools
-from bylaw_retrieval.retrieval import RetrievalService
+from bylaw_retrieval.retrieval import RetrievalRequest, RetrievalResponse, RetrievalService
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
 from layer1.pipeline.ingest import ingest_file
@@ -60,17 +60,24 @@ def test_build_bylaw_tools_returns_full_tool_set(seeded_service):
     names = [t.name for t in tool_defs]
     # Order matters less than the exact set: callers can rely on
     # this set being complete because mismatched name <-> handler
-    # pairs would silently break tool dispatch. ``request_tier_upgrade``
-    # is the Layer-3 self-monitoring tool added with the case-credit
-    # billing model.
+    # pairs would silently break tool dispatch. ``bylaw_query`` is the
+    # Phase 4 intent-routed mega-tool (ABS-274) that composes over the
+    # thick tools. ``request_tier_upgrade`` was UNREGISTERED in ABS-383:
+    # the beta pivot bills the account token wallet, not per-case tier
+    # credits, so the agent is no longer offered a tool to prompt a
+    # tier upgrade.
     assert set(names) == {
         "list_documents",
         "get_document_outline",
         "lookup_citation",
         "search_bylaw_evidence",
+        "get_address_profile",
+        "get_adjacent_zoning",
+        "get_zone_profile",
         "evaluate_submission_against_bylaws",
-        "request_tier_upgrade",
+        "bylaw_query",
     }
+    assert "request_tier_upgrade" not in set(names)
     assert set(handlers.keys()) == set(names)
 
 
@@ -115,8 +122,11 @@ async def test_lookup_citation_handler_returns_json(seeded_service):
         {"citation_path": cited["citation_path"], "document_id": document_id}
     )
     parsed = json.loads(raw)
-    assert parsed["citation_path"] == cited["citation_path"]
-    assert "text" in parsed
+    # ABS-261: handler now returns a match-or-suggestions envelope.
+    # On a hit, ``match`` is populated and the canonical citation_path
+    # lives under it.
+    assert parsed["match"]["citation_path"] == cited["citation_path"]
+    assert "text" in parsed["match"]
 
 
 @pytest.mark.asyncio
@@ -143,6 +153,38 @@ async def test_get_document_outline_handler_returns_json(seeded_service):
     assert parsed["document"]["id"] == document_id
     assert isinstance(parsed["fragments"], list)
     assert len(parsed["fragments"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_get_address_profile_handler_returns_json(seeded_service):
+    """The get_address_profile handler must round-trip through the service
+    and emit the compact projection. The seed corpus has no spatial datasets
+    or geocode cache, so a free-text address resolves to the graceful
+    unresolvable shape (never an exception) with the fall-back instruction.
+    """
+    service, _ = seeded_service
+    _, handlers = build_bylaw_tools(service)
+    raw = await handlers["get_address_profile"]({"address": "100 Robie Street"})
+    parsed = json.loads(raw)
+    assert parsed["address"]
+    assert parsed["unresolvable"] is True
+    assert "instruction" in parsed
+
+
+@pytest.mark.asyncio
+async def test_get_adjacent_zoning_handler_returns_json(seeded_service):
+    """The get_adjacent_zoning handler (ABS-375) round-trips through the
+    service and emits the compact projection. The seed corpus has no
+    geocode cache, so a free-text address resolves to the graceful
+    unresolvable shape (never an exception) with the fall-back instruction.
+    """
+    service, _ = seeded_service
+    _, handlers = build_bylaw_tools(service)
+    raw = await handlers["get_adjacent_zoning"]({"address": "1250 Robie Street"})
+    parsed = json.loads(raw)
+    assert parsed["address"]
+    assert parsed["unresolvable"] is True
+    assert "instruction" in parsed
 
 
 @pytest.mark.asyncio
@@ -232,15 +274,32 @@ async def test_factory_context_manager_exits_after_each_call(seeded_service):
 async def test_factory_context_manager_exits_on_handler_exception(
     seeded_service,
 ):
-    """If a handler raises (e.g. malformed input), the cm must still
+    """If the wrapped service call raises mid-handler, the cm must still
     exit so the SQLAlchemy session rolls back rather than leaking.
+
+    ABS-261 changed the contract: ``lookup_citation`` no longer raises on
+    path-not-found (it returns ``match=None`` + suggestions). The
+    exception path inside the cm now belongs to:
+
+    * search/lookup with an exception raised by the underlying ORM
+      (e.g. transient DB failure), or
+    * the still-raising ambiguous-across-documents case in
+      ``lookup_citation``.
+
+    We simulate that by yielding a stub service whose ``lookup_citation``
+    method raises — that puts the failure squarely inside the cm scope
+    (after ``model_validate`` succeeds, after ``__enter__`` returns)
+    which is where we need to prove ``__exit__`` still runs.
     """
-    service, _ = seeded_service
     exits = {"n": 0}
+
+    class RaisingService:
+        def lookup_citation(self, request):  # noqa: ARG002
+            raise RuntimeError("simulated DB blip inside cm scope")
 
     class TrackingCm:
         def __enter__(self):
-            return service
+            return RaisingService()
 
         def __exit__(self, exc_type, exc, tb):
             exits["n"] += 1
@@ -250,13 +309,9 @@ async def test_factory_context_manager_exits_on_handler_exception(
         return TrackingCm()
 
     _, handlers = build_bylaw_tools(factory)
-    # lookup_citation requires citation_path; omitting it raises
-    # ValidationError BEFORE the service is touched. Even so the cm
-    # never gets entered, so we exercise the exception path with a
-    # request that does enter the service:
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match="simulated DB blip"):
         await handlers["lookup_citation"](
-            {"citation_path": "this-path-does-not-exist", "document_id": 999_999}
+            {"citation_path": "Part I > 9", "document_id": 1}
         )
     assert exits["n"] == 1
 
@@ -345,11 +400,14 @@ async def test_lookup_citation_returns_compact_match(seeded_service):
         {"citation_path": cited["citation_path"], "document_id": document_id}
     )
     parsed = json.loads(raw)
-    assert parsed["citation_path"] == cited["citation_path"]
-    assert "text" in parsed
-    assert "fragment_type" not in parsed
-    assert "metadata_json" not in parsed
-    assert "parse_status" not in parsed
+    # ABS-261: handler now returns an envelope { match: {...} } on hit.
+    # The compact noise-stripping rules still apply to the wrapped match.
+    match = parsed["match"]
+    assert match["citation_path"] == cited["citation_path"]
+    assert "text" in match
+    assert "fragment_type" not in match
+    assert "metadata_json" not in match
+    assert "parse_status" not in match
 
 
 @pytest.mark.asyncio
@@ -428,11 +486,9 @@ def test_compact_search_response_keeps_notes_and_drops_request():
     it sent and that field is pure cache bloat.
     """
     from advisor.chat.compact import compact_search_response
-    from bylaw_retrieval.retrieval import RetrievalRequest, RetrievalResponse
+    from bylaw_retrieval.retrieval import RetrievalResponse
 
-    req = RetrievalRequest(query="anything", limit=5)
     response = RetrievalResponse(
-        request=req,
         total_matches=0,
         matches=[],
         notes=["The query contains a civic address but no location field"],
@@ -445,3 +501,208 @@ def test_compact_search_response_keeps_notes_and_drops_request():
     assert out["total_matches"] == 0
     assert out["shown_matches"] == 0
     assert "truncation_note" not in out
+
+
+def test_coerce_stringified_object_arg():
+    """ABS-280: a nested object arg serialized as a JSON string is parsed back
+    to a dict; everything else passes through untouched so normal validation
+    still runs."""
+    from advisor.chat.tools import _coerce_stringified_object_arg
+
+    inner = {"kind": "permitted_use", "use": "home occupation use", "zone": "HR-2"}
+    # stringified nested object -> parsed dict
+    assert _coerce_stringified_object_arg(
+        {"structured": json.dumps(inner), "document_id": 4}, "structured"
+    ) == {"structured": inner, "document_id": 4}
+    # already a dict -> unchanged
+    assert _coerce_stringified_object_arg(
+        {"structured": inner}, "structured"
+    ) == {"structured": inner}
+    # key absent -> unchanged
+    assert _coerce_stringified_object_arg(
+        {"citation_path": "4.2"}, "structured"
+    ) == {"citation_path": "4.2"}
+    # non-JSON string -> unchanged (let normal validation reject it)
+    assert _coerce_stringified_object_arg(
+        {"structured": "not json"}, "structured"
+    ) == {"structured": "not json"}
+    # JSON that isn't an object -> unchanged
+    assert _coerce_stringified_object_arg(
+        {"structured": "[1, 2]"}, "structured"
+    ) == {"structured": "[1, 2]"}
+
+
+def test_compact_permitted_use_conditional_carries_instruction():
+    """ABS-280 AC2: a conditional permitted_use result must carry an inline
+    instruction telling the writer to quote the footnote condition_text, so the
+    Table 1A carve-out isn't dropped in favour of the use's operating standards.
+    """
+    from advisor.chat.compact import compact_permitted_use
+    from bylaw_retrieval.retrieval.schemas import PermittedUseResult
+
+    conditional = PermittedUseResult(
+        use="home occupation use",
+        zone="HR-2",
+        indeterminate=False,
+        permission="conditional",
+        footnote_ordinal=15,
+        condition_text="⑮ Use is permitted, except within the Halifax Grain Elevator.",
+    )
+    out = compact_permitted_use(conditional)
+    assert out["permission"] == "conditional"
+    assert out["condition_text"].startswith("⑮")
+    assert "instruction" in out
+    assert "condition_text" in out["instruction"]
+    assert "15" in out["instruction"]
+
+    # A plain permitted result carries NO such instruction.
+    permitted = PermittedUseResult(
+        use="home occupation use",
+        zone="DD",
+        indeterminate=False,
+        permission="permitted",
+    )
+    assert "instruction" not in compact_permitted_use(permitted)
+
+
+@pytest.mark.asyncio
+async def test_lookup_citation_handler_tolerates_stringified_structured(
+    seeded_service,
+):
+    """ABS-280: Opus serialized the nested ``structured`` permitted_use arg as a
+    JSON string, which made CitationLookupRequest.model_validate raise and
+    stranded the structured permitted-use path (the model thrashed to the
+    iteration cap and fell back to ungrounded prose). The handler must parse a
+    stringified ``structured`` so the string form behaves like the dict form.
+    """
+    service, document_id = seeded_service
+    _, handlers = build_bylaw_tools(service)
+
+    structured = {
+        "kind": "permitted_use",
+        "use": "home occupation use",
+        "zone": "HR-2",
+    }
+    dict_form = json.loads(
+        await handlers["lookup_citation"](
+            {"structured": structured, "document_id": document_id}
+        )
+    )
+    # The stringified form must NOT raise and must produce identical output.
+    string_form = json.loads(
+        await handlers["lookup_citation"](
+            {"structured": json.dumps(structured), "document_id": document_id}
+        )
+    )
+    assert string_form == dict_form
+
+
+# ---------------------------------------------------------------------------
+# ABS-297: WI-7 / WI-3 surface-asymmetry drift guard
+#
+# ABS-288 (WI-7) flipped the underlying ``RetrievalRequest.include_*`` defaults
+# to ``False`` at the MCP / external surface. The advisor production path
+# (``src/advisor/chat/tools.py:774-777``) deliberately keeps the LLM-visible
+# behaviour True-by-default via an explicit ``payload.get("include_*", True)``
+# fallback — this is what keeps WI-3 fan-out leads (``cross_references``,
+# ``ancestor_chain``, ``linked_datasets``) flowing to the model whenever it
+# omits the include_* flags (which the persona never tells it to set).
+#
+# The fragility this guards against: if a future refactor drops the explicit
+# ``payload.get(..., True)`` fallback and just passes ``payload.get("include_*")``
+# (or unpacks the payload directly into ``RetrievalRequest(**payload)``), the
+# handler will inherit the post-WI-7 ``False`` defaults and the model silently
+# stops seeing fan-out leads. No exception, no warning, just a quiet cost
+# regression and a quiet quality regression as the LLM thrashes to find
+# cross-references that aren't in the tool_result anymore.
+#
+# These tests pin the contract at the handler boundary so any such refactor
+# fails loudly here rather than silently in production. The corresponding
+# Playwright spec ``abs297-advisor-default-include-drift-guard.spec.ts`` pins
+# the same contract through the running FastAPI stack.
+# ---------------------------------------------------------------------------
+
+
+class _CapturingRetrievalService:
+    """Stub service that records every ``RetrievalRequest`` it receives.
+
+    Returning an empty ``RetrievalResponse`` is enough — the drift guard
+    asserts on the request's ``include_*`` flags, not on what came back.
+    Bypassing the real retrieval pipeline keeps this test pinned to the
+    handler's request-construction behaviour and independent of seed data.
+    """
+
+    def __init__(self) -> None:
+        self.last_request: RetrievalRequest | None = None
+
+    def search(self, request: RetrievalRequest) -> RetrievalResponse:
+        self.last_request = request
+        return RetrievalResponse(total_matches=0, matches=[], notes=[])
+
+
+@pytest.mark.asyncio
+async def test_search_bylaw_evidence_handler_defaults_include_flags_true_drift_guard():
+    """ABS-297: a default advisor-path payload (no ``include_*`` keys) must
+    produce a ``RetrievalRequest`` with all four ``include_*`` flags set to
+    ``True`` — the explicit fallback in the handler must override the
+    post-WI-7 ``False`` default on ``RetrievalRequest``.
+
+    If this test starts failing, the handler has drifted: WI-3 fan-out
+    leads will stop reaching the model in production. Look at
+    ``src/advisor/chat/tools.py`` ``search_bylaw_evidence_handler`` —
+    each ``payload.get("include_*", True)`` is load-bearing.
+    """
+    capturing = _CapturingRetrievalService()
+    _, handlers = build_bylaw_tools(capturing)
+
+    await handlers["search_bylaw_evidence"]({"query": "any question"})
+
+    req = capturing.last_request
+    assert req is not None, "handler did not call service.search"
+    assert req.include_context is True, (
+        "ABS-297 drift: include_context fell through to RetrievalRequest's "
+        "post-WI-7 False default. Restore payload.get('include_context', True)."
+    )
+    assert req.include_cross_references is True, (
+        "ABS-297 drift: include_cross_references fell through to "
+        "RetrievalRequest's post-WI-7 False default. WI-3 fan-out leads will "
+        "stop reaching the model. Restore payload.get('include_cross_references', True)."
+    )
+    assert req.include_tables is True, (
+        "ABS-297 drift: include_tables fell through to RetrievalRequest's "
+        "post-WI-7 False default. Restore payload.get('include_tables', True)."
+    )
+    assert req.include_datasets is True, (
+        "ABS-297 drift: include_datasets fell through to RetrievalRequest's "
+        "post-WI-7 False default. WI-3 linked-dataset fan-out will silently "
+        "die. Restore payload.get('include_datasets', True)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_bylaw_evidence_handler_respects_explicit_include_false():
+    """ABS-297 paired check: the True-by-default must NOT mask an explicit
+    ``False`` from the model. If a future implementation switches to e.g.
+    ``payload.get("include_*", True) or True`` to "be safe", a model that
+    deliberately opts out (say, for a narrow follow-up to a fan-out parent
+    turn) would stop being able to. Pin that contract too.
+    """
+    capturing = _CapturingRetrievalService()
+    _, handlers = build_bylaw_tools(capturing)
+
+    await handlers["search_bylaw_evidence"](
+        {
+            "query": "any question",
+            "include_context": False,
+            "include_cross_references": False,
+            "include_tables": False,
+            "include_datasets": False,
+        }
+    )
+
+    req = capturing.last_request
+    assert req is not None
+    assert req.include_context is False
+    assert req.include_cross_references is False
+    assert req.include_tables is False
+    assert req.include_datasets is False

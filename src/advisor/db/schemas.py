@@ -150,6 +150,7 @@ class CaseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    user_case_number: int
     user_id: int
     anchor_label: str
     anchor_kind: str

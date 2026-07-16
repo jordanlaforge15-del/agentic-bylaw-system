@@ -1,0 +1,236 @@
+[
+  {
+    "question": "What is the front setback for the ER-1 zone?",
+    "expected_topics": ["front_setback"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["6.0 m", "ER-1"],
+    "expected_claim_shapes": [{"claim_type": "dimensional_standard", "zone_code": "ER-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "ER-1"}
+  },
+  {
+    "question": "What is the side setback for the ER-2 zone?",
+    "expected_topics": ["side_setback"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["1.5 m", "ER-2"],
+    "expected_claim_shapes": [{"claim_type": "dimensional_standard", "zone_code": "ER-2"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "ER-2"}
+  },
+  {
+    "question": "What is the rear setback for the HR-1 zone?",
+    "expected_topics": ["rear_setback"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["3.0 m", "HR-1"],
+    "expected_claim_shapes": [{"claim_type": "dimensional_standard", "zone_code": "HR-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "HR-1"}
+  },
+  {
+    "question": "What are the setback requirements for the CEN-1 zone?",
+    "expected_topics": ["front_setback", "side_setback", "rear_setback"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["0.0 m", "CEN-1"],
+    "expected_claim_shapes": [{"claim_type": "dimensional_standard", "zone_code": "CEN-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "CEN-1"}
+  },
+  {
+    "question": "What are the setback requirements for the ER-3 zone?",
+    "expected_topics": ["front_setback", "side_setback", "rear_setback"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["3.0 m", "ER-3"],
+    "expected_claim_shapes": [{"claim_type": "dimensional_standard", "zone_code": "ER-3"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "ER-3"}
+  },
+  {
+    "question": "What is the maximum height in the ER-1 zone?",
+    "expected_topics": ["height"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["10.0 m", "ER-1"],
+    "expected_claim_shapes": [{"claim_type": "dimensional_standard", "zone_code": "ER-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "ER-1"}
+  },
+  {
+    "question": "What is the maximum height in the HR-1 zone?",
+    "expected_topics": ["height"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["20.0 m", "HR-1"],
+    "expected_claim_shapes": [{"claim_type": "dimensional_standard", "zone_code": "HR-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "HR-1"}
+  },
+  {
+    "question": "What is the maximum height in the CEN-1 zone?",
+    "expected_topics": ["height", "overlay"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["Schedule 15", "CEN-1"],
+    "expected_claim_shapes": [{"claim_type": "cross_reference_dependency"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "CEN-1"}
+  },
+  {
+    "question": "What is the maximum lot coverage in the ER-1 zone?",
+    "expected_topics": ["lot_coverage"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["35%", "ER-1"],
+    "expected_claim_shapes": [{"claim_type": "dimensional_standard", "zone_code": "ER-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "ER-1"}
+  },
+  {
+    "question": "What is the maximum lot coverage in the HR-1 zone?",
+    "expected_topics": ["lot_coverage"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["60%", "HR-1"],
+    "expected_claim_shapes": [{"claim_type": "dimensional_standard", "zone_code": "HR-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "HR-1"}
+  },
+  {
+    "question": "Is a single-unit dwelling use permitted in the ER-1 zone?",
+    "expected_topics": ["use_permission"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["single-unit dwelling", "permitted", "ER-1"],
+    "expected_claim_shapes": [{"claim_type": "use_permission", "zone_code": "ER-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "ER-1"}
+  },
+  {
+    "question": "Is a multi-unit dwelling use permitted in the ER-1 zone?",
+    "expected_topics": ["use_permission"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["multi-unit dwelling", "not permitted", "ER-1"],
+    "expected_claim_shapes": [{"claim_type": "use_permission", "zone_code": "ER-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "ER-1"}
+  },
+  {
+    "question": "Is a secondary suite use permitted in the CEN-1 zone?",
+    "expected_topics": ["use_permission"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["secondary suite", "not permitted", "CEN-1"],
+    "expected_claim_shapes": [{"claim_type": "use_permission", "zone_code": "CEN-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "CEN-1"}
+  },
+  {
+    "question": "Is a multi-unit dwelling use permitted in the CEN-1 zone?",
+    "expected_topics": ["use_permission"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["multi-unit dwelling", "permitted", "CEN-1"],
+    "expected_claim_shapes": [{"claim_type": "use_permission", "zone_code": "CEN-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "CEN-1"}
+  },
+  {
+    "question": "Is a daycare use permitted in the HR-1 zone?",
+    "expected_topics": ["use_permission"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": [],
+    "expected_answer_keywords": ["daycare", "permitted", "HR-1"],
+    "expected_claim_shapes": [{"claim_type": "use_permission", "zone_code": "HR-1"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "HR-1"}
+  },
+  {
+    "question": "What are the heritage conservation district demolition requirements?",
+    "expected_topics": ["heritage", "overlay"],
+    "expected_fragment_ids": [51, 49],
+    "expected_citation_labels": ["110", "(b)"],
+    "expected_answer_keywords": ["heritage", "demolition", "Heritage Advisory Committee"],
+    "expected_claim_shapes": [{"claim_type": "procedure_requirement"}],
+    "known_facts_json": {"municipality": "HRM"}
+  },
+  {
+    "question": "Is off-street parking required in the CEN-1 zone?",
+    "expected_topics": ["parking"],
+    "expected_fragment_ids": [60, 61, 62],
+    "expected_citation_labels": ["(b)", "120"],
+    "expected_answer_keywords": ["no off-street parking", "CEN-1"],
+    "expected_claim_shapes": [{"claim_type": "parking_requirement"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "CEN-1"}
+  },
+  {
+    "question": "What is the residential parking requirement?",
+    "expected_topics": ["parking"],
+    "expected_fragment_ids": [61, 60],
+    "expected_citation_labels": ["(a)", "120"],
+    "expected_answer_keywords": ["1 parking space", "dwelling unit"],
+    "expected_claim_shapes": [{"claim_type": "parking_requirement"}],
+    "known_facts_json": {"municipality": "HRM"}
+  },
+  {
+    "question": "What are the development permit exemptions?",
+    "expected_topics": ["development_permit"],
+    "expected_fragment_ids": [13, 14],
+    "expected_citation_labels": ["9"],
+    "expected_answer_keywords": ["development permit", "interior renovations", "exemption"],
+    "expected_claim_shapes": [{"claim_type": "exception"}],
+    "known_facts_json": {"municipality": "HRM"}
+  },
+  {
+    "question": "What uses may be combined in the ER-1 zone under the combination of uses provision?",
+    "expected_topics": ["use_permission", "combination_of_uses"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": ["49", "(a)"],
+    "expected_answer_keywords": ["home occupation", "secondary suite", "ER-1"],
+    "expected_claim_shapes": [{"claim_type": "use_permission"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "ER-1"}
+  },
+  {
+    "question": "What is the definition of a dwelling unit?",
+    "expected_topics": ["definition"],
+    "expected_fragment_ids": [9, 10, 11],
+    "expected_citation_labels": ["(a)", "3"],
+    "expected_answer_keywords": ["dwelling unit", "self-contained", "private entrance"],
+    "expected_claim_shapes": [{"claim_type": "definition"}],
+    "known_facts_json": {"municipality": "HRM"}
+  },
+  {
+    "question": "What does Schedule 15 govern and when does it prevail?",
+    "expected_topics": ["overlay", "height"],
+    "expected_fragment_ids": [54, 55, 65],
+    "expected_citation_labels": ["Schedule 15", "111"],
+    "expected_answer_keywords": ["Schedule 15", "height", "prevails"],
+    "expected_claim_shapes": [{"claim_type": "cross_reference_dependency"}],
+    "known_facts_json": {"municipality": "HRM"}
+  },
+  {
+    "question": "What does Schedule 17 govern for floor area ratio?",
+    "expected_topics": ["overlay", "floor_area_ratio"],
+    "expected_fragment_ids": [67, 56, 57],
+    "expected_citation_labels": ["Schedule 17", "112"],
+    "expected_answer_keywords": ["Schedule 17", "floor area ratio"],
+    "expected_claim_shapes": [{"claim_type": "cross_reference_dependency"}],
+    "known_facts_json": {"municipality": "HRM"}
+  },
+  {
+    "question": "What is the bicycle parking requirement?",
+    "expected_topics": ["parking"],
+    "expected_fragment_ids": [64, 60],
+    "expected_citation_labels": ["(d)", "120"],
+    "expected_answer_keywords": ["bicycle", "1 space per 4 dwelling units"],
+    "expected_claim_shapes": [{"claim_type": "parking_requirement"}],
+    "known_facts_json": {"municipality": "HRM"}
+  },
+  {
+    "question": "Can a home occupation use be combined with a secondary suite in the ER-2 zone?",
+    "expected_topics": ["use_permission", "combination_of_uses"],
+    "expected_fragment_ids": [],
+    "expected_citation_labels": ["49"],
+    "expected_answer_keywords": ["home occupation", "secondary suite", "ER-2"],
+    "expected_claim_shapes": [{"claim_type": "use_permission"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "ER-2"}
+  },
+  {
+    "question": "Is off-street parking required for a development in the downtown Halifax DH zone?",
+    "expected_topics": ["parking"],
+    "expected_fragment_ids": [60, 62],
+    "expected_citation_labels": ["(b)", "120"],
+    "expected_answer_keywords": ["no off-street parking"],
+    "expected_claim_shapes": [{"claim_type": "parking_requirement"}],
+    "known_facts_json": {"municipality": "HRM", "zone_code": "DH"}
+  }
+]

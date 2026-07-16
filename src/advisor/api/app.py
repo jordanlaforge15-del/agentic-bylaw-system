@@ -8,7 +8,8 @@ gateway, in-memory sessions, RetrievalService bound to the configured
 DB URL).
 
 Endpoints:
-* ``GET /healthz`` — liveness check; no auth required.
+* ``GET /healthz`` — deep health check (DB connectivity via SELECT 1); no auth required.
+* ``GET /readyz`` — readiness probe (requires DB reachable); no auth required.
 * ``POST /v1/chat`` — send a message, get an SSE stream of events.
 * ``GET /v1/chat/sessions/{session_id}`` — debug endpoint that
   returns the message history; will be removed once the frontend
@@ -45,11 +46,8 @@ from advisor.api.auth import current_user_dependency
 from advisor.api.db_session_store import DbSessionStore, default_resolve_user
 from advisor.api.quota import (
     add_case_tokens,
-    commit_credit_for,
     enforce_request_rate,
     record_llm_call,
-    refund_credit_for,
-    reserve_credit_for_session,
     update_usage_event_tokens,
 )
 from advisor.api.sessions import (
@@ -62,7 +60,7 @@ from advisor.chat.persona import load_persona
 from advisor.chat.session import ChatSession
 from advisor.chat.tools import build_bylaw_tools
 from advisor.db.models import Case, User
-from advisor.llm import LLMGateway, LLMRole, Message, StreamEvent
+from advisor.llm import LLMGateway, Message, StreamEvent
 from layer1.db.base import utcnow
 
 logger = logging.getLogger(__name__)
@@ -127,11 +125,16 @@ class ChatSessionResponse(BaseModel):
     user_id: str
     model: str
     messages: list[Message]
+    # Parallel to ``messages``: the DB primary key of each ChatMessage
+    # row. Used by the feedback UI to identify which message the user
+    # is rating. Empty when the session store is in-memory (tests).
+    message_db_ids: list[int] = Field(default_factory=list)
     # Case-billing context. ``None`` for legacy sessions that predate
     # the case-credit model — the frontend uses this to gate the
     # composer (a null ``case_id`` means the conversation can't be
     # resumed and the user must start a new case).
     case_id: int | None = None
+    case_number: int | None = None
     tier: str | None = None
 
 
@@ -144,6 +147,9 @@ class ChatSessionSummary(BaseModel):
     ``message_count`` counts only user-facing turns (user input or
     assistant text reply), not the intermediate tool_use / tool_result
     rounds — that's what a sidebar wants to display.
+    ``case_id`` lets the frontend restore transcript state on direct URL
+    load (``/app?case_id=N``) by locating the matching session without
+    a separate round-trip.
     """
 
     session_id: str
@@ -154,6 +160,23 @@ class ChatSessionSummary(BaseModel):
     # that exist but have never been written to. The frontend renders
     # this as a relative label ("2m ago"); the backend stays neutral.
     updated_at: str | None = None
+    # Numeric case FK. None for legacy / un-cased sessions.
+    case_id: int | None = None
+    # ABS-345: discrete pieces of the sidebar row so the frontend can
+    # render the anchor address in bold with the question muted beneath
+    # (rather than re-parsing the composed ``title``) and show the zone
+    # caption. ``kind`` distinguishes conversation rows from the priced
+    # "report" rows the sidebar merges in from the Answers product, so a
+    # single case-aware list can style both. All are optional / defaulted
+    # so older frontends reading only ``title`` keep working.
+    anchor_label: str | None = None
+    anchor_kind: str | None = None
+    zone: str | None = None
+    # First user message — the "question" line rendered muted under the
+    # bold anchor. Mirrors the piece the composed ``title`` already folds
+    # in; surfaced discretely so the two lines can be styled apart.
+    question: str | None = None
+    kind: str = "conversation"
 
 
 class ChatSessionList(BaseModel):
@@ -175,6 +198,7 @@ def create_app(
     billing_user_dependency: Callable[..., Any] | None = None,
     billing_user_resolver: Callable[[Any, Any], Any] | None = None,
     submissions_evaluator_factory: Callable[[Any], Any] | None = None,
+    test_header_fallback: bool = False,
 ) -> FastAPI:
     """Build the FastAPI app with explicit, injectable dependencies.
 
@@ -247,6 +271,18 @@ def create_app(
     else:
         store = InMemorySessionStore()
 
+    # Resolve the main chat model up front so every request uses the
+    # configured value. ABS-267: ``AdvisorLLMSettings.main_model``
+    # honours ``ADVISOR_LLM_MAIN_MODEL`` (or legacy ``ADVISOR_LLM_MODEL``)
+    # — previously this setting was loaded but never threaded down to
+    # ``ChatSession.model``, so the env var was dead code from a
+    # deployment-config perspective.
+    from advisor.llm.registry import (  # noqa: PLC0415
+        get_settings as _get_llm_settings,
+    )
+
+    _chat_main_model = _get_llm_settings().main_model
+
     app = FastAPI(title="Halifax Bylaw Advisor", version="0.1.0")
 
     # Stash dependencies on app.state so route handlers can grab them
@@ -259,23 +295,53 @@ def create_app(
     app.state.retrieval_factory = factory
     app.state.db_session_factory = db_session_factory
 
+    # Build the user-dependency callable here — before the billing router
+    # so the dormant flavour can share it for ``GET /me``. Also used by
+    # the cases / admin / terms / submissions routers mounted below.
+    require_user = _build_user_dependency(
+        verifier, db_session_factory, test_header_fallback=test_header_fallback
+    )
+
+    # Pre-build the user resolver if we have a DB factory. Shared by
+    # the dormant billing ``GET /me`` and all DB-backed routers below.
+    _resolve_user_via_db: Any = None
+    if db_session_factory is not None:
+        from advisor.api.db_session_store import (  # noqa: PLC0415
+            default_resolve_user,
+        )
+
+        def _resolve_user_via_db(  # type: ignore[misc]
+            auth_session: Any, db: Session
+        ) -> User:
+            if isinstance(auth_session, User):
+                return auth_session
+            return default_resolve_user(db, auth_session.clerk_user_id)
+
     # Billing router. Mounted in two flavours:
     # * If ``billing_settings`` is provided AND ``enabled=True`` AND
-    #   the wiring kwargs are present, the live router is mounted.
-    # * Otherwise, a dormant stub router that 503s every endpoint —
-    #   so the frontend can probe ``/v1/billing/me`` regardless and
-    #   the operator can flip the flag without redeploying. This
-    #   block is the ONLY billing-related edit to this file; all
-    #   other billing logic lives in ``advisor.billing``.
+    #   the DB/user wiring kwargs are present, the live router is mounted.
+    #   ``stripe_client_factory`` is REQUIRED only when payments are on
+    #   (ABS-322): in payments-off / free-trial mode the buy-an-answer
+    #   flow unlocks answers by consuming free-question credits with no
+    #   Stripe client, so the live router mounts with ``client_factory``
+    #   left None and the Stripe-only endpoints (pack checkout, webhook)
+    #   self-503.
+    # * Otherwise, a dormant stub router that 503s purchase endpoints
+    #   but serves real credit balances on ``GET /me`` so the billing
+    #   page accurately reflects admin-granted credits even before
+    #   Stripe is configured. This block is the ONLY billing-related
+    #   edit to this file; all other billing logic lives in
+    #   ``advisor.billing``.
     from advisor.billing.router import (  # noqa: PLC0415 — lazy import
         build_billing_router,
         build_dormant_billing_router,
     )
 
+    _payments_enabled = getattr(billing_settings, "payments_enabled", False)
     if (
         billing_settings is not None
         and getattr(billing_settings, "enabled", False)
-        and stripe_client_factory is not None
+        and (stripe_client_factory is not None or not _payments_enabled)
         and billing_db_session_factory is not None
         and billing_user_dependency is not None
         and billing_user_resolver is not None
@@ -287,15 +353,40 @@ def create_app(
                 db_session_factory=billing_db_session_factory,
                 user_dependency=billing_user_dependency,
                 user_resolver=billing_user_resolver,
+                # ABS-312: wire the engine into the buy-an-answer
+                # run/refine endpoints. Reuses the same gateway, persona,
+                # and retrieval factory the chat route runs on.
+                answer_gateway=gateway,
+                answer_persona=persona,
+                answer_retrieval_factory=factory,
             )
         )
     else:
-        app.include_router(build_dormant_billing_router())
-
-    # Build the user-dependency callable here so the cases / admin
-    # routers (mounted next) can share it. The same callable is
-    # consumed by ``POST /v1/chat`` further down.
-    require_user = _build_user_dependency(verifier, db_session_factory)
+        # Pass the main DB + user deps as a fallback so ``GET /me``
+        # can return real credit balances even when Stripe isn't
+        # configured. Prefer the billing-specific deps when they are
+        # set (they will be present if billing_settings exists but
+        # enabled=False, e.g. during a feature-flag roll-out).
+        _dormant_db = billing_db_session_factory or db_session_factory
+        _dormant_user_dep = billing_user_dependency or (
+            require_user if db_session_factory is not None else None
+        )
+        _dormant_resolver = billing_user_resolver or _resolve_user_via_db
+        app.include_router(
+            build_dormant_billing_router(
+                db_session_factory=_dormant_db,
+                user_dependency=_dormant_user_dep,
+                user_resolver=_dormant_resolver,
+                # ABS-324: the Answers product is decoupled from the
+                # Conversation/Stripe billing toggle. Wire the same engine
+                # the chat route uses so the payments-off free-trial path
+                # runs answers in the dedicated answer view, with no Case
+                # and no CaseCredit.
+                answer_gateway=gateway,
+                answer_persona=persona,
+                answer_retrieval_factory=factory,
+            )
+        )
 
     # Cases router — case-credit lifecycle (open / match / classify /
     # upgrade / close). Mounted whenever a DB factory is wired; the
@@ -306,9 +397,6 @@ def create_app(
     # synthetic-_TestUser (test header) shapes.
     if db_session_factory is not None:
         from advisor.api.cases_router import build_cases_router  # noqa: PLC0415
-        from advisor.api.db_session_store import (  # noqa: PLC0415
-            default_resolve_user,
-        )
 
         # Default classifier gateway = same Anthropic gateway as chat,
         # since the gateway is model-agnostic and selects per-call.
@@ -320,11 +408,6 @@ def create_app(
 
         def _classifier_gateway_factory() -> LLMGateway:
             return gateway
-
-        def _resolve_user_via_db(auth_session: Any, db: Session) -> User:
-            if isinstance(auth_session, User):
-                return auth_session
-            return default_resolve_user(db, auth_session.clerk_user_id)
 
         app.include_router(
             build_cases_router(
@@ -384,6 +467,45 @@ def create_app(
             )
         )
 
+        # Integrations router (ABS-59) — API-key-authenticated M2M
+        # submission endpoints for Speckle Automate and similar callers.
+        from advisor.api.integrations_router import (  # noqa: PLC0415
+            build_integrations_router,
+        )
+
+        app.include_router(
+            build_integrations_router(
+                db_session_factory=db_session_factory,
+                evaluator_factory=submissions_evaluator_factory,
+            )
+        )
+
+        # Chat message feedback router (ABS-121) — thumbs + flag.
+        from advisor.api.feedback_router import (  # noqa: PLC0415
+            build_feedback_router,
+        )
+
+        app.include_router(
+            build_feedback_router(
+                db_session_factory=db_session_factory,
+                user_dependency=require_user,
+                user_resolver=_resolve_user_via_db,
+            )
+        )
+
+        # General feedback router (ABS-129) — non-message-specific feedback.
+        from advisor.api.general_feedback_router import (  # noqa: PLC0415
+            build_general_feedback_router,
+        )
+
+        app.include_router(
+            build_general_feedback_router(
+                db_session_factory=db_session_factory,
+                user_dependency=require_user,
+                user_resolver=_resolve_user_via_db,
+            )
+        )
+
     # Clerk webhook router. Only mounted when both the secret and a DB
     # factory are wired — the route needs a real DB to write user-row
     # changes against, and without the secret we have no way to verify
@@ -402,9 +524,71 @@ def create_app(
             )
         )
 
-    @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+    # Monitoring status router (ABS-122) — unauthenticated, always mounted.
+    from advisor.monitoring.router import router as monitoring_router  # noqa: PLC0415
+
+    app.include_router(monitoring_router)
+
+    def _check_db() -> str:
+        """Return ``"ok"`` if the database answers a ``SELECT 1``, else ``"unreachable"``."""
+        if db_session_factory is None:
+            return "not_configured"
+        try:
+            from sqlalchemy import text  # noqa: PLC0415
+
+            with db_session_factory() as session:
+                session.execute(text("SELECT 1"))
+            return "ok"
+        except Exception:
+            logger.warning("healthz: database connectivity check failed", exc_info=True)
+            return "unreachable"
+
+    @app.get("/healthz", response_model=None)
+    async def healthz():
+        from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+        from advisor.api.sentry import is_sentry_enabled  # noqa: PLC0415
+
+        db_status = _check_db()
+        checks = {
+            "database": db_status,
+            "error_tracking": "sentry" if is_sentry_enabled() else "disabled",
+        }
+
+        try:
+            from advisor.api.metrics import compute_sli_compliance  # noqa: PLC0415
+
+            sli = compute_sli_compliance()
+        except Exception:  # noqa: BLE001
+            sli = None
+
+        # ABS-267: surface the active chat model so out-of-band runners
+        # can verify they're hitting the model they expected before
+        # spending money on an Opus run when they meant Haiku, etc.
+        body: dict[str, Any] = {
+            "status": "ok",
+            "checks": checks,
+            "sli": sli,
+            "llm": {"main_model": _chat_main_model},
+        }
+
+        if db_status == "unreachable":
+            body["status"] = "degraded"
+            return JSONResponse(content=body, status_code=503)
+        return JSONResponse(content=body)
+
+    @app.get("/readyz", response_model=None)
+    async def readyz():
+        from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+        db_status = _check_db()
+        checks = {"database": db_status}
+        if db_status != "ok":
+            return JSONResponse(
+                content={"status": "not_ready", "checks": checks},
+                status_code=503,
+            )
+        return JSONResponse(content={"status": "ready", "checks": checks})
 
     @app.post("/v1/chat")
     async def post_chat(
@@ -428,27 +612,44 @@ def create_app(
             session_id=body.session_id,
             persona_text=persona,
             retrieval_factory=factory,
+            model=_chat_main_model,
         )
 
-        # Pre-flight (case-credit + RPM) BEFORE we start streaming.
-        # In the case-credit model:
-        #   1. Enforce the per-user RPM rate cap.
-        #   2. Reserve a credit for this session if one isn't already
-        #      attached. New sessions need ``body.case_id`` so we know
-        #      which case to bill against; resumed sessions inherit the
-        #      previously-reserved credit.
-        #   3. Record an up-front ``llm_call`` audit row; tokens get
+        # Pre-flight (token-wallet floor + RPM) BEFORE we start streaming.
+        # In the token-wallet model (ABS-383):
+        #   1. Enforce the per-user RPM rate cap (429).
+        #   2. Enforce the click-wrap terms gate (412).
+        #   3. Refuse the turn with 402 ``insufficient_tokens`` when the
+        #      wallet balance is at or below the floor — BEFORE any
+        #      ``llm_call`` UsageEvent row is written, so a floored turn
+        #      leaves no (0,0) usage stub. ``unlimited_credits`` users
+        #      bypass the floor.
+        #   4. Resolve the case context (case_id / number / anchor) so the
+        #      system prompt anchors to it and the burn row links to it. No
+        #      credit is reserved and no tier is bound — the account-level
+        #      wallet is the only gate now; the tier/CaseCredit machinery is
+        #      retired from the live chat path.
+        #   5. Record an up-front ``llm_call`` audit row; tokens get
         #      patched after the stream.
         # Skip everything when no DB factory is wired (in-memory test
         # path) so existing tests don't need DB fixtures.
         usage_event_id: int | None = None
         case_id_for_session: int | None = None
+        case_number_for_session: int | None = None
+        # Tier is intentionally always None on the live chat path (ABS-383):
+        # the tier/credit machinery is retired. Kept as a variable so the
+        # ``session`` SSE preamble can still carry an explicit ``tier: null``.
         case_tier_for_session: str | None = None
-        # Mirrored onto the in-memory ChatSession alongside case_id / tier
-        # so the LLM's system prompt picks up the case anchor (see
+        # Mirrored onto the in-memory ChatSession alongside case_id so the
+        # LLM's system prompt picks up the case anchor (see
         # ``_compose_system_prompt`` in ``advisor.chat.session``).
         case_anchor_label_for_session: str | None = None
         case_anchor_kind_for_session: str | None = None
+        # Captured inside the pre-flight transaction for post-stream burn
+        # settlement (see ``_settle_token_burn``): who to bill and whether
+        # they're exempt (unlimited).
+        settle_user_id: int | None = None
+        settle_unlimited: bool = False
         if db_session_factory is not None and isinstance(store, DbSessionStore):
             with db_session_factory() as db:
                 try:
@@ -486,16 +687,53 @@ def create_app(
                         },
                     )
 
+                settle_user_id = db_user.id
+                settle_unlimited = db_user.unlimited_credits
+
+                # Wallet floor pre-flight (ABS-383). Refuse the turn at
+                # ``balance <= floor`` BEFORE the ``llm_call`` row is
+                # recorded, so a floored turn never leaves a (0,0) usage
+                # stub. ``unlimited_credits`` users bypass the floor (and,
+                # later, the burn). The 402 payload mirrors the wallet read
+                # API's fields so the frontend can render the same
+                # out-of-tokens state it derives from ``GET /v1/wallet``.
+                from advisor.billing.turns import (  # noqa: PLC0415
+                    approx_turns_remaining as _approx_turns_remaining,
+                    chat_min_balance_tokens as _chat_min_balance_tokens,
+                )
+
+                floor_tokens = _chat_min_balance_tokens()
+                if (
+                    not db_user.unlimited_credits
+                    and db_user.token_balance <= floor_tokens
+                ):
+                    raise HTTPException(
+                        status_code=402,
+                        detail={
+                            "code": "insufficient_tokens",
+                            "balance_tokens": db_user.token_balance,
+                            "floor_tokens": floor_tokens,
+                            "approx_turns_remaining": _approx_turns_remaining(
+                                db_user.token_balance
+                            ),
+                            "message": (
+                                "Your token balance is exhausted. Top up to "
+                                "continue chatting."
+                            ),
+                        },
+                    )
+
                 try:
                     db_session_pk = int(session.session_id)
                 except ValueError:
                     db_session_pk = None
 
-                # Resolve / reserve the credit for this session. If the
-                # session already has one attached (resume path), use
-                # that. Otherwise the request must carry ``case_id``.
+                # Resolve the case context. New sessions carry ``case_id`` in
+                # the body; resumed sessions inherit the session's stored
+                # case. No credit is reserved and no tier is bound — the
+                # wallet floor + burn are the only billing now (ABS-383), so
+                # this is a pure read of the case's anchor / number.
                 from advisor.db.models import (  # noqa: PLC0415 — local import to avoid heavy import at module load
-                    CaseCredit as _CaseCredit,
                     ChatSession as _DbChatSession,
                 )
 
@@ -510,95 +748,36 @@ def create_app(
                         detail={"code": "session_not_found"},
                     )
 
-                existing_credit = (
-                    db.query(_CaseCredit)
-                    .filter(
-                        _CaseCredit.session_id == db_chat_session.id,
-                        _CaseCredit.state.in_(["reserved", "consumed"]),
-                    )
-                    .one_or_none()
+                effective_case_id = (
+                    body.case_id
+                    if body.case_id is not None
+                    else db_chat_session.case_id
                 )
-                if existing_credit is None:
-                    # Resume-path safety net: if the session is already
-                    # attached to a case in the DB but the live credit
-                    # got refunded / expired (or the client just didn't
-                    # bother sending case_id on a follow-up turn), fall
-                    # back to the session's stored case_id rather than
-                    # forcing the client to re-supply it.
-                    effective_case_id = (
-                        body.case_id
-                        if body.case_id is not None
-                        else db_chat_session.case_id
+                if effective_case_id is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "code": "case_id_required",
+                            "message": (
+                                "case_id is required for new sessions. Open "
+                                "a case via POST /v1/cases first."
+                            ),
+                        },
                     )
-                    if effective_case_id is None:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "code": "case_id_required",
-                                "message": (
-                                    "case_id is required for new sessions in "
-                                    "the case-credit model. Open a case via "
-                                    "POST /v1/cases first."
-                                ),
-                            },
-                        )
-                    case_row = db.get(Case, effective_case_id)
-                    if case_row is None or case_row.user_id != db_user.id:
-                        raise HTTPException(
-                            status_code=404, detail={"code": "case_not_found"}
-                        )
-                    if case_row.current_tier is None:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "code": "case_no_active_tier",
-                                "message": (
-                                    "Case has no active tier; reserve a "
-                                    "credit by opening it through "
-                                    "POST /v1/cases."
-                                ),
-                            },
-                        )
-                    db_chat_session.case_id = case_row.id
-                    db_chat_session.tier = case_row.current_tier
-                    # Initialise the per-case budget remaining from the
-                    # tier's full budget minus what the case has burned
-                    # in earlier sessions (reopen path).
-                    from advisor.llm.budget import (  # noqa: PLC0415
-                        case_budget_for,
+                case_row = db.get(Case, effective_case_id)
+                if case_row is None or case_row.user_id != db_user.id:
+                    raise HTTPException(
+                        status_code=404, detail={"code": "case_not_found"}
                     )
-
-                    db_chat_session.token_budget_remaining = max(
-                        0,
-                        case_budget_for(case_row.current_tier)
-                        - (case_row.tokens_consumed or 0),
-                    )
-                    credit = reserve_credit_for_session(
-                        db,
-                        db_user,
-                        session=db_chat_session,
-                        case=case_row,
-                        tier=case_row.current_tier,
-                    )
-                    case_id_for_session = case_row.id
-                    case_tier_for_session = credit.tier
-                    case_anchor_label_for_session = case_row.anchor_label
-                    case_anchor_kind_for_session = case_row.anchor_kind
-                else:
-                    case_id_for_session = existing_credit.case_id
-                    case_tier_for_session = existing_credit.tier
-                    # Resume path: load the case row to surface its anchor
-                    # to the LLM. The in-memory ChatSession is reconstituted
-                    # from the DB store on every turn, so we have to rebind
-                    # this each call (same pattern as case_id / tier above).
-                    resumed_case = (
-                        db.get(Case, existing_credit.case_id)
-                        if existing_credit.case_id is not None
-                        else None
-                    )
-                    if resumed_case is not None:
-                        case_anchor_label_for_session = resumed_case.anchor_label
-                        case_anchor_kind_for_session = resumed_case.anchor_kind
+                db_chat_session.case_id = case_row.id
+                # Tier stays null on the live path — ``token_budget_remaining``
+                # is left untouched (None) so the retired per-tier ledger
+                # no-ops in ``send_user_message_blocking``.
+                db_chat_session.tier = None
+                case_id_for_session = case_row.id
+                case_number_for_session = case_row.user_case_number
+                case_anchor_label_for_session = case_row.anchor_label
+                case_anchor_kind_for_session = case_row.anchor_kind
 
                 usage_event = record_llm_call(
                     db,
@@ -640,23 +819,17 @@ def create_app(
             if facts_block:
                 session.system_prompt = persona + "\n\n" + facts_block
 
-        # Mirror case context onto the in-memory ChatSession so
-        # ``send_user_message_blocking`` can update the budget ledger
-        # and surface the per-turn upgrade-request drain.
+        # Mirror case context onto the in-memory ChatSession so the LLM's
+        # system prompt anchors to the case. Tier stays None (retired) and
+        # ``token_budget_remaining`` is left None so the per-tier ledger
+        # no-ops — ``max_iterations`` falls back to
+        # ``ADVISOR_CHAT_MAX_ITERATIONS`` for the turn.
         if case_id_for_session is not None:
             session.case_id = case_id_for_session
+            session.case_number = case_number_for_session
             session.tier = case_tier_for_session
             session.case_anchor_label = case_anchor_label_for_session
             session.case_anchor_kind = case_anchor_kind_for_session
-            if (
-                session.token_budget_remaining is None
-                and case_tier_for_session is not None
-            ):
-                from advisor.llm.budget import case_budget_for  # noqa: PLC0415
-
-                session.token_budget_remaining = case_budget_for(
-                    case_tier_for_session
-                )
 
         async def event_stream() -> AsyncIterator[dict[str, str]]:
             # Send the session id up front so the frontend can persist
@@ -667,18 +840,17 @@ def create_app(
                     {
                         "session_id": session.session_id,
                         "case_id": case_id_for_session,
+                        "case_number": case_number_for_session,
                         "tier": case_tier_for_session,
                     }
                 ),
             }
-            stream_failed = False
             try:
                 async for stream_event in session.send_user_message(
                     gateway, body.message
                 ):
                     yield _format_sse_event(stream_event)
             except Exception as exc:  # noqa: BLE001 — surface to client
-                stream_failed = True
                 logger.exception("chat stream failed")
                 yield {
                     "event": "chat_error",
@@ -690,45 +862,31 @@ def create_app(
                     ),
                 }
             finally:
-                # Drain any tier-upgrade requests the agent fired via
-                # ``request_tier_upgrade`` and emit them as
-                # ``case_upgrade_offer`` SSE events. Done outside the
-                # try-block so a stream failure still surfaces any
-                # upgrade prompt that was already raised mid-turn.
-                for offer in session.last_turn_upgrade_requests:
-                    yield {
-                        "event": "case_upgrade_offer",
-                        "data": json.dumps(
-                            {
-                                "case_id": case_id_for_session,
-                                "current_tier": case_tier_for_session,
-                                "recommended_tier": offer.get(
-                                    "recommended_tier"
-                                ),
-                                "reason": offer.get("reason"),
-                            }
-                        ),
-                    }
-
-                # Post-stream DB updates: patch tokens, commit / refund
-                # the case credit, bump the per-case ledger, and emit a
-                # budget warning if we're in the danger zone.
+                # Post-stream DB updates (ABS-383): patch the audit row with
+                # real token counts, then burn the measured usage from the
+                # wallet and emit the per-turn ``token_balance`` SSE so the
+                # UI can decrement live. The burn is unconditional on
+                # measured usage — a mid-stream failure still burns what was
+                # recorded; there is no refund heuristic. The
+                # ``token_balance`` event is emitted in the ``finally`` so it
+                # follows any ``chat_error`` that preceded it.
                 _patch_usage_event_tokens(
                     db_session_factory=db_session_factory,
                     usage_event_id=usage_event_id,
                     chat_session=session,
                 )
-                budget_warning = _settle_case_credit(
+                balance_event = _settle_token_burn(
                     db_session_factory=db_session_factory,
                     chat_session=session,
                     case_id=case_id_for_session,
-                    tier=case_tier_for_session,
-                    stream_failed=stream_failed,
+                    user_id=settle_user_id,
+                    unlimited=settle_unlimited,
+                    usage_event_id=usage_event_id,
                 )
-                if budget_warning is not None:
+                if balance_event is not None:
                     yield {
-                        "event": "case_budget_warning",
-                        "data": json.dumps(budget_warning),
+                        "event": "token_balance",
+                        "data": json.dumps(balance_event),
                     }
 
         return EventSourceResponse(event_stream())
@@ -767,18 +925,94 @@ def create_app(
         user_id_str = user.clerk_user_id
         session = store.get(session_id)
         if session is None or session.user_id != user_id_str:
-            # 404, not 403, because leaking "this session exists but
-            # isn't yours" would let an attacker enumerate session
-            # ids. Treat unauth and missing as the same response.
             raise HTTPException(status_code=404, detail="Session not found")
+
+        message_db_ids: list[int] = []
+        if db_session_factory is not None:
+            try:
+                db_session_pk = int(session_id)
+            except ValueError:
+                db_session_pk = None
+            if db_session_pk is not None:
+                from advisor.db.models import (  # noqa: PLC0415
+                    ChatMessage as _DbChatMessage,
+                )
+
+                with db_session_factory() as db:
+                    rows = (
+                        db.query(
+                            _DbChatMessage.id, _DbChatMessage.sequence
+                        )
+                        .filter(_DbChatMessage.session_id == db_session_pk)
+                        .order_by(_DbChatMessage.sequence)
+                        .all()
+                    )
+                    message_db_ids = [r.id for r in rows]
+
         return ChatSessionResponse(
             session_id=session.session_id,
             user_id=session.user_id,
             model=session.model,
             messages=session.messages,
+            message_db_ids=message_db_ids,
             case_id=session.case_id,
+            case_number=session.case_number,
             tier=session.tier,
         )
+
+    @app.get("/v1/citation")
+    async def get_citation(
+        citation_path: str,
+        document_id: int | None = None,
+        user: User = Depends(require_user),
+    ) -> dict:
+        from advisor.chat.compact import compact_match  # noqa: PLC0415
+        from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+            CitationLookupRequest,
+        )
+
+        request = CitationLookupRequest(
+            citation_path=citation_path,
+            document_id=document_id,
+            include_context=True,
+            include_cross_references=False,
+            include_tables=False,
+        )
+        # ABS-261: service.lookup_citation now returns a
+        # CitationLookupResponse envelope (match-or-suggestions) and only
+        # raises on the ambiguous-across-documents case. We preserve the
+        # public 404-on-miss contract for /v1/citation because the UI
+        # (parcel-pane.tsx → /api/citation) throws on non-200; but on miss
+        # we now surface the nearest stored paths in the detail body so
+        # future UI iterations can let the user pick the right form.
+        try:
+            if callable(factory):
+                result = factory()
+                if hasattr(result, "__enter__"):
+                    with result as service:
+                        response = service.lookup_citation(request)
+                else:
+                    response = result.lookup_citation(request)
+            else:
+                response = factory.lookup_citation(request)
+        except ValueError as exc:
+            # Ambiguous-across-documents — caller must add a document_id.
+            # Kept as 404 for backward compatibility with the prior
+            # contract (the UI only checks `r.ok`); the change of
+            # semantics is left to a future endpoint cleanup.
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if response.match is None:
+            scope = (
+                f" in document {document_id}" if document_id is not None else ""
+            )
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": f"Citation '{citation_path}' not found{scope}",
+                    "suggestions": list(response.suggestions),
+                },
+            )
+        return compact_match(response.match)
 
     return app
 
@@ -809,6 +1043,12 @@ def _summary_from_entry(entry: SessionListEntry) -> ChatSessionSummary:
             if entry.updated_at is not None
             else None
         ),
+        case_id=entry.case_id,
+        anchor_label=entry.anchor_label,
+        anchor_kind=entry.anchor_kind,
+        zone=entry.zone,
+        question=entry.first_user_message,
+        kind="conversation",
     )
 
 
@@ -854,137 +1094,100 @@ def _trim_title_part(value: str | None, limit: int) -> str | None:
     return cleaned[:limit].rstrip() + "…"
 
 
-def _settle_case_credit(
+def _settle_token_burn(
     *,
     db_session_factory: DbSessionFactory | None,
     chat_session: ChatSession,
     case_id: int | None,
-    tier: str | None,
-    stream_failed: bool,
+    user_id: int | None,
+    unlimited: bool,
+    usage_event_id: int | None,
 ) -> dict | None:
-    """Post-stream credit settlement and budget-warning derivation.
+    """Post-stream wallet burn + ``token_balance`` SSE payload (ABS-383).
 
     Behaviour:
 
-    * If the stream errored before any tool call landed → refund the
-      reserved credit (the user got nothing).
-    * If the turn produced a qualifying assistant message AND at least
-      one prior tool_use block → commit the reserved credit (consumed).
-      "Qualifying" is defined as: final assistant content includes a
-      non-empty TextBlock AND the message history has at least one
-      ToolUseBlock from this session.
-    * Otherwise (empty assistant turn) → refund.
+    * Burn the turn's *measured* usage (input + output) from the wallet as
+      one ``burn`` ledger row linked to session / case / usage-event. The
+      burn is unconditional on measured usage — a mid-stream failure still
+      burns what was recorded; there is no refund heuristic and no
+      qualifying-turn check. Overdraw is by design (``burn_tokens`` has no
+      floor); the floor is a pre-flight concern.
+    * ``unlimited_credits`` users are exempt: no burn row, balance
+      unchanged. The ``UsageEvent`` still records the real tokens (patched
+      separately in ``_patch_usage_event_tokens``).
     * Bump ``advisor_case.tokens_consumed`` by the turn's input+output.
-    * Compute the budget-warning payload when ``token_budget_remaining``
-      drops below 25% of the tier's full budget.
+    * Return the ``token_balance`` SSE payload (balance after the burn,
+      how much was burned, backend-owned turns conversion, and the
+      low-balance flag / warn threshold) so the UI decrements live.
 
-    All DB work happens inside a single ``session_scope()`` — failing
-    here would otherwise propagate out of the SSE generator and surface
-    as a confusing 500 *after* the stream had already been delivered.
-    Returns the warning payload dict (or ``None`` to suppress the
-    warning event).
+    All DB work happens inside a single transaction — failing here would
+    otherwise propagate out of the SSE generator and surface as a
+    confusing 500 *after* the stream had already been delivered. Returns
+    ``None`` (suppressing the event) when there is no wallet to bill
+    (in-memory path) or the settlement raised.
     """
-    if db_session_factory is None or case_id is None:
+    if db_session_factory is None or user_id is None:
         return None
 
-    qualifying = _turn_was_qualifying(chat_session)
-    usage = chat_session.last_turn_usage
-    spent = (
-        (usage.input_tokens + usage.output_tokens)
-        if usage is not None
-        else 0
+    from advisor.billing.turns import (  # noqa: PLC0415
+        approx_turns_remaining,
+        low_balance_warn_tokens,
     )
+    from advisor.db.wallet import burn_tokens, get_balance  # noqa: PLC0415
 
+    usage = chat_session.last_turn_usage
+    input_tokens = usage.input_tokens if usage is not None else 0
+    output_tokens = usage.output_tokens if usage is not None else 0
+    spent = input_tokens + output_tokens
+
+    burned = 0
     try:
         with db_session_factory() as db:
             try:
                 db_session_pk = int(chat_session.session_id)
             except ValueError:
                 db_session_pk = None
-            if db_session_pk is not None:
-                if stream_failed or not qualifying:
-                    refund_credit_for(
+            if spent and not unlimited:
+                user = db.get(User, user_id)
+                if user is not None:
+                    txn = burn_tokens(
                         db,
+                        user=user,
+                        amount=spent,
+                        reason="chat_turn",
                         session_id=db_session_pk,
-                        reason=(
-                            "stream_error"
-                            if stream_failed
-                            else "non_qualifying_turn"
-                        ),
+                        case_id=case_id,
+                        usage_event_id=usage_event_id,
                     )
+                    burned = spent
+                    balance = txn.balance_after
                 else:
-                    commit_credit_for(db, session_id=db_session_pk)
-            if spent:
+                    balance = get_balance(db, user_id=user_id)
+            else:
+                balance = get_balance(db, user_id=user_id)
+            if spent and case_id is not None:
                 add_case_tokens(
                     db,
                     case_id=case_id,
-                    input_tokens=usage.input_tokens if usage else 0,
-                    output_tokens=usage.output_tokens if usage else 0,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
                 )
     except Exception:  # noqa: BLE001 — last-mile settlement; don't crash the SSE
         logger.exception(
-            "failed to settle case credit for session %s",
+            "failed to settle token burn for session %s",
             chat_session.session_id,
         )
         return None
 
-    if (
-        tier is None
-        or chat_session.token_budget_remaining is None
-        or chat_session.token_budget_remaining <= 0
-    ):
-        return None
-    from advisor.llm.budget import case_budget_for  # noqa: PLC0415
-
-    full = case_budget_for(tier)
-    if full <= 0:
-        return None
-    fraction_remaining = chat_session.token_budget_remaining / full
-    if fraction_remaining > 0.25:
-        return None
+    warn = low_balance_warn_tokens()
     return {
-        "case_id": case_id,
-        "tier": tier,
-        "remaining_tokens": chat_session.token_budget_remaining,
-        "tier_budget": full,
-        "fraction_remaining": fraction_remaining,
+        "balance_tokens": balance,
+        "burned_tokens": burned,
+        "approx_turns_remaining": approx_turns_remaining(balance),
+        "low_balance": balance <= warn,
+        "warn_threshold_tokens": warn,
     }
-
-
-def _turn_was_qualifying(chat_session: ChatSession) -> bool:
-    """Heuristic: did this turn produce billable output?
-
-    True iff the conversation contains at least one ``ToolUseBlock``
-    AND the final assistant message has a non-empty ``TextBlock``. The
-    "abandoned" definition in the brief: empty assistant turn or stream
-    error before any tool call → refund. Both conditions fail this
-    check.
-    """
-    has_tool_use = False
-    final_text_non_empty = False
-    for message in chat_session.messages:
-        if not isinstance(message.content, list):
-            continue
-        for block in message.content:
-            if getattr(block, "type", None) == "tool_use":
-                has_tool_use = True
-    last = next(
-        (
-            m
-            for m in reversed(chat_session.messages)
-            if m.role == LLMRole.ASSISTANT
-        ),
-        None,
-    )
-    if last is not None and isinstance(last.content, list):
-        for block in last.content:
-            if (
-                getattr(block, "type", None) == "text"
-                and getattr(block, "text", "").strip()
-            ):
-                final_text_non_empty = True
-                break
-    return has_tool_use and final_text_non_empty
 
 
 def _patch_usage_event_tokens(
@@ -1030,8 +1233,19 @@ def _patch_usage_event_tokens(
         return
     metadata: dict | None = None
     if trip is not None:
+        # ABS-305: both cost breakers (per-request and cumulative) record
+        # a ``CircuitTripInfo`` on ``last_turn_circuit_trip``. Carry the
+        # tool loop's ``terminated_reason`` so analytics can tell a
+        # single-oversized-request trip (``cost_circuit_trip``) apart
+        # from a whole-turn cumulative trip (``cumulative_cost_trip``);
+        # both still set the flat ``cost_circuit_trip`` boolean so the
+        # existing "any trip" query keeps working.
+        metrics = chat_session.last_tool_loop_metrics
         metadata = {
             "cost_circuit_trip": True,
+            "trip_reason": (
+                metrics.terminated_reason if metrics is not None else None
+            ),
             "estimated_input_tokens": trip.estimated_input_tokens,
             "turn_input_token_budget": trip.budget,
             "trip_iteration": trip.iteration,
@@ -1054,26 +1268,31 @@ def _patch_usage_event_tokens(
 def _build_user_dependency(
     verifier: ClerkVerifier | None,
     db_session_factory: Callable[[], AbstractContextManager[Session]] | None,
+    *,
+    test_header_fallback: bool = False,
 ) -> Callable[..., User]:
     """Return a Depends-compatible callable that yields a ``User``.
 
-    Three modes:
+    Four modes:
 
     * **Production** (``verifier`` + ``db_session_factory``): real Clerk
       JWT verification and DB-backed user resolution via
       ``current_user_dependency``.
-    * **E2E** (``verifier=None`` + ``db_session_factory``): header-based
-      auth (``X-Test-User-Id``, optional ``X-Test-User-Email`` /
-      ``X-Test-User-Full-Name``) that JIT-creates a real
-      ``advisor_user`` row on first sight and redeems any matching
-      approved ``InviteRequest``. Mirrors ``resolve_or_create_user``'s
-      shape so the Playwright suite exercises the full sign-up →
-      approval → first-login redemption path without Clerk.
+    * **E2E hybrid** (``verifier`` + ``db_session_factory`` +
+      ``test_header_fallback=True``): tries JWT verification first; if
+      no ``Authorization`` header is present, falls back to the
+      ``X-Test-User-Id`` header path. This lets the e2e suite exercise
+      the real Clerk JWT pipeline for requests routed through the
+      Next.js proxy while keeping direct FastAPI calls (from Playwright
+      fixtures) working via test headers.
+    * **E2E header-only** (``verifier=None`` + ``db_session_factory``):
+      header-based auth that JIT-creates a real ``advisor_user`` row.
     * **Unit-test** (``verifier=None`` + no ``db_session_factory``):
-      transient synthetic ``_TestUser`` for in-memory chat-behaviour
-      tests that never touch the DB.
+      transient synthetic ``_TestUser`` for in-memory tests.
     """
     if verifier is not None and db_session_factory is not None:
+        if test_header_fallback:
+            return _build_hybrid_user_dependency(verifier, db_session_factory)
         return current_user_dependency(verifier, db_session_factory)
 
     if db_session_factory is not None:
@@ -1131,6 +1350,64 @@ def _build_user_dependency(
         return _TestUser(id=cleaned)
 
     return _require_test_user_id
+
+
+def _build_hybrid_user_dependency(
+    verifier: ClerkVerifier,
+    db_session_factory: Callable[[], AbstractContextManager[Session]],
+) -> Callable[..., User]:
+    """User dependency that tries JWT first, falls back to test headers.
+
+    Used by the e2e server so requests through the Next.js proxy (which
+    sends ``Authorization: Bearer <jwt>``) exercise the real Clerk
+    verification pipeline, while direct FastAPI calls from Playwright
+    fixtures (which send ``X-Test-User-Id``) keep working.
+    """
+    from advisor.api.auth import resolve_or_create_user  # noqa: PLC0415
+    from advisor.auth.errors import AuthError  # noqa: PLC0415
+    from advisor.auth.fastapi import _strip_bearer  # noqa: PLC0415
+
+    def dependency(
+        authorization: str | None = Header(default=None),
+        x_test_user_id: str | None = Header(default=None),
+        x_test_user_email: str | None = Header(default=None),
+        x_test_user_full_name: str | None = Header(default=None),
+    ) -> User:
+        if authorization and authorization.strip():
+            try:
+                token = _strip_bearer(authorization)
+                clerk_session = verifier.verify(token)
+            except AuthError as exc:
+                raise HTTPException(
+                    status_code=401,
+                    detail={"code": exc.code, "message": str(exc)},
+                ) from exc
+            with db_session_factory() as db:
+                user = resolve_or_create_user(db, clerk_session)
+                db.commit()
+                db.refresh(user)
+                return user
+
+        if not x_test_user_id or not x_test_user_id.strip():
+            raise HTTPException(
+                status_code=401,
+                detail="Missing Authorization header or X-Test-User-Id header.",
+            )
+        cleaned = x_test_user_id.strip()
+        cleaned_email = (x_test_user_email or "").strip()
+        cleaned_name = (x_test_user_full_name or "").strip() or None
+        with db_session_factory() as db:
+            user = _resolve_or_create_test_user(
+                db,
+                clerk_user_id=cleaned,
+                email=cleaned_email,
+                full_name=cleaned_name,
+            )
+            db.commit()
+            db.refresh(user)
+            return user
+
+    return dependency
 
 
 def _resolve_or_create_test_user(
@@ -1213,6 +1490,13 @@ def _resolve_or_create_test_user(
         )
 
         grant_starter_credits_if_needed(db, user=user)
+        # ABS-380: mirror prod auth — issue the signup token-wallet grant so
+        # the e2e X-Test-User-Id path exercises the wallet like a real user.
+        from advisor.db.wallet import (  # noqa: PLC0415
+            grant_signup_tokens_if_needed,
+        )
+
+        grant_signup_tokens_if_needed(db, user=user)
         return user
 
     # Existing user — refresh mutable profile fields only when the
@@ -1231,6 +1515,25 @@ def _resolve_or_create_test_user(
     if changed:
         user.updated_at = utcnow()
         db.flush()
+    # Self-heal existing users who pre-date the free-question grant (or
+    # whose account was created via a path that skipped it). Mirrors the
+    # production existing-user branch in
+    # ``advisor.api.auth.resolve_or_create_user`` so the e2e suite
+    # actually exercises the ABS-323 self-heal. The helper is gated
+    # solely on the ``free_question_grant_issued`` flag, so it is a no-op
+    # for users who already hold the grant.
+    from advisor.db.cases import (  # noqa: PLC0415
+        grant_starter_credits_if_needed,
+    )
+
+    grant_starter_credits_if_needed(db, user=user)
+    # ABS-380: self-heal the token-wallet grant for existing e2e users too,
+    # mirroring the production existing-user branch.
+    from advisor.db.wallet import (  # noqa: PLC0415
+        grant_signup_tokens_if_needed,
+    )
+
+    grant_signup_tokens_if_needed(db, user=user)
     return user
 
 
@@ -1262,6 +1565,7 @@ def _resolve_or_create_session(
     session_id: str | None,
     persona_text: str,
     retrieval_factory: Callable[[], Any],
+    model: str | None = None,
 ) -> ChatSession:
     """Look up a session by id or mint a new one with bound tools.
 
@@ -1269,6 +1573,16 @@ def _resolve_or_create_session(
     re-bind them per request because that would stomp any handlers
     the test may have monkey-patched. A new session gets a fresh
     factory-bound tool set.
+
+    ``model`` overrides the dataclass default ``"claude-opus-4-5"``
+    when set; passed through verbatim to ``store.create``. The chat
+    route reads ``AdvisorLLMSettings.main_model`` and forwards it
+    here so deployments can swap models via env var
+    (``ADVISOR_LLM_MAIN_MODEL`` or the legacy ``ADVISOR_LLM_MODEL``)
+    without code changes. ABS-267 added this — previously the env
+    var was honoured by the settings model but never reached the
+    chat session, so cheap-model regression runs against the real
+    advisor were impossible.
     """
     if session_id is not None:
         existing = store.get(session_id)
@@ -1285,6 +1599,7 @@ def _resolve_or_create_session(
         system_prompt=persona_text,
         tool_defs=tool_defs,
         tool_handlers=tool_handlers,
+        model=model,
     )
 
 

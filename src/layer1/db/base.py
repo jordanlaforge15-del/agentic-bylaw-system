@@ -62,6 +62,7 @@ class Document(Base):
     fragments: Mapped[list["SourceFragment"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     tables: Mapped[list["SourceTable"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     cross_references: Mapped[list["CrossReference"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+    images: Mapped[list["SourceImage"]] = relationship(back_populates="document", cascade="all, delete-orphan")
 
 
 class IngestionRun(Base):
@@ -147,6 +148,15 @@ class SourceTable(Base):
 
     document: Mapped[Document] = relationship(back_populates="tables")
     cells: Mapped[list["SourceTableCell"]] = relationship(back_populates="table", cascade="all, delete-orphan")
+    # Read-side access to the semantic classification(s) attached by enrichment.
+    # Permission-matrix detection keys off this (profile_type='permission_matrix'),
+    # NOT the caption — captions are empty across the real corpus (ABS-281).
+    semantic_profiles: Mapped[list["TableSemanticProfile"]] = relationship(
+        "TableSemanticProfile",
+        primaryjoin="SourceTable.id == TableSemanticProfile.table_id",
+        foreign_keys="TableSemanticProfile.table_id",
+        viewonly=True,
+    )
 
 
 class SourceTableCell(Base):
@@ -391,6 +401,8 @@ class SourceImage(Base):
     docling_ref: Mapped[str | None] = mapped_column(String(255))
     parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+
+    document: Mapped["Document"] = relationship(back_populates="images")
 
 
 class Parcel(Base):
