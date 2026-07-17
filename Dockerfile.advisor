@@ -4,7 +4,7 @@
 # Stage 1 — builder
 # Has compilers + dev headers. Builds the venv. Discarded after build.
 # ============================================================================
-FROM python:3.11.10-slim-bookworm AS builder
+FROM python:3.14.6-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -46,7 +46,7 @@ RUN python -m venv /opt/venv \
 # Stage 2 — runtime
 # Slim, no compilers, runs as non-root.
 # ============================================================================
-FROM python:3.11.10-slim-bookworm AS runtime
+FROM python:3.14.6-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
