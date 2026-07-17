@@ -31,7 +31,10 @@ jobs:
         run: pip install ".[dev]"
 
       - name: Run pip-audit
-        run: pip-audit --strict --desc on
+        # No --strict: the project's own package (layer1-bylaw-ingest) is
+        # local-only, so its "not found on PyPI" skip must not be fatal.
+        # pip-audit still exits non-zero on any real vulnerability finding.
+        run: pip-audit --desc on
 
   npm-audit:
     name: npm dependency audit
