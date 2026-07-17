@@ -34,7 +34,12 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip "setuptools<82" wheel \
     && /opt/venv/bin/pip install ".[advisor]" \
     && /opt/venv/bin/pip install pip-audit \
-    && /opt/venv/bin/pip-audit --desc on \
+    # PYSEC-2026-3447 (setuptools 81, fixed in 83): MANIFEST.in exclusion
+    # bypass when building sdists on macOS filesystems. Inapplicable to this
+    # Linux runtime image, which never builds an sdist. The "setuptools<82"
+    # pin above blocks the fixed version; bumping the pin is tracked
+    # separately (needs a pkg_resources-consumer audit first).
+    && /opt/venv/bin/pip-audit --desc on --ignore-vuln PYSEC-2026-3447 \
     && /opt/venv/bin/pip uninstall -y pip-audit
 
 # ============================================================================
