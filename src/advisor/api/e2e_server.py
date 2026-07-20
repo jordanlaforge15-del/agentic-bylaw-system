@@ -229,6 +229,14 @@ class _SearchTablesBody(BaseModel):
 # optional (use, zone) -> cell resolution. The Playwright spec seeds a matrix
 # (including a header-bleed cell), hits this, and asserts axes are bound to zone/
 # use entities and the bleed is corrected.
+class _LinkTableCaptionsBody(BaseModel):
+    """Body for ``POST /v1/_test/link-table-captions`` (ABS-409)."""
+
+    bylaw_name: str = Field(min_length=1, max_length=512)
+    profile: str = "halifax"
+    dry_run: bool = False
+
+
 class _ProfilePermissionTablesBody(BaseModel):
     bylaw_name: str = Field(min_length=1, max_length=256)
     use_name: str | None = Field(default=None, max_length=256)
@@ -1139,6 +1147,53 @@ def _mount_test_router(app: FastAPI) -> None:
                 default_document_id_resolver=latest_per_bylaw_resolver,
             )
         return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/link-table-captions")
+    async def link_table_captions_endpoint(
+        body: _LinkTableCaptionsBody,
+    ) -> dict[str, object]:
+        """ABS-409: run the table-caption linking pass + caption-aware
+        re-enrichment against the newest document with ``bylaw_name`` —
+        the same sequence scripts/backfill_table_citations.py applies to a
+        real corpus — so the e2e spec can heal the seeded orphan state
+        through the shipped code path.
+        """
+        from layer1.pipeline.table_captions import (  # noqa: PLC0415
+            link_table_captions,
+        )
+        from layer1.semantic.enrichment import (  # noqa: PLC0415
+            enrich_document_semantics,
+        )
+
+        with session_scope() as session:
+            document = (
+                session.query(Document)
+                .filter(Document.bylaw_name == body.bylaw_name)
+                .order_by(Document.id.desc())
+                .first()
+            )
+            if document is None:
+                raise HTTPException(status_code=404, detail="bylaw_name not found")
+            stats = link_table_captions(
+                session,
+                document_id=document.id,
+                profile=body.profile,
+                dry_run=body.dry_run,
+            )
+            table_profiles = 0
+            if not body.dry_run and stats.writes:
+                report = enrich_document_semantics(session, document_id=document.id)
+                table_profiles = report.table_profiles
+            return {
+                "document_id": document.id,
+                "captions_seen": stats.captions_seen,
+                "captions_linked": stats.captions_linked,
+                "tables_claimed": stats.tables_claimed,
+                "ambiguous_skipped": stats.ambiguous_skipped,
+                "writes": stats.writes,
+                "mapping": stats.mapping,
+                "table_profiles_rebuilt": table_profiles,
+            }
 
     @app.post("/v1/_test/lookup-citation")
     async def test_lookup_citation(body: CitationLookupRequest) -> dict[str, object]:

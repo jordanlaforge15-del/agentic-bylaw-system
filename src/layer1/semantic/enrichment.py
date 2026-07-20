@@ -46,7 +46,7 @@ from layer1.semantic.extractors import (
     reset_profile_overlay,
     use_profile_overlay,
 )
-from layer1.semantic.permission_markers import annotate_value_cells
+from layer1.semantic.permission_markers import annotate_value_cells, classify_permission_marker
 from layer1.semantic.use_matching import match_use
 
 EXTRACTOR_VERSION = "semantic-v1"
@@ -134,6 +134,7 @@ def enrich_document_semantics(
             _extract_mainland_permitted_uses(session, report, cache, fragment)
         for table in tables:
             _enrich_table(session, report, cache, table)
+        _inherit_sibling_column_bindings(session, report, tables)
         _enrich_cross_references(session, report, cache, document_id=document_id)
         session.flush()
         _refresh_counts(session, report)
@@ -699,6 +700,77 @@ def _extract_definition_fact(
     )
 
 
+def _inherit_sibling_column_bindings(
+    session: Session,
+    report: SemanticEnrichmentReport,
+    tables: list[SourceTable],
+) -> None:
+    """Propagate zone-column bindings across caption-linked sibling slices.
+
+    ABS-409: a multi-page permission matrix is persisted as several
+    ``source_table`` rows sharing one caption parent. Continuation slices
+    sometimes carry no repeated header row (Table 1D p56), so per-table
+    enrichment can bind their use rows but never their zone columns — the
+    slice's cells become unreachable. When siblings share
+    ``parent_fragment_id`` and column count, the headered slice's column
+    bindings apply verbatim to the headerless one; copy them (at slightly
+    reduced confidence, provenance noted).
+    """
+    by_parent: dict[int, list[SourceTable]] = {}
+    for table in tables:
+        if table.parent_fragment_id is not None:
+            by_parent.setdefault(table.parent_fragment_id, []).append(table)
+
+    for siblings in by_parent.values():
+        if len(siblings) < 2:
+            continue
+        bindings_by_table: dict[int, list[TableAxisBinding]] = {}
+        for table in siblings:
+            bindings_by_table[table.id] = (
+                session.query(TableAxisBinding)
+                .filter(
+                    TableAxisBinding.table_id == table.id,
+                    TableAxisBinding.axis == "column",
+                )
+                .all()
+            )
+        donor = next(
+            (table for table in siblings if bindings_by_table[table.id]), None
+        )
+        if donor is None:
+            continue
+        donor_width = _table_width(session, donor.id)
+        for table in siblings:
+            if bindings_by_table[table.id]:
+                continue
+            if _table_width(session, table.id) != donor_width:
+                continue
+            for source in bindings_by_table[donor.id]:
+                binding = TableAxisBinding(
+                    table_id=table.id,
+                    axis="column",
+                    index=source.index,
+                    entity_id=source.entity_id,
+                    raw_label=source.raw_label,
+                    confidence=round(source.confidence * 0.9, 3),
+                    metadata_json={"inherited_from_table_id": donor.id},
+                )
+                session.add(binding)
+                report.axis_bindings += 1
+            session.flush()
+
+
+def _table_width(session: Session, table_id: int) -> int:
+    from sqlalchemy import func
+
+    return (
+        session.query(func.max(SourceTableCell.col_index))
+        .filter(SourceTableCell.table_id == table_id)
+        .scalar()
+        or 0
+    )
+
+
 def _classify_table(
     table: SourceTable,
     rows: dict[int, list[SourceTableCell]],
@@ -752,11 +824,25 @@ def _classify_table(
     amendment_disqualifies = (
         conventions.disqualify_amendment_tables and amendment_signal
     )
-    if (
+    # ABS-409: an explicit "permitted uses by zone" caption (supplied by the
+    # profile-gated caption-linking pass) is the strongest classification
+    # evidence and overrides the density-branch vetoes below. The real
+    # Regional Centre matrices trip BOTH vetoes legitimately: their cells
+    # carry amendment annotations ("RC-Dec 10/19…") that fire the
+    # amendment-table disqualifier, and their use rows include parking-named
+    # USES ("Parking structure use") that fire the parking signal — neither
+    # makes the table anything other than what its caption declares. A
+    # parking-requirements table (Table 15) is excluded because its own
+    # caption says "parking".
+    caption_declares_permitted_uses = (
+        conventions.detects_symbol_matrix
+        and "permitted uses by zone" in caption
+        and "parking" not in caption
+    )
+    if caption_declares_permitted_uses or (
         conventions.detects_symbol_matrix
         and (
-            "permitted uses by zone" in caption
-            or (zone_density >= 0.4 and use_density >= 0.35)
+            (zone_density >= 0.4 and use_density >= 0.35)
             or (
                 zone_density >= 0.3
                 and section_label_density >= 0.5
@@ -1841,6 +1927,113 @@ def resolve_permission_cell(
         "permission_marker": meta.get("permission_marker"),
         "footnote": meta.get("footnote"),
     }
+
+
+def enumerate_permission_column(
+    session: Session,
+    *,
+    table_id: int,
+    zone: str,
+) -> list[dict] | None:
+    """Enumerate every (use, permission) pair in a zone's matrix column (ABS-409).
+
+    The per-cell resolver (:func:`resolve_permission_cell`) answers "is THIS
+    use permitted?"; this walks the whole column so callers can answer "what
+    uses are permitted in this zone?" without one round-trip per row.
+
+    Returns ``None`` when the zone doesn't bind a column on ``table_id``
+    (caller falls through to the next table), else a list of
+    ``{"use_label", "permission", "footnote_ordinal"}`` dicts in row order.
+    Skips ``section:``-keyed placeholder rows (as :func:`use_row_labels`
+    does). Zone matching is hardened for the corpus as ingested: bound
+    ``raw_label`` values may carry trailing whitespace ("CEN-1  ") and
+    grouped columns bind one canonical entity for a comma-separated label
+    ("DD, DH, CEN-2, …") — a comma-token match catches the zones the single
+    canonical binding misses.
+    """
+    zone_norm = normalize_zone(zone)
+    column_bindings = (
+        session.query(TableAxisBinding)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id == table_id,
+            TableAxisBinding.axis == "column",
+            SemanticEntity.entity_type == "zone",
+        )
+        .order_by(TableAxisBinding.confidence.desc())
+        .all()
+    )
+    col_binding = None
+    for binding in column_bindings:
+        entity = session.get(SemanticEntity, binding.entity_id)
+        canonical = (entity.canonical_name or "") if entity is not None else ""
+        if canonical == zone_norm:
+            col_binding = binding
+            break
+        raw_tokens = {
+            normalize_zone(token.strip())
+            for token in (binding.raw_label or "").split(",")
+            if token.strip()
+        }
+        if zone_norm in raw_tokens:
+            col_binding = binding
+            break
+    if col_binding is None:
+        return None
+
+    row_bindings = (
+        session.query(TableAxisBinding, SemanticEntity.canonical_name)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id == table_id,
+            TableAxisBinding.axis == "row",
+            SemanticEntity.entity_type == "use",
+        )
+        .order_by(TableAxisBinding.index)
+        .all()
+    )
+    rows = [
+        (binding, (binding.raw_label or "").strip() or canonical_name)
+        for binding, canonical_name in row_bindings
+        if canonical_name and not canonical_name.startswith("section:")
+    ]
+    if not rows:
+        return []
+
+    row_indices = [binding.index for binding, _label in rows]
+    cells_by_row = {
+        cell.row_index: cell
+        for cell in session.query(SourceTableCell)
+        .filter(
+            SourceTableCell.table_id == table_id,
+            SourceTableCell.col_index == col_binding.index,
+            SourceTableCell.row_index.in_(row_indices),
+        )
+        .all()
+    }
+
+    results: list[dict] = []
+    seen_labels: set[str] = set()
+    for binding, label in rows:
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        cell = cells_by_row.get(binding.index)
+        meta = (cell.metadata_json or {}) if cell is not None else {}
+        marker = meta.get("permission_marker")
+        footnote = meta.get("footnote")
+        if marker is None:
+            classified = classify_permission_marker(cell.text if cell is not None else "")
+            marker = classified.get("permission_marker")
+            footnote = classified.get("footnote", footnote)
+        results.append(
+            {
+                "use_label": label,
+                "permission": marker,
+                "footnote_ordinal": footnote,
+            }
+        )
+    return results
 
 
 def resolve_mainland_permitted_use(

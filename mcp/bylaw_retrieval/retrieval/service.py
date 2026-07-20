@@ -56,6 +56,7 @@ from bylaw_retrieval.retrieval.schemas import (
     ZoneDimensions,
     ZoneParking,
     ZoneProfile,
+    ConditionalUse,
     ZoneUses,
 )
 from layer1.db.base import (
@@ -73,6 +74,7 @@ from layer1.db.base import (
 )
 from layer1.models.enums import FragmentType
 from layer1.semantic.enrichment import (
+    enumerate_permission_column,
     resolve_mainland_permitted_use,
     resolve_permission_cell,
     use_row_labels,
@@ -939,6 +941,12 @@ class RetrievalService:
             for m in (identity, dims_match, setback_match, far_match, uses_match)
         )
         if not zone_found:
+            # ABS-409: a zone can be known to the corpus only through the
+            # permission-matrix column headers (no prose fragment names it —
+            # e.g. HCD-SV). Probe the bound matrix columns before declaring
+            # the zone unknown, or the uses enumeration below never runs.
+            zone_found = self._zone_bound_in_permission_matrix(zone)
+        if not zone_found:
             # No fragment anywhere mentions the zone — treat as unknown.
             # No exception, empty citations (FR-2.5 / ABS-261 pattern).
             return ZoneProfile(zone=zone, unknown_zone=True, citations=[])
@@ -1072,6 +1080,15 @@ class RetrievalService:
         citations: "_CitationAccumulator",
         confidence: dict[str, float],
     ) -> ZoneUses:
+        # ABS-409: the permission-matrix enumeration is authoritative when the
+        # zone binds a matrix column — symbol-dot bylaws (Regional Centre)
+        # never carry the P/N prose the regex path below parses, which is why
+        # their zone profiles shipped empty use lists. The prose path stays as
+        # the fallback for P/N-styled corpora.
+        matrix = self._build_zone_uses_from_matrix(zone, citations, confidence)
+        if matrix is not None:
+            return matrix
+
         uses = ZoneUses()
         if uses_match is None:
             return uses
@@ -1084,6 +1101,89 @@ class RetrievalService:
             uses.not_permitted = not_permitted
             confidence["uses"] = round(conf, 3)
             citations.add(uses_match, ["uses"])
+        return uses
+
+    # Confidence recorded for matrix-enumerated use lists. Matches the table
+    # classifier's permission-matrix confidence (_classify_table) — the cells
+    # are read directly off bound axes, not regex-extracted from prose.
+    _MATRIX_USES_CONFIDENCE = 0.9
+
+    def _zone_bound_in_permission_matrix(self, zone: str) -> bool:
+        """True when a scoped permission matrix binds ``zone`` as a column."""
+        tables = self._permission_matrix_tables(document_id=None)
+        return self._axis_entity_exists(
+            [table.id for table in tables],
+            axis="column",
+            entity_type="zone",
+            canonical_name=normalize_zone(zone),
+        )
+
+    def _build_zone_uses_from_matrix(
+        self,
+        zone: str,
+        citations: "_CitationAccumulator",
+        confidence: dict[str, float],
+    ) -> ZoneUses | None:
+        """Enumerate the zone's use column from the bound permission matrices.
+
+        Unions across every scoped matrix that binds the zone — a single
+        logical table (Table 1A) spans several ``source_table`` rows, each
+        carrying a different slice of the use rows. Returns ``None`` when no
+        matrix binds the zone so the caller can fall through to the prose
+        path. Footnote condition text is joined once per ordinal (deduped) via
+        the ABS-280 legend matcher.
+        """
+        tables = self._permission_matrix_tables(document_id=None)
+        if not tables:
+            return None
+
+        uses = ZoneUses()
+        seen: set[str] = set()
+        condition_cache: dict[tuple[int, int], str | None] = {}
+        contributing: list[SourceTable] = []
+        for table in tables:
+            rows = enumerate_permission_column(
+                self.session, table_id=table.id, zone=zone
+            )
+            if rows is None:
+                continue
+            contributing.append(table)
+            for row in rows:
+                label = row["use_label"]
+                if label in seen:
+                    continue
+                seen.add(label)
+                permission = row["permission"]
+                if permission == "permitted":
+                    uses.permitted.append(label)
+                elif permission == "conditional":
+                    ordinal = row.get("footnote_ordinal")
+                    condition: str | None = None
+                    if ordinal is not None:
+                        cache_key = (table.document_id, ordinal)
+                        if cache_key not in condition_cache:
+                            condition_cache[cache_key] = self._footnote_condition_text(
+                                document_id=table.document_id, ordinal=ordinal
+                            )
+                        condition = condition_cache[cache_key]
+                    uses.conditional.append(
+                        ConditionalUse(
+                            use=label, footnote_ordinal=ordinal, condition=condition
+                        )
+                    )
+                elif permission == "not_permitted":
+                    uses.not_permitted.append(label)
+
+        if not contributing or not (
+            uses.permitted or uses.conditional or uses.not_permitted
+        ):
+            # No matrix binds the zone (or only placeholder rows did) — let
+            # the caller fall through to the prose-extraction path.
+            return None
+        confidence["uses"] = self._MATRIX_USES_CONFIDENCE
+        for table in contributing:
+            ref = self._table_citation(table)
+            citations.add_ref(ref, ["uses"])
         return uses
 
     def _build_zone_parking(
@@ -2556,6 +2656,28 @@ class _CitationAccumulator:
                 page_end=match.page_end,
             )
             self._order.append(path)
+        else:
+            for field in fields:
+                if field not in existing.backs:
+                    existing.backs.append(field)
+
+    def add_ref(self, ref: CitationRef, fields: list[str]) -> None:
+        """Accumulate a pre-built :class:`CitationRef` (ABS-409).
+
+        ``add`` keys strictly on ``citation_path`` and silently drops
+        path-less citations — correct for fragment-backed fields, but
+        table-backed citations (permission-matrix enumeration) may lack a
+        path on corpora whose captions haven't been backfilled yet. Those
+        must still surface (FR-2.4: every populated field traces to a
+        citation), so path-less refs key on label+pages instead.
+        """
+        key = ref.citation_path or (
+            f"__ref:{ref.citation_label}:{ref.page_start}:{ref.page_end}"
+        )
+        existing = self._by_path.get(key)
+        if existing is None:
+            self._by_path[key] = ref.model_copy(update={"backs": list(fields)})
+            self._order.append(key)
         else:
             for field in fields:
                 if field not in existing.backs:

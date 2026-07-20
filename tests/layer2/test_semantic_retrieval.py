@@ -11,7 +11,7 @@ from layer2.retrieval.semantic import retrieve_semantic_facts
 from layer2.retrieval.service import _candidate_pool_limit, retrieve_context
 from layer2.pipeline.service import _select_fragments_for_prompt
 from layer2.models.schemas import CandidateFragment
-from tests.test_semantic_enrichment import semantic_db as semantic_db  # noqa: F401
+from test_semantic_enrichment import semantic_db as semantic_db  # noqa: F401
 
 
 def test_semantic_retrieval_finds_permission_fact_without_legacy_table_helper(semantic_db):
