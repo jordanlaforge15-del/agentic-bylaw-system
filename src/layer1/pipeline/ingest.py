@@ -24,6 +24,7 @@ from layer1.models.schemas import FragmentData, ImageData, PageBlockData, TableD
 from layer1.parsers.factory import parse_source
 from layer1.pipeline.crossrefs import detect_cross_references
 from layer1.pipeline.hierarchy import reconstruct_hierarchy
+from layer1.pipeline.table_captions import link_table_captions
 from layer1.profiles import ParsingProfile, get_parsing_profile
 from layer1.utils.files import detect_mime_type, sha256_file
 from layer1.validators.structural import validate_document_objects
@@ -109,6 +110,12 @@ def ingest_file(
         # didn't hard-fail — a failed parse yields no usable fragments to bind.
         if run.status != IngestionStatus.FAILED:
             relink_superseded_datasets(session, document)
+            # ABS-409: link "Table 1A:"-style caption fragments to their
+            # tables (citation path on the caption, parent/caption on the
+            # table) so the matrices stay citation-addressable and the table
+            # classifier keeps seeing captions on re-ingest. No-op for
+            # profiles that declare no table_caption_re.
+            link_table_captions(session, document_id=document.id, profile=profile)
             session.flush()
 
         return document, run
