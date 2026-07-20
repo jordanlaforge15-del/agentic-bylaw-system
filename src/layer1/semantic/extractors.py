@@ -67,6 +67,10 @@ def current_enrichment_conventions() -> EnrichmentConventions:
     return DEFAULT_CONVENTIONS
 
 KNOWN_ZONE_CODES = {
+    # ABS-409: Table 1D's only zone — letters-only with an internal hyphen,
+    # so the numeric arm of ZONE_RE can never produce it; it must be in the
+    # literal alternation too.
+    "HCD-SV",
     "CEN-2",
     "CEN-1",
     "CDD-2",
@@ -92,7 +96,7 @@ KNOWN_ZONE_CODES = {
     "RPK",
     "WA",
 }
-ZONE_RE = re.compile(r"\b[A-Z]{1,4}-?\s?\d[A-Z]?(?:-?\s?[A-Z])?\b|\b(?:DD|DH|COR|CLI|LI|HRI|INS|DND|PCF|RPK|WA)\b", re.I)
+ZONE_RE = re.compile(r"\b[A-Z]{1,4}-?\s?\d[A-Z]?(?:-?\s?[A-Z])?\b|\b(?:HCD-SV|DD|DH|COR|CLI|LI|HRI|INS|DND|PCF|RPK|WA)\b", re.I)
 # Substrings that match ZONE_RE but are NOT real zone codes. Most common
 # sources of false positives on real municipal bylaws:
 #   1. Amendment markers: "(RC-May 9/24)", "(E-Jun 13/24)" → MAY-9, JUN-13

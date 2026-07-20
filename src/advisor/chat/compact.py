@@ -360,6 +360,21 @@ def compact_search_response(
     return out
 
 
+# ABS-409: bounds for matrix-enumerated use lists in the compact projection.
+# A full Regional Centre zone column carries ~80-90 uses across the matrix
+# pages; the cap keeps the per-call token cost bounded while the '+N more'
+# marker tells the model the list is truncated (drill down via
+# lookup_citation on the table's citation, or a permitted_use cell query).
+_USE_LIST_CAP = 40
+_CONDITION_TEXT_CAP = 160
+
+
+def _capped_list(items: list[Any]) -> list[Any]:
+    if len(items) <= _USE_LIST_CAP:
+        return items
+    return items[:_USE_LIST_CAP] + [f"+{len(items) - _USE_LIST_CAP} more"]
+
+
 def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
     """Project a ``ZoneProfile`` to its LLM-essential fields.
 
@@ -399,13 +414,34 @@ def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
             out["dimensions"] = dims
 
     if profile.uses is not None and (
-        profile.uses.permitted or profile.uses.not_permitted
+        profile.uses.permitted or profile.uses.not_permitted or profile.uses.conditional
     ):
         uses: dict[str, Any] = {}
         if profile.uses.permitted:
-            uses["permitted"] = list(profile.uses.permitted)
+            uses["permitted"] = _capped_list(list(profile.uses.permitted))
         if profile.uses.not_permitted:
-            uses["not_permitted"] = list(profile.uses.not_permitted)
+            uses["not_permitted"] = _capped_list(list(profile.uses.not_permitted))
+        if profile.uses.conditional:
+            # ABS-409: matrix-enumerated conditional uses. Condition text is
+            # capped per item — footnote legends run long and repeat across
+            # items; the model can lookup_citation the table for full text.
+            conditional = [
+                {
+                    "use": item.use,
+                    **(
+                        {"footnote": item.footnote_ordinal}
+                        if item.footnote_ordinal is not None
+                        else {}
+                    ),
+                    **(
+                        {"condition": item.condition[:_CONDITION_TEXT_CAP]}
+                        if item.condition
+                        else {}
+                    ),
+                }
+                for item in profile.uses.conditional
+            ]
+            uses["conditional"] = _capped_list(conditional)
         out["uses"] = uses
 
     if profile.parking is not None:
@@ -418,9 +454,19 @@ def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
             out["parking"] = parking
 
     if profile.citations:
+        # ABS-409: table-backed citations may lack a citation_path on corpora
+        # whose captions haven't been backfilled — fall back to label + pages
+        # so the model can still ground and page-scope its follow-ups.
         out["citations"] = [
             {
-                "citation_path": c.citation_path,
+                **(
+                    {"citation_path": c.citation_path}
+                    if c.citation_path
+                    else {
+                        **({"citation_label": c.citation_label} if c.citation_label else {}),
+                        **({"pages": [c.page_start, c.page_end]} if c.page_start else {}),
+                    }
+                ),
                 **({"backs": list(c.backs)} if c.backs else {}),
             }
             for c in profile.citations

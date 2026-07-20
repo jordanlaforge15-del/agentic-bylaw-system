@@ -78,3 +78,65 @@ def test_unaccounted_blocks_are_preserved_as_uncertain_fragments():
     assert fragments[0].fragment_type == FragmentType.PROSE
     assert fragments[0].parse_status == ParseStatus.UNCERTAIN
     assert fragments[0].metadata["fallback_unaccounted_block"] is True
+
+
+def test_ingest_links_table_captions_for_profiled_bylaw(tmp_path: Path):
+    """ABS-409: ingest_file runs the caption-linking pass for profiles that
+    declare a table_caption_re — the caption fragment becomes citation-
+    addressable and claims its table."""
+    db_url = f"sqlite:///{tmp_path / 'layer1.db'}"
+    create_all(db_url)
+    fixture = tmp_path / "captioned_bylaw.txt"
+    fixture.write_text(
+        "Town of Testville Bylaw\n"
+        "Part 1 Uses\n"
+        "1.1 General\n"
+        "Uses are regulated by this section.\n"
+        "Table 7A: Permitted uses by zone (COR and DD)\n"
+        "Table 1 | Use | COR; Row 1 | Restaurant use | P\n",
+        encoding="utf-8",
+    )
+
+    with session_scope(db_url) as session:
+        document, run = ingest_file(session, fixture, profile="halifax")
+        assert run.status in {IngestionStatus.COMPLETED, IngestionStatus.COMPLETED_WITH_WARNINGS}
+        caption = (
+            session.query(SourceFragment)
+            .filter(SourceFragment.document_id == document.id)
+            .filter(SourceFragment.text.like("Table 7A:%"))
+            .one()
+        )
+        assert caption.citation_label == "Table 7A"
+        assert caption.citation_path is not None
+        assert caption.citation_path.endswith("[Table 7A]")
+        table = (
+            session.query(SourceTable)
+            .filter_by(document_id=document.id)
+            .one()
+        )
+        assert table.parent_fragment_id == caption.id
+        assert table.caption.startswith("Table 7A:")
+
+
+def test_ingest_default_profile_skips_caption_linking(tmp_path: Path):
+    db_url = f"sqlite:///{tmp_path / 'layer1.db'}"
+    create_all(db_url)
+    fixture = tmp_path / "captioned_bylaw.txt"
+    fixture.write_text(
+        "Town of Testville Bylaw\n"
+        "Part 1 Uses\n"
+        "Table 7A: Permitted uses by zone (COR and DD)\n"
+        "Table 1 | Use | COR; Row 1 | Restaurant use | P\n",
+        encoding="utf-8",
+    )
+    with session_scope(db_url) as session:
+        document, _run = ingest_file(session, fixture, profile="default")
+        caption = (
+            session.query(SourceFragment)
+            .filter(SourceFragment.document_id == document.id)
+            .filter(SourceFragment.text.like("Table 7A:%"))
+            .one()
+        )
+        assert caption.citation_path is None
+        table = session.query(SourceTable).filter_by(document_id=document.id).one()
+        assert table.parent_fragment_id is None

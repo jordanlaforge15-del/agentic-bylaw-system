@@ -390,3 +390,163 @@ def test_get_zone_profile_low_confidence_returns_null_field(tmp_path: Path):
     assert "max_height_m" not in profile.confidence
     cited_fields = [field for c in profile.citations for field in c.backs]
     assert "max_height_m" not in cited_fields
+
+
+# ---------------------------------------------------------------------------
+# ABS-409 — matrix enumeration path (symbol-dot bylaws have no P/N prose)
+# ---------------------------------------------------------------------------
+
+DOT = ""  # symbol-font ● "permitted as-of-right"
+
+MATRIX_409 = [
+    ["Use", "DD", "DH", "COR"],
+    ["Restaurant use", DOT, "③", ""],
+    ["Office use", DOT, DOT, DOT],
+    ["Multi-unit dwelling use", DOT, DOT, ""],
+]
+
+CONDITION_409 = (
+    "③ Use is permitted subject to a maximum gross floor area of 100 "
+    "square metres."
+)
+
+
+def _seed_matrix_corpus(db_url: str, *, with_prose: bool = True) -> int:
+    """A symbol-dot permission matrix bound by enrichment (no P/N prose)."""
+    from layer1.db.base import SourceTable, SourceTableCell
+    from layer1.semantic.enrichment import enrich_document_semantics
+
+    create_all(db_url)
+    with session_scope(db_url) as session:
+        doc = _add_document(session)
+        if with_prose:
+            _add_fragment(
+                session,
+                doc.id,
+                text="The DH (Downtown Halifax) Zone is established in Part II.",
+                citation_path="Part II > 14",
+                citation_label="14",
+                page=20,
+                order=1,
+            )
+        table = SourceTable(
+            document_id=doc.id,
+            caption="Table 1A: Permitted uses by zone (DD, DH, and COR)",
+            page_start=45,
+            page_end=45,
+            parse_status=ParseStatus.PARSED,
+            metadata_json={},
+        )
+        session.add(table)
+        session.flush()
+        for row_index, row in enumerate(MATRIX_409):
+            for col_index, text in enumerate(row):
+                session.add(
+                    SourceTableCell(
+                        table_id=table.id,
+                        row_index=row_index,
+                        col_index=col_index,
+                        row_header_path=row[0] if row_index else None,
+                        col_header_path=MATRIX_409[0][col_index] if row_index else None,
+                        text=text,
+                        metadata_json={},
+                    )
+                )
+        session.add(
+            SourceFragment(
+                document_id=doc.id,
+                fragment_type=FragmentType.FOOTNOTE,
+                page_start=47,
+                page_end=47,
+                reading_order_start=900,
+                reading_order_end=900,
+                text=CONDITION_409,
+                parse_status=ParseStatus.PARSED,
+                confidence=0.9,
+            )
+        )
+        session.flush()
+        enrich_document_semantics(session, document_id=doc.id)
+        return doc.id
+
+
+def test_abs409_matrix_enumeration_populates_uses(tmp_path: Path):
+    db_url = f"sqlite:///{tmp_path / 'matrix.db'}"
+    _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        profile = _service(db_url, session).get_zone_profile("DH")
+        assert profile.unknown_zone is False
+        assert profile.uses is not None
+        assert "Office use" in profile.uses.permitted
+        assert "Multi-unit dwelling use" in profile.uses.permitted
+        conditional = {item.use: item for item in profile.uses.conditional}
+        assert "Restaurant use" in conditional
+        assert conditional["Restaurant use"].footnote_ordinal == 3
+        assert conditional["Restaurant use"].condition is not None
+        assert "100" in conditional["Restaurant use"].condition
+        assert profile.confidence.get("uses") is not None
+        # Pre-backfill the table has no caption-linked citation_path, but the
+        # citation must still surface (add_ref path) with label + pages.
+        uses_refs = [c for c in profile.citations if "uses" in c.backs]
+        assert uses_refs
+        assert uses_refs[0].page_start == 45
+
+
+def test_abs409_blank_cells_enumerate_as_not_permitted(tmp_path: Path):
+    db_url = f"sqlite:///{tmp_path / 'matrix2.db'}"
+    _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        profile = _service(db_url, session).get_zone_profile("COR")
+        assert profile.uses is not None
+        assert "Office use" in profile.uses.permitted
+        assert "Restaurant use" in profile.uses.not_permitted
+        assert "Multi-unit dwelling use" in profile.uses.not_permitted
+
+
+def test_abs409_matrix_only_zone_is_known(tmp_path: Path):
+    """A zone named ONLY in matrix column headers (no prose fragment) must not
+    return unknown_zone — the ABS-409 gate probes the bound columns."""
+    db_url = f"sqlite:///{tmp_path / 'matrix3.db'}"
+    _seed_matrix_corpus(db_url, with_prose=False)
+    with session_scope(db_url) as session:
+        profile = _service(db_url, session).get_zone_profile("DD")
+        assert profile.unknown_zone is False
+        assert profile.uses is not None
+        assert "Restaurant use" in profile.uses.permitted
+
+
+def test_abs409_caption_linked_citation_carries_path(tmp_path: Path):
+    """After the ABS-409 caption linking pass, the uses citation resolves to
+    the caption fragment's citation_path."""
+    from layer1.db.base import SourceTable
+    from layer1.pipeline.table_captions import link_table_captions
+
+    db_url = f"sqlite:///{tmp_path / 'matrix4.db'}"
+    doc_id = _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        # Stage the caption fragment as ingest would (unaddressed PROSE), and
+        # clear the table's inline caption so linking is what supplies it.
+        table = session.query(SourceTable).one()
+        caption_text = table.caption
+        table.caption = None
+        table.parent_fragment_id = None
+        session.add(
+            SourceFragment(
+                document_id=doc_id,
+                fragment_type=FragmentType.PROSE,
+                page_start=45,
+                page_end=45,
+                reading_order_start=100,
+                reading_order_end=100,
+                text=caption_text,
+                parse_status=ParseStatus.PARSED,
+                confidence=1.0,
+            )
+        )
+        session.flush()
+        link_table_captions(session, document_id=doc_id, profile="halifax")
+        profile = _service(db_url, session).get_zone_profile("DH")
+        uses_refs = [c for c in profile.citations if "uses" in c.backs]
+        assert uses_refs
+        assert uses_refs[0].citation_path is not None
+        assert uses_refs[0].citation_path.endswith("[Table 1A]")

@@ -29,6 +29,13 @@ class ManifestCitationLevel:
     label_format: str | None = None
 
 
+# ABS-409: HRM land-use bylaws caption their tables as "Table 1A: …" /
+# "Table 15: …" in a block that parses as neither a citation label nor a
+# heading, so the caption ends up as an unaddressed PROSE fragment and the
+# table itself carries no caption. Group 1 is the citation label.
+HRM_TABLE_CAPTION_RE = re.compile(r"^(Table\s+\d+[A-Z]?)\s*:")
+
+
 @dataclass(frozen=True)
 class ParsingProfile:
     name: str
@@ -68,6 +75,15 @@ class ParsingProfile:
     permission_encoding: str | None = None
     permitted_marker_codepoints: frozenset[int] | None = None
     ignored_marker_codepoints: frozenset[int] | None = None
+    # ABS-409: table-caption linking conventions. When ``table_caption_re`` is
+    # set, the post-persist linking pass (``layer1.pipeline.table_captions``)
+    # runs for documents parsed with this profile: fragments whose text matches
+    # the regex become citation-addressable caption anchors and claim the
+    # tables that follow them (up to ``table_caption_page_span`` pages after
+    # the caption's page). Group 1 of the regex must capture the citation
+    # label (e.g. "Table 1A"). ``None`` disables the pass for the bylaw.
+    table_caption_re: re.Pattern[str] | None = None
+    table_caption_page_span: int = 2
 
     def applies_to(self, path: Path) -> bool:
         return False
@@ -107,6 +123,7 @@ class RegionalCentreLandUseBylawProfile(ParsingProfile):
                 r"^\s*['\"“]?[A-Z][A-Za-z0-9 /&,'()-]{2,100}['\"”]?\s+(?:means|includes|shall\s+mean|shall\s+include|\(Deleted\b)",
                 re.IGNORECASE,
             ),
+            table_caption_re=HRM_TABLE_CAPTION_RE,
         )
 
     def applies_to(self, path: Path) -> bool:
@@ -151,6 +168,10 @@ HALIFAX_PROFILE = ParsingProfile(
         r"^\s*['\"“]?[A-Z][A-Za-z0-9 /&,'()-]{2,100}['\"”]?\s+(?:means|includes|shall\s+mean|shall\s+include|\(Deleted\b)",
         re.IGNORECASE,
     ),
+    # The Regional Centre LUB was ingested under this profile in practice
+    # (document.parser_version "docling:halifax"), so the caption convention
+    # lives here as well as on the dedicated Regional Centre profile.
+    table_caption_re=HRM_TABLE_CAPTION_RE,
 )
 
 REGIONAL_CENTRE_PROFILE = RegionalCentreLandUseBylawProfile()
