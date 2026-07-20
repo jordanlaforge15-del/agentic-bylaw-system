@@ -6,12 +6,26 @@ import pytest
 from advisor.billing.settings import AdvisorBillingSettings, get_settings
 
 
-def test_defaults_are_dormant() -> None:
+def test_defaults_are_dormant(monkeypatch: pytest.MonkeyPatch) -> None:
     """No env vars => billing is disabled and there are no creds.
     This is the safety property the rest of the system relies on:
     importing the settings model in a fresh process must not require
     any Stripe configuration."""
-    s = AdvisorBillingSettings()
+    # _env_file=None keeps the developer's local .env (dev-setup copies
+    # .env.example, which enables billing) out of a test about defaults;
+    # the delenvs do the same for an already-exported shell.
+    for var in (
+        "ADVISOR_BILLING_ENABLED",
+        "STRIPE_API_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_PRICE_QUICK_PAYG",
+        "STRIPE_PRICE_STANDARD_PRO",
+        "STRIPE_PRICE_COMPLEX_ENTERPRISE",
+        "ADVISOR_BILLING_SUCCESS_URL",
+        "ADVISOR_BILLING_CANCEL_URL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    s = AdvisorBillingSettings(_env_file=None)
     assert s.enabled is False
     assert s.stripe_api_key is None
     assert s.stripe_webhook_secret is None
