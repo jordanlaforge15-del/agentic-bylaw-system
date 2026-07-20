@@ -130,6 +130,7 @@ def test_spatial_channel_surfaces_schedule_when_text_misses(linked_dataset):
             RetrievalRequest(
                 query="zzz_does_not_match_anything",
                 location=LocationSlot(geometry=_point_inside_first_precinct()),
+                include_datasets=True,
                 limit=5,
             )
         )

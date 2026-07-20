@@ -235,7 +235,9 @@ def test_get_address_profile_zone_matches_existing_evaluator(seeded_db: str) -> 
         profile = service.get_address_profile("100 Robie Street")
 
         response = service.search(
-            RetrievalRequest(query="zone", location=slot, limit=10)
+            RetrievalRequest(
+                query="zone", location=slot, include_datasets=True, limit=10
+            )
         )
 
     # Pull the zone the shared spatial channel resolved from the zoning

@@ -809,6 +809,7 @@ def test_refund_orphaned_case_reservations_recovers_pre_abs9_leak(
         )
         sess_id = _new_session_for(s, user_id=user_id)
         case = Case(
+            user_case_number=1,
             user_id=user_id,
             anchor_label="addr",
             anchor_key="addr",
@@ -902,6 +903,7 @@ def test_refund_orphaned_case_reservations_is_idempotent(
         )
         sess_id = _new_session_for(s, user_id=user_id)
         case = Case(
+            user_case_number=1,
             user_id=user_id,
             anchor_label="addr",
             anchor_key="addr",
@@ -960,6 +962,7 @@ def test_db_constraint_rejects_second_unsessioned_reservation_on_same_case(
             reason="t",
         )
         case = Case(
+            user_case_number=1,
             user_id=user_id,
             anchor_label="addr",
             anchor_key="addr",
@@ -1015,6 +1018,7 @@ def test_db_constraint_allows_sessioned_credit_alongside_unsessioned(
         )
         sess_id = _new_session_for(s, user_id=user_id)
         case = Case(
+            user_case_number=1,
             user_id=user_id,
             anchor_label="addr",
             anchor_key="addr",

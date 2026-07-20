@@ -105,6 +105,7 @@ def test_search_without_location_returns_dataset_summary_only(linked_dataset):
             RetrievalRequest(
                 query="Schedule 15 maximum building height precincts",
                 document_id=linked_dataset["document_id"],
+                include_datasets=True,
                 limit=5,
             )
         )
@@ -131,6 +132,7 @@ def test_search_with_geometry_slot_skips_geocoding(linked_dataset):
             RetrievalRequest(
                 query="Schedule 15",
                 document_id=linked_dataset["document_id"],
+                include_datasets=True,
                 location=LocationSlot(
                     geometry={"type": "Point", "coordinates": [-63.59, 44.65]}
                 ),
@@ -187,6 +189,7 @@ def test_search_with_civic_address_slot_uses_layered_resolver(linked_dataset, mo
             RetrievalRequest(
                 query="max height",
                 document_id=linked_dataset["document_id"],
+                include_datasets=True,
                 location=LocationSlot(
                     civic_number="1234", street="Barrington Street"
                 ),
@@ -215,6 +218,7 @@ def test_search_with_unresolvable_slot_returns_dataset_without_features(linked_d
             RetrievalRequest(
                 query="max height",
                 document_id=linked_dataset["document_id"],
+                include_datasets=True,
                 location=LocationSlot(named_place="A Place That Does Not Exist"),
                 limit=5,
             )
@@ -299,6 +303,7 @@ def test_search_attaches_source_image_id_when_present(linked_dataset):
             RetrievalRequest(
                 query="Schedule 15",
                 document_id=linked_dataset["document_id"],
+                include_datasets=True,
                 limit=5,
             )
         )
@@ -390,6 +395,7 @@ def test_openai_executor_accepts_location_payload(linked_dataset):
                 "location": {
                     "geometry": {"type": "Point", "coordinates": [-63.59, 44.65]}
                 },
+                "include_datasets": True,
                 "limit": 5,
             },
         )
