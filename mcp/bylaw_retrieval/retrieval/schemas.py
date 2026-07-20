@@ -802,20 +802,49 @@ class ZoneDimensions(BaseModel):
     )
 
 
+class ConditionalUse(BaseModel):
+    """A use permitted in a zone subject to a footnote condition (ABS-409).
+
+    Produced by the permission-matrix enumeration path: a circled-number
+    marker (e.g. ③) in the use × zone cell, with the footnote legend's text
+    joined as ``condition`` when the legend fragment resolves.
+    """
+
+    use: str = Field(description="The use name as the bylaw prints it.")
+    footnote_ordinal: int | None = Field(
+        default=None, description="The circled-number footnote ordinal, e.g. 3 for ③."
+    )
+    condition: str | None = Field(
+        default=None,
+        description="The footnote legend's condition text, when resolvable.",
+    )
+
+
 class ZoneUses(BaseModel):
     """Use permissions for a zone. ``permitted`` lists explicitly
     permitted uses; ``not_permitted`` lists uses explicitly marked as
-    not permitted. Either may be empty when retrieval found no use table
-    for the zone.
+    not permitted; ``conditional`` lists uses permitted subject to a
+    footnote condition (symbol-matrix bylaws). Any may be empty when
+    retrieval found no use table for the zone.
     """
 
     permitted: list[str] = Field(
         default_factory=list,
-        description="Uses explicitly permitted in this zone (table cell 'P').",
+        description=(
+            "Uses explicitly permitted in this zone (table cell 'P', or a "
+            "● marker in symbol-matrix bylaws)."
+        ),
     )
     not_permitted: list[str] = Field(
         default_factory=list,
-        description="Uses explicitly NOT permitted in this zone (table cell 'N').",
+        description=(
+            "Uses explicitly NOT permitted in this zone (table cell 'N', or "
+            "a blank matrix cell)."
+        ),
+    )
+    conditional: list[ConditionalUse] = Field(
+        default_factory=list,
+        description="Uses permitted subject to a footnote condition.",
     )
 
 

@@ -32,6 +32,7 @@ from bylaw_retrieval.retrieval.schemas import (
     ZoneDimensions,
     ZoneParking,
     ZoneProfile,
+    ConditionalUse,
     ZoneUses,
 )
 from bylaw_retrieval.retrieval.service import (
@@ -77,6 +78,7 @@ __all__ = [
     "ZoneDimensions",
     "ZoneParking",
     "ZoneProfile",
+    "ConditionalUse",
     "ZoneUses",
     "audit_corpus_coherence",
     "latest_document_id_resolver",
