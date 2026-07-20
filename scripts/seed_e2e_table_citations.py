@@ -150,6 +150,15 @@ def _reset_existing(session, document: Document) -> None:
 
 def main() -> int:
     with session_scope() as session:
+        if session.bind.dialect.name == "postgresql":
+            from sqlalchemy import text as sa_text
+
+            # Playwright runs this seed once per worker concurrently; the
+            # lock serialises the check-then-insert on DOCUMENT_FILE_HASH.
+            session.execute(
+                sa_text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601409)
+            )
+
         existing = session.execute(
             select(Document).where(Document.file_hash == DOCUMENT_FILE_HASH)
         ).scalar_one_or_none()
