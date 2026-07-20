@@ -46,7 +46,7 @@ from layer1.semantic.extractors import (
     reset_profile_overlay,
     use_profile_overlay,
 )
-from layer1.semantic.permission_markers import annotate_value_cells
+from layer1.semantic.permission_markers import annotate_value_cells, classify_permission_marker
 from layer1.semantic.use_matching import match_use
 
 EXTRACTOR_VERSION = "semantic-v1"
@@ -1841,6 +1841,113 @@ def resolve_permission_cell(
         "permission_marker": meta.get("permission_marker"),
         "footnote": meta.get("footnote"),
     }
+
+
+def enumerate_permission_column(
+    session: Session,
+    *,
+    table_id: int,
+    zone: str,
+) -> list[dict] | None:
+    """Enumerate every (use, permission) pair in a zone's matrix column (ABS-409).
+
+    The per-cell resolver (:func:`resolve_permission_cell`) answers "is THIS
+    use permitted?"; this walks the whole column so callers can answer "what
+    uses are permitted in this zone?" without one round-trip per row.
+
+    Returns ``None`` when the zone doesn't bind a column on ``table_id``
+    (caller falls through to the next table), else a list of
+    ``{"use_label", "permission", "footnote_ordinal"}`` dicts in row order.
+    Skips ``section:``-keyed placeholder rows (as :func:`use_row_labels`
+    does). Zone matching is hardened for the corpus as ingested: bound
+    ``raw_label`` values may carry trailing whitespace ("CEN-1  ") and
+    grouped columns bind one canonical entity for a comma-separated label
+    ("DD, DH, CEN-2, …") — a comma-token match catches the zones the single
+    canonical binding misses.
+    """
+    zone_norm = normalize_zone(zone)
+    column_bindings = (
+        session.query(TableAxisBinding)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id == table_id,
+            TableAxisBinding.axis == "column",
+            SemanticEntity.entity_type == "zone",
+        )
+        .order_by(TableAxisBinding.confidence.desc())
+        .all()
+    )
+    col_binding = None
+    for binding in column_bindings:
+        entity = session.get(SemanticEntity, binding.entity_id)
+        canonical = (entity.canonical_name or "") if entity is not None else ""
+        if canonical == zone_norm:
+            col_binding = binding
+            break
+        raw_tokens = {
+            normalize_zone(token.strip())
+            for token in (binding.raw_label or "").split(",")
+            if token.strip()
+        }
+        if zone_norm in raw_tokens:
+            col_binding = binding
+            break
+    if col_binding is None:
+        return None
+
+    row_bindings = (
+        session.query(TableAxisBinding, SemanticEntity.canonical_name)
+        .join(SemanticEntity, SemanticEntity.id == TableAxisBinding.entity_id)
+        .filter(
+            TableAxisBinding.table_id == table_id,
+            TableAxisBinding.axis == "row",
+            SemanticEntity.entity_type == "use",
+        )
+        .order_by(TableAxisBinding.index)
+        .all()
+    )
+    rows = [
+        (binding, (binding.raw_label or "").strip() or canonical_name)
+        for binding, canonical_name in row_bindings
+        if canonical_name and not canonical_name.startswith("section:")
+    ]
+    if not rows:
+        return []
+
+    row_indices = [binding.index for binding, _label in rows]
+    cells_by_row = {
+        cell.row_index: cell
+        for cell in session.query(SourceTableCell)
+        .filter(
+            SourceTableCell.table_id == table_id,
+            SourceTableCell.col_index == col_binding.index,
+            SourceTableCell.row_index.in_(row_indices),
+        )
+        .all()
+    }
+
+    results: list[dict] = []
+    seen_labels: set[str] = set()
+    for binding, label in rows:
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        cell = cells_by_row.get(binding.index)
+        meta = (cell.metadata_json or {}) if cell is not None else {}
+        marker = meta.get("permission_marker")
+        footnote = meta.get("footnote")
+        if marker is None:
+            classified = classify_permission_marker(cell.text if cell is not None else "")
+            marker = classified.get("permission_marker")
+            footnote = classified.get("footnote", footnote)
+        results.append(
+            {
+                "use_label": label,
+                "permission": marker,
+                "footnote_ordinal": footnote,
+            }
+        )
+    return results
 
 
 def resolve_mainland_permitted_use(
