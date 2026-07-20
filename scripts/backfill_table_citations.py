@@ -61,6 +61,7 @@ def backfill(
     profile: ParsingProfile | str,
     dry_run: bool = False,
     enrich: bool = True,
+    force_enrich: bool = False,
 ) -> LinkStats:
     """Link captions, then re-enrich the touched document(s).
 
@@ -83,7 +84,9 @@ def backfill(
             entry["action"],
         )
 
-    if enrich and not dry_run and stats.writes:
+    if enrich and not dry_run and (stats.writes or force_enrich):
+        # force_enrich re-runs enrichment even when linking was a no-op —
+        # needed when the classifier changed after a previous linking apply.
         touched_docs = sorted({entry["document_id"] for entry in stats.mapping})
         for doc_id in touched_docs:
             logger.info("re-enriching document %s (caption-aware reclassification)", doc_id)
@@ -110,6 +113,11 @@ def main() -> int:
         "--skip-enrich",
         action="store_true",
         help="Skip the post-link document re-enrichment step.",
+    )
+    parser.add_argument(
+        "--force-enrich",
+        action="store_true",
+        help="Re-run enrichment even when linking was already applied (no-op).",
     )
     parser.add_argument(
         "--sidecar-dir",
@@ -144,6 +152,7 @@ def main() -> int:
             profile=args.profile,
             dry_run=args.dry_run,
             enrich=not args.skip_enrich,
+            force_enrich=args.force_enrich,
         )
         if not args.dry_run and (stats.touched["fragments"] or stats.touched["tables"]):
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

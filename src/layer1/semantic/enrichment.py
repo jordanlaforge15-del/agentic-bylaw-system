@@ -134,6 +134,7 @@ def enrich_document_semantics(
             _extract_mainland_permitted_uses(session, report, cache, fragment)
         for table in tables:
             _enrich_table(session, report, cache, table)
+        _inherit_sibling_column_bindings(session, report, tables)
         _enrich_cross_references(session, report, cache, document_id=document_id)
         session.flush()
         _refresh_counts(session, report)
@@ -699,6 +700,77 @@ def _extract_definition_fact(
     )
 
 
+def _inherit_sibling_column_bindings(
+    session: Session,
+    report: SemanticEnrichmentReport,
+    tables: list[SourceTable],
+) -> None:
+    """Propagate zone-column bindings across caption-linked sibling slices.
+
+    ABS-409: a multi-page permission matrix is persisted as several
+    ``source_table`` rows sharing one caption parent. Continuation slices
+    sometimes carry no repeated header row (Table 1D p56), so per-table
+    enrichment can bind their use rows but never their zone columns — the
+    slice's cells become unreachable. When siblings share
+    ``parent_fragment_id`` and column count, the headered slice's column
+    bindings apply verbatim to the headerless one; copy them (at slightly
+    reduced confidence, provenance noted).
+    """
+    by_parent: dict[int, list[SourceTable]] = {}
+    for table in tables:
+        if table.parent_fragment_id is not None:
+            by_parent.setdefault(table.parent_fragment_id, []).append(table)
+
+    for siblings in by_parent.values():
+        if len(siblings) < 2:
+            continue
+        bindings_by_table: dict[int, list[TableAxisBinding]] = {}
+        for table in siblings:
+            bindings_by_table[table.id] = (
+                session.query(TableAxisBinding)
+                .filter(
+                    TableAxisBinding.table_id == table.id,
+                    TableAxisBinding.axis == "column",
+                )
+                .all()
+            )
+        donor = next(
+            (table for table in siblings if bindings_by_table[table.id]), None
+        )
+        if donor is None:
+            continue
+        donor_width = _table_width(session, donor.id)
+        for table in siblings:
+            if bindings_by_table[table.id]:
+                continue
+            if _table_width(session, table.id) != donor_width:
+                continue
+            for source in bindings_by_table[donor.id]:
+                binding = TableAxisBinding(
+                    table_id=table.id,
+                    axis="column",
+                    index=source.index,
+                    entity_id=source.entity_id,
+                    raw_label=source.raw_label,
+                    confidence=round(source.confidence * 0.9, 3),
+                    metadata_json={"inherited_from_table_id": donor.id},
+                )
+                session.add(binding)
+                report.axis_bindings += 1
+            session.flush()
+
+
+def _table_width(session: Session, table_id: int) -> int:
+    from sqlalchemy import func
+
+    return (
+        session.query(func.max(SourceTableCell.col_index))
+        .filter(SourceTableCell.table_id == table_id)
+        .scalar()
+        or 0
+    )
+
+
 def _classify_table(
     table: SourceTable,
     rows: dict[int, list[SourceTableCell]],
@@ -752,11 +824,25 @@ def _classify_table(
     amendment_disqualifies = (
         conventions.disqualify_amendment_tables and amendment_signal
     )
-    if (
+    # ABS-409: an explicit "permitted uses by zone" caption (supplied by the
+    # profile-gated caption-linking pass) is the strongest classification
+    # evidence and overrides the density-branch vetoes below. The real
+    # Regional Centre matrices trip BOTH vetoes legitimately: their cells
+    # carry amendment annotations ("RC-Dec 10/19…") that fire the
+    # amendment-table disqualifier, and their use rows include parking-named
+    # USES ("Parking structure use") that fire the parking signal — neither
+    # makes the table anything other than what its caption declares. A
+    # parking-requirements table (Table 15) is excluded because its own
+    # caption says "parking".
+    caption_declares_permitted_uses = (
+        conventions.detects_symbol_matrix
+        and "permitted uses by zone" in caption
+        and "parking" not in caption
+    )
+    if caption_declares_permitted_uses or (
         conventions.detects_symbol_matrix
         and (
-            "permitted uses by zone" in caption
-            or (zone_density >= 0.4 and use_density >= 0.35)
+            (zone_density >= 0.4 and use_density >= 0.35)
             or (
                 zone_density >= 0.3
                 and section_label_density >= 0.5
