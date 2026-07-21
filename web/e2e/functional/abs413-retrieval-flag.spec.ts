@@ -26,9 +26,18 @@ const FLAG_URL = `${E2E_API_URL}/v1/_test/retrieval-flag`;
 const SEARCH_URL = `${E2E_API_URL}/v1/_test/search-enabled-scope`;
 
 const MUNICIPALITY = "Test Municipality ABS-413";
-const BYLAW_NAME = "ABS-413 Retrieval Flag By-law";
+// The same spec file runs concurrently in every Playwright project
+// (desktop-chrome, mobile-*) against one shared Postgres, and `seed`
+// delete-then-recreates its bylaw's documents. Partition the bylaw per
+// project+worker so a parallel run can't invalidate this run's ids
+// mid-lifecycle.
+function bylawName(): string {
+  return `ABS-413 Retrieval Flag By-law [${test.info().project.name}-w${test.info().workerIndex}]`;
+}
 // Matches the sentinel fragments the seed action creates; obscure enough
-// that no other seeded bylaw in the shared e2e corpus matches it.
+// that no other seeded bylaw in the shared e2e corpus matches it. Parallel
+// partitions share the sentinel text, but every assertion below is on this
+// partition's own document ids, so cross-partition matches are inert.
 const QUERY = "pergola trellis height limit versioned publish";
 
 type SetResponse = {
@@ -47,7 +56,7 @@ async function seedDocs(request: any, count = 3): Promise<number[]> {
     data: {
       action: "seed",
       municipality: MUNICIPALITY,
-      bylaw_name: BYLAW_NAME,
+      bylaw_name: bylawName(),
       doc_count: count,
     },
   });
@@ -132,7 +141,7 @@ test("full publish lifecycle: fail-closed seed → enable → replace → disabl
   // Status reflects the flags exactly.
   const statusRes = await request.post(FLAG_URL, {
     headers: { "Content-Type": "application/json" },
-    data: { action: "status", municipality: MUNICIPALITY, bylaw_name: BYLAW_NAME },
+    data: { action: "status", municipality: MUNICIPALITY, bylaw_name: bylawName() },
   });
   expect(statusRes.status()).toBe(200);
   const status = (await statusRes.json()) as StatusResponse;
@@ -166,7 +175,7 @@ test("set action rejects unknown document ids without partial writes", async ({
   // The valid id in the batch must NOT have been enabled.
   const statusRes = await request.post(FLAG_URL, {
     headers: { "Content-Type": "application/json" },
-    data: { action: "status", municipality: MUNICIPALITY, bylaw_name: BYLAW_NAME },
+    data: { action: "status", municipality: MUNICIPALITY, bylaw_name: bylawName() },
   });
   const status = (await statusRes.json()) as StatusResponse;
   const flags = new Map(status.documents.map((d) => [d.id, d.retrieval_enabled]));
