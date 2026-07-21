@@ -26,6 +26,7 @@ Usage::
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -232,6 +233,72 @@ def _ensure_geocode_cache(session) -> None:
     )
 
 
+def dataset_converged(session, *, name: str, geojson_text: str) -> bool:
+    """True if the named dataset already carries exactly this fixture content.
+
+    Convergence = same ``content_hash`` (sha256 of the geojson bytes, the same
+    hash ``parse_geojson`` writes), clean parse, and linkage bound. Shared with
+    ``seed_e2e_pocs``. When every seed-owned object converges the seed exits
+    without writing anything: an unchanged fixture then never churns dataset
+    ids mid-suite, which is the only thing the live-API readers (ABS-414) are
+    vulnerable to — they cannot take the corpus advisory lock, so a reseed
+    commit between their statements strands them on dead dataset ids. A no-op
+    reseed commits nothing, so after the first seeding the race cannot occur.
+    """
+    expected = hashlib.sha256(geojson_text.encode("utf-8")).hexdigest()
+    row = session.scalar(select(ExternalDataset).where(ExternalDataset.name == name))
+    return (
+        row is not None
+        and row.content_hash == expected
+        and row.parse_status == ParseStatus.PARSED
+        and row.linked_fragment_id is not None
+    )
+
+
+def _corpus_converged(session, overlay_geojson: dict[str, str]) -> bool:
+    """True when the document, fragments, datasets, and geocode row all match."""
+    document = session.scalar(
+        select(Document).where(Document.file_hash == DOCUMENT_FILE_HASH)
+    )
+    if document is None:
+        return False
+    for overlay in OVERLAYS:
+        fragment = session.scalar(
+            select(SourceFragment).where(
+                SourceFragment.document_id == document.id,
+                SourceFragment.citation_label == overlay["citation"],
+            )
+        )
+        if fragment is None:
+            return False
+        if not dataset_converged(
+            session, name=overlay["name"], geojson_text=overlay_geojson[overlay["name"]]
+        ):
+            return False
+    geocode = session.scalar(
+        select(GeocodeCache).where(
+            GeocodeCache.normalized_text == TEST_ADDRESS_NORMALIZED
+        )
+    )
+    return (
+        geocode is not None
+        and geocode.status == "linked"
+        and geocode.geometry_geojson == TEST_POINT
+        and geocode.confidence == 1.0
+    )
+
+
+# One lock key for every writer AND reader of the shared Regional Centre
+# corpus (this seed, seed_e2e_pocs, inspect_pocs_intersection). Distinct
+# per-script keys only serialise a script against itself: two different seeds
+# could still interleave on the shared document (double-minting it on a fresh
+# DB), and a probe could read a dataset id by name, lose a drop-and-reingest
+# commit between statements under READ COMMITTED, and then query features for
+# an id that no longer exists — the intermittent zone=null /
+# intersects=false failures in the full parallel suite (ABS-412 gate runs).
+CORPUS_ADVISORY_LOCK_KEY = 2604601273
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         work_dir = Path(tmp)
@@ -240,8 +307,26 @@ def main() -> int:
             # runs don't race the drop-then-reingest path.
             if session.bind.dialect.name == "postgresql":
                 session.execute(
-                    text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601273)
+                    text("SELECT pg_advisory_xact_lock(:k)").bindparams(
+                        k=CORPUS_ADVISORY_LOCK_KEY
+                    )
                 )
+
+            overlay_geojson = {
+                overlay["name"]: json.dumps(_feature_collection(overlay["properties"]))
+                for overlay in OVERLAYS
+            }
+            if _corpus_converged(session, overlay_geojson):
+                document = session.scalar(
+                    select(Document).where(Document.file_hash == DOCUMENT_FILE_HASH)
+                )
+                summary = {
+                    "document_id": document.id,
+                    "overlays_linked": len(OVERLAYS),
+                    "converged": True,
+                }
+                print(f"seed_e2e_address_profile summary: {json.dumps(summary)}")
+                return 0
 
             document = _get_or_create_document(session)
             _ensure_fragments(session, document_id=document.id)
@@ -252,7 +337,7 @@ def main() -> int:
                 _drop_existing_dataset(session, overlay["name"])
                 geojson_path = work_dir / f"{overlay['name']}.geojson"
                 geojson_path.write_text(
-                    json.dumps(_feature_collection(overlay["properties"])),
+                    overlay_geojson[overlay["name"]],
                     encoding="utf-8",
                 )
                 cfg_path = work_dir / f"{overlay['name']}.yaml"

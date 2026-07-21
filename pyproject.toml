@@ -97,6 +97,16 @@ layer2 = "layer2.cli:app"
 [tool.setuptools.packages.find]
 where = ["src", "mcp"]
 
+# Non-.py files the installed package reads at runtime. Without these the
+# wheel ships bare .py files and module-relative loads fail only in deployed
+# images (ABS-412; surfaced as FileNotFoundError during the ABS-409 prod
+# heal). layer1/datasets/*.yaml are deliberately absent: they are ingest
+# inputs addressed by repo-relative CLI paths, never resolved module-relative.
+[tool.setuptools.package-data]
+"layer1.semantic" = ["*.json"]
+"layer2.prompts" = ["assets/*.txt"]
+"layer2.compliance.attributes" = ["*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "mcp", "tests", "scripts"]

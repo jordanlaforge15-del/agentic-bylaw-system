@@ -64,9 +64,11 @@ from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 # Reusing the same document keeps both the zone overlays and the POCS overlay in
 # one bylaw partition so every resolver mode sees them together.
 from seed_e2e_address_profile import (
+    CORPUS_ADVISORY_LOCK_KEY,
     DOCUMENT_BYLAW_NAME as _AP_BYLAW_NAME,
     DOCUMENT_FILE_HASH as _AP_DOCUMENT_FILE_HASH,
     DOCUMENT_MUNICIPALITY as _AP_MUNICIPALITY,
+    dataset_converged,
 )
 
 DOCUMENT_FILE_HASH = _AP_DOCUMENT_FILE_HASH
@@ -326,17 +328,99 @@ def _ensure_geocode_cache(session, *, normalized: str, raw: str, point: dict) ->
     session.flush()
 
 
+def _corpus_converged(session, geojson_text: str) -> bool:
+    """True when this seed's slice of the shared corpus already matches.
+
+    Mirrors ``seed_e2e_address_profile._corpus_converged`` (see
+    ``dataset_converged`` there for why a no-op reseed matters — ABS-414):
+    shared document + Schedule 7 fragment present, the POCS dataset content-
+    identical and linked, both geocode rows in their seeded state, and no
+    stale pre-fix identities lingering (those must still trigger a purge).
+    """
+    from sqlalchemy import and_, or_
+
+    stale = session.scalar(
+        select(Document).where(
+            or_(
+                Document.file_hash == _STALE_POCS_FILE_HASH,
+                and_(
+                    Document.municipality == _STALE_POCS_MUNICIPALITY,
+                    Document.bylaw_name == _STALE_POCS_BYLAW_NAME,
+                ),
+            )
+        )
+    )
+    if stale is not None:
+        return False
+    if session.scalar(
+        select(ExternalDataset).where(ExternalDataset.name == _STALE_DATASET_NAME)
+    ) is not None:
+        return False
+    document = session.scalar(
+        select(Document).where(Document.file_hash == DOCUMENT_FILE_HASH)
+    )
+    if document is None:
+        return False
+    fragment = session.scalar(
+        select(SourceFragment).where(
+            SourceFragment.document_id == document.id,
+            SourceFragment.citation_label == SCHEDULE_CITATION,
+        )
+    )
+    if fragment is None:
+        return False
+    if not dataset_converged(session, name=DATASET_NAME, geojson_text=geojson_text):
+        return False
+    for normalized, point in (
+        (QUINPOOL_ADDRESS_NORMALIZED, _QUINPOOL_POINT),
+        (CONTROL_ADDRESS_NORMALIZED, _CONTROL_POINT),
+    ):
+        geocode = session.scalar(
+            select(GeocodeCache).where(GeocodeCache.normalized_text == normalized)
+        )
+        if (
+            geocode is None
+            or geocode.status != "linked"
+            or geocode.geometry_geojson != point
+            or geocode.confidence != 0.95
+        ):
+            return False
+    return True
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         work_dir = Path(tmp)
         with session_scope() as session:
-            # Serialise against concurrent Playwright workers so two seed runs
-            # don't race the drop-then-reingest path (same shape as the sibling
-            # seed scripts' advisory locks).
+            # Serialise against concurrent Playwright workers. Deliberately the
+            # SAME key as seed_e2e_address_profile (not a per-script one): both
+            # seeds mutate the shared Regional Centre document, so distinct keys
+            # let them interleave — double-minting the shared document on a
+            # fresh DB and evicting each other's overlays from resolver scope.
             if session.bind.dialect.name == "postgresql":
                 session.execute(
-                    text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601350)
+                    text("SELECT pg_advisory_xact_lock(:k)").bindparams(
+                        k=CORPUS_ADVISORY_LOCK_KEY
+                    )
                 )
+
+            geojson_text = json.dumps(_feature_collection())
+            if _corpus_converged(session, geojson_text):
+                dataset = session.scalar(
+                    select(ExternalDataset).where(ExternalDataset.name == DATASET_NAME)
+                )
+                summary = {
+                    "dataset_id": dataset.id,
+                    "dataset_name": DATASET_NAME,
+                    "parse_status": dataset.parse_status.value,
+                    "feature_count": dataset.feature_count,
+                    "link_status": "linked",
+                    "quinpool_address": QUINPOOL_ADDRESS_RAW,
+                    "control_address": CONTROL_ADDRESS_RAW,
+                    "converged": True,
+                }
+                print(f"seed_e2e_pocs summary: {json.dumps(summary)}")
+                return 0
 
             _purge_stale_pocs_document(session)
             document = _get_or_create_document(session)
@@ -346,7 +430,7 @@ def main() -> int:
             _drop_existing_dataset(session, _STALE_DATASET_NAME)
             _drop_existing_dataset(session, DATASET_NAME)
             geojson_path = work_dir / f"{DATASET_NAME}.geojson"
-            geojson_path.write_text(json.dumps(_feature_collection()), encoding="utf-8")
+            geojson_path.write_text(geojson_text, encoding="utf-8")
             cfg_path = work_dir / f"{DATASET_NAME}.yaml"
             cfg_path.write_text(_config_yaml(geojson_path), encoding="utf-8")
             result = ingest_geo_dataset(session, cfg_path)

@@ -16,6 +16,13 @@
 #      filesystem outside /tmp during import or app construction will fail
 #      under --read-only (the v0.8.4/mkdir class of bug).
 #
+#   3. Missing package data: non-.py assets the installed wheel must carry
+#      (taxonomy.json, prompt assets, compliance taxonomy). These are only
+#      read when enrichment/eval code runs, so a bare import of
+#      advisor.api.main passes even when they're absent — the ABS-412 /
+#      ABS-409-heal class of bug. The smoke command loads each one
+#      explicitly.
+#
 # Usage (run on the production server via SSH before container swap):
 #   ./scripts/preflight_advisor_image.sh <tag>
 #   e.g.:  ./scripts/preflight_advisor_image.sh v1.2.3
@@ -30,6 +37,8 @@
 #       --security-opt no-new-privileges:true \
 #       ghcr.io/jordanlaforge15-del/bylaw-advisor:<tag> \
 #       python -c 'import advisor.api.main'"
+#   (the manual one-liner above only covers check 1+2; prefer running the
+#   script itself, whose smoke command also exercises package data)
 #
 # Exit codes:
 #   0          — smoke passed; safe to proceed with docker compose up -d advisor
@@ -61,11 +70,24 @@ usage() {
 TAG="$1"
 FULL_IMAGE="${IMAGE}:${TAG}"
 
+# The smoke body: app construction + every module-relative data asset the
+# wheel must ship (kept in sync with tests/test_package_data.py).
+SMOKE_PY="
+import advisor.api.main
+from layer1.semantic.taxonomy import load_taxonomy as load_l1_taxonomy
+assert load_l1_taxonomy()['entity_types']
+from layer2.compliance.taxonomy import load_taxonomy as load_l2_taxonomy
+assert load_l2_taxonomy().attributes
+from layer2.prompts.builder import load_system_prompt
+assert load_system_prompt()
+print('[preflight] app import + package data OK')
+"
+
 echo "[preflight] Image:       ${FULL_IMAGE}"
 echo "[preflight] Env file:    ${ENV_FILE}"
 echo "[preflight] Network:     ${NETWORK}"
 echo "[preflight] Constraints: --read-only  --tmpfs /tmp  --cap-drop ALL  --no-new-privileges"
-echo "[preflight] Command:     python -c 'import advisor.api.main'"
+echo "[preflight] Command:     python -c '<app import + package-data smoke>'"
 echo
 
 set +e
@@ -77,7 +99,7 @@ docker run --rm \
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
     "${FULL_IMAGE}" \
-    python -c "import advisor.api.main"
+    python -c "${SMOKE_PY}"
 SMOKE_EXIT=$?
 set -e
 
