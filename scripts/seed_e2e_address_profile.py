@@ -232,6 +232,17 @@ def _ensure_geocode_cache(session) -> None:
     )
 
 
+# One lock key for every writer AND reader of the shared Regional Centre
+# corpus (this seed, seed_e2e_pocs, inspect_pocs_intersection). Distinct
+# per-script keys only serialise a script against itself: two different seeds
+# could still interleave on the shared document (double-minting it on a fresh
+# DB), and a probe could read a dataset id by name, lose a drop-and-reingest
+# commit between statements under READ COMMITTED, and then query features for
+# an id that no longer exists — the intermittent zone=null /
+# intersects=false failures in the full parallel suite (ABS-412 gate runs).
+CORPUS_ADVISORY_LOCK_KEY = 2604601273
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         work_dir = Path(tmp)
@@ -240,7 +251,9 @@ def main() -> int:
             # runs don't race the drop-then-reingest path.
             if session.bind.dialect.name == "postgresql":
                 session.execute(
-                    text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601273)
+                    text("SELECT pg_advisory_xact_lock(:k)").bindparams(
+                        k=CORPUS_ADVISORY_LOCK_KEY
+                    )
                 )
 
             document = _get_or_create_document(session)

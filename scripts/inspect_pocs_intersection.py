@@ -30,10 +30,11 @@ import math
 import sys
 
 from shapely.geometry import mapping, shape
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from layer1.db.base import ExternalDataset
 from layer1.db.session import session_scope
+from seed_e2e_address_profile import CORPUS_ADVISORY_LOCK_KEY
 from layer2.retrieval.geocode import resolve_location
 from layer2.retrieval.location import extract_location_references
 from layer2.retrieval.spatial import ResolvedLocation, query_features
@@ -95,6 +96,19 @@ def main() -> int:
     args = parser.parse_args()
 
     with session_scope() as session:
+        # Under READ COMMITTED each statement gets a fresh snapshot, so without
+        # this lock a concurrent seed_e2e_pocs run (another spec file's
+        # beforeAll) can commit its drop-and-reingest between the id lookup
+        # below and query_features — leaving us querying features for a dataset
+        # id that no longer exists (intersects=false flake in full-suite runs).
+        # Sharing the corpus key with the seeds serialises the whole probe
+        # transaction against any reseed.
+        if session.bind.dialect.name == "postgresql":
+            session.execute(
+                text("SELECT pg_advisory_xact_lock(:k)").bindparams(
+                    k=CORPUS_ADVISORY_LOCK_KEY
+                )
+            )
         dataset = session.scalar(
             select(ExternalDataset).where(ExternalDataset.name == args.dataset_name)
         )

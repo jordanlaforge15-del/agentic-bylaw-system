@@ -64,6 +64,7 @@ from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 # Reusing the same document keeps both the zone overlays and the POCS overlay in
 # one bylaw partition so every resolver mode sees them together.
 from seed_e2e_address_profile import (
+    CORPUS_ADVISORY_LOCK_KEY,
     DOCUMENT_BYLAW_NAME as _AP_BYLAW_NAME,
     DOCUMENT_FILE_HASH as _AP_DOCUMENT_FILE_HASH,
     DOCUMENT_MUNICIPALITY as _AP_MUNICIPALITY,
@@ -330,12 +331,16 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         work_dir = Path(tmp)
         with session_scope() as session:
-            # Serialise against concurrent Playwright workers so two seed runs
-            # don't race the drop-then-reingest path (same shape as the sibling
-            # seed scripts' advisory locks).
+            # Serialise against concurrent Playwright workers. Deliberately the
+            # SAME key as seed_e2e_address_profile (not a per-script one): both
+            # seeds mutate the shared Regional Centre document, so distinct keys
+            # let them interleave — double-minting the shared document on a
+            # fresh DB and evicting each other's overlays from resolver scope.
             if session.bind.dialect.name == "postgresql":
                 session.execute(
-                    text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601350)
+                    text("SELECT pg_advisory_xact_lock(:k)").bindparams(
+                        k=CORPUS_ADVISORY_LOCK_KEY
+                    )
                 )
 
             _purge_stale_pocs_document(session)
