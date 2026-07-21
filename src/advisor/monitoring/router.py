@@ -95,14 +95,14 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
     """Blocking body of the corpus-coherence check, run off the event loop."""
     from bylaw_retrieval.retrieval import (  # noqa: PLC0415
         audit_corpus_coherence,
-        latest_per_bylaw_resolver,
+        retrieval_enabled_resolver,
     )
     from layer1.db.session import session_scope  # noqa: PLC0415
 
     try:
         with session_scope() as session:
             report = audit_corpus_coherence(
-                session, default_document_id_resolver=latest_per_bylaw_resolver
+                session, default_document_id_resolver=retrieval_enabled_resolver
             )
     except Exception:
         logger.exception("corpus-coherence audit (ABS-356) failed to run")

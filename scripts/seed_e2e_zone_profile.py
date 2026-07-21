@@ -98,6 +98,11 @@ def _get_or_create_document(session) -> Document:
         .first()
     )
     if document is not None:
+        # Converge the publish flag on re-seed: rows created before
+        # ABS-413 (or left disabled by the migration backfill) must
+        # still end up retrieval-enabled in the persistent e2e DB.
+        document.retrieval_enabled = True
+        session.flush()
         return document
     document = Document(
         municipality=DOCUMENT_MUNICIPALITY,
@@ -107,6 +112,7 @@ def _get_or_create_document(session) -> Document:
         mime_type="text/plain",
         page_count=6,
         parser_version="e2e-seed",
+        retrieval_enabled=True,
         ingestion_timestamp=utcnow(),
     )
     session.add(document)

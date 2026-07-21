@@ -15,6 +15,10 @@ def create_app(db_url: str | None = None):
             "FastAPI is not installed. Install the 'api' extra: pip install -e '.[api]'"
         ) from exc
 
+    # Deliberately unscoped (ABS-413): this dev-only HTTP mirror is a raw
+    # browsing surface over the whole corpus, including documents not yet
+    # enabled for retrieval. Deployed surfaces (advisor app, MCP server)
+    # scope with retrieval_enabled_resolver.
     app = FastAPI(
         title="Layer 1 Retrieval API",
         version="0.1.0",

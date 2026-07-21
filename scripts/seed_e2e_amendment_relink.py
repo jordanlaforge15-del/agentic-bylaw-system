@@ -4,25 +4,27 @@ Used by ``web/e2e/functional/abs355-amendment-relink.spec.ts`` to prove the
 production twin of the ABS-349/350 regression: geo layers pin to a specific
 document version at ingest time (``ExternalDataset.linked_fragment_id`` ->
 ``SourceFragment`` -> ``Document``), and retrieval scoping
-(``latest_per_bylaw_resolver`` + ``_scoped_linked_datasets``) only surfaces
-layers whose pinned document is the newest per ``(municipality, bylaw_name)``.
-So re-ingesting an amended bylaw under the same name silently evicts every
-existing layer and ``get_address_profile`` starts returning ``zone=null``.
+(``retrieval_enabled_resolver`` + ``_scoped_linked_datasets``) only surfaces
+layers whose pinned document is retrieval-enabled (ABS-413). So publishing an
+amended version of a bylaw without moving its layers would silently evict
+every existing layer and ``get_address_profile`` would start returning
+``zone=null``.
 
 This seed reproduces a real amendment and exercises the fix end-to-end through
 PostGIS:
 
-1. A v1 ``HRM / ABS-355 Amendment Bylaw`` document with a ``Zoning Schedule``
-   fragment.
+1. A v1 ``HRM / ABS-355 Amendment Bylaw`` document, retrieval-enabled, with a
+   ``Zoning Schedule`` fragment.
 2. A linked zone geo dataset (one polygon covering the test point), ingested
    through ``ingest_geo_dataset`` so the PostGIS ``geometry`` column is
    populated — not just ``geometry_geojson`` (the ABS-332/349 gotcha: the
    ST_Intersects path needs the real geometry column). At this point the layer
    is pinned to v1.
 3. A v2 re-ingest of the same document (new file_hash, newer timestamp, its own
-   ``Zoning Schedule`` fragment), after which ``relink_superseded_datasets`` —
-   the exact production function ``layer1.pipeline.ingest.ingest_file`` calls at
-   the tail of every document ingest — is run to re-point the layer onto v2.
+   ``Zoning Schedule`` fragment), seeded disabled — mirroring a real ingest —
+   and then *published* via ``set_retrieval_enabled(..., replace=True)``, the
+   exact production operation behind the CLI's ``enable-retrieval --replace``,
+   which disables v1 and runs the relink pass that re-points the layer onto v2.
 
 The spec then asserts ``get_address_profile`` still resolves the zone and that
 its citations now reference the v2 document, not the evicted v1.
@@ -50,7 +52,7 @@ from typing import Any
 
 from sqlalchemy import select, text
 
-from layer1.datasets.linker import relink_superseded_datasets
+from layer1.pipeline.publish import set_retrieval_enabled
 from layer1.db.base import (
     Document,
     ExternalDataset,
@@ -148,7 +150,9 @@ def _drop_dataset(session) -> None:
     session.flush()
 
 
-def _create_document(session, *, file_hash: str, ingested_at: datetime) -> Document:
+def _create_document(
+    session, *, file_hash: str, ingested_at: datetime, enabled: bool = False
+) -> Document:
     document = Document(
         municipality=MUNICIPALITY,
         bylaw_name=BYLAW_NAME,
@@ -158,6 +162,7 @@ def _create_document(session, *, file_hash: str, ingested_at: datetime) -> Docum
         page_count=120,
         parser_version="e2e-seed",
         ingestion_timestamp=ingested_at,
+        retrieval_enabled=enabled,
     )
     session.add(document)
     session.flush()
@@ -228,6 +233,7 @@ def main() -> int:
                 session,
                 file_hash=DOCUMENT_V1_FILE_HASH,
                 ingested_at=now - timedelta(days=1),
+                enabled=True,
             )
 
             # Ingest the zone layer while only v1 exists — it pins to v1.
@@ -239,15 +245,21 @@ def main() -> int:
             assert ingest_result.link_result.status == "linked", ingest_result.link_result
             assert ingest_result.dataset.linked_document_id == v1_doc.id
 
-            # Amend: re-ingest v2 under the same name, then run the production
-            # re-link pass ingest_file invokes at the tail of every ingest.
+            # Amend: re-ingest v2 under the same name (disabled, like any real
+            # ingest), then PUBLISH it — the production operation behind
+            # `enable-retrieval --replace`, which disables v1 and runs the
+            # relink pass that moves the layer onto v2.
             v2_doc = _create_document(
                 session,
                 file_hash=DOCUMENT_V2_FILE_HASH,
                 ingested_at=now,
             )
-            relink_results = relink_superseded_datasets(session, v2_doc)
+            publish_result = set_retrieval_enabled(
+                session, [v2_doc.id], True, replace=True
+            )
+            relink_results = publish_result.relink_results
             assert [r.status for r in relink_results] == ["linked"], relink_results
+            assert not v1_doc.retrieval_enabled and v2_doc.retrieval_enabled
             session.refresh(ingest_result.dataset)
             assert ingest_result.dataset.linked_document_id == v2_doc.id
 

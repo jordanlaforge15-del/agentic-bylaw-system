@@ -267,6 +267,9 @@ class OpenAIToolExecutor:
         args = arguments_json
         if isinstance(arguments_json, str):
             args = json.loads(arguments_json)
+        # Deliberately unscoped (ABS-413): this executor is an eval/dev
+        # harness where the caller owns the session and decides the corpus;
+        # the retrieval_enabled publish gate applies to deployments, not here.
         service = RetrievalService(self.session)
 
         if tool_name == "list_documents":

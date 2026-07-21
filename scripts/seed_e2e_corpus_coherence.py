@@ -125,6 +125,11 @@ def _get_or_create_document(session, *, file_hash: str, municipality: str, bylaw
         select(Document).where(Document.file_hash == file_hash)
     ).scalars().first()
     if document is not None:
+        # Converge the publish flag on re-seed: rows created before
+        # ABS-413 (or left disabled by the migration backfill) must
+        # still end up retrieval-enabled in the persistent e2e DB.
+        document.retrieval_enabled = True
+        session.flush()
         return document
     document = Document(
         municipality=municipality,
@@ -134,6 +139,7 @@ def _get_or_create_document(session, *, file_hash: str, municipality: str, bylaw
         mime_type="application/pdf",
         page_count=100,
         parser_version="e2e-seed",
+        retrieval_enabled=True,
         ingestion_timestamp=utcnow(),
     )
     session.add(document)

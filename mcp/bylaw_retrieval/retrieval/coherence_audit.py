@@ -20,13 +20,15 @@ the ABS-350 postmortem:
   fragment (``ExternalDataset.linked_fragment_id IS NULL`` — see
   ``layer1.datasets.linker.find_orphan_datasets``).
 * ``evicted``   — the dataset is linked to a real fragment, but that
-  fragment's document fell outside the active retrieval scope (superseded by
-  a newer ingest of the same bylaw — the exact ABS-350 regression).
+  fragment's document is outside the active retrieval scope (not
+  retrieval-enabled — e.g. an amendment was ingested and published while the
+  dataset stayed pinned to the now-disabled version; the ABS-350 regression
+  shape).
 
 Usage (programmatic)::
 
     from bylaw_retrieval.retrieval.coherence_audit import audit_corpus_coherence
-    report = audit_corpus_coherence(session, default_document_id_resolver=latest_per_bylaw_resolver)
+    report = audit_corpus_coherence(session, default_document_id_resolver=retrieval_enabled_resolver)
 
 Usage (CLI)::
 
@@ -107,7 +109,7 @@ def audit_corpus_coherence(
     scanned — the production/CLI/ops-surface default.
 
     ``default_document_id_resolver`` should mirror whatever a deployment
-    wires into its ``RetrievalService`` (e.g. ``latest_per_bylaw_resolver``)
+    wires into its ``RetrievalService`` (e.g. ``retrieval_enabled_resolver``)
     so the audit sees the same "active" scope real requests do. Passing
     ``None`` audits against the unscoped corpus — every ingested document —
     which is only useful for diagnosing raw linker state, not what a real

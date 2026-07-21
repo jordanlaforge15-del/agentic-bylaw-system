@@ -33,9 +33,10 @@
 // Shared-document regression (ABS-350 seed fix, commits 4f58978 / 24b3803)
 // ------------------------------------------------------------------------
 // Schedule 7 is part of the Regional Centre Land Use By-Law, the same bylaw the
-// address-profile seed uses for its zone/height/FAR/heritage overlays. The
-// production advisor scopes retrieval with latest_per_bylaw_resolver — only the
-// newest document per (municipality, bylaw_name) stays in scope. An earlier
+// address-profile seed uses for its zone/height/FAR/heritage overlays. At the
+// time the production advisor scoped retrieval with latest_per_bylaw_resolver —
+// only the newest document per (municipality, bylaw_name) stayed in scope
+// (since ABS-413 the scope is the operator-enabled document set). An earlier
 // version of this seed minted a SECOND, newer "Regional Centre Land Use By-Law"
 // document, which evicted the zone-overlay document and regressed 100 Robie
 // Street to zone=null (breaking abs274-bylaw-query / address-profile-mcp-tool
@@ -123,8 +124,9 @@ test.beforeAll(() => {
   // Order matters for the non-eviction regression: seed the address-profile
   // document (zone/height/FAR/heritage overlays) FIRST, then the POCS layer.
   // Under the pre-fix seed the POCS document was newer and would evict the
-  // zone document from latest_per_bylaw scope; the fix binds both to one shared
-  // document, so this ordering must now leave the zone resolvable.
+  // zone document from the then-latest-per-bylaw scope; the fix binds both to
+  // one shared (retrieval-enabled) document, so this ordering must now leave
+  // the zone resolvable.
   runSeed("seed_e2e_address_profile.py");
   runSeed("seed_e2e_pocs.py");
 });
@@ -177,7 +179,7 @@ test("Schedule 7 and the zone overlays share one Regional Centre LUB document", 
   // Schedule 7 IS part of the Regional Centre Land Use By-Law that also carries
   // the zoning/height/FAR/heritage overlays. The pre-fix POCS seed minted a
   // SECOND "Regional Centre Land Use By-Law" document (its own file_hash) with a
-  // newer ingestion_timestamp. Under the production latest_per_bylaw_resolver
+  // newer ingestion_timestamp. Under the then-production latest_per_bylaw_resolver
   // that newer document evicted the zone document from scope, regressing
   // address_lookup for 100 Robie Street to zone=null on dev post-merge
   // (abs274-bylaw-query / address-profile-mcp-tool). The fix binds the POCS seed

@@ -185,9 +185,9 @@ def latest_document_id_resolver(session: Session) -> int | None:
     """Return the id of the most recently ingested document, or None.
 
     "Most recent" means largest ``ingestion_timestamp``; ties broken by id
-    descending. Used by the MCP server's ``--latest-only`` mode to scope
-    every request to the freshest ingest, since dev workflows commonly
-    re-ingest the same bylaw multiple times.
+    descending. Dev/debug utility only — no deployment scopes retrieval by
+    recency anymore (see ``retrieval_enabled_resolver``); this survives for
+    scripts and resolver-mechanism tests that want a single-doc scope.
     """
     return (
         session.execute(
@@ -200,32 +200,30 @@ def latest_document_id_resolver(session: Session) -> int | None:
     )
 
 
-def latest_per_bylaw_resolver(session: Session) -> list[int] | None:
-    """Return the id of the most recently ingested document *per bylaw*.
+def retrieval_enabled_resolver(session: Session) -> list[int]:
+    """Return the ids of documents explicitly published to retrieval.
 
-    Groups documents by ``(municipality, bylaw_name)`` and picks the
-    newest ingest of each (largest ``ingestion_timestamp``, ties broken
-    by ``id`` descending).  This lets a multi-bylaw deployment search
-    across all active bylaws while still de-duplicating re-ingests of
-    the same bylaw — the common dev-workflow concern that
-    ``latest_document_id_resolver`` was built for, generalized.
+    The retrieval corpus is exactly the set of documents an operator has
+    enabled (``document.retrieval_enabled``, toggled via the layer1 CLI's
+    ``enable-retrieval``/``disable-retrieval``) — nothing is derived from
+    ingestion recency. This is the production resolver (advisor app, MCP
+    server, monitoring).
 
-    Returns ``None`` when no documents exist (so the caller can
-    distinguish "no documents at all" from "an empty scope").
+    CONTRACT: always returns a list, never ``None``. An empty list is a
+    real, fail-closed scope — every scoped query returns zero rows. (The
+    latest-* resolvers return ``None`` on an empty corpus, which the
+    scope checks treat as "unscoped"; an opt-in publish flag must not
+    fail open that way.)
     """
-    from sqlalchemy import func  # noqa: PLC0415
-
-    window = func.row_number().over(
-        partition_by=[Document.municipality, Document.bylaw_name],
-        order_by=[desc(Document.ingestion_timestamp), desc(Document.id)],
-    ).label("rn")
-    subq = select(Document.id.label("doc_id"), window).subquery()
-    ids = (
-        session.execute(select(subq.c.doc_id).where(subq.c.rn == 1))
+    return list(
+        session.execute(
+            select(Document.id)
+            .where(Document.retrieval_enabled.is_(True))
+            .order_by(Document.id)
+        )
         .scalars()
         .all()
     )
-    return list(ids) if ids else None
 
 
 class RetrievalService:
@@ -294,6 +292,11 @@ class RetrievalService:
         max_fragments: int = 250,
         include_text: bool = False,
     ) -> DocumentOutlineResponse:
+        default_ids = self._resolve_default_document_ids()
+        if default_ids is not None and document_id not in default_ids:
+            # A document outside the scoped corpus must be
+            # indistinguishable from a nonexistent one.
+            raise ValueError(f"Document {document_id} not found")
         document = self._get_document(document_id)
         stmt = (
             select(SourceFragment)
@@ -2007,8 +2010,9 @@ class RetrievalService:
         match (containment over partial overlap) wins.
         """
         # Mirror the same scope rules used by the text channel so a request
-        # under --latest-only (or with explicit document_id / municipality /
-        # bylaw_name) constrains the spatial channel identically.
+        # under the enabled-documents scope (or with explicit document_id /
+        # municipality / bylaw_name) constrains the spatial channel
+        # identically.
         datasets = self._scoped_linked_datasets(
             document_id=request.document_id,
             municipality=request.municipality,
@@ -2276,6 +2280,7 @@ class RetrievalService:
             page_count=document.page_count,
             parser_version=document.parser_version,
             ingestion_timestamp=document.ingestion_timestamp,
+            retrieval_enabled=document.retrieval_enabled,
         )
 
     def _ancestor_chain(self, fragment: SourceFragment) -> list[AncestorFragment]:

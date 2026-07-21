@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 import hashlib
 
 from layer1.config import get_settings
-from layer1.datasets.linker import relink_superseded_datasets
 from layer1.db.base import (
     CrossReference,
     Document,
@@ -100,16 +99,14 @@ def ingest_file(
         )
         run.completed_at = datetime.now(timezone.utc)
 
-        # Amendment support (ABS-355): re-ingesting an amended bylaw under the
-        # same (municipality, bylaw_name) makes every geo layer pinned to the
-        # prior version silently fall out of retrieval scope, since scoping only
-        # surfaces layers on the newest document per bylaw. Re-point those
-        # layers onto this fresh version (or flag them as orphans if the cited
-        # schedule was dropped) so the map layers survive the amendment. No-op
-        # when this is the first ingest of the bylaw. Only runs when the run
-        # didn't hard-fail — a failed parse yields no usable fragments to bind.
+        # Geo-layer amendment support (ABS-355, reworked in ABS-413): datasets
+        # no longer re-link here. A fresh ingest defaults to
+        # retrieval_enabled=False, and re-pointing layers onto an unpublished
+        # document would strand them outside the enabled retrieval scope. The
+        # relink pass now fires when the document is published
+        # (layer1.pipeline.publish.set_retrieval_enabled →
+        # relink_superseded_datasets).
         if run.status != IngestionStatus.FAILED:
-            relink_superseded_datasets(session, document)
             # ABS-409: link "Table 1A:"-style caption fragments to their
             # tables (citation path on the caption, parent/caption on the
             # table) so the matrices stay citation-addressable and the table

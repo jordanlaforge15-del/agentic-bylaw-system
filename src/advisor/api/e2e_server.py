@@ -63,7 +63,7 @@ from layer1.manifest_adapter import (
     load_manifest,
     profile_from_manifest,
 )
-from layer1.models.enums import IngestionStatus, ParseStatus
+from layer1.models.enums import FragmentType, IngestionStatus, ParseStatus
 from layer1.pipeline.verify_coverage import compare_coverage_reports, verify_document_coverage
 from layer1.pipeline.ingest import ingest_file
 from layer1.profiles import HALIFAX_PROFILE
@@ -515,23 +515,24 @@ def _mount_test_router(app: FastAPI) -> None:
 
     @app.post("/v1/_test/address-profile-scoped")
     async def address_profile_scoped(body: _AddressProfileBody) -> dict[str, object]:
-        """Resolve an address under the *production* latest-per-bylaw scoping.
+        """Resolve an address under the *production* enabled-documents scoping.
 
         The plain ``/address-profile`` endpoint deliberately runs with no
         default-document resolver so it sees the full corpus regardless of
         same-name collisions in the shared e2e DB (the ABS-349/350 concern).
-        This variant instead wires ``latest_per_bylaw_resolver`` — exactly what
-        ``advisor.api.app`` and the MCP ``server`` use in production — so the
-        ABS-355 spec reproduces the real amendment eviction: a layer still
-        pinned to the superseded document version falls out of scope and the
-        zone resolves to null. With the re-link fix in place the layer follows
-        the amendment onto the new version and the zone resolves again.
+        This variant instead wires ``retrieval_enabled_resolver`` — exactly
+        what ``advisor.api.app`` and the MCP ``server`` use in production — so
+        the ABS-355 spec reproduces the real amendment eviction: a layer still
+        pinned to a disabled document version falls out of scope and the
+        zone resolves to null. With publish-driven re-linking in place the
+        layer follows the amendment onto the newly enabled version and the
+        zone resolves again.
         """
-        from bylaw_retrieval.retrieval import latest_per_bylaw_resolver  # noqa: PLC0415
+        from bylaw_retrieval.retrieval import retrieval_enabled_resolver  # noqa: PLC0415
 
         with session_scope() as session:
             service = RetrievalService(
-                session, default_document_id_resolver=latest_per_bylaw_resolver
+                session, default_document_id_resolver=retrieval_enabled_resolver
             )
             return service.get_address_profile(body.address).model_dump(mode="json")
 
@@ -803,6 +804,11 @@ def _mount_test_router(app: FastAPI) -> None:
                     "errors": list(run.errors_json or []),
                     "warnings": list(run.warnings_json or []),
                 }
+            # Test-context auto-publish (ABS-413): production ingest leaves a
+            # document disabled until an operator enables it, but the ABS-74
+            # spec asserts retrieval sees the ingested bylaw immediately.
+            document.retrieval_enabled = True
+            session.flush()
             enrich_report = enrich_document_semantics(
                 session, document_id=document.id, profile=profile
             )
@@ -1120,7 +1126,7 @@ def _mount_test_router(app: FastAPI) -> None:
 
         Mirrors the CLI (``scripts/corpus_coherence_audit.py``) and the
         ``/v1/monitoring/corpus-coherence`` ops endpoint: scopes with
-        ``latest_per_bylaw_resolver`` — the same resolver production wires
+        ``retrieval_enabled_resolver`` — the same resolver production wires
         into ``RetrievalService`` — so a Playwright spec can seed a coherent
         corpus, assert the audit passes, break one link, and assert it fails
         naming the missing role exactly as a real deployment would see it.
@@ -1128,7 +1134,7 @@ def _mount_test_router(app: FastAPI) -> None:
         from bylaw_retrieval.retrieval import (  # noqa: PLC0415
             OverlayDeclaration,
             audit_corpus_coherence,
-            latest_per_bylaw_resolver,
+            retrieval_enabled_resolver,
         )
 
         declarations = [
@@ -1144,7 +1150,7 @@ def _mount_test_router(app: FastAPI) -> None:
             report = audit_corpus_coherence(
                 session,
                 overlay_declarations=declarations,
-                default_document_id_resolver=latest_per_bylaw_resolver,
+                default_document_id_resolver=retrieval_enabled_resolver,
             )
         return report.model_dump(mode="json")
 
@@ -1436,11 +1442,172 @@ def _mount_search_evidence_endpoint(app: FastAPI) -> None:
 class _ZoneProfileBody(BaseModel):
     zone: str
     include: list[str] | None = None
-    # Optional document scope. Production runs --latest-only (one document);
-    # the e2e corpus holds many bylaws, several staging the same zone codes,
-    # so a spec passes its own seeded document_id to isolate get_zone_profile
-    # to its data (mirrors the document_id scoping on lookup_citation).
+    # Optional document scope. Production scopes to retrieval-enabled
+    # documents (ABS-413); the e2e corpus holds many bylaws, several staging
+    # the same zone codes, so a spec passes its own seeded document_id to
+    # isolate get_zone_profile to its data (mirrors the document_id scoping
+    # on lookup_citation).
     document_id: int | None = None
+
+
+class _RetrievalFlagBody(BaseModel):
+    """ABS-413 e2e driver for the document publish flag."""
+
+    action: Literal["seed", "set", "status"]
+    municipality: str = "Test Municipality ABS-413"
+    bylaw_name: str = "ABS-413 Retrieval Flag By-law"
+    doc_count: int = Field(default=3, ge=1, le=9)
+    document_ids: list[int] | None = None
+    enabled: bool | None = None
+    replace: bool = False
+
+
+class _SearchEnabledScopeBody(BaseModel):
+    query: str
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+def _mount_retrieval_flag_endpoints(app: FastAPI) -> None:
+    """ABS-413: drive the real publish surface + production-scope probe.
+
+    ``/v1/_test/retrieval-flag`` seeds N disabled documents (each carrying a
+    sentinel fragment), toggles them through the real
+    ``layer1.pipeline.publish.set_retrieval_enabled``, and reports status via
+    ``list_retrieval_status`` — the exact functions behind the CLI's
+    ``enable-retrieval`` / ``disable-retrieval`` / ``list-documents``.
+
+    ``/v1/_test/search-enabled-scope`` runs a search under
+    ``retrieval_enabled_resolver`` — the resolver production wires — so the
+    Playwright spec can prove opt-in publishing end-to-end: seeded docs are
+    invisible until enabled (fail-closed), replace evicts the older sibling,
+    and disabling hides them again.
+    """
+    from datetime import timedelta  # noqa: PLC0415
+    import hashlib  # noqa: PLC0415
+
+    from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+        RetrievalRequest,
+        retrieval_enabled_resolver,
+    )
+    from layer1.pipeline.publish import (  # noqa: PLC0415
+        list_retrieval_status,
+        set_retrieval_enabled,
+    )
+
+    @app.post("/v1/_test/retrieval-flag")
+    async def retrieval_flag(body: _RetrievalFlagBody) -> dict[str, object]:
+        with session_scope() as session:
+            if body.action == "seed":
+                session.query(Document).filter(
+                    Document.municipality == body.municipality,
+                    Document.bylaw_name == body.bylaw_name,
+                ).delete(synchronize_session=False)
+                session.flush()
+                base_time = utcnow()
+                ids: list[int] = []
+                for i in range(body.doc_count):
+                    file_hash = hashlib.sha256(
+                        f"abs413-{body.bylaw_name}-{i}".encode()
+                    ).hexdigest()[:64]
+                    doc = Document(
+                        municipality=body.municipality,
+                        bylaw_name=body.bylaw_name,
+                        source_path=f"/tmp/abs413-flag-{i}.txt",
+                        file_hash=file_hash,
+                        mime_type="text/plain",
+                        page_count=1,
+                        parser_version="e2e-seed",
+                        ingestion_timestamp=base_time
+                        - timedelta(seconds=(body.doc_count - 1 - i)),
+                        # Mirrors real ingest: documents start unpublished.
+                        retrieval_enabled=False,
+                    )
+                    session.add(doc)
+                    session.flush()
+                    ids.append(doc.id)
+                    session.add(
+                        SourceFragment(
+                            document_id=doc.id,
+                            fragment_type=FragmentType.SECTION,
+                            citation_label=f"413.{i}",
+                            citation_path=f"413.{i}",
+                            page_start=1,
+                            page_end=1,
+                            text=(
+                                f"ABS413_FLAG_SENTINEL_V{i} pergola trellis "
+                                "height limit for versioned publish testing."
+                            ),
+                            parse_status=ParseStatus.PARSED,
+                            source_block_ids_json=[],
+                            metadata_json={},
+                        )
+                    )
+                session.flush()
+                return {"document_ids": ids}
+
+            if body.action == "set":
+                if body.document_ids is None or body.enabled is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="'set' requires document_ids and enabled",
+                    )
+                try:
+                    result = set_retrieval_enabled(
+                        session,
+                        body.document_ids,
+                        body.enabled,
+                        replace=body.replace,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                return {
+                    "changes": [
+                        {
+                            "document_id": c.document_id,
+                            "enabled": c.enabled,
+                            "reason": c.reason,
+                        }
+                        for c in result.changes
+                    ],
+                    "warnings": result.warnings,
+                    "relinked": len(result.relink_results),
+                }
+
+            entries = list_retrieval_status(
+                session,
+                municipality=body.municipality,
+                bylaw_name=body.bylaw_name,
+            )
+            return {
+                "documents": [
+                    {
+                        "id": e.id,
+                        "bylaw_name": e.bylaw_name,
+                        "retrieval_enabled": e.retrieval_enabled,
+                    }
+                    for e in entries
+                ]
+            }
+
+    @app.post("/v1/_test/search-enabled-scope")
+    async def search_enabled_scope(body: _SearchEnabledScopeBody) -> dict[str, object]:
+        with session_scope() as session:
+            service = RetrievalService(
+                session, default_document_id_resolver=retrieval_enabled_resolver
+            )
+            response = service.search(
+                RetrievalRequest(query=body.query, top_k=body.limit)
+            )
+            return {
+                "matches": [
+                    {
+                        "fragment_id": m.fragment_id,
+                        "document_id": m.document_id,
+                        "text": m.text,
+                    }
+                    for m in response.matches
+                ]
+            }
 
 
 def _mount_zone_profile_endpoint(app: FastAPI) -> None:
@@ -2088,6 +2255,7 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
 
 app = build_e2e_app()
 _mount_seed_session_endpoint(app)
+_mount_retrieval_flag_endpoints(app)
 _mount_search_evidence_endpoint(app)
 _mount_search_evidence_raw_endpoint(app)
 _mount_zone_profile_endpoint(app)

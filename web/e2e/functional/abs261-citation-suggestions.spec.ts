@@ -83,9 +83,9 @@ test.describe("ABS-261: lookup_citation returns suggestions instead of raising",
   test("exact citation_path hit returns 200 with match payload", async ({
     request,
   }) => {
-    // "4.2" is carried by the latest-ingested e2e seed doc (Coverage
-    // E2E Bylaw), which the service's latest-only document_id resolver
-    // hard-scopes us to. If this fails, the seed didn't run — see
+    // "4.2" is carried by the retrieval-enabled e2e seed docs (Coverage
+    // E2E Bylaw et al. — since ABS-413 the scope is the enabled-documents
+    // set, not the latest ingest). If this fails, the seed didn't run — see
     // scripts/seed_e2e_evaluator_bylaws.py / seed_e2e_verify_coverage.py.
     const res = await fetchCitation(request, "4.2");
     expect(

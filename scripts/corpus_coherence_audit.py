@@ -29,7 +29,7 @@ import json
 import sys
 from pathlib import Path
 
-from bylaw_retrieval.retrieval import audit_corpus_coherence, latest_per_bylaw_resolver
+from bylaw_retrieval.retrieval import audit_corpus_coherence, retrieval_enabled_resolver
 from bylaw_retrieval.retrieval.coherence_audit import DEFAULT_DATASET_CONFIG_DIR
 from layer1.db.session import session_scope
 
@@ -47,12 +47,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--unscoped",
         action="store_true",
-        help="Audit against every ingested document instead of the latest-per-bylaw scope "
+        help="Audit against every ingested document instead of the retrieval-enabled scope "
         "(diagnostic: shows raw linker state, not what a real request would see).",
     )
     args = parser.parse_args(argv)
 
-    resolver = None if args.unscoped else latest_per_bylaw_resolver
+    resolver = None if args.unscoped else retrieval_enabled_resolver
     with session_scope(args.db_url) as session:
         report = audit_corpus_coherence(
             session,

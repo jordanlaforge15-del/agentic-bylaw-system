@@ -98,6 +98,7 @@ should resolve in a single call with no suggestions.
   `${WORKTREE_ROOT}` / `${DATABASE_URL}` placeholders. The script
   renders an absolute-path copy into the run directory on every
   invocation, so the template stays portable across worktrees.
-- `--latest-only` is deliberately **off** so the model can target
-  `document_id=4` (the real Regional Centre LUB ingest) rather than
-  whichever bylaw was ingested last (often the E2E seed bylaw).
+- The server runs with `--all-documents` (ABS-413: default scoping is the
+  set of retrieval-enabled documents) so the model can target
+  `document_id=4` (the real Regional Centre LUB ingest) regardless of
+  which documents are currently enabled in the harness DB.
