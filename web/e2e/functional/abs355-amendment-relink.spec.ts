@@ -1,23 +1,25 @@
-// Functional regression: ABS-355 — re-link geo datasets when a bylaw document
-// is re-ingested (a new version evicts all layers) — end-to-end through the
-// real Postgres/PostGIS stack.
+// Functional regression: ABS-355 — re-link geo datasets when an amended bylaw
+// version is published (the new version would otherwise evict all layers) —
+// end-to-end through the real Postgres/PostGIS stack.
 //
 // Scope
 // -----
 // Geo layers pin to a specific document version at ingest time
 // (ExternalDataset.linked_fragment_id -> SourceFragment -> Document). Retrieval
-// scoping (latest_per_bylaw_resolver + _scoped_linked_datasets) only surfaces
-// layers whose pinned document is the newest per (municipality, bylaw_name). So
-// re-ingesting an amended bylaw under the same name would silently evict every
-// existing layer and make get_address_profile return zone=null for every
+// scoping (retrieval_enabled_resolver + _scoped_linked_datasets, ABS-413) only
+// surfaces layers whose pinned document is retrieval-enabled. So publishing an
+// amended version of a bylaw without moving its layers would silently evict
+// every existing layer and make get_address_profile return zone=null for every
 // address — the production twin of the ABS-349/350 e2e regression.
 //
-// The fix runs relink_superseded_datasets at the tail of document ingestion
-// (layer1.pipeline.ingest.ingest_file) to re-point superseded layers onto the
-// new version. Pytest covers the linker unit paths; this spec exercises the
-// PostGIS gate: the seed links a zone layer to v1, re-ingests v2, runs the real
-// re-link pass, and this test asserts the address still resolves its zone AND
-// that the grounding citations now reference the v2 document — not v1.
+// The fix runs relink_superseded_datasets when a document is ENABLED for
+// retrieval (layer1.pipeline.publish.set_retrieval_enabled — the operation
+// behind the CLI's enable-retrieval --replace; moved from ingest-time by
+// ABS-413, since a fresh ingest is unpublished). Pytest covers the linker and
+// publish unit paths; this spec exercises the PostGIS gate: the seed links a
+// zone layer to the enabled v1, ingests a disabled v2, publishes it with
+// replace, and this test asserts the address still resolves its zone AND that
+// the grounding citations now reference the v2 document — not v1.
 
 import { execSync } from "node:child_process";
 import * as path from "node:path";
@@ -77,8 +79,8 @@ async function postProfile(
   request: import("@playwright/test").APIRequestContext,
   address: string,
 ): Promise<AddressProfile> {
-  // The *scoped* endpoint applies production latest-per-bylaw scoping, so a
-  // layer still pinned to the superseded document version would fall out of
+  // The *scoped* endpoint applies production enabled-documents scoping, so a
+  // layer still pinned to the now-disabled document version would fall out of
   // scope and resolve to null — the real eviction this fix prevents.
   const response = await request.post(`${E2E_API_URL}/v1/_test/address-profile-scoped`, {
     headers: { "Content-Type": "application/json" },
@@ -102,14 +104,14 @@ test.beforeAll(() => {
 test("re-ingesting an amended bylaw keeps the zone resolvable via the new version", async ({
   request,
 }) => {
-  // Sanity: the seed re-pointed exactly one layer during the v2 re-ingest.
+  // Sanity: the seed re-pointed exactly one layer when it published v2.
   expect(summary.relinked).toBe(1);
   expect(summary.v2_document_id).toBeGreaterThan(summary.v1_document_id);
 
   const profile = await postProfile(request, "355 Amendment Avenue");
 
   // Before the fix this returned zone=null because the layer was still pinned
-  // to v1, which latest_per_bylaw_resolver had evicted from scope.
+  // to v1, which publishing v2 with replace had disabled (evicted from scope).
   expect(profile.unresolvable).toBe(false);
   expect(profile.zone).toBe("AR-9");
 

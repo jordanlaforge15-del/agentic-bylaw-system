@@ -57,12 +57,13 @@ from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 # carries the zoning/height/FAR/heritage schedules (seed_e2e_address_profile).
 # Bind this seed to that shared document instead of minting a *second* "Regional
 # Centre Land Use By-Law" document. The advisor scopes retrieval with
-# latest_per_bylaw_resolver, which keeps only the newest document per
-# (municipality, bylaw_name); a separate, newer POCS document would evict the
-# zone overlays' document from scope and regress address_lookup zone resolution
+# retrieval_enabled_resolver (ABS-413): only enabled documents are searchable,
+# and a separate POCS document would fragment the overlays across two documents
+# — historically (under latest-per-bylaw scoping) that evicted the zone
+# overlays' document from scope and regressed address_lookup zone resolution
 # (100 Robie Street -> HR-2) in abs274-bylaw-query / address-profile-mcp-tool.
-# Reusing the same document keeps both the zone overlays and the POCS overlay in
-# one bylaw partition so every resolver mode sees them together.
+# Reusing the same document keeps both the zone overlays and the POCS overlay
+# on one enabled document so every resolver mode sees them together.
 from seed_e2e_address_profile import (
     DOCUMENT_BYLAW_NAME as _AP_BYLAW_NAME,
     DOCUMENT_FILE_HASH as _AP_DOCUMENT_FILE_HASH,
@@ -76,14 +77,15 @@ SCHEDULE_CITATION = "Schedule 7"
 
 # Pre-fix standalone POCS document. The original ABS-350 seed minted its own
 # "Regional Centre Land Use By-Law" document under this file_hash with a newer
-# ingestion_timestamp than the address-profile document. Because
-# latest_per_bylaw_resolver keeps only the newest document per
-# (municipality, bylaw_name), that standalone doc *evicts* the address-profile
+# ingestion_timestamp than the address-profile document. Under the pre-ABS-413
+# latest-per-bylaw scoping that standalone doc *evicted* the address-profile
 # document (which carries the zone/height/FAR/heritage overlays) from scope,
-# so get_address_profile returns zone=None (abs274-bylaw-query /
-# address-profile-mcp-tool). The seed now binds to the shared document, but
-# layer1_test persists across `make e2e` runs, so a stale doc left behind by a
-# pre-fix run keeps evicting the zone overlays until it is actively removed.
+# so get_address_profile returned zone=None (abs274-bylaw-query /
+# address-profile-mcp-tool) — and the ABS-413 migration backfill enables the
+# newest doc per bylaw, so a stale row could still end up enabled instead of
+# the shared document. The seed binds to the shared document, but layer1_test
+# persists across `make e2e` runs, so a stale doc left behind by a pre-fix run
+# keeps polluting the corpus until it is actively removed.
 _STALE_POCS_FILE_HASH = "e2e-pocs-schedule7-doc-1"
 
 # The ABS-349 POCS seed that landed on dev minted its standalone document under a
@@ -245,6 +247,11 @@ def _get_or_create_document(session) -> Document:
         .first()
     )
     if document is not None:
+        # Converge the publish flag on re-seed: rows created before
+        # ABS-413 (or left disabled by the migration backfill) must
+        # still end up retrieval-enabled in the persistent e2e DB.
+        document.retrieval_enabled = True
+        session.flush()
         return document
     document = Document(
         municipality=DOCUMENT_MUNICIPALITY,
@@ -254,6 +261,7 @@ def _get_or_create_document(session) -> Document:
         mime_type="application/pdf",
         page_count=500,
         parser_version="e2e-seed",
+        retrieval_enabled=True,
         ingestion_timestamp=utcnow(),
     )
     session.add(document)

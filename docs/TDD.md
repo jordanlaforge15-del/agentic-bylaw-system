@@ -710,11 +710,15 @@ Design notes embedded in the server prompt
   slot when the user mentions an address — text-only matching
   silently skips zone / FAR / heritage datasets, which is almost
   always the wrong answer.
-- **`--latest-only` scope.** The CLI flag hard-scopes the server to
-  the most recently ingested document so a single-document pilot
-  (Halifax Regional Centre LUB) can't accidentally surface other
-  bylaws (`mcp/bylaw_retrieval/server.py:26`,
-  `latest_document_id_resolver` at `retrieval/service.py:51`).
+- **Enabled-documents scope (ABS-413).** By default the server
+  hard-scopes retrieval to the set of documents an operator has
+  explicitly published (`document.retrieval_enabled`, toggled via the
+  layer1 CLI's `enable-retrieval`/`disable-retrieval`). Fresh ingests
+  default to disabled; zero enabled documents means empty results
+  (fail-closed). `--all-documents` is the dev/debug escape hatch and
+  `--latest-only` survives only as a deprecated no-op
+  (`mcp/bylaw_retrieval/server.py:create_mcp_server`,
+  `retrieval_enabled_resolver` in `retrieval/service.py`).
 - **OpenAI tool schemas are separate.**
   `mcp/bylaw_retrieval/openai_tools.py:build_openai_tool_specs`
   generates Chat-Completions and Responses-API tool schemas from the

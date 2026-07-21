@@ -104,6 +104,10 @@ def _get_or_create_document(session, source_path: str) -> Document:
     )
     if doc is not None:
         doc.source_path = source_path
+        # Converge the publish flag on re-seed (ABS-413); the old-decoy
+        # document in _get_or_create_old_document deliberately stays
+        # disabled — that is now the eviction mechanism.
+        doc.retrieval_enabled = True
         session.flush()
         return doc
     doc = Document(
@@ -114,6 +118,7 @@ def _get_or_create_document(session, source_path: str) -> Document:
         mime_type="text/plain",
         page_count=5,
         parser_version="e2e-seed",
+        retrieval_enabled=True,
         ingestion_timestamp=utcnow(),
     )
     session.add(doc)

@@ -175,6 +175,7 @@ def main() -> int:
             mime_type="application/pdf",
             page_count=60,
             parser_version="e2e-seed",
+            retrieval_enabled=True,
             ingestion_timestamp=utcnow(),
         )
         session.add(document)
