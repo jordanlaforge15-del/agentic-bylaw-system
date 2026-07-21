@@ -1,9 +1,12 @@
-"""Phase I — `--latest-only` MCP scope.
+"""Resolver-mechanism coverage via ``latest_document_id_resolver``.
 
-When the MCP server is launched with --latest-only, RetrievalService is
-constructed with a default-document-id resolver that scopes every query
-to the most recently ingested document unless the caller explicitly
-supplies a scoping filter (document_id, municipality, or bylaw_name).
+Historical note: this suite was written for the MCP server's ``--latest-only``
+mode. Since ABS-413 no deployment scopes retrieval by recency — production
+uses ``retrieval_enabled_resolver`` (see ``test_retrieval_enabled_flag.py``)
+and ``latest_document_id_resolver`` survives as a dev/debug utility. The
+suite is kept because it exercises the *resolver mechanism* itself: how a
+default-document-id resolver hard-scopes every query, how request filters
+AND with it, and how the resolver is re-evaluated per request.
 """
 from __future__ import annotations
 
