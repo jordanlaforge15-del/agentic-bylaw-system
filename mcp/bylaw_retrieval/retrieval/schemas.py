@@ -17,6 +17,7 @@ class DocumentSummary(BaseModel):
     page_count: int | None = None
     parser_version: str | None = None
     ingestion_timestamp: datetime
+    retrieval_enabled: bool = False
 
 
 class AncestorFragment(BaseModel):

@@ -10,8 +10,8 @@ one of three modes established by the ABS-349/ABS-350 postmortem and
 
 * ``unlinked``  — no dataset with the declared name was ever ingested.
 * ``orphaned``  — the dataset exists but was never resolved to a fragment.
-* ``evicted``   — the dataset is linked, but its document fell outside the
-  active retrieval scope (superseded by a newer ingest of the same bylaw).
+* ``evicted``   — the dataset is linked, but its document is outside the
+  active retrieval scope (not retrieval-enabled — ABS-413).
 
 These tests build a synthetic sqlite corpus (mirroring
 ``tests/test_get_address_profile.py``'s fixture style) with one dataset per
@@ -28,7 +28,7 @@ import pytest
 from bylaw_retrieval.retrieval import (
     OverlayDeclaration,
     audit_corpus_coherence,
-    latest_per_bylaw_resolver,
+    retrieval_enabled_resolver,
 )
 from bylaw_retrieval.retrieval.coherence_audit import (
     DEFAULT_DATASET_CONFIG_DIR,
@@ -65,11 +65,11 @@ def _add_fragment(session, *, document_id: int, label: str, path: str) -> int:
 def seeded_db(tmp_path: Path) -> str:
     """A sqlite corpus with one dataset per degradation mode:
 
-    * ``test_zoning_boundaries`` (role ``zone``) is linked only to the OLDER
-      of two same-bylaw documents — invisible once ``latest_per_bylaw_resolver``
-      pins scope to the newer one (evicted).
+    * ``test_zoning_boundaries`` (role ``zone``) is linked only to the
+      DISABLED of two same-bylaw documents — invisible once
+      ``retrieval_enabled_resolver`` pins scope to the enabled one (evicted).
     * ``test_height_precincts`` (role ``height_precinct``) is linked to the
-      NEWER document — visible, the fully-coherent control.
+      ENABLED document — visible, the fully-coherent control.
     * ``test_heritage_districts`` (role ``heritage``) exists but was never
       linked to any fragment (orphaned).
     * No dataset is ever created for ``shadow_impact`` (unlinked).
@@ -99,6 +99,7 @@ def seeded_db(tmp_path: Path) -> str:
             mime_type="application/pdf",
             ingestion_timestamp=now,
             page_count=10,
+            retrieval_enabled=True,
         )
         session.add(new_document)
         session.flush()
@@ -188,7 +189,7 @@ def test_coherent_when_the_declared_role_is_visible_in_scope(seeded_db: str) -> 
         report = audit_corpus_coherence(
             session,
             overlay_declarations=[HEIGHT_DECLARATION],
-            default_document_id_resolver=latest_per_bylaw_resolver,
+            default_document_id_resolver=retrieval_enabled_resolver,
         )
     assert report.coherent is True
     assert report.missing == []
@@ -202,7 +203,7 @@ def test_detects_unlinked_dataset(seeded_db: str) -> None:
         report = audit_corpus_coherence(
             session,
             overlay_declarations=[SHADOW_DECLARATION],
-            default_document_id_resolver=latest_per_bylaw_resolver,
+            default_document_id_resolver=retrieval_enabled_resolver,
         )
     assert report.coherent is False
     assert len(report.missing) == 1
@@ -218,7 +219,7 @@ def test_detects_orphaned_dataset(seeded_db: str) -> None:
         report = audit_corpus_coherence(
             session,
             overlay_declarations=[HERITAGE_DECLARATION],
-            default_document_id_resolver=latest_per_bylaw_resolver,
+            default_document_id_resolver=retrieval_enabled_resolver,
         )
     assert report.coherent is False
     entry = report.missing[0]
@@ -227,12 +228,12 @@ def test_detects_orphaned_dataset(seeded_db: str) -> None:
 
 
 def test_detects_evicted_dataset(seeded_db: str) -> None:
-    """Linked fine, but its document lost the latest-per-bylaw race."""
+    """Linked fine, but its document is not retrieval-enabled."""
     with session_scope(seeded_db) as session:
         report = audit_corpus_coherence(
             session,
             overlay_declarations=[ZONE_DECLARATION],
-            default_document_id_resolver=latest_per_bylaw_resolver,
+            default_document_id_resolver=retrieval_enabled_resolver,
         )
     assert report.coherent is False
     entry = report.missing[0]
@@ -263,7 +264,7 @@ def test_reports_every_missing_role_together(seeded_db: str) -> None:
                 HERITAGE_DECLARATION,
                 SHADOW_DECLARATION,
             ],
-            default_document_id_resolver=latest_per_bylaw_resolver,
+            default_document_id_resolver=retrieval_enabled_resolver,
         )
     assert report.coherent is False
     assert report.checked_roles == 4

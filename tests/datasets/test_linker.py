@@ -231,9 +231,10 @@ def test_multiple_documents_prefers_the_one_carrying_the_fragment(tmp_path: Path
 
 def test_amendment_reingest_repoints_linked_datasets(tmp_path: Path):
     # The production twin of the ABS-349/350 regression: a geo layer pinned to
-    # v1 of a bylaw silently falls out of retrieval scope when v2 is ingested
-    # under the same (municipality, bylaw_name). relink_superseded_datasets must
-    # re-point the layer onto v2 so get_address_profile keeps resolving.
+    # v1 of a bylaw silently falls out of retrieval scope when v2 is published
+    # under the same (municipality, bylaw_name). relink_superseded_datasets
+    # (fired at enable-time, ABS-413) must re-point the layer onto v2 so
+    # get_address_profile keeps resolving.
     db_url = _setup_db(tmp_path)
     cfg_path = _write_config(tmp_path)
 
@@ -250,9 +251,11 @@ def test_amendment_reingest_repoints_linked_datasets(tmp_path: Path):
         assert result.dataset.linked_document_id == v1_doc_id
         dataset_id = result.dataset.id
 
-    # v2 re-ingested under the same name, also carrying Schedule 15.
+    # v2 re-ingested under the same name, also carrying Schedule 15, and
+    # published (relink only fires for retrieval-enabled documents).
     with session_scope(db_url) as session:
         v2_doc, v2_frag = _seed_synthetic_bylaw(session)
+        v2_doc.retrieval_enabled = True
         v2_doc_id, v2_frag_id = v2_doc.id, v2_frag.id
         results = relink_superseded_datasets(session, v2_doc)
         assert len(results) == 1
@@ -284,9 +287,10 @@ def test_amendment_reingest_dropping_schedule_flags_orphan(tmp_path: Path):
         assert result.link_result.status == "linked"
         dataset_id = result.dataset.id
 
-    # v2 drops Schedule 15 (carries only Schedule 22).
+    # v2 drops Schedule 15 (carries only Schedule 22) and is published.
     with session_scope(db_url) as session:
         v2_doc, _ = _seed_synthetic_bylaw(session, schedule_label="Schedule 22")
+        v2_doc.retrieval_enabled = True
         results = relink_superseded_datasets(session, v2_doc)
         assert len(results) == 1
         assert results[0].status == "no_fragment"
@@ -301,13 +305,14 @@ def test_amendment_reingest_dropping_schedule_flags_orphan(tmp_path: Path):
 
 
 def test_relink_superseded_is_noop_without_older_siblings(tmp_path: Path):
-    # First ingest of a bylaw: no older sibling exists, so there is nothing to
+    # First publish of a bylaw: no sibling exists, so there is nothing to
     # re-point and the pass must be a clean no-op.
     db_url = _setup_db(tmp_path)
     cfg_path = _write_config(tmp_path)
 
     with session_scope(db_url) as session:
         doc, _ = _seed_synthetic_bylaw(session)
+        doc.retrieval_enabled = True
         ingest_geo_dataset(session, cfg_path)
         results = relink_superseded_datasets(session, doc)
         assert results == []
@@ -331,6 +336,7 @@ def test_relink_superseded_is_idempotent(tmp_path: Path):
 
     with session_scope(db_url) as session:
         v2_doc, v2_frag = _seed_synthetic_bylaw(session)
+        v2_doc.retrieval_enabled = True
         v2_frag_id = v2_frag.id
         first = relink_superseded_datasets(session, v2_doc)
         assert len(first) == 1
@@ -342,14 +348,45 @@ def test_relink_superseded_is_idempotent(tmp_path: Path):
         assert dataset.linked_fragment_id == v2_frag_id
 
 
-def test_relink_superseded_skips_backfill_of_older_version(tmp_path: Path):
-    # Re-ingesting an OLDER version (e.g. backfilling history) must not evict a
-    # dataset correctly pinned to the current latest — the relink pass only
-    # fires when the ingested document is itself the newest version.
+def test_relink_superseded_skips_disabled_document(tmp_path: Path):
+    # Ingesting (e.g. backfilling) a version that is NOT retrieval-enabled must
+    # not evict a dataset correctly pinned to the published version — the
+    # relink pass only fires for retrieval-enabled documents (ABS-413).
     db_url = _setup_db(tmp_path)
     cfg_path = _write_config(tmp_path)
 
-    # v2 is the current latest, carrying Schedule 15; the dataset pins to it.
+    # v2 is the published version, carrying Schedule 15; the dataset pins to it.
+    with session_scope(db_url) as session:
+        v2_doc, v2_frag = _seed_synthetic_bylaw(session)
+        v2_doc.ingestion_timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        v2_doc.retrieval_enabled = True
+        session.flush()
+        v2_frag_id = v2_frag.id
+
+    with session_scope(db_url) as session:
+        result = ingest_geo_dataset(session, cfg_path)
+        assert result.dataset.linked_fragment_id == v2_frag_id
+        dataset_id = result.dataset.id
+
+    # Backfill an older, unpublished v1 and run the relink pass for it.
+    with session_scope(db_url) as session:
+        v1_doc, _ = _seed_synthetic_bylaw(session)
+        v1_doc.ingestion_timestamp = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        session.flush()
+        assert relink_superseded_datasets(session, v1_doc) == []
+
+    # The dataset stays pinned to the published v2, not the backfilled v1.
+    with session_scope(db_url) as session:
+        dataset = session.get(ExternalDataset, dataset_id)
+        assert dataset.linked_fragment_id == v2_frag_id
+
+
+def test_relink_superseded_follows_enabled_document_regardless_of_age(tmp_path: Path):
+    # The inverse: publishing an OLDER version (operator rollback) pulls the
+    # layers onto it — enablement, not recency, decides where layers pin.
+    db_url = _setup_db(tmp_path)
+    cfg_path = _write_config(tmp_path)
+
     with session_scope(db_url) as session:
         v2_doc, v2_frag = _seed_synthetic_bylaw(session)
         v2_doc.ingestion_timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
@@ -361,17 +398,20 @@ def test_relink_superseded_skips_backfill_of_older_version(tmp_path: Path):
         assert result.dataset.linked_fragment_id == v2_frag_id
         dataset_id = result.dataset.id
 
-    # Backfill an older v1 and run the relink pass for it.
+    # Roll back: publish an older v1 and relink for it.
     with session_scope(db_url) as session:
-        v1_doc, _ = _seed_synthetic_bylaw(session)
+        v1_doc, v1_frag = _seed_synthetic_bylaw(session)
         v1_doc.ingestion_timestamp = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        v1_doc.retrieval_enabled = True
         session.flush()
-        assert relink_superseded_datasets(session, v1_doc) == []
+        v1_frag_id = v1_frag.id
+        results = relink_superseded_datasets(session, v1_doc)
+        assert len(results) == 1
+        assert results[0].status == "linked"
 
-    # The dataset stays pinned to the current latest v2, not the backfilled v1.
     with session_scope(db_url) as session:
         dataset = session.get(ExternalDataset, dataset_id)
-        assert dataset.linked_fragment_id == v2_frag_id
+        assert dataset.linked_fragment_id == v1_frag_id
 
 
 def test_direct_link_function_handles_unknown_dataset_id(tmp_path: Path):

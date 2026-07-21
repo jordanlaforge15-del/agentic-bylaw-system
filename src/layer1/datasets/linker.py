@@ -195,39 +195,44 @@ def relink_orphan_datasets(session: Session) -> list[LinkResult]:
 
 
 def relink_superseded_datasets(session: Session, document: Document) -> list[LinkResult]:
-    """Re-point geo datasets pinned to an older version of ``document``'s bylaw.
+    """Re-point geo datasets pinned to a sibling version of ``document``'s bylaw.
 
     Geo layers pin to a specific document version at ingest time
     (``ExternalDataset.linked_fragment_id`` → ``SourceFragment`` → ``Document``).
-    Retrieval scoping only surfaces layers whose pinned document is the newest
-    per ``(municipality, bylaw_name)`` (``latest_per_bylaw_resolver`` +
-    ``_scoped_linked_datasets``). So re-ingesting an amended bylaw PDF under the
-    same name silently evicts every existing layer — zone, height, FAR,
-    heritage, POCS — and ``get_address_profile`` starts returning ``zone=null``.
+    Retrieval scoping only surfaces layers whose pinned document is
+    retrieval-enabled (``retrieval_enabled_resolver`` +
+    ``_scoped_linked_datasets``). So publishing an amended version of a bylaw
+    without moving its layers would silently evict every existing layer —
+    zone, height, FAR, heritage, POCS — and ``get_address_profile`` would
+    start returning ``zone=null``.
 
-    This runs at the tail of document ingestion: when ``document`` has older
-    same-named siblings, every dataset still pinned to one of those older
-    siblings is re-resolved **strictly against ``document``** (the freshly
-    re-ingested version). On a hit the FK pointers move onto the new version;
-    on a miss (schedule dropped or renamed in the new version) the dataset is
-    recorded as an orphan (``linked_fragment_id`` cleared) with a detail naming
-    the missing citation, surfaced by ``find_orphan_datasets`` — never silently
-    stranded on a now-out-of-scope prior version.
+    This runs when a document is *enabled for retrieval*
+    (``layer1.pipeline.publish.set_retrieval_enabled``), not at ingest time —
+    a freshly ingested document defaults to disabled, and re-pointing layers
+    onto an unpublished version would strand them outside the enabled scope
+    (the inverse of the ABS-350 regression). Every dataset still pinned to a
+    same-bylaw sibling is re-resolved **strictly against ``document``** (the
+    newly published version). On a hit the FK pointers move onto it; on a
+    miss (schedule dropped or renamed in the new version) the dataset is
+    recorded as an orphan (``linked_fragment_id`` cleared) with a detail
+    naming the missing citation, surfaced by ``find_orphan_datasets`` — never
+    silently stranded on a now-out-of-scope prior version.
 
     Note it deliberately does *not* route through ``link_dataset_to_bylaw``:
     that function's ABS-349 multi-document preference would happily re-bind a
-    dropped-schedule layer to the older sibling that still carries the citation,
-    leaving it pinned to a document that ``latest_per_bylaw_resolver`` excludes
-    — the exact silent strand this pass exists to prevent.
+    dropped-schedule layer to a sibling that still carries the citation,
+    leaving it pinned to a document outside the enabled scope — the exact
+    silent strand this pass exists to prevent.
 
-    Only fires when ``document`` is the newest version of its bylaw (matching
-    the resolver's ``(ingestion_timestamp desc, id desc)`` ordering): a
-    backfill re-ingest of an *older* version must not evict datasets that are
-    correctly pinned to the current latest. Idempotent — a second pass finds
-    every dataset already pinned to ``document`` (no longer on an older
-    sibling), so there is nothing left to move — and a no-op when ``document``
-    has no siblings.
+    Only fires when ``document`` is retrieval-enabled: relinking onto a
+    disabled document would evict datasets that are correctly pinned to the
+    currently published version. Idempotent — a second pass finds every
+    dataset already pinned to ``document`` (no longer on a sibling), so there
+    is nothing left to move — and a no-op when ``document`` has no siblings.
     """
+    if not document.retrieval_enabled:
+        return []
+
     siblings = (
         session.execute(
             select(Document).where(
@@ -239,11 +244,6 @@ def relink_superseded_datasets(session: Session, document: Document) -> list[Lin
         .all()
     )
     if len(siblings) <= 1:
-        return []
-
-    # ``document`` only supersedes the others when it is the resolver-latest.
-    latest = max(siblings, key=lambda d: (_as_aware(d.ingestion_timestamp), d.id))
-    if latest.id != document.id:
         return []
 
     older_sibling_ids = [d.id for d in siblings if d.id != document.id]

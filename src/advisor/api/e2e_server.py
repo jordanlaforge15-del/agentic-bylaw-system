@@ -515,23 +515,24 @@ def _mount_test_router(app: FastAPI) -> None:
 
     @app.post("/v1/_test/address-profile-scoped")
     async def address_profile_scoped(body: _AddressProfileBody) -> dict[str, object]:
-        """Resolve an address under the *production* latest-per-bylaw scoping.
+        """Resolve an address under the *production* enabled-documents scoping.
 
         The plain ``/address-profile`` endpoint deliberately runs with no
         default-document resolver so it sees the full corpus regardless of
         same-name collisions in the shared e2e DB (the ABS-349/350 concern).
-        This variant instead wires ``latest_per_bylaw_resolver`` — exactly what
-        ``advisor.api.app`` and the MCP ``server`` use in production — so the
-        ABS-355 spec reproduces the real amendment eviction: a layer still
-        pinned to the superseded document version falls out of scope and the
-        zone resolves to null. With the re-link fix in place the layer follows
-        the amendment onto the new version and the zone resolves again.
+        This variant instead wires ``retrieval_enabled_resolver`` — exactly
+        what ``advisor.api.app`` and the MCP ``server`` use in production — so
+        the ABS-355 spec reproduces the real amendment eviction: a layer still
+        pinned to a disabled document version falls out of scope and the
+        zone resolves to null. With publish-driven re-linking in place the
+        layer follows the amendment onto the newly enabled version and the
+        zone resolves again.
         """
-        from bylaw_retrieval.retrieval import latest_per_bylaw_resolver  # noqa: PLC0415
+        from bylaw_retrieval.retrieval import retrieval_enabled_resolver  # noqa: PLC0415
 
         with session_scope() as session:
             service = RetrievalService(
-                session, default_document_id_resolver=latest_per_bylaw_resolver
+                session, default_document_id_resolver=retrieval_enabled_resolver
             )
             return service.get_address_profile(body.address).model_dump(mode="json")
 
@@ -1120,7 +1121,7 @@ def _mount_test_router(app: FastAPI) -> None:
 
         Mirrors the CLI (``scripts/corpus_coherence_audit.py``) and the
         ``/v1/monitoring/corpus-coherence`` ops endpoint: scopes with
-        ``latest_per_bylaw_resolver`` — the same resolver production wires
+        ``retrieval_enabled_resolver`` — the same resolver production wires
         into ``RetrievalService`` — so a Playwright spec can seed a coherent
         corpus, assert the audit passes, break one link, and assert it fails
         naming the missing role exactly as a real deployment would see it.
@@ -1128,7 +1129,7 @@ def _mount_test_router(app: FastAPI) -> None:
         from bylaw_retrieval.retrieval import (  # noqa: PLC0415
             OverlayDeclaration,
             audit_corpus_coherence,
-            latest_per_bylaw_resolver,
+            retrieval_enabled_resolver,
         )
 
         declarations = [
@@ -1144,7 +1145,7 @@ def _mount_test_router(app: FastAPI) -> None:
             report = audit_corpus_coherence(
                 session,
                 overlay_declarations=declarations,
-                default_document_id_resolver=latest_per_bylaw_resolver,
+                default_document_id_resolver=retrieval_enabled_resolver,
             )
         return report.model_dump(mode="json")
 

@@ -9,7 +9,7 @@ from bylaw_retrieval.retrieval import (
     LocationSlot,
     RetrievalRequest,
     RetrievalService,
-    latest_document_id_resolver,
+    retrieval_enabled_resolver,
 )
 from layer1.db.session import session_scope
 from layer2.compliance.evaluator import (
@@ -23,7 +23,7 @@ from layer2.compliance.db.models import SubmissionAttributeSource
 SERVER_NAME = "Bylaw Retrieval MCP"
 
 
-def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
+def create_mcp_server(db_url: str | None = None, *, all_documents: bool = False):
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:
@@ -31,16 +31,18 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             "The MCP SDK is not installed. Install the 'mcp' extra: pip install -e '.[mcp]'"
         ) from exc
 
-    scope_resolver = latest_document_id_resolver if latest_only else None
+    scope_resolver = None if all_documents else retrieval_enabled_resolver
     scope_note = (
-        " This server is launched with --latest-only: every retrieval is "
-        "hard-scoped to the most recently ingested document. The "
-        "document_id, municipality, and bylaw_name filters on requests are "
-        "still accepted but they AND with the active document — they cannot "
-        "reach a different bylaw. Queries that target a different bylaw "
-        "will return empty results."
-        if latest_only
-        else ""
+        ""
+        if all_documents
+        else (
+            " Every retrieval is hard-scoped to the set of documents "
+            "explicitly enabled for retrieval (operator-published via the "
+            "layer1 CLI). The document_id, municipality, and bylaw_name "
+            "filters on requests are still accepted but they AND with the "
+            "enabled set — they cannot reach a disabled document. If no "
+            "documents are enabled, all queries return empty results."
+        )
     )
 
     def _service(session) -> RetrievalService:
@@ -522,12 +524,12 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
     return mcp
 
 
-def run_stdio(db_url: str | None = None, *, latest_only: bool = False) -> None:
-    create_mcp_server(db_url, latest_only=latest_only).run()
+def run_stdio(db_url: str | None = None, *, all_documents: bool = False) -> None:
+    create_mcp_server(db_url, all_documents=all_documents).run()
 
 
-def run_streamable_http(db_url: str | None = None, *, latest_only: bool = False) -> None:
-    create_mcp_server(db_url, latest_only=latest_only).run(transport="streamable-http")
+def run_streamable_http(db_url: str | None = None, *, all_documents: bool = False) -> None:
+    create_mcp_server(db_url, all_documents=all_documents).run(transport="streamable-http")
 
 
 def main() -> None:
@@ -535,21 +537,36 @@ def main() -> None:
     parser.add_argument("--db-url", default=None, help="Database URL override")
     parser.add_argument("--http", action="store_true", help="Use streamable HTTP transport")
     parser.add_argument(
-        "--latest-only",
+        "--all-documents",
         action="store_true",
         help=(
-            "Scope every retrieval to the most recently ingested document. "
-            "Useful during development when re-ingesting the same bylaw "
-            "leaves stale duplicates in the database. Explicit document_id, "
-            "municipality, or bylaw_name filters in the request override."
+            "Disable published-document scoping and expose every document "
+            "in the database, including ones not enabled for retrieval. "
+            "Dev/debug only — never use for a deployment."
         ),
+    )
+    parser.add_argument(
+        "--latest-only",
+        action="store_true",
+        help=argparse.SUPPRESS,  # deprecated no-op, kept so stale launch configs don't crash
     )
     args = parser.parse_args()
 
+    if args.latest_only:
+        import sys  # noqa: PLC0415
+
+        print(
+            "layer1-mcp: --latest-only is deprecated and ignored. Retrieval "
+            "is scoped to documents enabled via the layer1 CLI "
+            "(enable-retrieval/disable-retrieval); remove the flag from "
+            "your launch config.",
+            file=sys.stderr,
+        )
+
     if args.http:
-        run_streamable_http(args.db_url, latest_only=args.latest_only)
+        run_streamable_http(args.db_url, all_documents=args.all_documents)
         return
-    run_stdio(args.db_url, latest_only=args.latest_only)
+    run_stdio(args.db_url, all_documents=args.all_documents)
 
 
 if __name__ == "__main__":

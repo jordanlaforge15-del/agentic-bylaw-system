@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
@@ -56,6 +57,13 @@ class Document(Base):
     page_count: Mapped[int | None] = mapped_column(Integer)
     ingestion_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     parser_version: Mapped[str | None] = mapped_column(String(255))
+    # Opt-in publish gate for the retrieval API (ABS-413). Ingestion never
+    # sets this; an operator enables documents explicitly (layer1 CLI
+    # enable-retrieval / disable-retrieval). Retrieval scoping is the set of
+    # enabled documents — nothing is derived from ingestion recency.
+    retrieval_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default=false()
+    )
 
     runs: Mapped[list["IngestionRun"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     page_blocks: Mapped[list["PageBlock"]] = relationship(back_populates="document", cascade="all, delete-orphan")

@@ -21,6 +21,7 @@ from layer1.pipeline.audit import audit_document_pages
 from layer1.pipeline.export import export_document_json
 from layer1.pipeline.ingest import ingest_file
 from layer1.pipeline.prune import prune_superseded_documents
+from layer1.pipeline.publish import list_retrieval_status, set_retrieval_enabled
 from layer1.pipeline.verify_coverage import compare_coverage_reports, verify_document_coverage
 from layer1.datasets.linker import find_orphan_datasets, relink_orphan_datasets
 from layer1.pipeline.ingest_dataset import ingest_geo_dataset
@@ -393,6 +394,14 @@ def prune_superseded(
             dry_run=True,
         )
 
+    for entry in result.skipped_enabled:
+        console.print(
+            f"[yellow]Skipping document {entry.id} ({entry.municipality} / "
+            f"{entry.bylaw_name}, ingested {entry.ingestion_timestamp.isoformat()}): "
+            "superseded by a newer ingest but retrieval-enabled — disable it "
+            "first (disable-retrieval) if you really want it pruned.[/yellow]"
+        )
+
     if not result.entries:
         console.print("[green]No superseded documents found.[/green]")
         return
@@ -438,6 +447,118 @@ def prune_superseded(
             dry_run=False,
         )
     console.print(f"[green]Deleted {final.deleted_count} superseded document(s).[/green]")
+
+
+@app.command("list-documents")
+def list_documents(
+    municipality: str | None = typer.Option(None, "--municipality", help="Filter by municipality (substring)"),
+    bylaw_name: str | None = typer.Option(None, "--bylaw-name", help="Filter by bylaw name (substring)"),
+    enabled_only: bool = typer.Option(False, "--enabled-only", help="Show only retrieval-enabled documents"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    """List documents with their retrieval-enabled status."""
+    from rich.table import Table  # noqa: PLC0415
+
+    with session_scope(db_url) as session:
+        entries = list_retrieval_status(
+            session,
+            municipality=municipality,
+            bylaw_name=bylaw_name,
+            enabled_only=enabled_only,
+        )
+
+    if not entries:
+        console.print("[yellow]No documents found.[/yellow]")
+        return
+
+    table = Table(title="Documents")
+    table.add_column("id", justify="right")
+    table.add_column("municipality")
+    table.add_column("bylaw_name")
+    table.add_column("version")
+    table.add_column("ingested")
+    table.add_column("enabled")
+    for entry in entries:
+        table.add_row(
+            str(entry.id),
+            entry.municipality,
+            entry.bylaw_name,
+            entry.version_label or "-",
+            entry.ingestion_timestamp.isoformat(),
+            "[green]yes[/green]" if entry.retrieval_enabled else "[dim]no[/dim]",
+        )
+    console.print(table)
+    enabled_count = sum(1 for e in entries if e.retrieval_enabled)
+    console.print(f"{enabled_count} of {len(entries)} document(s) enabled for retrieval.")
+
+
+def _print_publish_result(result) -> None:
+    for warning in result.warnings:
+        console.print(f"[yellow]{warning}[/yellow]")
+    for change in result.changes:
+        verb = "Enabled" if change.enabled else "Disabled"
+        suffix = " (replaced sibling)" if change.reason == "replaced-sibling" else ""
+        console.print(
+            f"[green]{verb}[/green] document {change.document_id} "
+            f"({change.municipality} / {change.bylaw_name}){suffix}"
+        )
+    if result.relink_results:
+        moved = sum(1 for r in result.relink_results if r.status == "linked")
+        orphaned = [r for r in result.relink_results if r.status != "linked"]
+        console.print(f"Relinked {moved} geo dataset(s) onto the enabled document.")
+        for orphan in orphaned:
+            console.print(
+                f"[yellow]Dataset {orphan.dataset_id}: {orphan.status} — {orphan.detail}[/yellow]"
+            )
+
+
+@app.command("enable-retrieval")
+def enable_retrieval(
+    document_ids: list[int] = typer.Argument(..., help="Document id(s) to enable for retrieval"),
+    replace: bool = typer.Option(
+        False,
+        "--replace",
+        help="Disable currently enabled versions of the same bylaw in the same transaction",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    """Publish document(s) to the retrieval API (geo layers relink automatically)."""
+    with session_scope(db_url) as session:
+        preview = set_retrieval_enabled(
+            session, document_ids, True, replace=replace, dry_run=True
+        )
+
+    sibling_conflict = any("other enabled version" in w for w in preview.warnings)
+    if sibling_conflict and not yes:
+        for warning in preview.warnings:
+            console.print(f"[yellow]{warning}[/yellow]")
+        if not typer.confirm(
+            "Enable anyway, leaving multiple versions of the same bylaw searchable?"
+        ):
+            console.print("[yellow]Aborted.[/yellow]")
+            return
+
+    with session_scope(db_url) as session:
+        result = set_retrieval_enabled(session, document_ids, True, replace=replace)
+        _print_publish_result(result)
+
+
+@app.command("disable-retrieval")
+def disable_retrieval(
+    document_ids: list[int] = typer.Argument(..., help="Document id(s) to remove from retrieval"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    db_url: str | None = typer.Option(None, "--db-url", help="Database URL override"),
+) -> None:
+    """Unpublish document(s) from the retrieval API."""
+    if not yes:
+        ids = ", ".join(str(i) for i in document_ids)
+        if not typer.confirm(f"Disable retrieval for document(s) {ids}?"):
+            console.print("[yellow]Aborted.[/yellow]")
+            return
+    with session_scope(db_url) as session:
+        result = set_retrieval_enabled(session, document_ids, False)
+        _print_publish_result(result)
 
 
 def _validate_from_db(session: Session, document_id: int):

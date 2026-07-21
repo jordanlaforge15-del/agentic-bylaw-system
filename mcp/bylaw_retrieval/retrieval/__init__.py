@@ -40,7 +40,7 @@ from bylaw_retrieval.retrieval.service import (
     DocumentIdResolver,
     RetrievalService,
     latest_document_id_resolver,
-    latest_per_bylaw_resolver,
+    retrieval_enabled_resolver,
     overlay_role_for_name,
     scoped_linked_datasets,
 )
@@ -82,7 +82,7 @@ __all__ = [
     "ZoneUses",
     "audit_corpus_coherence",
     "latest_document_id_resolver",
-    "latest_per_bylaw_resolver",
+    "retrieval_enabled_resolver",
     "load_overlay_declarations",
     "overlay_role_for_name",
     "scoped_linked_datasets",

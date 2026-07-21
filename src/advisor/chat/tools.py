@@ -886,7 +886,7 @@ def build_bylaw_tools(
 
         The evaluator reuses whatever RetrievalService the chat backend
         is already bound to (via ``_resolve_cm``), so the same
-        --latest-only / document-id scope rules apply automatically.
+        enabled-documents / document-id scope rules apply automatically.
         """
         location_payload = payload.get("location")
         location = (
