@@ -16,6 +16,10 @@ Idempotent — identified by the unique ``file_hash``.
 """
 from __future__ import annotations
 
+# ABS-428: must precede any advisor/layer1 import so the cached settings
+# resolve DATABASE_URL to the dedicated e2e Postgres instance, never dev.
+import e2e_db_default  # noqa: F401  isort: skip
+
 import sys
 from pathlib import Path
 

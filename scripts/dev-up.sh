@@ -92,7 +92,13 @@ for port in "$DEV_FASTAPI_PORT" "$DEV_WEB_PORT"; do
   fi
 done
 
-log "Ensuring Postgres container is up"
+# ABS-428: this script is pinned to the DEV compose service `postgres`
+# (:${DEV_PG_PORT}, database `layer1`). The dedicated e2e instance is a
+# separate service (`postgres-e2e`) behind the compose `e2e` profile,
+# which this script cannot start or stop: every compose invocation here
+# names `postgres` explicitly, and the profile hides `postgres-e2e`
+# from profile-less commands anyway.
+log "Ensuring dev Postgres container is up"
 docker_compose up -d postgres
 for _ in $(seq 1 60); do
   if docker_compose exec -T postgres pg_isready -U layer1 -d postgres >/dev/null 2>&1; then
@@ -102,7 +108,31 @@ for _ in $(seq 1 60); do
 done
 docker_compose exec -T postgres pg_isready -U layer1 -d postgres >/dev/null
 
+# ABS-428: one-time hygiene — before the e2e/dev Postgres split, the e2e
+# suite (and old NM runs with E2E_TEST_DB overrides) created
+# `layer1_test`-prefixed databases on this same dev instance. The e2e
+# suite now runs on its own ephemeral instance (`postgres-e2e`), so any
+# `layer1_test%` database still present here is legacy residue. Drop
+# them so the dev instance hosts `layer1` only. WITH (FORCE) terminates
+# any stray connections (pg16). The `layer1_test%` pattern cannot match
+# `layer1` itself.
+legacy_test_dbs="$(docker_compose exec -T postgres psql -U layer1 -d postgres -tAc \
+  "SELECT datname FROM pg_database WHERE datname LIKE 'layer1\\_test%'" 2>/dev/null || true)"
+for legacy_db in $legacy_test_dbs; do
+  log "Dropping legacy ${legacy_db} from the dev Postgres instance (e2e now has its own instance)"
+  docker_compose exec -T postgres psql -U layer1 -d postgres -c \
+    "DROP DATABASE IF EXISTS \"${legacy_db}\" WITH (FORCE)"
+done
+
 log "Running Alembic migrations against ${DATABASE_URL}"
+# Pre-create alembic_version with a wider column (mirrors e2e-up.sh).
+# The default VARCHAR(32) is one char too short for the revision id
+# ``0008_advisor_billing_subscription`` (33 chars), which makes a fresh
+# migration chain fail. Only affects fresh databases; existing ones
+# keep their column as-is. Surfaced by ABS-428's fresh-instance boot
+# verification — the long-lived dev DB never hit it.
+docker_compose exec -T postgres psql -U layer1 -d layer1 \
+  -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) PRIMARY KEY)" >/dev/null
 "${REPO_ROOT}/.venv/bin/alembic" upgrade head
 
 if [[ ! -f web/.env.local ]]; then

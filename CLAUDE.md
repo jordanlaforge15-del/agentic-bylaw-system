@@ -31,10 +31,10 @@
 - **Running e2e from a worktree while another worktree's stack is up** (you have parallel agents/issues in flight): each worktree needs its own host-port triplet. The first worktree uses defaults; each subsequent worktree exports unique ports before invoking `make e2e*`. Example for a second concurrent worktree:
 
   ```bash
-  export PG_PORT=5433 E2E_FASTAPI_PORT=8002 E2E_WEB_PORT=3002
+  export PG_PORT=5434 E2E_FASTAPI_PORT=8002 E2E_WEB_PORT=3002
   export E2E_API_URL=http://127.0.0.1:8002 E2E_BASE_URL=http://localhost:3002
   make e2e-up && cd web && npx playwright test e2e/smoke
   ```
 
-  Convention: pick `PG_PORT=543X`, `E2E_FASTAPI_PORT=800X`, `E2E_WEB_PORT=300X` where `X` is the last digit of the Linear issue ID (or any free triplet — `lsof -iTCP:543X -sTCP:LISTEN` to check). `scripts/e2e-up.sh` derives and exports both `POSTGRES_HOST_PORT` and `DATABASE_URL` from `PG_PORT`, so Playwright's globalSetup and seed scripts always connect to the right database without any extra export. Full recipe and rationale in [docs/E2E_TESTING.md#parallel-worktrees](docs/E2E_TESTING.md#parallel-worktrees).
+  Convention: pick `PG_PORT=543X`, `E2E_FASTAPI_PORT=800X`, `E2E_WEB_PORT=300X` where `X` is the last digit of the Linear issue ID (or any free triplet — `lsof -iTCP:543X -sTCP:LISTEN` to check). `PG_PORT` is the host port of the worktree's **dedicated ephemeral e2e Postgres instance** (compose service `postgres-e2e`, default `5433`; ABS-428) — the dev Postgres keeps `:5432` and is never touched by e2e tooling. `scripts/e2e-up.sh` derives and exports both `E2E_POSTGRES_HOST_PORT` and `DATABASE_URL` from `PG_PORT`, so Playwright's globalSetup and seed scripts always connect to the right database without any extra export. Full recipe and rationale in [docs/E2E_TESTING.md#parallel-worktrees](docs/E2E_TESTING.md#parallel-worktrees).
 - When you add a UI-touching fix, add a Playwright spec under `web/e2e/functional/` (or `smoke/` if it belongs on the critical-path matrix). The suite is the only thing that catches Next-proxy ↔ FastAPI ↔ Postgres regressions before deploy.

@@ -1,4 +1,8 @@
 services:
+  # Dev Postgres. Hosts the `layer1` database ONLY. The e2e suite runs
+  # against the dedicated ephemeral `postgres-e2e` service below
+  # (ABS-428) — nothing test-shaped is ever created on this instance,
+  # and e2e tooling never starts/stops this service.
   postgres:
     build:
       context: .
@@ -8,9 +12,6 @@ services:
       POSTGRES_DB: layer1
       POSTGRES_USER: layer1
       POSTGRES_PASSWORD: layer1
-    # Host port is parametrized so multiple worktrees can each `make e2e`
-    # without colliding on host:5432. Each worktree exports a unique
-    # POSTGRES_HOST_PORT (scripts/e2e-up.sh derives it from PG_PORT).
     ports:
       - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
@@ -36,6 +37,48 @@ services:
       -c statement_timeout=${PG_STATEMENT_TIMEOUT:-120000}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U layer1 -d layer1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Dedicated e2e Postgres (ABS-428). Ephemeral by design: hosts
+  # `layer1_test` ONLY (no `layer1`), lives in its own named volume, and
+  # scripts/e2e-down.sh destroys both the container AND the volume so
+  # every `make e2e` starts from a pristine instance (fresh initdb +
+  # migrations + seeds).
+  #
+  # The `e2e` profile keeps this service invisible to every dev-side
+  # compose invocation: bare `docker compose up`/`down`, `make db-up`/
+  # `db-down`, and scripts/dev-up.sh (which targets the `postgres`
+  # service by name) can neither start nor stop it. Only the e2e
+  # scripts, which name `postgres-e2e` explicitly, touch it.
+  #
+  # Host port defaults to 5433 and is parametrized so multiple worktrees
+  # can each `make e2e` concurrently (PG_PORT=543X convention;
+  # scripts/e2e-up.sh derives E2E_POSTGRES_HOST_PORT from PG_PORT).
+  postgres-e2e:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    image: agentic-bylaw-system-postgres:pg16-pgvector-postgis
+    profiles: ["e2e"]
+    environment:
+      POSTGRES_DB: layer1_test
+      POSTGRES_USER: layer1
+      POSTGRES_PASSWORD: layer1
+    ports:
+      - "${E2E_POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - layer1-postgres-e2e:/var/lib/postgresql/data
+    # Same runtime caps as the dev service (ABS-100) — the e2e suite
+    # exercises the identical spatial scans and benefits from the same
+    # self-healing on wedged connections.
+    command: >
+      postgres
+      -c idle_in_transaction_session_timeout=${PG_IDLE_IN_TXN_TIMEOUT:-60000}
+      -c statement_timeout=${PG_STATEMENT_TIMEOUT:-120000}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U layer1 -d layer1_test"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -94,6 +137,9 @@ services:
 
 volumes:
   layer1-postgres:
+  # Ephemeral e2e data volume — removed by scripts/e2e-down.sh after
+  # every run (ABS-428). Never holds anything worth keeping.
+  layer1-postgres-e2e:
   codex-home:
   codex-cache:
   web-node-modules:

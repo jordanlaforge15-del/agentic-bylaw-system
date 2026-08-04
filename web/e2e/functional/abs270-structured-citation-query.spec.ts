@@ -45,7 +45,7 @@ const ABS270_BYLAW_NAME = "ABS-270 Structured Query E2E Bylaw";
 function runSeed(): number | null {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5432";
+  const pgPort = process.env.PG_PORT || "5433";
   const databaseUrl =
     process.env.DATABASE_URL ||
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;

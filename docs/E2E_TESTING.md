@@ -30,11 +30,15 @@ FastAPI test instance :8001       advisor.api.e2e_server
    └─ verifier=None              → X-Test-User-Id header path
    │
    ▼
-Postgres test database            layer1_test
-   └─ Alembic-migrated, seeded with one demo user + 200 credits per tier
+Dedicated e2e Postgres instance   compose service postgres-e2e, host :5433
+   └─ database layer1_test only — ephemeral: created fresh on every up
+      (initdb + Alembic migrations + demo-user seed), destroyed
+      (container AND volume) by e2e-down
 ```
 
-The test stack runs on `:3001/:8001` so it never clashes with `make dev` (which uses `:3000/:8000`). The test database is a separate database name (`layer1_test`) on the same Postgres container — no second container.
+The test stack runs on `:3001/:8001` so it never clashes with `make dev` (which uses `:3000/:8000`). Since ABS-428 the test database lives on a **dedicated ephemeral Postgres instance** — the compose service `postgres-e2e`, published on host port `5433` by default. The dev instance (compose service `postgres`, host `:5432`) hosts the `layer1` database only and is never touched by the e2e tooling; conversely `postgres-e2e` never hosts `layer1`, so a mis-pointed seed or spec cannot contaminate the dev corpus. The e2e service sits behind the compose `e2e` profile, which hides it from every profile-less compose command (`docker compose up`/`down`, `make db-up`/`db-down`, `scripts/dev-up.sh`) — only the e2e scripts, which name `postgres-e2e` explicitly, can start or stop it.
+
+`scripts/e2e-down.sh` destroys the e2e container **and its data volume**, so every `make e2e` is a cold start: migrations and seeds run from scratch against a pristine instance, and no state (documents, cases, credits) can carry over between runs.
 
 The web dev server runs with `CLERK_SECRET_KEY=""`, which trips the `isClerkConfigured() === false` branch in `web/proxy.ts` — `/app` and `/admin` are then gated by a shared-password cookie (`abs_demo`). The Playwright fixture mints that cookie before each test by POSTing to `/api/access` with `DEMO_PASSWORD=e2e-demo-pw`.
 
@@ -59,11 +63,13 @@ make e2e-install
 ```bash
 make e2e              # boot stack, run full suite, tear stack down
 make e2e-smoke        # boot stack, run smoke tier only (all 4 viewports), tear down
-make e2e-up           # idempotent: boot Postgres + create layer1_test + migrate
+make e2e-up           # idempotent: boot the dedicated e2e Postgres (:5433) + migrate
                       # + seed demo user + start uvicorn:8001 + start next dev:3001
-make e2e-down         # graceful teardown of uvicorn + next dev (DB is left alone)
-make e2e-down --drop-db   # also drop layer1_test
+make e2e-down         # teardown: stop uvicorn + next dev, then DESTROY the e2e
+                      # Postgres container and its volume (fresh instance next run)
 ```
+
+(The old `--drop-db` flag on `e2e-down` is obsolete — the whole e2e instance is destroyed on every teardown.)
 
 When iterating on a single spec, leave the stack up and re-run Playwright directly:
 
@@ -121,7 +127,7 @@ Orchestration:
 ```
 scripts/
 ├── e2e-up.sh                  # boot the stack (idempotent)
-├── e2e-down.sh                # tear down (uvicorn + next dev only)
+├── e2e-down.sh                # tear down (uvicorn + next dev + destroy e2e Postgres)
 └── seed_e2e_user.py           # idempotent demo-user + credits seed
 ```
 
@@ -225,7 +231,7 @@ The specs use unique synthetic identities (`auth-<slug>@e2e.test`) per run, so t
 |---|---|---|---|
 | Anthropic LLM | `AnthropicGateway` | `MockGateway(callable_=build_dispatcher())` | Determinism, speed, no API key. |
 | Clerk auth | JWT verifier + allowlist API | `verifier=None` + `X-Test-User-Id/-Email/-Full-Name` headers + `/v1/_test/invite-approve` | Avoids Clerk dev-tenant flakiness; the JIT-create code path still exercises the `resolve_or_create_user` + invite-redemption logic. |
-| Postgres | Real | Real, separate DB (`layer1_test`) | Migrations, FKs, credit-reservation logic are part of what we test. |
+| Postgres | Real | Real, dedicated ephemeral instance (`postgres-e2e`, `:5433`, DB `layer1_test`) | Migrations, FKs, credit-reservation logic are part of what we test; a fresh instance per run also proves the migration chain from scratch. |
 | Retrieval (pgvector) | Real | Real, seeded synthetic bylaw on demand | Reuses `scripts/seed_synthetic_fragment.py`. |
 | Google Geocoder | Optional | Disabled by `tests/conftest.py` default | Off in tests; opt-in only. |
 | Stripe | Live or dormant | Dormant (503) | Tests the dormant path the frontend actually probes. |
@@ -244,10 +250,10 @@ CI integration is left out of scope for now (the suite is local-first). `playwri
 
 ## Parallel worktrees
 
-Each worktree has its own compose project (different project name → its own Postgres container and `layer1_test` DB), but the host-side ports collide by default. To run `make e2e` from two worktrees at the same time, override the port triplet in the second one before invoking the script:
+Each worktree has its own compose project (different project name → its own `postgres-e2e` container and volume), but the host-side ports collide by default. To run `make e2e` from two worktrees at the same time, override the port triplet in the second one before invoking the script:
 
 ```bash
-PG_PORT=5433 \
+PG_PORT=5434 \
 E2E_FASTAPI_PORT=8002 \
 E2E_WEB_PORT=3002 \
 E2E_API_URL=http://127.0.0.1:8002 \
@@ -255,11 +261,15 @@ E2E_BASE_URL=http://localhost:3002 \
   make e2e
 ```
 
-`scripts/e2e-up.sh` derives and exports `POSTGRES_HOST_PORT` from `PG_PORT` (for docker-compose), and also exports `DATABASE_URL` built from `PG_PORT` so Playwright's `global-setup.ts` and seed scripts inherit the correct URL automatically — no extra `DATABASE_URL` export needed. `playwright.config.ts` already reads `E2E_BASE_URL` for `baseURL`, and `global-setup.ts` / `fixtures/test-env.ts` read `E2E_API_URL` for upstream calls.
+`PG_PORT` is the host port of the worktree's **dedicated e2e Postgres instance** — never the dev instance, which keeps `:5432` to itself regardless of these overrides. The first worktree uses the defaults (`PG_PORT=5433`); each additional concurrent worktree picks a free `543X` (convention: `X` = last digit of the Linear issue ID; `lsof -iTCP:543X -sTCP:LISTEN` to check).
+
+`scripts/e2e-up.sh` derives and exports `E2E_POSTGRES_HOST_PORT` from `PG_PORT` (for the `postgres-e2e` service's port binding), and also exports `DATABASE_URL` built from `PG_PORT` so Playwright's `global-setup.ts` and seed scripts inherit the correct URL automatically — no extra `DATABASE_URL` export needed. `playwright.config.ts` already reads `E2E_BASE_URL` for `baseURL`, and `global-setup.ts` / `fixtures/test-env.ts` read `E2E_API_URL` for upstream calls.
+
+Export the same triplet before `./scripts/e2e-down.sh` too — its lsof fallback targets the default ports when the env is unset, which on a multi-worktree machine may kill another worktree's stack.
 
 The first worktree (using all defaults) and the second (using the overrides above) can each run the full suite end-to-end without seeing each other.
 
-Note: the test database `layer1_test` lives inside each worktree's own Postgres container, so concurrent runs don't share state. The seeded demo user, credits, and synthetic bylaw are all per-container.
+Note: each worktree's `postgres-e2e` container, volume, and `layer1_test` DB are per-compose-project, so concurrent runs don't share state — and since every run boots a fresh instance, neither do consecutive runs in the same worktree.
 
 ## Troubleshooting
 
@@ -276,7 +286,7 @@ make e2e               # re-run; guard should pass now
 ```
 The Night Manager's `merge_to_dev` runs this automatically before each merge, so this error should only appear when running `make e2e` on a branch that has not yet gone through the NM merge flow. See [docs/NIGHT_MANAGER.md — Alembic collision resistance](NIGHT_MANAGER.md#alembic-collision-resistance) for the full mechanism.
 
-**FastAPI logs show `database "layer1_test" does not exist` even though it was created.** Symptom of two worktrees both trying to bind `host:5432` — one container ends up unpublished and the host-side alembic / uvicorn hit the wrong Postgres. Use the parallel-worktrees recipe to give each worktree its own host port, or tear down the stack of the worktree you're not actively using.
+**FastAPI logs show `database "layer1_test" does not exist` even though it was created.** Symptom of two worktrees both trying to bind the same e2e host port (default `:5433`) — one container ends up unpublished and the host-side alembic / uvicorn hit the wrong Postgres. Use the parallel-worktrees recipe to give each worktree its own `543X` port, or tear down the stack of the worktree you're not actively using. If the logs instead show `database "layer1" does not exist`, something is connecting to the e2e instance with dev settings — the e2e instance intentionally hosts `layer1_test` only.
 
 **Tests hit 402 Payment Required.** Credits drained — `globalSetup` should be topping them up but didn't fire. Run `scripts/seed_e2e_user.py --credits-per-tier 200` manually with the right `DATABASE_URL`.
 

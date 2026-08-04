@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 # Boot the end-to-end UI test stack on ports 3001 (Next.js) + 8001
-# (FastAPI), wired against a dedicated Postgres database named
-# ``layer1_test`` on the local docker-compose Postgres container.
+# (FastAPI), wired against the DEDICATED ephemeral e2e Postgres
+# instance (compose service ``postgres-e2e``, host port 5433 by
+# default; ABS-428). The dev Postgres (service ``postgres``, :5432,
+# database ``layer1``) is never touched by this script.
 #
 # Idempotent: re-running while the stack is already up is a no-op for
-# already-healthy components. Use scripts/e2e-down.sh to tear down.
+# already-healthy components. Use scripts/e2e-down.sh to tear down —
+# teardown destroys the e2e container AND its data volume, so every
+# fresh up gets a pristine instance (initdb + migrations + seeds).
 #
 # Env vars consumed:
 #   E2E_TEST_DB    — DB name to create/migrate (default ``layer1_test``)
 #   E2E_FASTAPI_PORT — port for the test FastAPI (default 8001)
 #   E2E_WEB_PORT    — port for the Next.js dev server (default 3001)
-#   PG_PORT         — host port that the postgres container publishes
-#                     (default 5432). Override per worktree to allow
-#                     parallel `make e2e` runs; the compose file reads
-#                     POSTGRES_HOST_PORT which this script exports below.
+#   PG_PORT         — host port that the postgres-e2e container
+#                     publishes (default 5433). Override per worktree
+#                     (PG_PORT=543X convention) to allow parallel
+#                     `make e2e` runs; the compose file reads
+#                     E2E_POSTGRES_HOST_PORT which this script exports
+#                     below.
 #
 # State written:
 #   .e2e/pids/fastapi.pid  — uvicorn PID
@@ -34,7 +40,7 @@ E2E_USER_ID="${E2E_USER_ID:-demo-user-1}"
 PG_USER="${PG_USER:-layer1}"
 PG_PASSWORD="${PG_PASSWORD:-layer1}"
 PG_HOST="${PG_HOST:-localhost}"
-PG_PORT="${PG_PORT:-5432}"
+PG_PORT="${PG_PORT:-5433}"
 
 DATABASE_URL_E2E="postgresql+psycopg://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${E2E_TEST_DB}"
 # Export so child processes (Playwright globalSetup, seed scripts) inherit the
@@ -48,10 +54,17 @@ export DATABASE_URL="$DATABASE_URL_E2E"
 DATABASE_URL_E2E_PG="postgresql://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${E2E_TEST_DB}"
 PSQL_BASE_URL="postgresql://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/postgres"
 
-# Compose reads this for the postgres `ports:` host-side binding. Keep
-# it aligned with PG_PORT so a worktree overriding one always overrides
-# the other consistently.
-export POSTGRES_HOST_PORT="$PG_PORT"
+# Compose reads this for the postgres-e2e `ports:` host-side binding.
+# Keep it aligned with PG_PORT so a worktree overriding one always
+# overrides the other consistently. Note this is deliberately NOT
+# POSTGRES_HOST_PORT — that knob belongs to the dev `postgres` service
+# and this script must never influence it (ABS-428).
+export E2E_POSTGRES_HOST_PORT="$PG_PORT"
+
+# The compose service name for the dedicated e2e instance. Every
+# docker-compose invocation in this script is scoped to it explicitly;
+# the dev `postgres` service is out of reach by construction.
+E2E_PG_SERVICE="postgres-e2e"
 
 STATE_DIR="${REPO_ROOT}/.e2e"
 PID_DIR="${STATE_DIR}/pids"
@@ -121,8 +134,9 @@ ensure_postgres() {
   # already exists, it attaches without re-applying the port mapping, so a
   # worktree previously launched with a different PG_PORT silently keeps the
   # old port. NM's reviewer then runs e2e against the wrong port and every
-  # cycle fails at startup. Force-recreate when we detect the mismatch (the
-  # named volume survives, so the test DB content is preserved).
+  # cycle fails at startup. Force-recreate when we detect the mismatch.
+  # (ABS-428: the e2e instance is ephemeral — losing its content on
+  # recreate is by design; every up migrates and seeds from scratch.)
   #
   # We use `docker inspect .HostConfig.PortBindings` rather than `docker port`
   # because the latter only reports for *running* containers — and our worst
@@ -133,22 +147,22 @@ ensure_postgres() {
   # whole run before any diagnostic log prints. require_docker has already
   # confirmed the daemon is reachable, so an empty result here just means
   # "no existing container", which is the normal fresh-worktree case.
-  stale_container="$(docker_compose ps -aq postgres 2>/dev/null | head -1 || true)"
+  stale_container="$(docker_compose ps -aq "$E2E_PG_SERVICE" 2>/dev/null | head -1 || true)"
   if [[ -n "$stale_container" ]]; then
     stale_port="$(docker inspect "$stale_container" \
       --format '{{range $p, $bs := .HostConfig.PortBindings}}{{if eq $p "5432/tcp"}}{{range $bs}}{{.HostPort}}{{end}}{{end}}{{end}}' \
       2>/dev/null)"
     if [[ -n "$stale_port" && "$stale_port" != "$PG_PORT" ]]; then
-      log "Removing stale postgres container (port was ${stale_port}, now ${PG_PORT})"
-      docker_compose rm -fs postgres >/dev/null 2>&1 || true
+      log "Removing stale ${E2E_PG_SERVICE} container (port was ${stale_port}, now ${PG_PORT})"
+      docker_compose rm -fsv "$E2E_PG_SERVICE" >/dev/null 2>&1 || true
     fi
   fi
 
-  if docker_compose exec -T postgres pg_isready -U "$PG_USER" -d postgres >/dev/null 2>&1; then
-    log "Postgres already healthy on :${PG_PORT} — reusing"
+  if docker_compose exec -T "$E2E_PG_SERVICE" pg_isready -U "$PG_USER" -d postgres >/dev/null 2>&1; then
+    log "E2E Postgres already healthy on :${PG_PORT} — reusing"
     return 0
   fi
-  log "Starting Postgres container on :${PG_PORT}"
+  log "Starting e2e Postgres container (${E2E_PG_SERVICE}) on :${PG_PORT}"
   # `docker compose up` creates a per-project bridge network. On a machine
   # running many parallel worktree stacks, Docker's default address pool can
   # become fully subnetted, and compose aborts with:
@@ -161,11 +175,11 @@ ensure_postgres() {
   # reviewer sees a bare `make: *** [e2e-up] Error 1`, indistinguishable from a
   # code failure.
   local up_out
-  if ! up_out="$(docker_compose up -d postgres 2>&1)"; then
+  if ! up_out="$(docker_compose up -d "$E2E_PG_SERVICE" 2>&1)"; then
     if printf '%s' "$up_out" | grep -qi 'address pools have been fully subnetted'; then
       log "Docker address pool exhausted — pruning orphaned networks and retrying"
       docker network prune -f >/dev/null 2>&1 || true
-      if ! up_out="$(docker_compose up -d postgres 2>&1)"; then
+      if ! up_out="$(docker_compose up -d "$E2E_PG_SERVICE" 2>&1)"; then
         echo "error: could not start Postgres container after pruning networks" >&2
         echo "$up_out" >&2
         echo "       Docker predefined address pools are exhausted. Reclaim network" >&2
@@ -181,7 +195,7 @@ ensure_postgres() {
   fi
   local last_err=""
   for _ in $(seq 1 60); do
-    last_err=$(docker_compose exec -T postgres pg_isready -U "$PG_USER" -d postgres 2>&1) && return 0
+    last_err=$(docker_compose exec -T "$E2E_PG_SERVICE" pg_isready -U "$PG_USER" -d postgres 2>&1) && return 0
     sleep 1
   done
   echo "error: Postgres did not become ready" >&2
@@ -191,12 +205,15 @@ ensure_postgres() {
 }
 
 ensure_test_db() {
+  # POSTGRES_DB=layer1_test in the compose service means initdb already
+  # created the default test DB on a fresh instance; this remains for
+  # the E2E_TEST_DB-override case and as an idempotent safety net.
   log "Ensuring test database ${E2E_TEST_DB} exists"
   local exists
-  exists=$(docker_compose exec -T postgres psql -U "$PG_USER" -d postgres -tAc \
+  exists=$(docker_compose exec -T "$E2E_PG_SERVICE" psql -U "$PG_USER" -d postgres -tAc \
     "SELECT 1 FROM pg_database WHERE datname='${E2E_TEST_DB}'" || true)
   if [[ "$exists" != "1" ]]; then
-    docker_compose exec -T postgres psql -U "$PG_USER" -d postgres -c \
+    docker_compose exec -T "$E2E_PG_SERVICE" psql -U "$PG_USER" -d postgres -c \
       "CREATE DATABASE \"${E2E_TEST_DB}\""
     echo "created database ${E2E_TEST_DB}"
   else
@@ -243,7 +260,7 @@ run_migrations() {
   # fresh migration chain fail. Pre-creating with VARCHAR(255) is the
   # least invasive fix and only affects fresh databases; existing
   # databases keep their column as-is.
-  docker_compose exec -T postgres psql -U "$PG_USER" -d "$E2E_TEST_DB" \
+  docker_compose exec -T "$E2E_PG_SERVICE" psql -U "$PG_USER" -d "$E2E_TEST_DB" \
     -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) PRIMARY KEY)" >/dev/null
   DATABASE_URL="$DATABASE_URL_E2E" \
     PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" \

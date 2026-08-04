@@ -48,7 +48,7 @@ test.beforeAll(() => {
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // Honor PG_PORT so the seed lands in the same Postgres the worktree's
   // FastAPI queries (see docs/E2E_TESTING.md#parallel-worktrees).
-  const pgPort = process.env.PG_PORT || "5432";
+  const pgPort = process.env.PG_PORT || "5433";
   const databaseUrl =
     process.env.DATABASE_URL ||
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
