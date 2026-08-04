@@ -125,6 +125,14 @@ for legacy_db in $legacy_test_dbs; do
 done
 
 log "Running Alembic migrations against ${DATABASE_URL}"
+# Pre-create alembic_version with a wider column (mirrors e2e-up.sh).
+# The default VARCHAR(32) is one char too short for the revision id
+# ``0008_advisor_billing_subscription`` (33 chars), which makes a fresh
+# migration chain fail. Only affects fresh databases; existing ones
+# keep their column as-is. Surfaced by ABS-428's fresh-instance boot
+# verification — the long-lived dev DB never hit it.
+docker_compose exec -T postgres psql -U layer1 -d layer1 \
+  -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) PRIMARY KEY)" >/dev/null
 "${REPO_ROOT}/.venv/bin/alembic" upgrade head
 
 if [[ ! -f web/.env.local ]]; then
