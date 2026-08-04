@@ -112,6 +112,23 @@ SEEDS: dict[str, SeedSpec] = {
         ),
         fragment_type=FragmentType.SCHEDULE,
     ),
+    "pocs": SeedSpec(
+        citation_label="Schedule 7",
+        citation_path="schedules.schedule_7",
+        text=(
+            "Schedule 7: Pedestrian-Oriented Commercial Streets. This "
+            "schedule is published cartographically (Map 19) and its "
+            "designated street segments are not enumerated in the by-law "
+            "text. Whether a lot abuts a pedestrian-oriented commercial "
+            "street controls the s.38(2)-vs-s.69(d) ground-floor-use "
+            "branch, maximum setbacks, streetwall storeys, ground-floor "
+            "height, and hard landscaping requirements. Authoritative "
+            "corridor geometry and street names are stored in the linked "
+            "external geo dataset "
+            "(halifax_pedestrian_oriented_commercial_streets)."
+        ),
+        fragment_type=FragmentType.SCHEDULE,
+    ),
     "shadow_impact": SeedSpec(
         citation_label="Schedule 51",
         citation_path="schedules.schedule_51",
