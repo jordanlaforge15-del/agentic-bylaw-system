@@ -16,7 +16,7 @@ export default async function globalSetup() {
   // worktree overrides ports for parallel `make e2e`. The shell-level
   // DATABASE_URL exported by scripts/e2e-up.sh doesn't survive the
   // make recipe's per-line subshell, so we derive from PG_PORT here.
-  const pgPort = process.env.PG_PORT || "5432";
+  const pgPort = process.env.PG_PORT || "5433";
   const databaseUrl =
     process.env.DATABASE_URL ||
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;

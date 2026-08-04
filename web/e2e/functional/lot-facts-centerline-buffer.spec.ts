@@ -76,7 +76,7 @@ function runSeed(): void {
   const seed = path.join(repoRoot, "scripts", "seed_e2e_parcels.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT for the parallel-worktree case.
-  const pgPort = process.env.PG_PORT || "5432";
+  const pgPort = process.env.PG_PORT || "5433";
   const databaseUrl =
     process.env.DATABASE_URL ||
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
@@ -97,7 +97,7 @@ function readCaseMetadata(caseId: number): Record<string, unknown> {
   const inspect = path.join(repoRoot, "scripts", "inspect_case_metadata.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT for the parallel-worktree case.
-  const pgPort = process.env.PG_PORT || "5432";
+  const pgPort = process.env.PG_PORT || "5433";
   const databaseUrl =
     process.env.DATABASE_URL ||
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;

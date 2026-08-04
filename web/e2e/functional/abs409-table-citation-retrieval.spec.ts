@@ -34,7 +34,7 @@ const BYLAW_NAME = "Table Citations Test By-law";
 function runSeeds(): void {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5432";
+  const pgPort = process.env.PG_PORT || "5433";
   const databaseUrl =
     process.env.DATABASE_URL ||
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;

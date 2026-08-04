@@ -25,7 +25,7 @@ let zoneDocumentId: number | null = null;
 
 function repoEnv() {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
-  const pgPort = process.env.PG_PORT || "5432";
+  const pgPort = process.env.PG_PORT || "5433";
   const databaseUrl =
     process.env.DATABASE_URL ||
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
