@@ -19,10 +19,16 @@ Usage::
 """
 from __future__ import annotations
 
+# ABS-428: must precede any advisor/layer1 import so the cached settings
+# resolve DATABASE_URL to the dedicated e2e Postgres instance, never dev.
+# (An explicit DATABASE_URL in the environment still wins — that is how
+# the ABS-432 scratch-DB verification drives this script.)
+import e2e_db_default  # noqa: F401  isort: skip
+
 import argparse
 import sys
 
-from sqlalchemy import select
+from sqlalchemy import select, text as sa_text
 
 from layer1.db.base import Document, utcnow
 from layer1.db.session import session_scope
@@ -50,6 +56,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     with session_scope() as session:
+        if session.bind.dialect.name == "postgresql":
+            # ABS-207 convention: serialise spec-callable seeds behind a
+            # transaction-scoped advisory lock. Each caller passes a unique
+            # --file-hash so races are already impossible by construction,
+            # but the lock keeps this script within the fleet-wide pattern
+            # tests/test_e2e_seed_concurrency.py enforces. Constant is
+            # arbitrary but stable/unique among seeds ("abs432-tripwire").
+            session.execute(sa_text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604604320))
+
         existing = session.execute(
             select(Document).where(Document.file_hash == args.file_hash)
         ).scalars().first()

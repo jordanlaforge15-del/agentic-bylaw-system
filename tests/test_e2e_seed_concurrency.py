@@ -36,6 +36,7 @@ SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     "seed_e2e_address_profile.py",
     "seed_e2e_amendment_relink.py",
     "seed_e2e_axis_binding.py",
+    "seed_e2e_contamination_marker.py",
     "seed_e2e_corpus_coherence.py",
     "seed_e2e_evaluator_bylaws.py",
     "seed_e2e_groundtruth_bylaws.py",
