@@ -109,18 +109,20 @@ done
 docker_compose exec -T postgres pg_isready -U layer1 -d postgres >/dev/null
 
 # ABS-428: one-time hygiene — before the e2e/dev Postgres split, the e2e
-# suite created `layer1_test` on this same dev instance. The e2e suite
-# now runs on its own ephemeral instance (`postgres-e2e`), so any
-# `layer1_test` still present here is legacy residue. Drop it so the
-# dev instance hosts `layer1` only. WITH (FORCE) terminates any stray
-# connections (pg16). Scoped to the test DB name; `layer1` is untouched.
-legacy_test_db="$(docker_compose exec -T postgres psql -U layer1 -d postgres -tAc \
-  "SELECT 1 FROM pg_database WHERE datname='layer1_test'" 2>/dev/null | tr -d '[:space:]' || true)"
-if [[ "$legacy_test_db" == "1" ]]; then
-  log "Dropping legacy layer1_test from the dev Postgres instance (e2e now has its own instance)"
+# suite (and old NM runs with E2E_TEST_DB overrides) created
+# `layer1_test`-prefixed databases on this same dev instance. The e2e
+# suite now runs on its own ephemeral instance (`postgres-e2e`), so any
+# `layer1_test%` database still present here is legacy residue. Drop
+# them so the dev instance hosts `layer1` only. WITH (FORCE) terminates
+# any stray connections (pg16). The `layer1_test%` pattern cannot match
+# `layer1` itself.
+legacy_test_dbs="$(docker_compose exec -T postgres psql -U layer1 -d postgres -tAc \
+  "SELECT datname FROM pg_database WHERE datname LIKE 'layer1\\_test%'" 2>/dev/null || true)"
+for legacy_db in $legacy_test_dbs; do
+  log "Dropping legacy ${legacy_db} from the dev Postgres instance (e2e now has its own instance)"
   docker_compose exec -T postgres psql -U layer1 -d postgres -c \
-    'DROP DATABASE IF EXISTS "layer1_test" WITH (FORCE)'
-fi
+    "DROP DATABASE IF EXISTS \"${legacy_db}\" WITH (FORCE)"
+done
 
 log "Running Alembic migrations against ${DATABASE_URL}"
 "${REPO_ROOT}/.venv/bin/alembic" upgrade head
