@@ -27,17 +27,33 @@ Note: because this sets a process ENVIRONMENT variable, it also
 outranks any ``DATABASE_URL`` in a repo-root ``.env`` file (pydantic
 precedence: env var > dotenv). That is deliberate — a dev-pointing
 ``.env`` must never redirect an e2e seed script at the dev database.
+
+ABS-430 hard refusal: after the default is applied, this module runs
+``layer1.seed_guard.require_test_database()`` at import time. Whatever
+the effective ``DATABASE_URL`` resolves to, the seed process aborts
+(exit 1, clear message, nothing written) unless the target database's
+name ends in ``_test`` — or ``E2E_SEED_ALLOW_DB=<exact-db-name>``
+explicitly whitelists it. The default above makes the common no-env case
+safe; the guard makes the explicit-URL case safe too.
+
+Importing ``layer1.seed_guard`` here is fine w.r.t. the "before any
+layer1 import" contract: the guard module is pure stdlib and pulls in
+nothing but ``layer1/__init__`` (a docstring) — in particular it never
+touches ``layer1.config``, so ``get_settings``'s lru_cache still
+resolves after the env default is in place.
 """
 from __future__ import annotations
 
 import os
 
-E2E_PG_PORT_DEFAULT = "5433"
-
-
-def default_e2e_database_url() -> str:
-    port = os.environ.get("PG_PORT", E2E_PG_PORT_DEFAULT)
-    return f"postgresql+psycopg://layer1:layer1@localhost:{port}/layer1_test"
-
+from layer1.seed_guard import (  # noqa: F401  (re-exported for callers/tests)
+    E2E_PG_PORT_DEFAULT,
+    default_e2e_database_url,
+    require_test_database,
+)
 
 os.environ.setdefault("DATABASE_URL", default_e2e_database_url())
+
+# ABS-430: refuse to run against any non-test database. SystemExit here
+# kills the importing seed script before it opens a single connection.
+require_test_database()

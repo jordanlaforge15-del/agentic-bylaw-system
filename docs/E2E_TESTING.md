@@ -40,6 +40,8 @@ The test stack runs on `:3001/:8001` so it never clashes with `make dev` (which 
 
 `scripts/e2e-down.sh` destroys the e2e container **and its data volume**, so every `make e2e` is a cold start: migrations and seeds run from scratch against a pristine instance, and no state (documents, cases, credits) can carry over between runs.
 
+Defense-in-depth behind the instance split (ABS-430): every `scripts/seed_e2e_*.py` (via the `scripts/e2e_db_default.py` bootstrap) and the `advisor.api.e2e_server` entrypoint run a hard preflight — `layer1.seed_guard.require_test_database()` — before touching the database. If the effective `DATABASE_URL` names a database that does not end in `_test`, the process aborts with `E2E SEED REFUSED …` (exit 1) before opening a single connection. Pointing a seed at an arbitrary URL therefore cannot write outside a test database. The escape hatch for the rare legitimate case is `E2E_SEED_ALLOW_DB=<exact-db-name>`, which whitelists exactly that name for the current invocation (sqlite URLs used by unit-test harnesses are exempt).
+
 The web dev server runs with `CLERK_SECRET_KEY=""`, which trips the `isClerkConfigured() === false` branch in `web/proxy.ts` — `/app` and `/admin` are then gated by a shared-password cookie (`abs_demo`). The Playwright fixture mints that cookie before each test by POSTing to `/api/access` with `DEMO_PASSWORD=e2e-demo-pw`.
 
 The FastAPI test server runs with no Clerk verifier, so its routes accept an `X-Test-User-Id` header. The Next.js proxy (`web/lib/advisor-auth.ts`) forwards that header automatically when Clerk isn't configured.
