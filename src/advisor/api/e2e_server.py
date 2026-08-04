@@ -49,6 +49,19 @@ if _ABS_LEARNING_SRC.is_dir():
     if _abs_learning_path not in sys.path:
         sys.path.insert(0, _abs_learning_path)
 
+# ABS-430 (with ABS-428): the e2e entrypoint — including every
+# /v1/_test/* seed endpoint it mounts — may only ever address a test
+# database. Mirror the seed-script bootstrap (scripts/e2e_db_default):
+# default DATABASE_URL to the dedicated e2e instance, then hard-refuse
+# any effective target whose database name does not end in `_test`,
+# unless E2E_SEED_ALLOW_DB=<exact-db-name> explicitly whitelists it.
+# Must run before the advisor/layer1 imports below so the lru_cached
+# layer1 settings can only ever resolve to the guarded URL.
+from layer1.seed_guard import default_e2e_database_url, require_test_database
+
+os.environ.setdefault("DATABASE_URL", default_e2e_database_url())
+require_test_database()
+
 from advisor.api.app import create_app
 from advisor.api.metrics_middleware import MetricsMiddleware
 from advisor.db.models import InviteRequest, User
