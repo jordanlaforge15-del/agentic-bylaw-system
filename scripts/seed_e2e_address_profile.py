@@ -4,7 +4,9 @@ Used by ``web/e2e/functional/address-profile-mcp-tool.spec.ts`` (ABS-273) to
 drop everything ``RetrievalService.get_address_profile`` needs to resolve one
 address end-to-end through the real Postgres/PostGIS stack:
 
-* A ``HRM / Regional Centre Land Use By-Law`` document with four schedule
+* A ``HRM / Regional Centre Land Use By-Law (Address Profile E2E)`` document
+  (E2E-marked so it can never collide with the real RC-LUB — ABS-431) with
+  four schedule
   fragments — ``Zoning Schedule``, ``Schedule 15`` (height), ``Schedule 17``
   (FAR), and ``Schedule 22`` (heritage) — so the dataset linker can bind
   each overlay to its citing fragment by ``citation_label``.
@@ -54,7 +56,13 @@ from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 
 DOCUMENT_FILE_HASH = "e2e-address-profile-doc-1"
 DOCUMENT_MUNICIPALITY = "HRM"
-DOCUMENT_BYLAW_NAME = "Regional Centre Land Use By-Law"
+# ABS-431: the name must NEVER be the bare real RC-LUB name — the
+# migration-0024 backfill and the ABS-355 relink pass
+# match on (municipality, bylaw_name), so a real-named fixture competes with
+# the real document for the enabled flag and steals its dataset links. The
+# "(… E2E)" marker convention is enforced by scripts/e2e_fixture_names.py +
+# tests/test_e2e_fixture_bylaw_names.py.
+DOCUMENT_BYLAW_NAME = "Regional Centre Land Use By-Law (Address Profile E2E)"
 
 TEST_ADDRESS_RAW = "100 Robie Street"
 TEST_ADDRESS_NORMALIZED = "civic:100 robie st"

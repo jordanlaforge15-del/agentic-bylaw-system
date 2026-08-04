@@ -41,7 +41,7 @@ test("retrieval finds permission tables by caption", async ({ request }) => {
   const response = await request.post(`${E2E_API_URL}/v1/_test/search-tables`, {
     headers: { "Content-Type": "application/json" },
     data: {
-      bylaw_name: "Regional Centre Land Use By-law",
+      bylaw_name: "Regional Centre Land Use By-law (Permission Tables E2E)",
       use_name: "Restaurant use",
     },
   });
@@ -58,7 +58,7 @@ test("retrieval returns zone-specific cell for restaurant use", async ({ request
   const response = await request.post(`${E2E_API_URL}/v1/_test/search-tables`, {
     headers: { "Content-Type": "application/json" },
     data: {
-      bylaw_name: "Regional Centre Land Use By-law",
+      bylaw_name: "Regional Centre Land Use By-law (Permission Tables E2E)",
       use_name: "Restaurant use",
       zone: "DH",
     },
@@ -84,7 +84,7 @@ test("recovers symbol-font permission markers into permission_marker", async ({
   const response = await request.post(`${E2E_API_URL}/v1/_test/search-tables`, {
     headers: { "Content-Type": "application/json" },
     data: {
-      bylaw_name: "Regional Centre Land Use By-law",
+      bylaw_name: "Regional Centre Land Use By-law (Permission Tables E2E)",
       use_name: "Home occupation use",
     },
   });
@@ -123,7 +123,7 @@ test("retrieval returns candidates for office use in CEN-2", async ({ request })
   const response = await request.post(`${E2E_API_URL}/v1/_test/search-tables`, {
     headers: { "Content-Type": "application/json" },
     data: {
-      bylaw_name: "Regional Centre Land Use By-law",
+      bylaw_name: "Regional Centre Land Use By-law (Permission Tables E2E)",
       use_name: "Office use",
       zone: "CEN-2",
     },

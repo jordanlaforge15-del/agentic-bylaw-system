@@ -153,7 +153,7 @@ test("6184 Quinpool Rd abuts a Schedule 7 pedestrian-oriented commercial street"
   const pocsCitation = profile.citations.find((c) => c.backs.includes("pedestrian_street"));
   expect(pocsCitation, "expected a pedestrian_street citation").toBeTruthy();
   expect(pocsCitation?.citation_path).toBe("schedule_7");
-  expect(pocsCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law");
+  expect(pocsCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law (Address Profile E2E)");
 });
 
 
@@ -198,7 +198,7 @@ test("Schedule 7 and the zone overlays share one Regional Centre LUB document", 
 
   const zoneCitation = robie.citations.find((c) => c.backs.includes("zone"));
   expect(zoneCitation, "expected a zone citation").toBeTruthy();
-  expect(zoneCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law");
+  expect(zoneCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law (Address Profile E2E)");
   expect(zoneCitation?.document_id).toBeGreaterThan(0);
 
   const quinpool = await postProfile(request, "6184 Quinpool Road");
@@ -206,7 +206,7 @@ test("Schedule 7 and the zone overlays share one Regional Centre LUB document", 
     c.backs.includes("pedestrian_street"),
   );
   expect(pocsCitation, "expected a pedestrian_street citation").toBeTruthy();
-  expect(pocsCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law");
+  expect(pocsCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law (Address Profile E2E)");
 
   // The invariant the seed fix restores: one document holds both overlays.
   expect(pocsCitation?.document_id).toBe(zoneCitation?.document_id);
