@@ -76,9 +76,9 @@ type CorpusCoherenceReport = {
   missing: MissingOverlayRole[];
 };
 
-function runSeed(): void {
+function runSeedScript(scriptName: string, args: string[] = []): void {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
-  const seed = path.join(repoRoot, "scripts", "seed_e2e_corpus_coherence.py");
+  const seed = path.join(repoRoot, "scripts", scriptName);
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT so this seed lands in the right Postgres when a
   // worktree overrides ports for parallel `make e2e`.
@@ -87,7 +87,8 @@ function runSeed(): void {
     process.env.DATABASE_URL ||
     `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
 
-  execSync(`"${venvPython}" "${seed}"`, {
+  const quotedArgs = args.map((a) => `"${a}"`).join(" ");
+  execSync(`"${venvPython}" "${seed}" ${quotedArgs}`, {
     env: {
       ...process.env,
       DATABASE_URL: databaseUrl,
@@ -95,6 +96,10 @@ function runSeed(): void {
     },
     stdio: "inherit",
   });
+}
+
+function runSeed(): void {
+  runSeedScript("seed_e2e_corpus_coherence.py");
 }
 
 async function postAudit(
@@ -168,4 +173,107 @@ test("an overlay role no dataset was ever ingested for is reported as unlinked",
   expect(report.missing).toHaveLength(1);
   expect(report.missing[0].role).toBe("shadow_impact");
   expect(report.missing[0].reason).toBe("unlinked");
+});
+
+// ---------------------------------------------------------------------------
+// ABS-432 — e2e-contamination tripwire
+// ---------------------------------------------------------------------------
+//
+// Defense-in-depth behind the dev/e2e Postgres split (ABS-428) and the dev
+// purge (ABS-429): rows fingerprinted by the e2e suite (parser_version
+// 'e2e-seed', file_hash 'e2e-%', external_dataset name 'e2e_%') must be
+// reported loudly if they ever reach a non-test database again.
+//
+// Two surfaces:
+// * GET /v1/monitoring/corpus-coherence — the real ops endpoint. THIS stack
+//   is the e2e deployment, whose DB legitimately holds seeded marker rows
+//   (this very spec's beforeAll creates 'e2e-seed' documents), so the
+//   endpoint reports them informationally ('expected_test_fixtures') and
+//   never as 'contaminated'.
+// * POST /v1/_test/e2e-contamination — the uncached, armed sweep (exactly
+//   what a dev/prod tripwire evaluates). Each worker inserts its OWN
+//   uniquely-hashed synthetic marker and asserts on that row only — four
+//   viewport projects run this spec in parallel against one DB, so global
+//   counts are not stable.
+
+type E2eContaminationMarker = {
+  table: "document" | "external_dataset";
+  row_id: number;
+  marker_kinds: string[];
+  detail: string;
+};
+
+type E2eContaminationReport = {
+  contaminated: boolean;
+  marker_counts: Record<string, number>;
+  markers: E2eContaminationMarker[];
+};
+
+async function postArmedContaminationSweep(
+  request: import("@playwright/test").APIRequestContext,
+): Promise<E2eContaminationReport> {
+  const response = await request.post(`${E2E_API_URL}/v1/_test/e2e-contamination`, {
+    headers: { "Content-Type": "application/json" },
+  });
+  expect(
+    response.status(),
+    `e2e-contamination endpoint failed: ${response.status()} ${await response.text()}`,
+  ).toBe(200);
+  return (await response.json()) as E2eContaminationReport;
+}
+
+test("monitoring corpus-coherence carries the e2e_contamination check and never reports the e2e stack's own fixtures as contamination", async ({
+  request,
+}) => {
+  const response = await request.get(`${E2E_API_URL}/v1/monitoring/corpus-coherence`);
+  // The e2e DB does not ingest the real halifax corpus, so the coherence
+  // half of this endpoint may legitimately be 'incoherent' (503) here —
+  // this test is about the contamination check's shape and its
+  // markers-expected handling, not the coherence verdict.
+  expect([200, 503]).toContain(response.status());
+  const body = (await response.json()) as {
+    status: string;
+    e2e_contamination: E2eContaminationReport & { status: string };
+  };
+
+  expect(body.e2e_contamination).toBeDefined();
+  const contamination = body.e2e_contamination;
+  expect(typeof contamination.contaminated).toBe("boolean");
+  expect(Object.keys(contamination.marker_counts).sort()).toEqual([
+    "document_file_hash",
+    "document_parser_version",
+    "external_dataset_name",
+  ]);
+  // The e2e entrypoint declares ADVISOR_E2E_MARKERS_EXPECTED, so seeded
+  // fixtures are reported informationally — never as 'contaminated', and
+  // never flipping the top-level status to 'contaminated'.
+  expect(["ok", "expected_test_fixtures"]).toContain(contamination.status);
+  expect(body.status).not.toBe("contaminated");
+});
+
+test("the armed sweep goes red on a synthetic marker row, names it, and clears after cleanup", async ({
+  request,
+}, testInfo) => {
+  const fileHash = `e2e-tripwire-w${testInfo.workerIndex}-${Date.now().toString(36)}`;
+
+  runSeedScript("seed_e2e_contamination_marker.py", ["--file-hash", fileHash]);
+  try {
+    const dirty = await postArmedContaminationSweep(request);
+
+    // Red: the sweep a dev/prod deployment runs judges this DB contaminated
+    // and names our synthetic row with both document marker kinds.
+    expect(dirty.contaminated).toBe(true);
+    const ours = dirty.markers.find((m) => m.detail.includes(fileHash));
+    expect(ours, `synthetic marker ${fileHash} not named in sweep`).toBeDefined();
+    expect(ours!.table).toBe("document");
+    expect(ours!.marker_kinds).toEqual(
+      expect.arrayContaining(["document_parser_version", "document_file_hash"]),
+    );
+  } finally {
+    runSeedScript("seed_e2e_contamination_marker.py", ["--file-hash", fileHash, "--delete"]);
+  }
+
+  // Green (for this row): after cleanup the sweep no longer names it.
+  const clean = await postArmedContaminationSweep(request);
+  expect(clean.markers.some((m) => m.detail.includes(fileHash))).toBe(false);
 });
