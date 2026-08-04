@@ -41,7 +41,8 @@ PUA_SPACE = ""  # symbol-font space (padding)
 
 DOCUMENT_FILE_HASH = "e2e-permission-tables-1"
 DOCUMENT_MUNICIPALITY = "HRM"
-DOCUMENT_BYLAW_NAME = "Regional Centre Land Use By-law"
+# ABS-431: never the bare real name — see scripts/e2e_fixture_names.py.
+DOCUMENT_BYLAW_NAME = "Regional Centre Land Use By-law (Permission Tables E2E)"
 
 
 TABLE_1A_CAPTION = "Table 1A: Permitted uses by zone — Residential"

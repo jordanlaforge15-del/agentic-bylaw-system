@@ -127,7 +127,7 @@ test("resolves a known address into zone + overlay precincts with citations", as
   for (const citation of profile.citations) {
     expect(citation.citation_path).toBeTruthy();
     expect(citation.document_id).toBeGreaterThan(0);
-    expect(citation.bylaw_name).toBe("Regional Centre Land Use By-Law");
+    expect(citation.bylaw_name).toBe("Regional Centre Land Use By-Law (Address Profile E2E)");
   }
 
   const overlayKinds = new Set(profile.overlays.map((o) => o.kind));

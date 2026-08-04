@@ -9,7 +9,9 @@ s.69(d) permits it otherwise).
 
 Seeds:
 
-* A ``HRM / Regional Centre Land Use By-Law`` document with a ``Schedule 7``
+* A ``HRM / Regional Centre Land Use By-Law (Address Profile E2E)`` document
+  (shared with seed_e2e_address_profile; E2E-marked per ABS-431 so it can
+  never collide with the real RC-LUB) with a ``Schedule 7``
   fragment (p.27 list-of-schedules reference) so the dataset linker binds the
   overlay to its citing fragment by ``citation_label``.
 * One linked ``external_dataset`` whose name contains "pedestrian" (so the
@@ -82,7 +84,7 @@ DOCUMENT_BYLAW_NAME = _AP_BYLAW_NAME
 SCHEDULE_CITATION = "Schedule 7"
 
 # Pre-fix standalone POCS document. The original ABS-350 seed minted its own
-# "Regional Centre Land Use By-Law" document under this file_hash with a newer
+# RC-LUB-named document under this file_hash with a newer
 # ingestion_timestamp than the address-profile document. Under the pre-ABS-413
 # latest-per-bylaw scoping that standalone doc *evicted* the address-profile
 # document (which carries the zone/height/FAR/heritage overlays) from scope,
@@ -104,7 +106,8 @@ _STALE_POCS_FILE_HASH = "e2e-pocs-schedule7-doc-1"
 # would keep occupying its own bylaw partition. Purge by this identity too so the
 # shared volume self-heals regardless of which seed version ran last. This name is
 # intentionally NOT the shared document's ("HRM" / "Regional Centre Land Use
-# By-Law"), so the identity purge can never touch the shared address-profile doc.
+# By-Law (Address Profile E2E)" — ABS-431 naming), so the identity purge can
+# never touch the shared address-profile doc.
 _STALE_POCS_MUNICIPALITY = "Halifax Regional Municipality"
 _STALE_POCS_BYLAW_NAME = "Regional Centre Land Use By-Law (POCS Schedule 7 E2E)"
 
