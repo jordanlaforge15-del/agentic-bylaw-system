@@ -43,10 +43,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from layer1.datasets.config import DatasetConfig, load_dataset_config
-from layer1.db.base import ExternalDataset, SourceFragment
+from layer1.db.base import Document, ExternalDataset, SourceFragment
 
 from bylaw_retrieval.retrieval.schemas import (
     CorpusCoherenceReport,
+    E2eContaminationMarker,
+    E2eContaminationReport,
     MissingOverlayRole,
     OverlayDeclaration,
 )
@@ -191,4 +193,101 @@ def _classify_missing_role(
         fragment_citation=declaration.fragment_citation,
         reason=reason,
         detail=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ABS-432 — e2e contamination sweep
+# ---------------------------------------------------------------------------
+#
+# The three fingerprints every scripts/seed_e2e_*.py fixture stamps on the
+# rows it creates. Kept here — next to the coherence audit that shares the
+# same ops surfaces (CLI, /v1/monitoring/corpus-coherence) — so the
+# dev-up.sh preflight, the CLI, the monitoring endpoint, and the ABS-420
+# prod sweep all agree on one definition of "e2e marker".
+
+E2E_PARSER_VERSION_MARKER = "e2e-seed"
+E2E_FILE_HASH_PREFIX = "e2e-"
+E2E_DATASET_NAME_PREFIX = "e2e_"
+
+
+def audit_e2e_contamination(session: Session) -> E2eContaminationReport:
+    """Sweep the connected database for e2e-suite fixture markers (ABS-432).
+
+    Flags every row matching any of:
+
+    * ``document.parser_version = 'e2e-seed'``
+    * ``document.file_hash LIKE 'e2e-%'``
+    * ``external_dataset.name LIKE 'e2e_%'`` (literal underscore — escaped,
+      so a hypothetical ``e2eX...`` name does not false-positive)
+
+    Pure read-only SELECTs; safe to point at prod. The caller decides what a
+    non-empty result means: in a dev/prod database it is contamination that
+    should refuse a boot or turn monitoring red; in the e2e stack's own
+    database these rows are the suite's legitimate fixtures.
+    """
+    marker_counts = {
+        "document_parser_version": 0,
+        "document_file_hash": 0,
+        "external_dataset_name": 0,
+    }
+    markers: list[E2eContaminationMarker] = []
+
+    documents = (
+        session.execute(
+            select(Document)
+            .where(
+                (Document.parser_version == E2E_PARSER_VERSION_MARKER)
+                | Document.file_hash.startswith(E2E_FILE_HASH_PREFIX, autoescape=True)
+            )
+            .order_by(Document.id)
+        )
+        .scalars()
+        .all()
+    )
+    for document in documents:
+        kinds: list[str] = []
+        if document.parser_version == E2E_PARSER_VERSION_MARKER:
+            kinds.append("document_parser_version")
+            marker_counts["document_parser_version"] += 1
+        if document.file_hash.startswith(E2E_FILE_HASH_PREFIX):
+            kinds.append("document_file_hash")
+            marker_counts["document_file_hash"] += 1
+        markers.append(
+            E2eContaminationMarker(
+                table="document",
+                row_id=document.id,
+                marker_kinds=kinds,
+                detail=(
+                    f"document {document.id}: {document.bylaw_name!r} "
+                    f"({document.municipality}), file_hash={document.file_hash!r}, "
+                    f"parser_version={document.parser_version!r}"
+                ),
+            )
+        )
+
+    datasets = (
+        session.execute(
+            select(ExternalDataset)
+            .where(ExternalDataset.name.startswith(E2E_DATASET_NAME_PREFIX, autoescape=True))
+            .order_by(ExternalDataset.id)
+        )
+        .scalars()
+        .all()
+    )
+    for dataset in datasets:
+        marker_counts["external_dataset_name"] += 1
+        markers.append(
+            E2eContaminationMarker(
+                table="external_dataset",
+                row_id=dataset.id,
+                marker_kinds=["external_dataset_name"],
+                detail=f"external_dataset {dataset.id}: name={dataset.name!r}",
+            )
+        )
+
+    return E2eContaminationReport(
+        contaminated=bool(markers),
+        marker_counts=marker_counts,
+        markers=markers,
     )
