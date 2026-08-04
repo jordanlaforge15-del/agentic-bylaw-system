@@ -3,6 +3,10 @@ whose published port no longer matches the requested PG_PORT and remove
 it before `docker compose up`. e2e-down.sh must remove the postgres
 container (not just stop web/fastapi) so the next launch is clean.
 
+ABS-428 update: the container under management is now the DEDICATED
+ephemeral e2e instance (`postgres-e2e`), and e2e-down destroys its data
+volume too — the stale-port rm and the teardown rm both carry `-v`.
+
 Both scripts are bash; we test them by invoking them with a PATH that
 shadows `docker` with a fake binary whose behavior we control. We
 short-circuit before the real `ensure_postgres` work by exporting an
@@ -144,12 +148,13 @@ class TestE2eUpPortMismatchDetection:
             extra_env={"PG_PORT": "5433"},
         )
         assert result.returncode == 0, f"stderr={result.stderr}"
-        assert "Removing stale postgres container (port was 5440, now 5433)" \
+        assert "Removing stale postgres-e2e container (port was 5440, now 5433)" \
             in result.stdout
         docker_log = (tmp_path / "docker.log").read_text()
         # Must have issued the rm command before the next `compose up`
-        # would attach to the stale container.
-        rm_idx = docker_log.find("compose rm -fs postgres")
+        # would attach to the stale container. -v included: the e2e
+        # instance is ephemeral, stale data has no value (ABS-428).
+        rm_idx = docker_log.find("compose rm -fsv postgres-e2e")
         assert rm_idx != -1, f"docker calls: {docker_log}"
 
     def test_matching_port_skips_rm(self, tmp_path: Path):
@@ -163,7 +168,7 @@ class TestE2eUpPortMismatchDetection:
             extra_env={"PG_PORT": "5433"},
         )
         assert result.returncode == 0
-        assert "Removing stale postgres container" not in result.stdout
+        assert "Removing stale postgres-e2e container" not in result.stdout
         docker_log = (tmp_path / "docker.log").read_text()
         assert "compose rm" not in docker_log
 
@@ -178,17 +183,19 @@ class TestE2eUpPortMismatchDetection:
             extra_env={"PG_PORT": "5433"},
         )
         assert result.returncode == 0
-        assert "Removing stale postgres container" not in result.stdout
+        assert "Removing stale postgres-e2e container" not in result.stdout
         docker_log = (tmp_path / "docker.log").read_text()
         assert "compose rm" not in docker_log
 
 
-class TestE2eDownRemovesPostgresContainer:
-    """e2e-down.sh must end with `docker compose rm -fs postgres` so
-    that the next e2e-up can bind a different PG_PORT cleanly. Volume
-    is preserved (no -v) so DB content survives container recreation."""
+class TestE2eDownDestroysE2ePostgres:
+    """ABS-428: e2e-down.sh must destroy the dedicated e2e Postgres —
+    `docker compose rm -fsv postgres-e2e` (container + anonymous
+    volumes) plus removal of the named `layer1-postgres-e2e` volume —
+    so the next e2e-up boots a pristine instance. The dev `postgres`
+    service must never be addressed."""
 
-    def test_down_issues_rm_postgres(self, tmp_path: Path):
+    def test_down_destroys_e2e_container_and_volume(self, tmp_path: Path):
         fake_bin = _make_fake_docker(tmp_path, stale_port="5433")
         result = _run_script(
             "e2e-down.sh",
@@ -197,21 +204,26 @@ class TestE2eDownRemovesPostgresContainer:
             stop_at="down",
         )
         assert result.returncode == 0, f"stderr={result.stderr}"
-        assert "Removing Postgres container" in result.stdout
+        assert "Destroying e2e Postgres container + volume" in result.stdout
         docker_log = (tmp_path / "docker.log").read_text()
-        assert "compose rm -fs postgres" in docker_log, \
+        assert "compose rm -fsv postgres-e2e" in docker_log, \
             f"docker calls: {docker_log}"
+        # The named-volume sweep must have run (fake docker reports no
+        # volumes, so the script logs the nothing-to-remove branch).
+        assert "volume ls" in docker_log, f"docker calls: {docker_log}"
+        assert "no e2e Postgres volume to remove" in result.stdout
 
-    def test_down_does_not_remove_volume(self, tmp_path: Path):
-        """The rm must NOT pass -v — that would nuke the named volume
-        and lose the DB content between launches on the same PG_PORT."""
+    def test_down_never_touches_dev_postgres(self, tmp_path: Path):
+        """No compose invocation may address the dev `postgres` service —
+        removing it (or its volume) would take down the dev stack."""
         fake_bin = _make_fake_docker(tmp_path, stale_port="5433")
         _run_script("e2e-down.sh", tmp_path=tmp_path, fake_bin=fake_bin, stop_at="down")
         docker_log = (tmp_path / "docker.log").read_text()
         for line in docker_log.splitlines():
-            if "compose rm" in line:
-                assert " -v" not in line, \
-                    f"rm with -v would destroy named volume: {line}"
+            if "compose" in line:
+                # every service-addressed call must target postgres-e2e
+                assert " postgres " not in f"{line} ", \
+                    f"dev postgres service addressed: {line}"
 
 
 # ---------------------------------------------------------------------------

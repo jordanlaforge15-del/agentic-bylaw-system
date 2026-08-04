@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Stop the FastAPI + Next.js processes spawned by ./scripts/e2e-up.sh.
-# Does not drop the test database (cheap to keep around between runs;
-# pass --drop-db if you want a clean reset).
+# Stop the FastAPI + Next.js processes spawned by ./scripts/e2e-up.sh,
+# then DESTROY the dedicated e2e Postgres container and its data volume
+# (ABS-428). The e2e instance is ephemeral by contract: every
+# `e2e-up` after this teardown boots a pristine instance and re-runs
+# migrations + seeds, so no e2e state can leak between runs. The dev
+# Postgres (compose service ``postgres``, :5432) is never touched.
+#
+# --drop-db is accepted for backward compatibility but is a no-op now:
+# the whole instance is destroyed on every teardown anyway.
 
 set -euo pipefail
 
@@ -9,18 +15,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-DROP_DB=0
 if [[ "${1:-}" == "--drop-db" ]]; then
-  DROP_DB=1
+  echo "note: --drop-db is obsolete — the e2e Postgres instance (container" >&2
+  echo "      + volume) is destroyed on every teardown since ABS-428." >&2
 fi
 
-E2E_TEST_DB="${E2E_TEST_DB:-layer1_test}"
 # Match e2e-up.sh defaults so the lsof fallback in stop_pid targets the
 # right port when the pidfile is missing/stale. Worktrees that overrode
 # these on the e2e-up call must export the same values here.
 E2E_FASTAPI_PORT="${E2E_FASTAPI_PORT:-8001}"
 E2E_WEB_PORT="${E2E_WEB_PORT:-3001}"
-PG_USER="${PG_USER:-layer1}"
 STATE_DIR="${REPO_ROOT}/.e2e"
 PID_DIR="${STATE_DIR}/pids"
 
@@ -120,18 +124,42 @@ docker_compose_cmd() {
   fi
 }
 
-if [[ "$DROP_DB" -eq 1 ]]; then
-  log "Dropping test database ${E2E_TEST_DB}"
-  docker_compose_cmd exec -T postgres psql -U "$PG_USER" -d postgres -c \
-    "DROP DATABASE IF EXISTS \"${E2E_TEST_DB}\""
-fi
+# ABS-428: destroy the dedicated e2e Postgres instance — container AND
+# data volume. This is what makes the instance ephemeral: the next
+# `e2e-up` boots from a fresh initdb and re-runs migrations + seeds, so
+# no document/case/user state can carry over between runs. It also
+# subsumes the ABS-170 stale-port concern (no container left to attach
+# to with an outdated port mapping).
+#
+# Scoped strictly to the `postgres-e2e` service; the dev `postgres`
+# service and its `layer1-postgres` volume are never touched here.
+log "Destroying e2e Postgres container + volume (postgres-e2e)"
+# `rm -fsv` stops+removes the container and any anonymous volumes.
+docker_compose_cmd rm -fsv postgres-e2e >/dev/null 2>&1 || true
 
-# ABS-170: Remove the postgres container so the next `e2e-up` cannot attach
-# to it with a stale port mapping. The compose project's named volume is
-# preserved (no -v), so DB content survives container recreation. Without
-# this, a worktree relaunched with a different PG_PORT silently keeps the
-# old port and NM's reviewer e2e fails at startup with no useful signal.
-log "Removing Postgres container (volume preserved)"
-docker_compose_cmd rm -fs postgres >/dev/null 2>&1 || true
+# The named data volume (`layer1-postgres-e2e` in docker-compose.yml) is
+# not removed by `rm -v` (named volumes are preserved by design there),
+# so remove it explicitly. Match on the compose-assigned labels rather
+# than a computed "<project>_layer1-postgres-e2e" name so a custom
+# COMPOSE_PROJECT_NAME or compose's name normalisation can't cause a
+# miss — but filter by THIS project's name so sibling worktrees'
+# in-flight e2e volumes survive.
+compose_project_name() {
+  if [[ -n "${COMPOSE_PROJECT_NAME:-}" ]]; then
+    printf '%s' "$COMPOSE_PROJECT_NAME" | tr '[:upper:]' '[:lower:]'
+  else
+    basename "$REPO_ROOT" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]//g; s/^[_-]+//'
+  fi
+}
+e2e_volumes="$(docker volume ls -q \
+  --filter "label=com.docker.compose.project=$(compose_project_name)" \
+  --filter "label=com.docker.compose.volume=layer1-postgres-e2e" 2>/dev/null || true)"
+if [[ -n "$e2e_volumes" ]]; then
+  # shellcheck disable=SC2086
+  docker volume rm -f $e2e_volumes >/dev/null 2>&1 || true
+  echo "removed e2e Postgres volume(s): $e2e_volumes"
+else
+  echo "no e2e Postgres volume to remove"
+fi
 
 log "E2E stack is down"

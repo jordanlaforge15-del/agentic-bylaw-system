@@ -92,7 +92,13 @@ for port in "$DEV_FASTAPI_PORT" "$DEV_WEB_PORT"; do
   fi
 done
 
-log "Ensuring Postgres container is up"
+# ABS-428: this script is pinned to the DEV compose service `postgres`
+# (:${DEV_PG_PORT}, database `layer1`). The dedicated e2e instance is a
+# separate service (`postgres-e2e`) behind the compose `e2e` profile,
+# which this script cannot start or stop: every compose invocation here
+# names `postgres` explicitly, and the profile hides `postgres-e2e`
+# from profile-less commands anyway.
+log "Ensuring dev Postgres container is up"
 docker_compose up -d postgres
 for _ in $(seq 1 60); do
   if docker_compose exec -T postgres pg_isready -U layer1 -d postgres >/dev/null 2>&1; then
@@ -101,6 +107,20 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 docker_compose exec -T postgres pg_isready -U layer1 -d postgres >/dev/null
+
+# ABS-428: one-time hygiene — before the e2e/dev Postgres split, the e2e
+# suite created `layer1_test` on this same dev instance. The e2e suite
+# now runs on its own ephemeral instance (`postgres-e2e`), so any
+# `layer1_test` still present here is legacy residue. Drop it so the
+# dev instance hosts `layer1` only. WITH (FORCE) terminates any stray
+# connections (pg16). Scoped to the test DB name; `layer1` is untouched.
+legacy_test_db="$(docker_compose exec -T postgres psql -U layer1 -d postgres -tAc \
+  "SELECT 1 FROM pg_database WHERE datname='layer1_test'" 2>/dev/null | tr -d '[:space:]' || true)"
+if [[ "$legacy_test_db" == "1" ]]; then
+  log "Dropping legacy layer1_test from the dev Postgres instance (e2e now has its own instance)"
+  docker_compose exec -T postgres psql -U layer1 -d postgres -c \
+    'DROP DATABASE IF EXISTS "layer1_test" WITH (FORCE)'
+fi
 
 log "Running Alembic migrations against ${DATABASE_URL}"
 "${REPO_ROOT}/.venv/bin/alembic" upgrade head
