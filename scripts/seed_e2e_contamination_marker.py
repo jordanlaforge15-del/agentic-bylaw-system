@@ -34,7 +34,7 @@ from layer1.db.base import Document, utcnow
 from layer1.db.session import session_scope
 
 MUNICIPALITY = "E2E Contamination Tripwire Municipality"
-BYLAW_NAME = "Contamination Tripwire Synthetic Bylaw"
+BYLAW_NAME = "Contamination Tripwire Synthetic Bylaw (ABS-432 E2E)"
 
 
 def main(argv: list[str] | None = None) -> int:
