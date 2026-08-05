@@ -1092,3 +1092,70 @@ class CorpusCoherenceReport(BaseModel):
     checked_roles: int = Field(..., description="Number of overlay-role dataset configs evaluated.")
     bylaws_checked: int = Field(..., description="Number of distinct (municipality, bylaw_name) pairs evaluated.")
     missing: list[MissingOverlayRole] = Field(default_factory=list)
+
+
+class E2eContaminationMarker(BaseModel):
+    """One row in a non-test database that carries an e2e-suite fingerprint (ABS-432).
+
+    The three marker kinds are the exact fingerprints every
+    ``scripts/seed_e2e_*.py`` fixture stamps on the rows it creates:
+
+    * ``document_parser_version`` — ``document.parser_version = 'e2e-seed'``
+    * ``document_file_hash``      — ``document.file_hash LIKE 'e2e-%'``
+    * ``external_dataset_name``   — ``external_dataset.name LIKE 'e2e_%'``
+      (literal underscore, escaped in SQL)
+
+    A single document row matching both document markers is reported once,
+    with both kinds listed in ``marker_kinds``.
+    """
+
+    table: Literal["document", "external_dataset"] = Field(
+        ..., description="Which table the offending row lives in."
+    )
+    row_id: int = Field(..., description="Primary key of the offending row.")
+    marker_kinds: list[str] = Field(
+        ...,
+        description=(
+            "Every e2e fingerprint this row matches: 'document_parser_version', "
+            "'document_file_hash', and/or 'external_dataset_name'."
+        ),
+    )
+    detail: str = Field(
+        ...,
+        description=(
+            "Human-readable identification of the row (bylaw name + file hash "
+            "for documents, dataset name for external datasets) for a red "
+            "banner or ops log line."
+        ),
+    )
+
+
+class E2eContaminationReport(BaseModel):
+    """Result of sweeping a database for e2e-suite fixture markers (ABS-432).
+
+    Defense-in-depth behind the dev/e2e Postgres split (ABS-428) and the
+    dev-DB purge (ABS-429): if test artifacts ever reach a non-test database
+    again, this report surfaces them loudly — in the ``dev-up.sh`` preflight,
+    the ``scripts/corpus_coherence_audit.py`` CLI, and the
+    ``/v1/monitoring/corpus-coherence`` ops endpoint — instead of silently
+    polluting manual testing and real answers.
+
+    ``contaminated`` is green-only-when-zero: True the moment any marker row
+    exists. Whether that's an incident depends on the deployment — an e2e
+    stack's own database legitimately holds these rows (the caller decides;
+    see the monitoring router's markers-expected handling).
+    """
+
+    contaminated: bool = Field(..., description="True when any marker row exists.")
+    marker_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Row count per marker kind, always carrying all three keys: "
+            "'document_parser_version', 'document_file_hash', "
+            "'external_dataset_name'."
+        ),
+    )
+    markers: list[E2eContaminationMarker] = Field(
+        default_factory=list,
+        description="Every offending row, one entry per row (deduplicated across marker kinds).",
+    )

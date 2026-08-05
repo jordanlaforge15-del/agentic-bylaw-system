@@ -28,6 +28,7 @@ import pytest
 from bylaw_retrieval.retrieval import (
     OverlayDeclaration,
     audit_corpus_coherence,
+    audit_e2e_contamination,
     retrieval_enabled_resolver,
 )
 from bylaw_retrieval.retrieval.coherence_audit import (
@@ -289,3 +290,141 @@ def test_load_overlay_declarations_reads_the_real_dataset_configs() -> None:
         assert declaration.municipality
         assert declaration.bylaw_name
         assert declaration.fragment_citation
+
+
+# ---------------------------------------------------------------------------
+# ABS-432 — audit_e2e_contamination
+# ---------------------------------------------------------------------------
+#
+# The tripwire behind the dev/e2e Postgres split (ABS-428) and the dev purge
+# (ABS-429): any row bearing an e2e-suite fingerprint in a non-test database
+# must be reported loudly. ``seeded_db`` above is deliberately marker-free
+# (documents hashed 'o'*64/'n'*64, datasets named test_*) so it doubles as
+# the clean baseline here.
+
+
+def _add_marker_document(
+    db_url: str, *, file_hash: str, parser_version: str | None
+) -> int:
+    with session_scope(db_url) as session:
+        document = Document(
+            municipality="Marker Town",
+            bylaw_name="Marker Bylaw",
+            source_path="/marker.pdf",
+            file_hash=file_hash,
+            mime_type="application/pdf",
+            ingestion_timestamp=datetime.now(timezone.utc),
+            parser_version=parser_version,
+        )
+        session.add(document)
+        session.flush()
+        return document.id
+
+
+def test_e2e_contamination_clean_on_a_marker_free_corpus(seeded_db: str) -> None:
+    with session_scope(seeded_db) as session:
+        report = audit_e2e_contamination(session)
+    assert report.contaminated is False
+    assert report.markers == []
+    assert report.marker_counts == {
+        "document_parser_version": 0,
+        "document_file_hash": 0,
+        "external_dataset_name": 0,
+    }
+
+
+def test_e2e_contamination_flags_the_parser_version_marker(seeded_db: str) -> None:
+    doc_id = _add_marker_document(seeded_db, file_hash="a" * 64, parser_version="e2e-seed")
+    with session_scope(seeded_db) as session:
+        report = audit_e2e_contamination(session)
+    assert report.contaminated is True
+    assert len(report.markers) == 1
+    marker = report.markers[0]
+    assert marker.table == "document"
+    assert marker.row_id == doc_id
+    assert marker.marker_kinds == ["document_parser_version"]
+    assert "Marker Bylaw" in marker.detail
+    assert report.marker_counts["document_parser_version"] == 1
+    assert report.marker_counts["document_file_hash"] == 0
+
+
+def test_e2e_contamination_flags_the_file_hash_marker(seeded_db: str) -> None:
+    _add_marker_document(seeded_db, file_hash="e2e-sneaky-hash", parser_version="docling")
+    with session_scope(seeded_db) as session:
+        report = audit_e2e_contamination(session)
+    assert report.contaminated is True
+    assert report.markers[0].marker_kinds == ["document_file_hash"]
+    assert report.marker_counts["document_file_hash"] == 1
+
+
+def test_a_document_matching_both_markers_is_reported_once_with_both_kinds(
+    seeded_db: str,
+) -> None:
+    doc_id = _add_marker_document(seeded_db, file_hash="e2e-double", parser_version="e2e-seed")
+    with session_scope(seeded_db) as session:
+        report = audit_e2e_contamination(session)
+    assert len(report.markers) == 1
+    assert report.markers[0].row_id == doc_id
+    assert report.markers[0].marker_kinds == [
+        "document_parser_version",
+        "document_file_hash",
+    ]
+    assert report.marker_counts["document_parser_version"] == 1
+    assert report.marker_counts["document_file_hash"] == 1
+
+
+def test_e2e_contamination_flags_the_dataset_name_marker(seeded_db: str) -> None:
+    with session_scope(seeded_db) as session:
+        session.add(
+            ExternalDataset(
+                name="e2e_zoning_boundaries",
+                format="geojson",
+                content_hash="h-e2e",
+                crs="EPSG:4326",
+                feature_count=1,
+                schema_mapping_json={},
+                parse_status=ParseStatus.PARSED,
+                metadata_json={},
+            )
+        )
+    with session_scope(seeded_db) as session:
+        report = audit_e2e_contamination(session)
+    assert report.contaminated is True
+    assert report.markers[0].table == "external_dataset"
+    assert report.markers[0].marker_kinds == ["external_dataset_name"]
+    assert "e2e_zoning_boundaries" in report.markers[0].detail
+
+
+def test_dataset_marker_underscore_is_literal_not_a_wildcard(seeded_db: str) -> None:
+    """`e2e_%` must not match `e2eX...` — the SQL underscore is escaped."""
+    with session_scope(seeded_db) as session:
+        session.add(
+            ExternalDataset(
+                name="e2eXnot_a_marker",
+                format="geojson",
+                content_hash="h-not-marker",
+                crs="EPSG:4326",
+                feature_count=1,
+                schema_mapping_json={},
+                parse_status=ParseStatus.PARSED,
+                metadata_json={},
+            )
+        )
+    with session_scope(seeded_db) as session:
+        report = audit_e2e_contamination(session)
+    assert report.contaminated is False
+
+
+def test_e2e_contamination_goes_green_again_after_cleanup(seeded_db: str) -> None:
+    """Both ways in one flow: red on the synthetic marker, green after delete."""
+    doc_id = _add_marker_document(seeded_db, file_hash="e2e-cleanup-me", parser_version="e2e-seed")
+    with session_scope(seeded_db) as session:
+        assert audit_e2e_contamination(session).contaminated is True
+
+    with session_scope(seeded_db) as session:
+        session.delete(session.get(Document, doc_id))
+
+    with session_scope(seeded_db) as session:
+        report = audit_e2e_contamination(session)
+    assert report.contaminated is False
+    assert report.markers == []

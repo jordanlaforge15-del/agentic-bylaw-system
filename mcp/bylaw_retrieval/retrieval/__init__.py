@@ -1,6 +1,7 @@
 from bylaw_retrieval.retrieval.coherence_audit import (
     DEFAULT_DATASET_CONFIG_DIR,
     audit_corpus_coherence,
+    audit_e2e_contamination,
     load_overlay_declarations,
 )
 from bylaw_retrieval.retrieval.schemas import (
@@ -17,6 +18,8 @@ from bylaw_retrieval.retrieval.schemas import (
     CorpusCoherenceReport,
     DatasetFeatureMatch,
     DocumentOutlineResponse,
+    E2eContaminationMarker,
+    E2eContaminationReport,
     DocumentSummary,
     LinkedDataset,
     LocationSlot,
@@ -63,6 +66,8 @@ __all__ = [
     "DocumentIdResolver",
     "DocumentOutlineResponse",
     "DocumentSummary",
+    "E2eContaminationMarker",
+    "E2eContaminationReport",
     "LinkedDataset",
     "LocationSlot",
     "MissingOverlayRole",
@@ -81,6 +86,7 @@ __all__ = [
     "ConditionalUse",
     "ZoneUses",
     "audit_corpus_coherence",
+    "audit_e2e_contamination",
     "latest_document_id_resolver",
     "retrieval_enabled_resolver",
     "load_overlay_declarations",

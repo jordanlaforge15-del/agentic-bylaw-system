@@ -124,6 +124,28 @@ for legacy_db in $legacy_test_dbs; do
     "DROP DATABASE IF EXISTS \"${legacy_db}\" WITH (FORCE)"
 done
 
+# ABS-432: contamination tripwire. Refuse to boot the dev stack against a
+# database carrying e2e fixture markers (parser_version='e2e-seed',
+# file_hash 'e2e-%', external_dataset name 'e2e_%'). The e2e suite has its
+# own Postgres instance (ABS-428) and the dev DB was purged (ABS-429) — if
+# a marker shows up here again, something re-leaked test artifacts into a
+# non-test database and manual testing would be silently polluted. The
+# sweep runs against $DATABASE_URL (the exact DB the servers below will
+# use), tolerates a fresh database with no tables, and is SELECT-only.
+# Emergency override: DEV_UP_ALLOW_E2E_CONTAMINATION=1 boots anyway.
+if [[ "${DEV_UP_ALLOW_E2E_CONTAMINATION:-0}" == "1" ]]; then
+  log "WARNING: DEV_UP_ALLOW_E2E_CONTAMINATION=1 — skipping the e2e-contamination preflight (ABS-432)"
+else
+  log "Preflight: sweeping ${DATABASE_URL##*@} for e2e contamination markers (ABS-432)"
+  if ! PYTHONPATH="${REPO_ROOT}/src:${REPO_ROOT}/mcp:${PYTHONPATH:-}" \
+      DATABASE_URL="$DATABASE_URL" \
+      "${REPO_ROOT}/.venv/bin/python" "${REPO_ROOT}/scripts/check_e2e_contamination.py"; then
+    echo "error: e2e contamination markers found in ${DATABASE_URL##*@} — refusing to boot." >&2
+    echo "       Clean the rows listed above, or re-run with DEV_UP_ALLOW_E2E_CONTAMINATION=1 to override." >&2
+    exit 1
+  fi
+fi
+
 log "Running Alembic migrations against ${DATABASE_URL}"
 # Pre-create alembic_version with a wider column (mirrors e2e-up.sh).
 # The default VARCHAR(32) is one char too short for the revision id

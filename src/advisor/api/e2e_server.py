@@ -49,6 +49,19 @@ if _ABS_LEARNING_SRC.is_dir():
     if _abs_learning_path not in sys.path:
         sys.path.insert(0, _abs_learning_path)
 
+# ABS-430 (with ABS-428): the e2e entrypoint — including every
+# /v1/_test/* seed endpoint it mounts — may only ever address a test
+# database. Mirror the seed-script bootstrap (scripts/e2e_db_default):
+# default DATABASE_URL to the dedicated e2e instance, then hard-refuse
+# any effective target whose database name does not end in `_test`,
+# unless E2E_SEED_ALLOW_DB=<exact-db-name> explicitly whitelists it.
+# Must run before the advisor/layer1 imports below so the lru_cached
+# layer1 settings can only ever resolve to the guarded URL.
+from layer1.seed_guard import default_e2e_database_url, require_test_database
+
+os.environ.setdefault("DATABASE_URL", default_e2e_database_url())
+require_test_database()
+
 from advisor.api.app import create_app
 from advisor.api.metrics_middleware import MetricsMiddleware
 from advisor.db.models import InviteRequest, User
@@ -82,6 +95,14 @@ logger = logging.getLogger(__name__)
 def build_e2e_app() -> FastAPI:
     """Construct the test FastAPI app wired for end-to-end UI tests."""
     setup_logging(json_output=False)
+    # ABS-432: this entrypoint's database IS the e2e suite's own instance —
+    # the `e2e-seed` documents and `e2e_*` datasets the seed scripts create
+    # are fixtures, not contamination. Declare that to the monitoring
+    # router's e2e_contamination tripwire so /v1/monitoring/corpus-coherence
+    # reports them informationally instead of going red. Production
+    # (advisor.api.main) and dev (advisor.api.dev) never import this module,
+    # so any marker row there still flips monitoring to 503.
+    os.environ.setdefault("ADVISOR_E2E_MARKERS_EXPECTED", "1")
     gateway = MockGateway(callable_=build_dispatcher())
 
     # ABS-19: wire a real ClerkVerifier backed by an in-memory test RSA
@@ -1152,6 +1173,25 @@ def _mount_test_router(app: FastAPI) -> None:
                 overlay_declarations=declarations,
                 default_document_id_resolver=retrieval_enabled_resolver,
             )
+        return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/e2e-contamination")
+    async def e2e_contamination() -> dict[str, object]:
+        """Run the ABS-432 e2e-contamination sweep, armed as production judges it.
+
+        The ``/v1/monitoring/corpus-coherence`` endpoint in THIS process
+        reports markers informationally (``expected_test_fixtures``) because
+        the e2e stack's database legitimately holds seeded fixtures — and it
+        caches results for 30s, which would race a spec that mutates markers.
+        This endpoint returns the raw, uncached ``E2eContaminationReport`` —
+        exactly what a dev/prod deployment's tripwire evaluates — so a
+        Playwright spec can insert a synthetic marker row, assert the sweep
+        names it, delete it, and assert it is gone.
+        """
+        from bylaw_retrieval.retrieval import audit_e2e_contamination  # noqa: PLC0415
+
+        with session_scope() as session:
+            report = audit_e2e_contamination(session)
         return report.model_dump(mode="json")
 
     @app.post("/v1/_test/link-table-captions")

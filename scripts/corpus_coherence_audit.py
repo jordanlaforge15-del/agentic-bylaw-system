@@ -29,7 +29,11 @@ import json
 import sys
 from pathlib import Path
 
-from bylaw_retrieval.retrieval import audit_corpus_coherence, retrieval_enabled_resolver
+from bylaw_retrieval.retrieval import (
+    audit_corpus_coherence,
+    audit_e2e_contamination,
+    retrieval_enabled_resolver,
+)
 from bylaw_retrieval.retrieval.coherence_audit import DEFAULT_DATASET_CONFIG_DIR
 from layer1.db.session import session_scope
 
@@ -59,8 +63,13 @@ def main(argv: list[str] | None = None) -> int:
             dataset_config_dir=args.config_dir,
             default_document_id_resolver=resolver,
         )
+        # ABS-432: sweep for e2e fixture markers in the same pass. This CLI
+        # is an ops tool pointed at dev/prod databases, where any marker row
+        # is contamination (the e2e suite runs on its own instance, ABS-428).
+        contamination = audit_e2e_contamination(session)
 
     payload = report.model_dump(mode="json")
+    payload["e2e_contamination"] = contamination.model_dump(mode="json")
     text = json.dumps(payload, indent=2)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +78,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(text)
 
+    failed = False
     if not report.coherent:
+        failed = True
         print(
             f"corpus-coherence audit FAILED: {len(report.missing)} overlay role(s) "
             f"missing from active retrieval scope",
@@ -77,9 +88,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         for entry in report.missing:
             print(f"  - [{entry.reason}] {entry.role} ({entry.bylaw_name}): {entry.detail}", file=sys.stderr)
+
+    if contamination.contaminated:
+        failed = True
+        print(
+            f"e2e-contamination sweep FAILED (ABS-432): {len(contamination.markers)} "
+            "row(s) carry e2e fixture markers — this is not a clean non-test database",
+            file=sys.stderr,
+        )
+        for marker in contamination.markers:
+            print(f"  - [{' + '.join(marker.marker_kinds)}] {marker.detail}", file=sys.stderr)
+
+    if failed:
         return 1
 
-    print(f"corpus-coherence audit passed: {report.checked_roles} role(s) across {report.bylaws_checked} bylaw(s)")
+    print(
+        f"corpus-coherence audit passed: {report.checked_roles} role(s) across "
+        f"{report.bylaws_checked} bylaw(s); e2e-contamination sweep clean"
+    )
     return 0
 
 
