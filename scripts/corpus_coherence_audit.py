@@ -32,6 +32,7 @@ from pathlib import Path
 from bylaw_retrieval.retrieval import (
     audit_corpus_coherence,
     audit_e2e_contamination,
+    audit_enabled_name_collisions,
     retrieval_enabled_resolver,
 )
 from bylaw_retrieval.retrieval.coherence_audit import DEFAULT_DATASET_CONFIG_DIR
@@ -67,9 +68,13 @@ def main(argv: list[str] | None = None) -> int:
         # is an ops tool pointed at dev/prod databases, where any marker row
         # is contamination (the e2e suite runs on its own instance, ABS-428).
         contamination = audit_e2e_contamination(session)
+        # ABS-434: at most one ENABLED document per normalized bylaw identity
+        # — the doc-15/38 double-enable ("By-law" vs "By-Law") tripwire.
+        name_collisions = audit_enabled_name_collisions(session)
 
     payload = report.model_dump(mode="json")
     payload["e2e_contamination"] = contamination.model_dump(mode="json")
+    payload["enabled_name_collisions"] = name_collisions.model_dump(mode="json")
     text = json.dumps(payload, indent=2)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -99,12 +104,25 @@ def main(argv: list[str] | None = None) -> int:
         for marker in contamination.markers:
             print(f"  - [{' + '.join(marker.marker_kinds)}] {marker.detail}", file=sys.stderr)
 
+    if not name_collisions.collision_free:
+        failed = True
+        print(
+            f"enabled-name-collision audit FAILED (ABS-434): "
+            f"{len(name_collisions.collisions)} normalized bylaw identit(ies) have "
+            "more than one retrieval-enabled document",
+            file=sys.stderr,
+        )
+        for collision in name_collisions.collisions:
+            print(f"  - {collision.detail}", file=sys.stderr)
+
     if failed:
         return 1
 
     print(
         f"corpus-coherence audit passed: {report.checked_roles} role(s) across "
-        f"{report.bylaws_checked} bylaw(s); e2e-contamination sweep clean"
+        f"{report.bylaws_checked} bylaw(s); e2e-contamination sweep clean; "
+        f"{name_collisions.enabled_documents} enabled document(s) across "
+        f"{name_collisions.identities_checked} normalized identit(ies), no name collisions"
     )
     return 0
 

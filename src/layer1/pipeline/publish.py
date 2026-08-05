@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from layer1.datasets.linker import LinkResult, relink_superseded_datasets
 from layer1.db.base import Document
+from layer1.naming import normalized_document_identity
 
 
 @dataclass
@@ -191,6 +192,41 @@ def set_retrieval_enabled(
                     "will search all of them; use replace to disable the "
                     "older version(s)."
                 )
+        # ABS-434: normalized-name drift detection. The exact match above
+        # misses enabled siblings whose (municipality, bylaw_name) differ
+        # only by case/hyphenation/whitespace ("By-law" vs "By-Law" — the
+        # doc-15/38 double-enable). WARNING only: ``--replace`` deliberately
+        # keeps exact matching, so a drifted sibling is never auto-disabled.
+        identity = normalized_document_identity(doc.municipality, doc.bylaw_name)
+        drifted = [
+            other
+            for other in session.execute(
+                select(Document).where(
+                    Document.retrieval_enabled.is_(True),
+                    Document.id != doc.id,
+                    Document.id.notin_(ids),
+                )
+            )
+            .scalars()
+            .all()
+            if (other.municipality, other.bylaw_name)
+            != (doc.municipality, doc.bylaw_name)
+            and normalized_document_identity(other.municipality, other.bylaw_name)
+            == identity
+        ]
+        if drifted:
+            spellings = ", ".join(
+                f"{other.id} ({other.municipality!r} / {other.bylaw_name!r})"
+                for other in drifted
+            )
+            result.warnings.append(
+                f"WARNING: document {doc.id} ({doc.bylaw_name!r}) has enabled "
+                f"normalized-name sibling(s) that exact matching misses: "
+                f"{spellings}. The names differ only by case, hyphenation, or "
+                "whitespace, so the backfill, --replace, and geo-dataset "
+                "relink all treat them as different bylaws — fix the name "
+                "drift or disable the stray document."
+            )
         if doc.retrieval_enabled:
             result.warnings.append(
                 f"Document {doc.id} ({doc.bylaw_name}) is already enabled."
