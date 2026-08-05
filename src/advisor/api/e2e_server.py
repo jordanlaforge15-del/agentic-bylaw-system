@@ -1525,8 +1525,6 @@ class _DisableRetrievalProbeBody(BaseModel):
     document_ids: list[int]
     query: str
     address: str
-    use_name: str
-    zone: str
 
 
 def _mount_retrieval_flag_endpoints(app: FastAPI) -> None:
@@ -1682,8 +1680,10 @@ def _mount_retrieval_flag_endpoints(app: FastAPI) -> None:
         production-scoped surfaces under ``retrieval_enabled_resolver``:
 
         * the evidence search (fragment scope),
-        * ``lookup_permitted_use`` (permission-matrix TABLE scope — reports
-          ``no_permission_matrix`` when no enabled document carries one),
+        * the permission-matrix TABLE scope (which enabled documents own a
+          matrix — the shared e2e corpus legitimately stages matrices on
+          other bylaws, so membership is reported per document id rather
+          than as a global emptiness claim),
         * ``get_address_profile`` (linked geo-dataset scope),
 
         and finally re-enables the documents. Everything happens in one
@@ -1718,8 +1718,16 @@ def _mount_retrieval_flag_endpoints(app: FastAPI) -> None:
                 search = service.search(
                     RetrievalRequest(query=body.query, top_k=20)
                 )
-                permitted = service.lookup_permitted_use(
-                    use=body.use_name, zone=body.zone
+                # The exact scope lookup_permitted_use resolves against:
+                # every permission-matrix table visible under the enabled
+                # resolver, reported by owning document id.
+                matrix_document_ids = sorted(
+                    {
+                        table.document_id
+                        for table in service._permission_matrix_tables(
+                            document_id=None
+                        )
+                    }
                 )
                 profile = service.get_address_profile(body.address)
                 return {
@@ -1727,8 +1735,7 @@ def _mount_retrieval_flag_endpoints(app: FastAPI) -> None:
                         {"document_id": m.document_id, "text": m.text}
                         for m in search.matches
                     ],
-                    "permitted_use_indeterminate": permitted.indeterminate,
-                    "permitted_use_reason_code": permitted.reason_code,
+                    "matrix_document_ids": matrix_document_ids,
                     "zone": profile.zone,
                     "overlay_count": len(profile.overlays),
                     "citation_count": len(profile.citations),

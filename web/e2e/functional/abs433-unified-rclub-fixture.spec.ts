@@ -219,8 +219,6 @@ test("disable-retrieval on the one document empties the production scope — no 
         document_ids: [docId],
         query: USES_SENTINEL_QUERY,
         address: "100 Robie Street",
-        use_name: "Restaurant use",
-        zone: "DH",
       },
     },
   );
@@ -228,15 +226,14 @@ test("disable-retrieval on the one document empties the production scope — no 
   const probe = (await probeRes.json()) as {
     disabled: {
       matches: { document_id: number; text: string }[];
-      permitted_use_indeterminate: boolean;
-      permitted_use_reason_code: string | null;
+      matrix_document_ids: number[];
       zone: string | null;
       overlay_count: number;
       citation_count: number;
     };
     restored: {
       matches: { document_id: number; text: string }[];
-      permitted_use_reason_code: string | null;
+      matrix_document_ids: number[];
       zone: string | null;
     };
   };
@@ -248,9 +245,11 @@ test("disable-retrieval on the one document empties the production scope — no 
     probe.disabled.matches.filter((m) => /Use Permissions HR-2/.test(m.text)),
   ).toHaveLength(0);
   expect(probe.disabled.matches.some((m) => m.document_id === docId)).toBe(false);
-  // Table scope: no enabled document carries a permission matrix any more.
-  expect(probe.disabled.permitted_use_indeterminate).toBe(true);
-  expect(probe.disabled.permitted_use_reason_code).toBe("no_permission_matrix");
+  // Table scope: the unified document's Table 1A/1B drop out of the
+  // production permission-matrix scope. (Other fixture bylaws legitimately
+  // stage their own matrices in the shared corpus, so the assertion is on
+  // THIS document's membership, not global emptiness.)
+  expect(probe.disabled.matrix_document_ids).not.toContain(docId);
   // Geo scope: zone, overlays, and citations all vanish — the six layers
   // hang off the disabled document and nothing else serves them.
   expect(probe.disabled.zone).toBeNull();
@@ -259,7 +258,7 @@ test("disable-retrieval on the one document empties the production scope — no 
 
   // Re-enabling restores every scope.
   expect(probe.restored.zone).toBe("HR-2");
-  expect(probe.restored.permitted_use_reason_code).not.toBe("no_permission_matrix");
+  expect(probe.restored.matrix_document_ids).toContain(docId);
   expect(probe.restored.matches.some((m) => m.document_id === docId)).toBe(true);
 
   // And the steady state observed over ordinary HTTP is enabled again.
