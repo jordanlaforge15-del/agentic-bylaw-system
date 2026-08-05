@@ -97,8 +97,8 @@ def main() -> int:
 
     with session_scope() as session:
         # Under READ COMMITTED each statement gets a fresh snapshot, so without
-        # this lock a concurrent seed_e2e_pocs run (another spec file's
-        # beforeAll) can commit its drop-and-reingest between the id lookup
+        # this lock a concurrent seed_e2e_rclub_unified run (another spec
+        # file's beforeAll) can commit its drop-and-reingest between the id lookup
         # below and query_features — leaving us querying features for a dataset
         # id that no longer exists (intersects=false flake in full-suite runs).
         # Sharing the corpus key with the seeds serialises the whole probe

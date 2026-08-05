@@ -237,7 +237,7 @@ class _AddressProfileBody(BaseModel):
 # ABS-163: test-only table-search endpoint. Verifies that SourceTable rows
 # with proper captions are found by the retrieval layer's
 # _structured_permission_table_candidates() path. The Playwright spec seeds
-# tables via seed_e2e_permission_tables.py, then hits this endpoint to
+# tables via seed_e2e_rclub_unified.py (ABS-433), then hits this endpoint to
 # confirm the query finds them by caption pattern.
 class _SearchTablesBody(BaseModel):
     bylaw_name: str = Field(min_length=1, max_length=256)

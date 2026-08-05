@@ -81,7 +81,7 @@ def test_normalized_real_name_variants_are_rejected(variant: str) -> None:
 def test_real_name_with_e2e_marker_is_allowed() -> None:
     assert (
         fixture_bylaw_name_violation(
-            "Regional Centre Land Use By-Law (Address Profile E2E)"
+            "Regional Centre Land Use By-Law (Unified RC-LUB E2E)"
         )
         is None
     )
