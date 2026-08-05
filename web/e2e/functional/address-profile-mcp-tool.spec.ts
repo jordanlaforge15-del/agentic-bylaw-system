@@ -13,9 +13,9 @@
 //
 // Approach
 // --------
-// 1. beforeAll — invoke scripts/seed_e2e_address_profile.py to insert a
-//    synthetic Regional Centre doc + four linked overlays + a geocode-cache
-//    row into the test Postgres.
+// 1. beforeAll — invoke scripts/seed_e2e_rclub_unified.py (ABS-433) to insert
+//    the single unified Regional Centre doc + its six linked overlays + the
+//    geocode-cache rows into the test Postgres.
 // 2. Each test posts to POST /v1/_test/address-profile (a test-only endpoint
 //    mounted in advisor.api.e2e_server) and asserts on the AddressProfile.
 
@@ -27,6 +27,7 @@ import { E2E_API_URL, expect, test } from "../fixtures/test-env";
 
 type Citation = {
   source: string;
+  backs: string[];
   citation_path: string | null;
   citation_label: string | null;
   document_id: number | null;
@@ -53,6 +54,7 @@ type AddressProfile = {
   far_precinct: string | null;
   heritage: boolean | null;
   bonus_zoning_eligible: boolean | null;
+  abuts_pedestrian_street: boolean | null;
   overlays: Overlay[];
   citations: Citation[];
   unresolvable: boolean;
@@ -61,7 +63,7 @@ type AddressProfile = {
 
 function runSeed(): void {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
-  const seed = path.join(repoRoot, "scripts", "seed_e2e_address_profile.py");
+  const seed = path.join(repoRoot, "scripts", "seed_e2e_rclub_unified.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT so this seed lands in the right Postgres when a
   // worktree overrides ports for parallel `make e2e`.
@@ -116,24 +118,35 @@ test("resolves a known address into zone + overlay precincts with citations", as
   expect(profile.height_precinct).toBe("HP-25");
   expect(profile.far_precinct).toBe("FA-3.5");
   expect(profile.heritage).toBe(true);
+  // ABS-433: the unified corpus carries all six overlay roles on ONE
+  // document — the bonus-zoning polygon covers the test point, and the
+  // Schedule 7 line layer is in scope but does not abut 100 Robie (a
+  // definitive false, not an unknown null).
+  expect(profile.bonus_zoning_eligible).toBe(true);
+  expect(profile.abuts_pedestrian_street).toBe(false);
 
   // Every contributing overlay must carry a citation — the grounding
   // contract the issue calls out ("returns ... citations in one call").
   expect(profile.citations.length).toBeGreaterThan(0);
   const sources = new Set(profile.citations.flatMap((c) => c.backs));
   expect(sources).toEqual(
-    new Set(["zone", "height_precinct", "far_precinct", "heritage"]),
+    new Set(["zone", "height_precinct", "far_precinct", "heritage", "bonus_zoning"]),
   );
   for (const citation of profile.citations) {
     expect(citation.citation_path).toBeTruthy();
     expect(citation.document_id).toBeGreaterThan(0);
-    expect(citation.bylaw_name).toBe("Regional Centre Land Use By-Law (Address Profile E2E)");
+    expect(citation.bylaw_name).toBe("Regional Centre Land Use By-Law (Unified RC-LUB E2E)");
   }
 
   const overlayKinds = new Set(profile.overlays.map((o) => o.kind));
   expect(overlayKinds).toEqual(
-    new Set(["zone", "height_precinct", "far_precinct", "heritage"]),
+    new Set(["zone", "height_precinct", "far_precinct", "heritage", "bonus_zoning"]),
   );
+
+  // Single-document invariant (ABS-433): every citation must come from THE
+  // unified document — one document id across all facets.
+  const documentIds = new Set(profile.citations.map((c) => c.document_id));
+  expect(documentIds.size).toBe(1);
 });
 
 
