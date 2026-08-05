@@ -33,7 +33,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Playwright worker, so they must serialise via advisory lock.
 SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     "seed_e2e_abs270_structured.py",
-    "seed_e2e_address_profile.py",
     "seed_e2e_amendment_relink.py",
     "seed_e2e_axis_binding.py",
     "seed_e2e_contamination_marker.py",
@@ -42,16 +41,17 @@ SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     "seed_e2e_groundtruth_bylaws.py",
     "seed_e2e_mainland_permitted_use.py",
     "seed_e2e_parcels.py",
-    "seed_e2e_permission_tables.py",
     "seed_e2e_permitted_use.py",
-    "seed_e2e_pocs.py",
+    # ABS-433: the unified RC-LUB corpus seed — replaces the retired
+    # seed_e2e_permission_tables / seed_e2e_address_profile / seed_e2e_pocs /
+    # seed_e2e_zone_profile quartet.
+    "seed_e2e_rclub_unified.py",
     "seed_e2e_submission_pdf.py",
     "seed_e2e_table_citations.py",
     "seed_e2e_tc005_permitted_use.py",
     "seed_e2e_tier_credits.py",
     "seed_e2e_user.py",
     "seed_e2e_verify_coverage.py",
-    "seed_e2e_zone_profile.py",
     "seed_e2e_zoning.py",
 )
 

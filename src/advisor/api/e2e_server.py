@@ -237,7 +237,7 @@ class _AddressProfileBody(BaseModel):
 # ABS-163: test-only table-search endpoint. Verifies that SourceTable rows
 # with proper captions are found by the retrieval layer's
 # _structured_permission_table_candidates() path. The Playwright spec seeds
-# tables via seed_e2e_permission_tables.py, then hits this endpoint to
+# tables via seed_e2e_rclub_unified.py (ABS-433), then hits this endpoint to
 # confirm the query finds them by caption pattern.
 class _SearchTablesBody(BaseModel):
     bylaw_name: str = Field(min_length=1, max_length=256)
@@ -1304,7 +1304,10 @@ class _SeedSessionBody(BaseModel):
     street: str = "Elm St"
     citation_path: str = "4.2.1"
     citation_label: str = "(1)"
-    bylaw_name: str = "Regional Centre Land Use By-Law"
+    # ABS-431 naming convention: even though this value only lands in
+    # synthetic chat tool_result JSON (never a Document row), it must not
+    # read as the real bylaw — see scripts/e2e_fixture_names.py.
+    bylaw_name: str = "Regional Centre Land Use By-Law (Session Seed E2E)"
     clause_text: str = (
         "The minimum front yard setback shall be 3.0 metres from the property line."
     )
@@ -1507,6 +1510,23 @@ class _SearchEnabledScopeBody(BaseModel):
     limit: int = Field(default=10, ge=1, le=50)
 
 
+class _DisableRetrievalProbeBody(BaseModel):
+    """Body for ``POST /v1/_test/disable-retrieval-probe`` (ABS-433).
+
+    Transactionally disables the given documents, probes the production
+    enabled scope (evidence search, permitted-use table lookup, address
+    profile), then re-enables them — all inside ONE transaction under the
+    shared Regional Centre corpus advisory lock. The atomic
+    disable→probe→restore shape exists so the probe can never race a
+    concurrent seed run (whose convergence pass force-re-enables the unified
+    document) and never leaves the shared corpus dark for parallel workers.
+    """
+
+    document_ids: list[int]
+    query: str
+    address: str
+
+
 def _mount_retrieval_flag_endpoints(app: FastAPI) -> None:
     """ABS-413: drive the real publish surface + production-scope probe.
 
@@ -1648,6 +1668,84 @@ def _mount_retrieval_flag_endpoints(app: FastAPI) -> None:
                     for m in response.matches
                 ]
             }
+
+    @app.post("/v1/_test/disable-retrieval-probe")
+    async def disable_retrieval_probe(
+        body: _DisableRetrievalProbeBody,
+    ) -> dict[str, object]:
+        """ABS-433: prove disabling the unified RC-LUB document empties scope.
+
+        Runs the real publish surface (``set_retrieval_enabled`` — the same
+        function behind the CLI's ``disable-retrieval``), then probes three
+        production-scoped surfaces under ``retrieval_enabled_resolver``:
+
+        * the evidence search (fragment scope),
+        * the permission-matrix TABLE scope (which enabled documents own a
+          matrix — the shared e2e corpus legitimately stages matrices on
+          other bylaws, so membership is reported per document id rather
+          than as a global emptiness claim),
+        * ``get_address_profile`` (linked geo-dataset scope),
+
+        and finally re-enables the documents. Everything happens in one
+        transaction while holding the shared Regional Centre corpus advisory
+        lock (key mirrors ``scripts/seed_e2e_rclub_unified.py``), so the
+        probe can neither race a concurrent seed's convergence re-enable nor
+        leave the shared corpus dark for parallel Playwright workers.
+        """
+        from sqlalchemy import text as sa_text  # noqa: PLC0415
+
+        with session_scope() as session:
+            if session.bind.dialect.name == "postgresql":
+                # Same key as seed_e2e_rclub_unified.CORPUS_ADVISORY_LOCK_KEY.
+                session.execute(
+                    sa_text("SELECT pg_advisory_xact_lock(:k)").bindparams(
+                        k=2604601273
+                    )
+                )
+            docs = [session.get(Document, doc_id) for doc_id in body.document_ids]
+            if any(doc is None for doc in docs):
+                raise HTTPException(status_code=400, detail="unknown document id")
+            if not all(doc.retrieval_enabled for doc in docs):
+                raise HTTPException(
+                    status_code=409,
+                    detail="probe expects the documents to start enabled",
+                )
+
+            def _probe() -> dict[str, object]:
+                service = RetrievalService(
+                    session, default_document_id_resolver=retrieval_enabled_resolver
+                )
+                search = service.search(
+                    RetrievalRequest(query=body.query, top_k=20)
+                )
+                # The exact scope lookup_permitted_use resolves against:
+                # every permission-matrix table visible under the enabled
+                # resolver, reported by owning document id.
+                matrix_document_ids = sorted(
+                    {
+                        table.document_id
+                        for table in service._permission_matrix_tables(
+                            document_id=None
+                        )
+                    }
+                )
+                profile = service.get_address_profile(body.address)
+                return {
+                    "matches": [
+                        {"document_id": m.document_id, "text": m.text}
+                        for m in search.matches
+                    ],
+                    "matrix_document_ids": matrix_document_ids,
+                    "zone": profile.zone,
+                    "overlay_count": len(profile.overlays),
+                    "citation_count": len(profile.citations),
+                }
+
+            set_retrieval_enabled(session, body.document_ids, False)
+            disabled = _probe()
+            set_retrieval_enabled(session, body.document_ids, True)
+            restored = _probe()
+            return {"disabled": disabled, "restored": restored}
 
 
 def _mount_zone_profile_endpoint(app: FastAPI) -> None:
