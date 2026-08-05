@@ -34,7 +34,7 @@ from sqlalchemy import select, text
 
 from layer1.db.base import ExternalDataset
 from layer1.db.session import session_scope
-from seed_e2e_address_profile import CORPUS_ADVISORY_LOCK_KEY
+from seed_e2e_rclub_unified import CORPUS_ADVISORY_LOCK_KEY
 from layer2.retrieval.geocode import resolve_location
 from layer2.retrieval.location import extract_location_references
 from layer2.retrieval.spatial import ResolvedLocation, query_features
