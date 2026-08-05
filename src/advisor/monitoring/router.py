@@ -91,10 +91,23 @@ async def monitoring_status() -> JSONResponse:
     return JSONResponse(content=body, status_code=status_code)
 
 
+def _e2e_markers_expected() -> bool:
+    """True when this deployment legitimately hosts e2e fixture rows.
+
+    Set (as ``ADVISOR_E2E_MARKERS_EXPECTED=1``) only by the e2e entrypoint
+    (``advisor.api.e2e_server``), whose database IS the e2e suite's own
+    instance — its seeded ``e2e-seed`` documents are fixtures, not
+    contamination. Production and dev never set it, so any marker row there
+    turns this endpoint red (ABS-432).
+    """
+    return os.environ.get("ADVISOR_E2E_MARKERS_EXPECTED", "") == "1"
+
+
 def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
     """Blocking body of the corpus-coherence check, run off the event loop."""
     from bylaw_retrieval.retrieval import (  # noqa: PLC0415
         audit_corpus_coherence,
+        audit_e2e_contamination,
         retrieval_enabled_resolver,
     )
     from layer1.db.session import session_scope  # noqa: PLC0415
@@ -104,6 +117,7 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
             report = audit_corpus_coherence(
                 session, default_document_id_resolver=retrieval_enabled_resolver
             )
+            contamination = audit_e2e_contamination(session)
     except Exception:
         logger.exception("corpus-coherence audit (ABS-356) failed to run")
         return {"status": "error"}, 503
@@ -115,13 +129,41 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
             [(m.role, m.bylaw_name, m.reason) for m in report.missing],
         )
 
+    # ABS-432: e2e-contamination tripwire. Green only when zero marker rows —
+    # except in the e2e stack itself, where the suite's fixtures legitimately
+    # carry the markers and are reported informationally instead.
+    markers_expected = _e2e_markers_expected()
+    contamination_red = contamination.contaminated and not markers_expected
+    if contamination_red:
+        logger.warning(
+            "e2e-contamination sweep (ABS-432) found %d marker row(s) in a "
+            "non-test database: %s",
+            len(contamination.markers),
+            [m.detail for m in contamination.markers],
+        )
+    if contamination.contaminated:
+        contamination_status = "expected_test_fixtures" if markers_expected else "contaminated"
+    else:
+        contamination_status = "ok"
+
+    if not report.coherent:
+        status = "incoherent"
+    elif contamination_red:
+        status = "contaminated"
+    else:
+        status = "ok"
+
     body = {
-        "status": "ok" if report.coherent else "incoherent",
+        "status": status,
         "checked_roles": report.checked_roles,
         "bylaws_checked": report.bylaws_checked,
         "missing": [m.model_dump() for m in report.missing],
+        "e2e_contamination": {
+            "status": contamination_status,
+            **contamination.model_dump(mode="json"),
+        },
     }
-    return body, (200 if report.coherent else 503)
+    return body, (200 if status == "ok" else 503)
 
 
 @router.get("/v1/monitoring/corpus-coherence", include_in_schema=True)
@@ -136,6 +178,14 @@ async def corpus_coherence_status() -> JSONResponse:
     with the specific missing role(s) and reason instead, and logs a warning
     on every incoherent result so it lands in ops logs even for a poller that
     only alerts on repeated failures.
+
+    Also carries the ABS-432 ``e2e_contamination`` tripwire: the body's
+    ``e2e_contamination`` object reports every row bearing an e2e fixture
+    marker (``parser_version='e2e-seed'``, ``file_hash 'e2e-%'``,
+    ``external_dataset.name 'e2e_%'``). Green only when zero — in a non-test
+    deployment any marker row flips the endpoint to 503/``contaminated``.
+    The e2e stack itself (``advisor.api.e2e_server``) declares its markers
+    expected and reports them informationally.
     """
     global _cached_coherence_body, _cached_coherence_status, _cached_coherence_at  # noqa: PLW0603
 

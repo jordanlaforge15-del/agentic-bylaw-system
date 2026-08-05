@@ -17,7 +17,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from advisor.monitoring import router as router_module
-from bylaw_retrieval.retrieval import CorpusCoherenceReport, MissingOverlayRole
+from bylaw_retrieval.retrieval import (
+    CorpusCoherenceReport,
+    E2eContaminationMarker,
+    E2eContaminationReport,
+    MissingOverlayRole,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -29,6 +34,49 @@ def _reset_cache():
     router_module._cached_coherence_body = None
     router_module._cached_coherence_status = 200
     router_module._cached_coherence_at = 0.0
+
+
+@pytest.fixture(autouse=True)
+def _clean_contamination_by_default(monkeypatch: pytest.MonkeyPatch):
+    """ABS-432: the endpoint now also runs the e2e-contamination sweep via
+    the same lazy import pattern. Default every test to a clean sweep in a
+    non-test deployment; contamination-specific tests override."""
+    monkeypatch.delenv("ADVISOR_E2E_MARKERS_EXPECTED", raising=False)
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_e2e_contamination",
+        lambda *a, **k: _clean_contamination(),
+    )
+
+
+def _clean_contamination() -> E2eContaminationReport:
+    return E2eContaminationReport(
+        contaminated=False,
+        marker_counts={
+            "document_parser_version": 0,
+            "document_file_hash": 0,
+            "external_dataset_name": 0,
+        },
+        markers=[],
+    )
+
+
+def _dirty_contamination() -> E2eContaminationReport:
+    return E2eContaminationReport(
+        contaminated=True,
+        marker_counts={
+            "document_parser_version": 1,
+            "document_file_hash": 1,
+            "external_dataset_name": 0,
+        },
+        markers=[
+            E2eContaminationMarker(
+                table="document",
+                row_id=99,
+                marker_kinds=["document_parser_version", "document_file_hash"],
+                detail="document 99: 'Corpus Coherence Test Bylaw', file_hash='e2e-doc-1'",
+            )
+        ],
+    )
 
 
 @pytest.fixture()
@@ -73,6 +121,8 @@ def test_returns_200_when_coherent(client: TestClient, monkeypatch: pytest.Monke
     assert body["status"] == "ok"
     assert body["missing"] == []
     assert body["checked_roles"] == 7
+    assert body["e2e_contamination"]["status"] == "ok"
+    assert body["e2e_contamination"]["contaminated"] is False
 
 
 def test_returns_503_with_missing_role_when_incoherent(
@@ -104,6 +154,76 @@ def test_returns_503_when_the_audit_raises(
 
     assert response.status_code == 503
     assert response.json()["status"] == "error"
+
+
+def test_returns_503_contaminated_when_e2e_markers_found(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ABS-432: a marker row in a non-test deployment turns the endpoint red,
+    naming the offending row — green only when zero."""
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_corpus_coherence", lambda *a, **k: _coherent_report()
+    )
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_e2e_contamination",
+        lambda *a, **k: _dirty_contamination(),
+    )
+
+    response = client.get("/v1/monitoring/corpus-coherence")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "contaminated"
+    contamination = body["e2e_contamination"]
+    assert contamination["status"] == "contaminated"
+    assert contamination["contaminated"] is True
+    assert contamination["marker_counts"]["document_parser_version"] == 1
+    assert contamination["markers"][0]["row_id"] == 99
+    assert "e2e-doc-1" in contamination["markers"][0]["detail"]
+
+
+def test_markers_expected_deployment_reports_fixtures_without_going_red(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ABS-432: the e2e stack itself (ADVISOR_E2E_MARKERS_EXPECTED=1, set by
+    advisor.api.e2e_server) legitimately hosts seeded marker rows — they are
+    reported informationally and the endpoint stays green."""
+    monkeypatch.setenv("ADVISOR_E2E_MARKERS_EXPECTED", "1")
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_corpus_coherence", lambda *a, **k: _coherent_report()
+    )
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_e2e_contamination",
+        lambda *a, **k: _dirty_contamination(),
+    )
+
+    response = client.get("/v1/monitoring/corpus-coherence")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    contamination = body["e2e_contamination"]
+    assert contamination["status"] == "expected_test_fixtures"
+    assert contamination["contaminated"] is True
+
+
+def test_incoherent_takes_priority_over_contaminated_in_top_level_status(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_corpus_coherence", lambda *a, **k: _incoherent_report()
+    )
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_e2e_contamination",
+        lambda *a, **k: _dirty_contamination(),
+    )
+
+    response = client.get("/v1/monitoring/corpus-coherence")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "incoherent"
+    assert body["e2e_contamination"]["status"] == "contaminated"
 
 
 def test_caches_the_result_within_the_ttl(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
