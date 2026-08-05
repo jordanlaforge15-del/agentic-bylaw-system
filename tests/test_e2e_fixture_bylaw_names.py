@@ -13,6 +13,16 @@ predicate. This test AST-scans every ``scripts/seed_e2e_*.py`` for declared
 ``bylaw_name=...`` keyword arguments, and ``"bylaw_name": ...`` dict keys —
 and asserts each one passes ``fixture_bylaw_name_violation``.
 
+ABS-433 extends coverage beyond seed scripts to the two other surfaces that
+can put a bylaw name in front of the e2e stack:
+
+* ``src/advisor/api/e2e_server.py`` — its ``/v1/_test/...`` request bodies
+  declare ``bylaw_name`` defaults and keyword constants that become (or look
+  like) Document identities in spec-driven ingestion paths.
+* ``web/e2e/**/*.spec.ts`` — Playwright specs pass ``bylaw_name`` string
+  literals to those endpoints (manifest ingest, prune, retrieval-flag,
+  delete-documents, ...).
+
 AST scanning (rather than importing the seed modules) keeps the test free of
 the seeds' import side effects (``e2e_db_default`` mutates ``DATABASE_URL``)
 and their layer1/advisor dependency graph.
@@ -25,8 +35,12 @@ from pathlib import Path
 
 import pytest
 
+import re
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
+E2E_SERVER = REPO_ROOT / "src" / "advisor" / "api" / "e2e_server.py"
+E2E_SPEC_DIR = REPO_ROOT / "web" / "e2e"
 
 _spec = importlib.util.spec_from_file_location(
     "e2e_fixture_names", SCRIPTS / "e2e_fixture_names.py"
@@ -185,4 +199,95 @@ def test_no_seed_declares_a_real_bylaw_name(path: Path) -> None:
         "e2e seed fixtures must never use a real bylaw name (ABS-431 — the "
         "(municipality, bylaw_name) backfill/relink match would bind them to "
         "the real document):\n" + "\n".join(problems)
+    )
+
+
+# ---------------------------------------------------------------------------
+# e2e_server scan (ABS-433 — ABS-431 review follow-up)
+# ---------------------------------------------------------------------------
+#
+# The e2e FastAPI server's request-body models declare bylaw_name string
+# defaults (e.g. _SeedSessionBody, _RetrievalFlagBody) and its handlers pass
+# bylaw_name= keyword constants. Those names reach the same spec-driven
+# ingestion / lookup paths the seeds feed, so they obey the same convention.
+
+
+def test_e2e_server_declares_no_real_bylaw_name() -> None:
+    assert E2E_SERVER.exists(), f"missing {E2E_SERVER}"
+    declarations = _declared_bylaw_names(E2E_SERVER)
+    # Guard the guard: the server currently declares at least the
+    # _SeedSessionBody and _RetrievalFlagBody defaults.
+    assert len(declarations) >= 2, (
+        f"only {len(declarations)} bylaw_name declarations found in "
+        f"e2e_server.py — the AST scan no longer matches how the server "
+        f"declares names; update the scanner"
+    )
+    problems = []
+    for lineno, name in declarations:
+        violation = fixture_bylaw_name_violation(name)
+        if violation is not None:
+            problems.append(f"{E2E_SERVER.name}:{lineno}: {violation}")
+    assert not problems, (
+        "e2e_server bylaw_name defaults/constants must follow the ABS-431 "
+        "fixture naming convention:\n" + "\n".join(problems)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Playwright spec scan (ABS-433 — ABS-431 review follow-up)
+# ---------------------------------------------------------------------------
+#
+# Specs drive the spec-driven ingestion paths (manifest-ingest, prune,
+# retrieval-flag seed, delete-documents, ...) with bylaw_name string
+# literals. A real-named literal there mints a real-named Document row in the
+# shared e2e DB just as surely as a seed script would. The regex covers the
+# two declaration shapes the specs use:
+#
+# * ``bylaw_name: "..."`` object keys in request payloads
+# * ``const <X>BYLAW_NAME = "..."`` constants
+_TS_BYLAW_NAME_PATTERNS = (
+    re.compile(r'bylaw_name:\s*"([^"]+)"'),
+    re.compile(r'const\s+\w*BYLAW_NAME\w*\s*=\s*"([^"]+)"'),
+)
+
+
+def _spec_files() -> list[Path]:
+    return sorted(E2E_SPEC_DIR.rglob("*.ts"))
+
+
+def _declared_ts_bylaw_names(path: Path) -> list[tuple[int, str]]:
+    found: list[tuple[int, str]] = []
+    for lineno, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        for pattern in _TS_BYLAW_NAME_PATTERNS:
+            for match in pattern.finditer(line):
+                found.append((lineno, match.group(1)))
+    return found
+
+
+def test_spec_files_exist() -> None:
+    assert len(_spec_files()) >= 20, "web/e2e spec glob unexpectedly empty/small"
+
+
+def test_spec_scan_actually_finds_declarations() -> None:
+    total = sum(len(_declared_ts_bylaw_names(p)) for p in _spec_files())
+    assert total >= 10, (
+        f"only {total} bylaw_name literals found across Playwright specs — "
+        f"the regex scan in _declared_ts_bylaw_names no longer matches how "
+        f"specs declare names; update the scanner"
+    )
+
+
+@pytest.mark.parametrize("path", _spec_files(), ids=lambda p: p.name)
+def test_no_spec_declares_a_real_bylaw_name(path: Path) -> None:
+    problems = []
+    for lineno, name in _declared_ts_bylaw_names(path):
+        violation = fixture_bylaw_name_violation(name)
+        if violation is not None:
+            problems.append(f"{path.name}:{lineno}: {violation}")
+    assert not problems, (
+        "Playwright specs must never pass a real bylaw name to the e2e "
+        "ingestion/lookup endpoints (ABS-431/ABS-433 naming convention):\n"
+        + "\n".join(problems)
     )
