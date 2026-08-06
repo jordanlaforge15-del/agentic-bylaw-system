@@ -32,13 +32,14 @@ this project, `target_repo = agentic-bylaw-system`. Practically that means:
 
 ## What stayed behind, and why
 
-Two pieces removed from the NM package are this repo's own infrastructure and
-still live here:
+Two scripts the NM leaned on are this repo's own infrastructure rather than NM
+code, so they stayed:
 
-| Path | What it is |
-|---|---|
-| `scripts/linear_client.py` | Generic Linear GraphQL client. Used by `scripts/investigate_coverage.py --promote-to-linear`. |
-| `scripts/rechain_migration.py` | Alembic dual-head guard. See [E2E_TESTING.md — troubleshooting](E2E_TESTING.md#troubleshooting); also invoked by the NM's merge step from its own repo. |
+| Path | What it is | Covered by |
+|---|---|---|
+| `scripts/linear_client.py` | Generic Linear GraphQL client — no NM concepts in it. Lifted out of the deleted package; used by `scripts/investigate_coverage.py --promote-to-linear`. | `tests/test_investigate_coverage.py` |
+| `scripts/rechain_migration.py` | Alembic dual-head guard. Always lived at this path; run it by hand per [E2E_TESTING.md — troubleshooting](E2E_TESTING.md#troubleshooting), and the NM also calls it before merging. | `tests/test_migration_rechain.py` |
 
-Their coverage is `tests/test_investigate_coverage.py`,
-`tests/test_migration_rechain.py`, and `tests/test_e2e_port_recreate.py`.
+`tests/test_e2e_port_recreate.py` moved out of the NM test directory for the
+same reason: it exercises this repo's own `scripts/e2e-up.sh` and
+`scripts/e2e-down.sh`, not anything the NM owns.
