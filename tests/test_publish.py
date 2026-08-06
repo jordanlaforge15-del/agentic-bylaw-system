@@ -128,6 +128,99 @@ def test_replace_disables_sibling_in_same_transaction(db_url: str):
         assert not any("other enabled version" in w for w in result.warnings)
 
 
+# ---------------------------------------------------------------------------
+# ABS-434 — normalized-name sibling warning
+# ---------------------------------------------------------------------------
+#
+# The doc-15/38 double-enable: an enabled sibling whose (municipality,
+# bylaw_name) matches only after case/hyphen/whitespace normalization is
+# invisible to the exact-match sibling detection above. ``enable-retrieval``
+# must WARN about it — and --replace must keep exact matching (never
+# auto-disable a drifted sibling).
+
+
+def test_enabling_warns_on_normalized_name_sibling_exact_match_misses(db_url: str):
+    with session_scope(db_url) as session:
+        drifted_id, _ = _add_version(
+            session, bylaw_name="Regional Centre Land Use By-Law", enabled=True, hash_char="a"
+        )
+        v2_id, _ = _add_version(session, hash_char="b")  # "...By-law"
+        result = set_retrieval_enabled(session, [v2_id], True)
+
+        # The exact-match warning must NOT fire — the names differ literally.
+        assert not any("other enabled version" in w for w in result.warnings)
+        drift_warnings = [w for w in result.warnings if "normalized-name sibling" in w]
+        assert len(drift_warnings) == 1
+        assert str(drifted_id) in drift_warnings[0]
+        assert "Regional Centre Land Use By-Law" in drift_warnings[0]
+        # Warn only: both stay enabled.
+        assert session.get(Document, drifted_id).retrieval_enabled is True
+        assert session.get(Document, v2_id).retrieval_enabled is True
+
+
+def test_replace_still_warns_but_never_disables_a_drifted_sibling(db_url: str):
+    """--replace keeps exact matching: the case-variant sibling survives the
+    replace and is called out in a warning instead."""
+    with session_scope(db_url) as session:
+        exact_id, _ = _add_version(session, enabled=True, hash_char="a")
+        drifted_id, _ = _add_version(
+            session, bylaw_name="Regional Centre Land Use By-Law", enabled=True, hash_char="c"
+        )
+        v2_id, _ = _add_version(session, hash_char="b")
+
+        result = set_retrieval_enabled(session, [v2_id], True, replace=True)
+
+        # Exact sibling replaced; drifted sibling untouched but warned about.
+        assert session.get(Document, exact_id).retrieval_enabled is False
+        assert session.get(Document, drifted_id).retrieval_enabled is True
+        assert session.get(Document, v2_id).retrieval_enabled is True
+        reasons = {c.document_id: c.reason for c in result.changes}
+        assert reasons == {exact_id: "replaced-sibling", v2_id: "requested"}
+        drift_warnings = [w for w in result.warnings if "normalized-name sibling" in w]
+        assert len(drift_warnings) == 1
+        assert str(drifted_id) in drift_warnings[0]
+
+
+def test_no_drift_warning_for_genuinely_different_bylaws(db_url: str):
+    with session_scope(db_url) as session:
+        _add_version(session, bylaw_name="Mainland Land Use By-law", enabled=True, hash_char="c")
+        v2_id, _ = _add_version(session, hash_char="b")
+        result = set_retrieval_enabled(session, [v2_id], True)
+        assert not any("normalized-name sibling" in w for w in result.warnings)
+
+
+def test_drift_warning_covers_municipality_casing_too(db_url: str):
+    with session_scope(db_url) as session:
+        doc = Document(
+            municipality="hrm",  # _add_version uses "HRM"
+            bylaw_name=BYLAW,
+            source_path="/m.pdf",
+            file_hash="m" * 64,
+            mime_type="application/pdf",
+            ingestion_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            retrieval_enabled=True,
+        )
+        session.add(doc)
+        session.flush()
+        v2_id, _ = _add_version(session, hash_char="b")
+        result = set_retrieval_enabled(session, [v2_id], True)
+        # Literal (municipality, bylaw_name) differ, normalized identity equal.
+        assert not any("other enabled version" in w for w in result.warnings)
+        assert any("normalized-name sibling" in w for w in result.warnings)
+
+
+def test_dry_run_predicts_the_drift_warning_without_mutating(db_url: str):
+    with session_scope(db_url) as session:
+        drifted_id, _ = _add_version(
+            session, bylaw_name="Regional Centre Land Use By-Law", enabled=True, hash_char="a"
+        )
+        v2_id, _ = _add_version(session, hash_char="b")
+        result = set_retrieval_enabled(session, [v2_id], True, dry_run=True)
+        assert any("normalized-name sibling" in w for w in result.warnings)
+        assert session.get(Document, v2_id).retrieval_enabled is False
+        assert session.get(Document, drifted_id).retrieval_enabled is True
+
+
 def test_replace_ignores_other_bylaws(db_url: str):
     with session_scope(db_url) as session:
         other_id, _ = _add_version(
