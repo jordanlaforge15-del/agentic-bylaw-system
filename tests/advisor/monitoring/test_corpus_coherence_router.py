@@ -21,6 +21,9 @@ from bylaw_retrieval.retrieval import (
     CorpusCoherenceReport,
     E2eContaminationMarker,
     E2eContaminationReport,
+    EnabledDocumentRef,
+    EnabledNameCollision,
+    EnabledNameCollisionReport,
     MissingOverlayRole,
 )
 
@@ -38,13 +41,18 @@ def _reset_cache():
 
 @pytest.fixture(autouse=True)
 def _clean_contamination_by_default(monkeypatch: pytest.MonkeyPatch):
-    """ABS-432: the endpoint now also runs the e2e-contamination sweep via
-    the same lazy import pattern. Default every test to a clean sweep in a
-    non-test deployment; contamination-specific tests override."""
+    """ABS-432/ABS-434: the endpoint now also runs the e2e-contamination
+    sweep and the enabled-name-collision audit via the same lazy import
+    pattern. Default every test to clean results in a non-test deployment;
+    check-specific tests override."""
     monkeypatch.delenv("ADVISOR_E2E_MARKERS_EXPECTED", raising=False)
     monkeypatch.setattr(
         "bylaw_retrieval.retrieval.audit_e2e_contamination",
         lambda *a, **k: _clean_contamination(),
+    )
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_enabled_name_collisions",
+        lambda *a, **k: _collision_free_report(),
     )
 
 
@@ -74,6 +82,39 @@ def _dirty_contamination() -> E2eContaminationReport:
                 row_id=99,
                 marker_kinds=["document_parser_version", "document_file_hash"],
                 detail="document 99: 'Corpus Coherence Test Bylaw', file_hash='e2e-doc-1'",
+            )
+        ],
+    )
+
+
+def _collision_free_report() -> EnabledNameCollisionReport:
+    return EnabledNameCollisionReport(
+        collision_free=True, enabled_documents=3, identities_checked=3, collisions=[]
+    )
+
+
+def _colliding_report() -> EnabledNameCollisionReport:
+    return EnabledNameCollisionReport(
+        collision_free=False,
+        enabled_documents=4,
+        identities_checked=3,
+        collisions=[
+            EnabledNameCollision(
+                normalized_municipality="hrm",
+                normalized_bylaw_name="regionalcentrelandusebylaw",
+                document_ids=[15, 38],
+                documents=[
+                    EnabledDocumentRef(
+                        id=15, municipality="HRM", bylaw_name="Regional Centre Land Use By-law"
+                    ),
+                    EnabledDocumentRef(
+                        id=38, municipality="HRM", bylaw_name="Regional Centre Land Use By-Law"
+                    ),
+                ],
+                detail=(
+                    "2 enabled documents share the normalized bylaw identity "
+                    "('hrm', 'regionalcentrelandusebylaw'): 15, 38"
+                ),
             )
         ],
     )
@@ -224,6 +265,96 @@ def test_incoherent_takes_priority_over_contaminated_in_top_level_status(
     body = response.json()
     assert body["status"] == "incoherent"
     assert body["e2e_contamination"]["status"] == "contaminated"
+
+
+def test_returns_503_name_collision_when_two_enabled_docs_share_a_normalized_name(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ABS-434: the doc-15/38 double-enable turns the endpoint red, naming
+    both ids — no expected-fixtures exemption exists for this check."""
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_corpus_coherence", lambda *a, **k: _coherent_report()
+    )
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_enabled_name_collisions",
+        lambda *a, **k: _colliding_report(),
+    )
+
+    response = client.get("/v1/monitoring/corpus-coherence")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "name_collision"
+    collisions = body["enabled_name_collisions"]
+    assert collisions["status"] == "collision"
+    assert collisions["collision_free"] is False
+    assert collisions["collisions"][0]["document_ids"] == [15, 38]
+    assert {d["bylaw_name"] for d in collisions["collisions"][0]["documents"]} == {
+        "Regional Centre Land Use By-law",
+        "Regional Centre Land Use By-Law",
+    }
+
+
+def test_name_collision_reported_in_body_when_collision_free(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_corpus_coherence", lambda *a, **k: _coherent_report()
+    )
+
+    response = client.get("/v1/monitoring/corpus-coherence")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["enabled_name_collisions"]["status"] == "ok"
+    assert body["enabled_name_collisions"]["collision_free"] is True
+    assert body["enabled_name_collisions"]["collisions"] == []
+
+
+def test_name_collision_goes_red_even_where_e2e_markers_are_expected(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ABS-434: unlike the contamination sweep, the e2e stack gets no pass —
+    a fragmented enabled corpus is never legitimate, even among fixtures."""
+    monkeypatch.setenv("ADVISOR_E2E_MARKERS_EXPECTED", "1")
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_corpus_coherence", lambda *a, **k: _coherent_report()
+    )
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_enabled_name_collisions",
+        lambda *a, **k: _colliding_report(),
+    )
+
+    response = client.get("/v1/monitoring/corpus-coherence")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "name_collision"
+
+
+def test_incoherent_and_contaminated_outrank_name_collision_in_top_level_status(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_enabled_name_collisions",
+        lambda *a, **k: _colliding_report(),
+    )
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_e2e_contamination",
+        lambda *a, **k: _dirty_contamination(),
+    )
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_corpus_coherence", lambda *a, **k: _incoherent_report()
+    )
+
+    response = client.get("/v1/monitoring/corpus-coherence")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "incoherent"
+    # The per-check statuses still tell the whole story.
+    assert body["e2e_contamination"]["status"] == "contaminated"
+    assert body["enabled_name_collisions"]["status"] == "collision"
 
 
 def test_caches_the_result_within_the_ttl(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -22,11 +22,14 @@ Enforced by ``tests/test_e2e_fixture_bylaw_names.py``, which AST-scans every
 ABS-433 (unified RC-LUB fixture) must name its document through this
 convention — import this module rather than restating the list.
 
-This module is import-side-effect free (safe from unit tests).
+This module is import-side-effect free (safe from unit tests). The
+normalizer itself lives in ``layer1.naming`` (ABS-434) so this guard, the
+``layer1 enable-retrieval`` sibling warning, and the enabled-name-collision
+audit all agree on one definition of a colliding name.
 """
 from __future__ import annotations
 
-import re
+from layer1.naming import normalize_bylaw_name
 
 # The real bylaws present in the production corpus. Comparison is
 # normalized (casefold; "By-Law"/"By-law"/"Bylaw"/"by law" all collide), so
@@ -40,17 +43,9 @@ REAL_BYLAW_NAMES: tuple[str, ...] = (
 E2E_MARKER = "E2E"
 
 
-def _normalize(name: str) -> str:
-    """Collapse the spellings under which two bylaw names collide.
-
-    Casefold, then drop hyphens and whitespace outright so ``By-Law``,
-    ``Bylaw`` and ``By law`` all collide. The (municipality, bylaw_name)
-    match in migration-0024 and the relink pass is literal equality, but the
-    guard is deliberately stricter: a fixture named ``"regional centre land
-    use bylaw"`` is a collision waiting for a data-entry variation, not a
-    distinct name.
-    """
-    return re.sub(r"[\s\-]+", "", name.casefold())
+# Moved to ``layer1.naming`` (ABS-434); re-exported under the private alias
+# existing callers and tests already use.
+_normalize = normalize_bylaw_name
 
 
 def has_e2e_marker(name: str) -> bool:

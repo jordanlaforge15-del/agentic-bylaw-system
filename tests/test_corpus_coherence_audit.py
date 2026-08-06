@@ -29,6 +29,7 @@ from bylaw_retrieval.retrieval import (
     OverlayDeclaration,
     audit_corpus_coherence,
     audit_e2e_contamination,
+    audit_enabled_name_collisions,
     retrieval_enabled_resolver,
 )
 from bylaw_retrieval.retrieval.coherence_audit import (
@@ -428,3 +429,150 @@ def test_e2e_contamination_goes_green_again_after_cleanup(seeded_db: str) -> Non
         report = audit_e2e_contamination(session)
     assert report.contaminated is False
     assert report.markers == []
+
+
+# ---------------------------------------------------------------------------
+# ABS-434 — audit_enabled_name_collisions
+# ---------------------------------------------------------------------------
+#
+# The doc-15/38 double-enable tripwire: at most one retrieval-ENABLED
+# document per case/hyphen/whitespace-normalized (municipality, bylaw_name).
+# ``seeded_db`` already holds two same-name documents of which only one is
+# enabled — the audit must treat that (the normal amendment shape) as green.
+
+
+def _add_enabled_document(
+    db_url: str, *, municipality: str, bylaw_name: str, hash_seed: str, enabled: bool = True
+) -> int:
+    with session_scope(db_url) as session:
+        document = Document(
+            municipality=municipality,
+            bylaw_name=bylaw_name,
+            source_path=f"/{hash_seed}.pdf",
+            file_hash=(hash_seed * 64)[:64],
+            mime_type="application/pdf",
+            ingestion_timestamp=datetime.now(timezone.utc),
+            retrieval_enabled=enabled,
+        )
+        session.add(document)
+        session.flush()
+        return document.id
+
+
+def test_name_collisions_green_on_disabled_sibling_pair(seeded_db: str) -> None:
+    """The seeded corpus has two same-name documents, one enabled — the
+    normal amendment shape, not a collision."""
+    with session_scope(seeded_db) as session:
+        report = audit_enabled_name_collisions(session)
+    assert report.collision_free is True
+    assert report.collisions == []
+    assert report.enabled_documents == 1
+    assert report.identities_checked == 1
+
+
+def test_name_collisions_flags_casing_drift_naming_both_ids(seeded_db: str) -> None:
+    """The exact ABS-434 stop-signal shape: 'Test By-law' vs 'Test By-Law',
+    same municipality, both enabled — one violation naming both ids."""
+    id_a = _add_enabled_document(
+        seeded_db, municipality="Testville", bylaw_name="Test By-law", hash_seed="p"
+    )
+    id_b = _add_enabled_document(
+        seeded_db, municipality="Testville", bylaw_name="Test By-Law", hash_seed="q"
+    )
+
+    with session_scope(seeded_db) as session:
+        report = audit_enabled_name_collisions(session)
+
+    assert report.collision_free is False
+    assert len(report.collisions) == 1
+    collision = report.collisions[0]
+    assert collision.document_ids == sorted([id_a, id_b])
+    assert collision.normalized_bylaw_name == "testbylaw"
+    assert collision.normalized_municipality == "testville"
+    stored_names = {d.bylaw_name for d in collision.documents}
+    assert stored_names == {"Test By-law", "Test By-Law"}
+    assert str(id_a) in collision.detail and str(id_b) in collision.detail
+
+
+def test_name_collisions_green_after_disabling_one(seeded_db: str) -> None:
+    """Red on the pair, green once one side is disabled — the heal path."""
+    _add_enabled_document(
+        seeded_db, municipality="Testville", bylaw_name="Test By-law", hash_seed="p"
+    )
+    id_b = _add_enabled_document(
+        seeded_db, municipality="Testville", bylaw_name="Test By-Law", hash_seed="q"
+    )
+    with session_scope(seeded_db) as session:
+        assert audit_enabled_name_collisions(session).collision_free is False
+
+    with session_scope(seeded_db) as session:
+        session.get(Document, id_b).retrieval_enabled = False
+
+    with session_scope(seeded_db) as session:
+        report = audit_enabled_name_collisions(session)
+    assert report.collision_free is True
+    assert report.collisions == []
+
+
+def test_name_collisions_ignore_same_name_across_municipalities(seeded_db: str) -> None:
+    """The identity is the (municipality, bylaw_name) PAIR — the same bylaw
+    name in two different municipalities is legitimate."""
+    _add_enabled_document(
+        seeded_db, municipality="Halifax", bylaw_name="Land Use By-law", hash_seed="p"
+    )
+    _add_enabled_document(
+        seeded_db, municipality="Dartmouth", bylaw_name="Land Use By-law", hash_seed="q"
+    )
+    with session_scope(seeded_db) as session:
+        report = audit_enabled_name_collisions(session)
+    assert report.collision_free is True
+
+
+def test_name_collisions_flag_municipality_drift_too(seeded_db: str) -> None:
+    """Casing drift in the municipality half fragments the identity the
+    same way — 'HRM' vs 'hrm' with one bylaw name is one collision."""
+    _add_enabled_document(
+        seeded_db, municipality="HRM", bylaw_name="Drift Test Bylaw", hash_seed="p"
+    )
+    _add_enabled_document(
+        seeded_db, municipality="hrm", bylaw_name="Drift Test Bylaw", hash_seed="q"
+    )
+    with session_scope(seeded_db) as session:
+        report = audit_enabled_name_collisions(session)
+    assert report.collision_free is False
+    assert len(report.collisions) == 1
+
+
+def test_name_collisions_flag_exact_duplicates_as_well(seeded_db: str) -> None:
+    """Two enabled documents under the SAME literal identity (the pre-434
+    'operator skipped --replace' shape) are >1 per group too."""
+    _add_enabled_document(
+        seeded_db, municipality="Testville", bylaw_name="Exact Twin Bylaw", hash_seed="p"
+    )
+    _add_enabled_document(
+        seeded_db, municipality="Testville", bylaw_name="Exact Twin Bylaw", hash_seed="q"
+    )
+    with session_scope(seeded_db) as session:
+        report = audit_enabled_name_collisions(session)
+    assert report.collision_free is False
+    assert len(report.collisions) == 1
+    assert len(report.collisions[0].document_ids) == 2
+
+
+def test_name_collisions_report_multiple_groups_independently(seeded_db: str) -> None:
+    _add_enabled_document(seeded_db, municipality="A-Town", bylaw_name="First By-law", hash_seed="p")
+    _add_enabled_document(seeded_db, municipality="A-Town", bylaw_name="First By-Law", hash_seed="q")
+    _add_enabled_document(seeded_db, municipality="B-Town", bylaw_name="Second Bylaw", hash_seed="r")
+    _add_enabled_document(seeded_db, municipality="B-Town", bylaw_name="Second By law", hash_seed="s")
+    _add_enabled_document(seeded_db, municipality="C-Town", bylaw_name="Lonely Bylaw", hash_seed="t")
+
+    with session_scope(seeded_db) as session:
+        report = audit_enabled_name_collisions(session)
+
+    assert report.collision_free is False
+    assert len(report.collisions) == 2
+    keys = {(c.normalized_municipality, c.normalized_bylaw_name) for c in report.collisions}
+    assert keys == {("atown", "firstbylaw"), ("btown", "secondbylaw")}
+    # seeded_db's 1 enabled control + the 5 added here.
+    assert report.enabled_documents == 6
+    assert report.identities_checked == 4

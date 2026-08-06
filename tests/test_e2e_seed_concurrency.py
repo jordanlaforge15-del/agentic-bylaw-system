@@ -40,6 +40,10 @@ SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     "seed_e2e_evaluator_bylaws.py",
     "seed_e2e_groundtruth_bylaws.py",
     "seed_e2e_mainland_permitted_use.py",
+    # ABS-434: the enabled-name-collision pair fixture (per-test, uniquely
+    # slugged, so races are impossible by construction; the lock keeps it
+    # within the fleet-wide pattern anyway).
+    "seed_e2e_name_collision.py",
     "seed_e2e_parcels.py",
     "seed_e2e_permitted_use.py",
     # ABS-433: the unified RC-LUB corpus seed — replaces the retired

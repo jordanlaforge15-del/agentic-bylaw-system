@@ -108,6 +108,7 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
     from bylaw_retrieval.retrieval import (  # noqa: PLC0415
         audit_corpus_coherence,
         audit_e2e_contamination,
+        audit_enabled_name_collisions,
         retrieval_enabled_resolver,
     )
     from layer1.db.session import session_scope  # noqa: PLC0415
@@ -118,6 +119,7 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
                 session, default_document_id_resolver=retrieval_enabled_resolver
             )
             contamination = audit_e2e_contamination(session)
+            name_collisions = audit_enabled_name_collisions(session)
     except Exception:
         logger.exception("corpus-coherence audit (ABS-356) failed to run")
         return {"status": "error"}, 503
@@ -146,10 +148,24 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
     else:
         contamination_status = "ok"
 
+    # ABS-434: enabled-name-collision tripwire. Unlike the contamination
+    # sweep there is no deployment where >1 enabled document per normalized
+    # (municipality, bylaw_name) is legitimate — red is red everywhere,
+    # including the e2e stack's own database.
+    if not name_collisions.collision_free:
+        logger.warning(
+            "enabled-name-collision audit (ABS-434) found %d normalized bylaw "
+            "identit(ies) with multiple retrieval-enabled documents: %s",
+            len(name_collisions.collisions),
+            [c.detail for c in name_collisions.collisions],
+        )
+
     if not report.coherent:
         status = "incoherent"
     elif contamination_red:
         status = "contaminated"
+    elif not name_collisions.collision_free:
+        status = "name_collision"
     else:
         status = "ok"
 
@@ -161,6 +177,10 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
         "e2e_contamination": {
             "status": contamination_status,
             **contamination.model_dump(mode="json"),
+        },
+        "enabled_name_collisions": {
+            "status": "ok" if name_collisions.collision_free else "collision",
+            **name_collisions.model_dump(mode="json"),
         },
     }
     return body, (200 if status == "ok" else 503)
@@ -186,6 +206,13 @@ async def corpus_coherence_status() -> JSONResponse:
     deployment any marker row flips the endpoint to 503/``contaminated``.
     The e2e stack itself (``advisor.api.e2e_server``) declares its markers
     expected and reports them informationally.
+
+    And the ABS-434 ``enabled_name_collisions`` tripwire: at most one
+    retrieval-enabled document per case/hyphen/whitespace-normalized
+    ``(municipality, bylaw_name)``. More than one (the doc-15/38 "By-law"
+    vs "By-Law" double-enable) flips the endpoint to
+    503/``name_collision`` in every deployment — no expected-fixtures
+    exemption, because a fragmented enabled corpus is never legitimate.
     """
     global _cached_coherence_body, _cached_coherence_status, _cached_coherence_at  # noqa: PLW0603
 

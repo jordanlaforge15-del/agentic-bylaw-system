@@ -44,11 +44,15 @@ from sqlalchemy.orm import Session
 
 from layer1.datasets.config import DatasetConfig, load_dataset_config
 from layer1.db.base import Document, ExternalDataset, SourceFragment
+from layer1.naming import normalized_document_identity
 
 from bylaw_retrieval.retrieval.schemas import (
     CorpusCoherenceReport,
     E2eContaminationMarker,
     E2eContaminationReport,
+    EnabledDocumentRef,
+    EnabledNameCollision,
+    EnabledNameCollisionReport,
     MissingOverlayRole,
     OverlayDeclaration,
 )
@@ -290,4 +294,78 @@ def audit_e2e_contamination(session: Session) -> E2eContaminationReport:
         contaminated=bool(markers),
         marker_counts=marker_counts,
         markers=markers,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ABS-434 — enabled-name-collision audit
+# ---------------------------------------------------------------------------
+
+
+def audit_enabled_name_collisions(session: Session) -> EnabledNameCollisionReport:
+    """At most one ENABLED document per normalized bylaw identity (ABS-434).
+
+    The doc-15/38 double-enable happened because two enabled documents
+    shared a bylaw name modulo casing ("By-law" vs "By-Law"): the
+    migration-0024 backfill, the ``enable-retrieval`` sibling detection and
+    ``--replace``, and the ABS-355 relink all match ``(municipality,
+    bylaw_name)`` with literal equality, so name drift silently fragments
+    the enabled corpus into pieces no pass can reconcile.
+
+    Groups every retrieval-enabled document by its case/hyphen/whitespace-
+    normalized ``(municipality, bylaw_name)`` (``layer1.naming`` — the same
+    normalizer the ABS-431 fixture-name guard uses); any group with more
+    than one enabled document is a violation reported with the ids and the
+    stored spellings. Read-only; safe to point at prod.
+    """
+    documents = (
+        session.execute(
+            select(Document)
+            .where(Document.retrieval_enabled.is_(True))
+            .order_by(Document.id)
+        )
+        .scalars()
+        .all()
+    )
+
+    groups: dict[tuple[str, str], list[Document]] = {}
+    for document in documents:
+        key = normalized_document_identity(document.municipality, document.bylaw_name)
+        groups.setdefault(key, []).append(document)
+
+    collisions: list[EnabledNameCollision] = []
+    for (norm_municipality, norm_bylaw_name), members in sorted(groups.items()):
+        if len(members) <= 1:
+            continue
+        spellings = ", ".join(
+            f"{doc.id}: {doc.municipality!r} / {doc.bylaw_name!r}" for doc in members
+        )
+        collisions.append(
+            EnabledNameCollision(
+                normalized_municipality=norm_municipality,
+                normalized_bylaw_name=norm_bylaw_name,
+                document_ids=[doc.id for doc in members],
+                documents=[
+                    EnabledDocumentRef(
+                        id=doc.id,
+                        municipality=doc.municipality,
+                        bylaw_name=doc.bylaw_name,
+                    )
+                    for doc in members
+                ],
+                detail=(
+                    f"{len(members)} enabled documents share the normalized bylaw "
+                    f"identity ({norm_municipality!r}, {norm_bylaw_name!r}): "
+                    f"{spellings}. Exact-match passes (backfill, --replace, "
+                    "relink) cannot reconcile them — disable the stray or fix "
+                    "the name drift."
+                ),
+            )
+        )
+
+    return EnabledNameCollisionReport(
+        collision_free=not collisions,
+        enabled_documents=len(documents),
+        identities_checked=len(groups),
+        collisions=collisions,
     )

@@ -1159,3 +1159,64 @@ class E2eContaminationReport(BaseModel):
         default_factory=list,
         description="Every offending row, one entry per row (deduplicated across marker kinds).",
     )
+
+
+class EnabledDocumentRef(BaseModel):
+    """One retrieval-enabled document inside a name-collision group (ABS-434)."""
+
+    id: int = Field(..., description="Document primary key.")
+    municipality: str = Field(..., description="The municipality exactly as stored.")
+    bylaw_name: str = Field(..., description="The bylaw name exactly as stored.")
+
+
+class EnabledNameCollision(BaseModel):
+    """Multiple ENABLED documents sharing one normalized bylaw identity (ABS-434).
+
+    The doc-15/38 shape: two enabled documents whose ``(municipality,
+    bylaw_name)`` differ only by case/hyphenation/whitespace ("By-law" vs
+    "By-Law"). Every exact-match pass (migration-0024 backfill,
+    ``enable-retrieval`` sibling detection/``--replace``, the ABS-355
+    relink) sees them as unrelated bylaws, so the enabled corpus silently
+    fragments. Exact duplicates (two enabled versions under the *same*
+    literal name) are also reported — >1 enabled per normalized identity is
+    the violation either way.
+    """
+
+    normalized_municipality: str = Field(
+        ..., description="The group key's municipality half (see layer1.naming.normalize_bylaw_name)."
+    )
+    normalized_bylaw_name: str = Field(
+        ..., description="The group key's bylaw-name half."
+    )
+    document_ids: list[int] = Field(
+        ..., description="Every enabled document id in the group, ascending."
+    )
+    documents: list[EnabledDocumentRef] = Field(
+        ..., description="The colliding documents with their names exactly as stored."
+    )
+    detail: str = Field(
+        ..., description="Human-readable description naming the ids and stored spellings."
+    )
+
+
+class EnabledNameCollisionReport(BaseModel):
+    """Result of auditing enabled documents for normalized-name collisions (ABS-434).
+
+    ``collision_free`` is the loud/quiet signal: True means every normalized
+    ``(municipality, bylaw_name)`` identity has at most one retrieval-enabled
+    document; False means at least one identity has several (see
+    ``collisions`` for the ids). Unlike the e2e-contamination sweep there is
+    no deployment where a collision is legitimate — red is red everywhere,
+    including the e2e stack's own database.
+    """
+
+    collision_free: bool = Field(
+        ..., description="True when no normalized identity has more than one enabled document."
+    )
+    enabled_documents: int = Field(
+        ..., description="Number of retrieval-enabled documents examined."
+    )
+    identities_checked: int = Field(
+        ..., description="Number of distinct normalized (municipality, bylaw_name) identities among them."
+    )
+    collisions: list[EnabledNameCollision] = Field(default_factory=list)
