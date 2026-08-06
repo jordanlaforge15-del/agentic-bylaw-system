@@ -273,3 +273,30 @@ def test_render_markdown_omits_promotion_section_when_empty():
         promotion_results=[],
     )
     assert "Linear promotion results" not in md
+
+
+# --------------------------------------------------------------------------- #
+# promote_to_linear's lazy LinearClient import (ABS-446)                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_promote_to_linear_imports_linear_client():
+    """The Linear client moved out of the retired night_manager package.
+
+    `promote_to_linear` imports `scripts.linear_client.LinearClient` lazily,
+    so a broken import path would only surface at runtime behind
+    `--promote-to-linear`. Resolve the exact module the function names and
+    assert the symbol is the class it expects.
+    """
+    import inspect
+
+    source = inspect.getsource(ic.promote_to_linear)
+    assert "from scripts.linear_client import LinearClient" in source
+    assert "night_manager" not in source
+
+    from scripts.linear_client import LinearClient
+
+    assert inspect.isclass(LinearClient)
+    # The two methods promote_to_linear actually calls.
+    assert callable(LinearClient.get_team_id)
+    assert callable(LinearClient.create_issue)

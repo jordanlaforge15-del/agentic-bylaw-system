@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _make_fake_docker(tmp_path: Path, stale_port: str | None) -> Path:

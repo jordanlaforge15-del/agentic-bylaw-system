@@ -7,7 +7,6 @@ Verifies:
   2. find_dev_head correctly picks the single head from dev's migration set.
   3. rechain() updates down_revision and commits when a mismatch is detected.
   4. rechain() is idempotent (no change when already correct).
-  5. The Night Manager's merge_to_dev calls the rechain step automatically.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -269,73 +267,3 @@ class TestRechain:
         text_b = (versions / "0002_b.py").read_text()
         m = re.search(r'^down_revision\s*=\s*["\']([^"\']+)["\']', text_b, re.MULTILINE)
         assert m and m.group(1) == "0002_a"
-
-
-# ---------------------------------------------------------------------------
-# Night Manager integration: merge_to_dev calls rechain
-# ---------------------------------------------------------------------------
-
-class TestMergeToDevCallsRechain:
-    """Verify that merge_to_dev invokes _rechain_migrations_if_needed."""
-
-    async def test_rechain_called_when_branch_touches_migrations(self):
-        from scripts.night_manager import reviewer
-        from scripts.night_manager.state import IssuePorts, IssueState
-
-        issue = IssueState(
-            identifier="ABS-999",
-            title="Migration test",
-            branch="agent/ABS-999",
-            worktree="/tmp/fake-wt",
-            ports=IssuePorts(pg=5499, api=8099, web=3099),
-        )
-
-        rechain_calls = []
-
-        async def _fake_rechain(iss):
-            rechain_calls.append(iss.identifier)
-            return True, "rechained"
-
-        async def _fake_rebase(iss):
-            return False, "no remote in test"
-
-        with (
-            patch.object(reviewer, "_rechain_migrations_if_needed", _fake_rechain),
-            patch.object(reviewer, "_rebase_branch_onto_dev", _fake_rebase),
-        ):
-            success, msg = await reviewer.merge_to_dev(issue)
-
-        # Rechain must have been called (even though rebase then fails)
-        assert "ABS-999" in rechain_calls, "rechain was not called"
-        assert success is False  # rebase failure stops merge
-
-    async def test_rechain_not_called_when_no_worktree(self):
-        from scripts.night_manager import reviewer
-        from scripts.night_manager.state import IssuePorts, IssueState
-
-        issue = IssueState(
-            identifier="ABS-999",
-            title="No worktree",
-            branch="agent/ABS-999",
-            worktree="",
-            ports=IssuePorts(pg=5499, api=8099, web=3099),
-        )
-
-        rechain_calls = []
-
-        async def _fake_rechain(iss):
-            rechain_calls.append(iss.identifier)
-            return True, ""
-
-        async def _fake_rebase(iss):
-            return False, "no worktree"
-
-        with (
-            patch.object(reviewer, "_rechain_migrations_if_needed", _fake_rechain),
-            patch.object(reviewer, "_rebase_branch_onto_dev", _fake_rebase),
-        ):
-            await reviewer.merge_to_dev(issue)
-
-        # _rechain_migrations_if_needed is called, but it short-circuits on
-        # empty worktree and returns immediately without doing work
-        assert len(rechain_calls) == 1

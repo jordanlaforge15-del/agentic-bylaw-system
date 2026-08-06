@@ -109,7 +109,14 @@ where = ["src", "mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "mcp", "tests", "scripts"]
+# "." puts the project root on sys.path so tests can import the `scripts`
+# package by its fully-qualified name (e.g. `scripts.rechain_migration`,
+# `scripts.linear_client`). It is listed first deliberately: pytest inserts
+# these at the front of sys.path in list order, so the last entry ends up
+# with the highest precedence — keeping "." first gives the project root the
+# lowest precedence of the five, so top-level directories that share a name
+# with an installed distribution (mcp/, alembic/) cannot shadow it.
+pythonpath = [".", "src", "mcp", "tests", "scripts"]
 asyncio_mode = "auto"
 
 [tool.ruff]
