@@ -7,18 +7,11 @@ or database.
 from __future__ import annotations
 
 import json
-import textwrap
 from pathlib import Path
 
 import pytest
 
-# Locate the script relative to this file so the tests work from any
-# working directory.
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-import sys
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
-
-from compare_ab_runs import (  # noqa: E402
+from scripts.compare_ab_runs import (
     PRICING,
     build_report,
     compute_totals,
@@ -27,7 +20,6 @@ from compare_ab_runs import (  # noqa: E402
     summarise_case,
     tok_cost_usd,
 )
-
 
 # ---------------------------------------------------------------------------
 # tok_cost_usd
