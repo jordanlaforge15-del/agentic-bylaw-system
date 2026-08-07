@@ -9,7 +9,10 @@ from layer1.db.session import session_scope
 from layer1.models.enums import FragmentType, ParseStatus
 from layer1.pipeline.ingest_dataset import ingest_geo_dataset
 from layer2.db.init_db import create_all as create_layer2
+from sqlalchemy import select
+
 from layer2.retrieval.geocode import (
+    _cache_put,
     normalize_reference,
     normalize_street,
     resolve_location,
@@ -223,6 +226,123 @@ def test_cache_hit_short_circuits_dataset_lookup(both_datasets):
         second = resolve_location(session, ref)
     assert second is not None
     assert second.geometry["coordinates"] == first.geometry["coordinates"]
+
+
+def _winning_cache_row(normalized_text: str, ref: LocationReference) -> GeocodeCache:
+    return GeocodeCache(
+        normalized_text=normalized_text,
+        raw_text=ref.raw_text,
+        kind=ref.kind,
+        status="no_match",
+        resolver="miss",
+        detail="committed by the race winner",
+        metadata_json={"reference": ref.model_dump()},
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+def test_cache_put_recovers_from_lost_write_race(both_datasets, monkeypatch):
+    """ABS-422: the loser of a geocode-cache write race must not 500.
+
+    Two concurrent requests geocode the same not-yet-cached address. The
+    winner inserts and commits ``normalized_text`` first; the loser's own
+    check-then-insert already read a miss, so its INSERT trips
+    ``uq_geocode_cache_normalized_text``. Before the fix this
+    ``UniqueViolation`` poisoned the session and cascaded into a
+    ``PendingRollbackError`` 500. Now ``_cache_put`` inserts inside a
+    SAVEPOINT, catches the ``IntegrityError``, rolls back only the nested
+    unit, re-reads the winning row and refreshes it — no raise, one row,
+    session still usable.
+
+    The race window is simulated deterministically: the FIRST cache read
+    (the check) misses as it would before the winner committed, while the
+    recovery re-read sees the committed winner.
+    """
+    import layer2.retrieval.geocode as geocode_module
+
+    db_url = both_datasets["db_url"]
+    ref = LocationReference(
+        raw_text="4321 Contested Street",
+        kind="civic_address",
+        civic_number="4321",
+        street="Contested Street",
+    )
+    key = normalize_reference(ref)
+
+    # Winner commits the cache row in its own transaction first.
+    with session_scope(db_url) as winner:
+        winner.add(_winning_cache_row(key, ref))
+
+    real_get_row = geocode_module._cache_get_row
+    calls = {"n": 0}
+
+    def flaky_get_row(session, normalized_text):
+        calls["n"] += 1
+        # First read = the check-then-insert probe: the winner's commit is
+        # not yet visible, so it misses. Later reads see the real DB.
+        if calls["n"] == 1:
+            return None
+        return real_get_row(session, normalized_text)
+
+    monkeypatch.setattr(geocode_module, "_cache_get_row", flaky_get_row)
+
+    with session_scope(db_url) as loser:
+        # Must not raise even though the INSERT trips the unique constraint.
+        _cache_put(
+            loser,
+            normalized_text=key,
+            ref=ref,
+            resolved=None,
+            resolver="miss",
+            status="no_match",
+            detail="loser refreshed the winning row",
+            source_dataset_id=None,
+            source_feature_id=None,
+        )
+        assert calls["n"] >= 2, "recovery re-read should have run"
+        # The session survives the absorbed conflict — unrelated work in the
+        # same request keeps working rather than hitting PendingRollbackError.
+        loser.execute(select(GeocodeCache)).scalars().all()
+
+    # Exactly one row survives and the loser's payload was reconciled onto it.
+    with session_scope(db_url) as s:
+        rows = s.execute(
+            select(GeocodeCache).where(GeocodeCache.normalized_text == key)
+        ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].detail == "loser refreshed the winning row"
+
+
+def test_cache_put_updates_existing_row_without_savepoint(both_datasets):
+    """The common no-conflict path still updates a pre-existing row in place
+    (regression guard for the refactor that routes both reads through
+    ``_cache_get_row``)."""
+    db_url = both_datasets["db_url"]
+    ref = LocationReference(
+        raw_text="10 Update Street",
+        kind="civic_address",
+        civic_number="10",
+        street="Update Street",
+    )
+    key = normalize_reference(ref)
+    with session_scope(db_url) as s:
+        _cache_put(
+            s, normalized_text=key, ref=ref, resolved=None, resolver="miss",
+            status="no_match", detail="first", source_dataset_id=None,
+            source_feature_id=None,
+        )
+    with session_scope(db_url) as s:
+        _cache_put(
+            s, normalized_text=key, ref=ref, resolved=None, resolver="miss",
+            status="no_match", detail="second", source_dataset_id=None,
+            source_feature_id=None,
+        )
+    with session_scope(db_url) as s:
+        rows = s.execute(
+            select(GeocodeCache).where(GeocodeCache.normalized_text == key)
+        ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].detail == "second"
 
 
 def test_resolved_location_intersects_height_precinct(both_datasets):
