@@ -10,20 +10,11 @@ reverted WI-1 / WI-4 production code.
 """
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
 
-# Load the script as a module without polluting sys.path globally.
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "measure_wi_token_savings.py"
-spec = importlib.util.spec_from_file_location("measure_wi", _SCRIPT)
-measure_wi = importlib.util.module_from_spec(spec)
-sys.modules["measure_wi"] = measure_wi
-sys.path.insert(0, str(_SCRIPT.parent.parent / "src"))
-spec.loader.exec_module(measure_wi)
-
+from scripts import measure_wi_token_savings as measure_wi
 
 # -- ANALYTICAL MODE ----------------------------------------------------------
 
