@@ -30,16 +30,18 @@ COPY mcp ./mcp
 # Install into a venv so the runtime stage gets one self-contained directory.
 # No -e (editable) — production should be a normal install.
 # No [dev], no [parsers], no [mcp] extras.
+# setuptools>=83 (ABS-401): closes PYSEC-2026-3447 (sdist MANIFEST.in
+# exclusion bypass, fixed in 83) without needing an audit exception. The
+# old "setuptools<82" pin predated the removal of the deprecated
+# pkg_resources module in setuptools 82; the [advisor] dependency tree was
+# audited for runtime pkg_resources importers and the only hit is
+# sentry-sdk, which imports it solely in a guarded Python <3.8 fallback
+# branch (importlib.metadata is used on 3.11) — so >=83 is safe here.
 RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --upgrade pip "setuptools<82" wheel \
+    && /opt/venv/bin/pip install --upgrade pip "setuptools>=83" wheel \
     && /opt/venv/bin/pip install ".[advisor]" \
     && /opt/venv/bin/pip install pip-audit \
-    # PYSEC-2026-3447 (setuptools 81, fixed in 83): MANIFEST.in exclusion
-    # bypass when building sdists on macOS filesystems. Inapplicable to this
-    # Linux runtime image, which never builds an sdist. The "setuptools<82"
-    # pin above blocks the fixed version; bumping the pin is tracked
-    # separately (needs a pkg_resources-consumer audit first).
-    && /opt/venv/bin/pip-audit --desc on --ignore-vuln PYSEC-2026-3447 \
+    && /opt/venv/bin/pip-audit --desc on \
     && /opt/venv/bin/pip uninstall -y pip-audit
 
 # ============================================================================
