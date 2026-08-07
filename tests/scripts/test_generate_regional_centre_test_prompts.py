@@ -17,19 +17,10 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 
-# Ensure the repo root is on sys.path so `scripts.generate_regional_centre_test_prompts`
-# imports cleanly regardless of pytest invocation cwd.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from scripts import generate_regional_centre_test_prompts as gen  # noqa: E402
-
+from scripts import generate_regional_centre_test_prompts as gen
 
 SPEC = {
     "zone": "CEN-1",
