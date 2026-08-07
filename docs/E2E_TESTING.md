@@ -286,7 +286,7 @@ python scripts/rechain_migration.py
 git log --oneline -3   # verify the [rechain] commit landed
 make e2e               # re-run; guard should pass now
 ```
-The Night Manager's `merge_to_dev` runs this automatically before each merge, so this error should only appear when running `make e2e` on a branch that has not yet gone through the NM merge flow. See [docs/NIGHT_MANAGER.md — Alembic collision resistance](NIGHT_MANAGER.md#alembic-collision-resistance) for the full mechanism.
+`rechain_migration.py` identifies the migration files your branch adds that dev does not have, resolves dev's single head, and rewrites the root one's `down_revision` to point at it — committing the fix under a `[rechain]` message. It is idempotent: if the chain is already correct it exits 0 without changing anything. Coverage lives in `tests/test_migration_rechain.py`. The Night Manager (which runs from [its own repo](NIGHT_MANAGER.md)) invokes it automatically before each merge, so this error should only surface on a branch that has not gone through that merge flow.
 
 **FastAPI logs show `database "layer1_test" does not exist` even though it was created.** Symptom of two worktrees both trying to bind the same e2e host port (default `:5433`) — one container ends up unpublished and the host-side alembic / uvicorn hit the wrong Postgres. Use the parallel-worktrees recipe to give each worktree its own `543X` port, or tear down the stack of the worktree you're not actively using. If the logs instead show `database "layer1" does not exist`, something is connecting to the e2e instance with dev settings — the e2e instance intentionally hosts `layer1_test` only.
 

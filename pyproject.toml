@@ -109,7 +109,18 @@ where = ["src", "mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "mcp", "tests", "scripts"]
+# "." puts the project root on sys.path so tests can import the `scripts`
+# package by its fully-qualified name (e.g. `scripts.rechain_migration`,
+# `scripts.linear_client`). Before ABS-446 that job was done by a sys.path
+# hack in tests/night_manager/conftest.py, which went with the NM fork.
+#
+# It is listed LAST deliberately. pytest walks this list in reverse and
+# inserts each entry at sys.path[0], so the final sys.path order matches the
+# list order — the FIRST entry wins. The project root is the broadest entry
+# (it makes every top-level directory importable, including bare ones like
+# mcp/ and alembic/ that share a name with a distribution), so it takes the
+# lowest precedence of the five.
+pythonpath = ["src", "mcp", "tests", "scripts", "."]
 asyncio_mode = "auto"
 
 [tool.ruff]

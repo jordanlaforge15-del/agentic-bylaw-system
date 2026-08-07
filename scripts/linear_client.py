@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-log = logging.getLogger("night_manager.linear")
+log = logging.getLogger("scripts.linear_client")
 
 GRAPHQL_URL = "https://api.linear.app/graphql"
 

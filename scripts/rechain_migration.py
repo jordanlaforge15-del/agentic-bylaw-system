@@ -19,8 +19,10 @@ with no changes.
 Usage:
     python scripts/rechain_migration.py [--worktree PATH] [--dry-run]
 
-Called automatically by the Night Manager's merge_to_dev step when the
-feature branch touches alembic/versions/.
+Run it by hand from a feature-branch worktree when `e2e-up` reports
+"Multiple Alembic heads detected" (see docs/E2E_TESTING.md). The Night
+Manager — which lives in its own repo, see docs/NIGHT_MANAGER.md — also
+invokes it before merging a branch that touches alembic/versions/.
 """
 
 from __future__ import annotations

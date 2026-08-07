@@ -439,8 +439,6 @@ start_web() {
   # state and forwards JWTs minted by /v1/_test/mint-jwt to FastAPI.
   # DEMO_PASSWORD is still set as a fallback for the /api/access endpoint
   # used by some legacy fixtures.
-  # ABS-153: NM_TEST_MODE=1 makes /api/nm/run/start short-circuit before exec()
-  # so Playwright specs that POST a valid body never spawn a real NM run.
   ( cd "${REPO_ROOT}/web" && \
     NEXT_DIST_DIR=.next-e2e \
     ADVISOR_API_URL="http://127.0.0.1:${E2E_FASTAPI_PORT}" \
@@ -452,7 +450,6 @@ start_web() {
     DEMO_PASSWORD="${E2E_DEMO_PASSWORD:-e2e-demo-pw}" \
     ADMIN_PASSWORD="${E2E_ADMIN_PASSWORD:-e2e-admin-pw}" \
     DATABASE_URL="$DATABASE_URL_E2E_PG" \
-    NM_TEST_MODE=1 \
     NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true \
     nohup npx next dev -p "$E2E_WEB_PORT" &
     echo $! >"${PID_DIR}/web.pid"

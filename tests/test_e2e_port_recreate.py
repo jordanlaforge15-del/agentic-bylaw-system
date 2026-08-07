@@ -21,10 +21,8 @@ import os
 import subprocess
 from pathlib import Path
 
-import pytest
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _make_fake_docker(tmp_path: Path, stale_port: str | None) -> Path:
@@ -254,12 +252,10 @@ class TestWaitForPortSettleCheck:
             "is_listening() { return 0; }" if is_listening_returns
             else "is_listening() { return 1; }"
         )
-        pidfile_setup = ""
         pidfile_arg = ""
         if pidfile_pid is not None:
             pid_path = tmp_path / "fake.pid"
             pid_path.write_text(pidfile_pid)
-            pidfile_setup = ""  # already written
             pidfile_arg = str(pid_path)
 
         # Make WAIT_FOR_PORT_SETTLE_SECS=0 to keep the test fast.
