@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature, GeocodeCache
@@ -408,13 +409,7 @@ def _cache_put(
     source_dataset_id: int | None,
     source_feature_id: int | None,
 ) -> None:
-    existing = (
-        session.execute(
-            select(GeocodeCache).where(GeocodeCache.normalized_text == normalized_text)
-        )
-        .scalars()
-        .first()
-    )
+    existing = _cache_get_row(session, normalized_text)
     payload: dict[str, Any] = {
         "raw_text": ref.raw_text,
         "kind": ref.kind,
@@ -428,13 +423,37 @@ def _cache_put(
         "metadata_json": {"reference": ref.model_dump()},
     }
     if existing is None:
-        existing = GeocodeCache(
-            normalized_text=normalized_text,
-            created_at=datetime.now(timezone.utc),
-            **payload,
-        )
-        session.add(existing)
-    else:
-        for key, value in payload.items():
-            setattr(existing, key, value)
+        try:
+            # Add + flush inside a SAVEPOINT so that a concurrent writer
+            # winning the race (and tripping uq_geocode_cache_normalized_text)
+            # rolls back only this nested unit — the outer request transaction
+            # stays usable. Without this, the UniqueViolation poisons the
+            # session and cascades into a PendingRollbackError 500 for
+            # unrelated work later in the same request (ABS-422). The add()
+            # must live inside the savepoint too, or its pending INSERT
+            # survives the rollback and re-fires on the next flush.
+            with session.begin_nested():
+                session.add(
+                    GeocodeCache(
+                        normalized_text=normalized_text,
+                        created_at=datetime.now(timezone.utc),
+                        **payload,
+                    )
+                )
+                session.flush()
+            return
+        except IntegrityError:
+            # Lost the race: another transaction committed the same
+            # normalized_text. Rolling back the savepoint already discards
+            # our now-orphaned INSERT, so we just re-read the winning row and
+            # fall through to the update path below to refresh its payload.
+            existing = _cache_get_row(session, normalized_text)
+            if existing is None:
+                # The conflicting row vanished (rolled back rather than
+                # committed) between the violation and our re-read — nothing
+                # to reconcile against, so surface the original error.
+                raise
+
+    for key, value in payload.items():
+        setattr(existing, key, value)
     session.flush()
