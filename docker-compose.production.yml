@@ -85,11 +85,13 @@ services:
       # Per-report gate (ABS-384). Deny-by-default when unset; disable a slug
       # only after draining its `authorized` holds (see docs/DEPLOYMENT.md).
       ADVISOR_ENABLED_QUESTIONS: ${ADVISOR_ENABLED_QUESTIONS:-}
-      # Token wallet / turns parameters (ABS-380).
-      ADVISOR_TOKENS_PER_TURN: ${ADVISOR_TOKENS_PER_TURN:-2500}
-      ADVISOR_SIGNUP_TOKEN_GRANT: ${ADVISOR_SIGNUP_TOKEN_GRANT:-25000}
+      # Token wallet / turns parameters (ABS-380), calibrated against measured
+      # prod burn on ABS-416 — a real grounded question costs 103k-248k tokens.
+      # Fallbacks here MUST track src/advisor/billing/turns.py.
+      ADVISOR_TOKENS_PER_TURN: ${ADVISOR_TOKENS_PER_TURN:-175000}
+      ADVISOR_SIGNUP_TOKEN_GRANT: ${ADVISOR_SIGNUP_TOKEN_GRANT:-1750000}
       ADVISOR_CHAT_MIN_BALANCE_TOKENS: ${ADVISOR_CHAT_MIN_BALANCE_TOKENS:-0}
-      ADVISOR_LOW_BALANCE_WARN_TOKENS: ${ADVISOR_LOW_BALANCE_WARN_TOKENS:-5000}
+      ADVISOR_LOW_BALANCE_WARN_TOKENS: ${ADVISOR_LOW_BALANCE_WARN_TOKENS:-350000}
       ADVISOR_CHAT_MAX_ITERATIONS: ${ADVISOR_CHAT_MAX_ITERATIONS:-20}
       # Stripe — required only when ADVISOR_PAYMENTS_ENABLED=true. Token
       # top-up Price IDs (ABS-381). Legacy STRIPE_PRICE_<TIER>_<PACK> IDs are

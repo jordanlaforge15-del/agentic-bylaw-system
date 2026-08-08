@@ -13,6 +13,7 @@ from pathlib import Path
 from advisor.api.auth import resolve_or_create_user
 from advisor.auth.clerk_backend import ClerkUserProfile
 from advisor.auth.session import ClerkSession
+from advisor.billing.turns import signup_token_grant
 from advisor.db import User, burn_tokens
 from advisor.db.models import TokenTransaction
 from layer1.db.init_db import create_all
@@ -61,7 +62,7 @@ def test_new_user_gets_signup_token_grant(tmp_path: Path) -> None:
             s, _make_session(), backend_client=_StubBackendClient()  # type: ignore[arg-type]
         )
         s.commit()
-        assert user.token_balance == 25_000
+        assert user.token_balance == signup_token_grant()
         assert user.metadata_json.get("token_grant_issued") is True
         grants = _grant_rows(s, user.id)
         assert len(grants) == 1
@@ -95,7 +96,7 @@ def test_pre_wallet_user_self_heals_once(tmp_path: Path) -> None:
             s, _make_session(), backend_client=_StubBackendClient()  # type: ignore[arg-type]
         )
         s.commit()
-        assert user.token_balance == 25_000
+        assert user.token_balance == signup_token_grant()
         assert len(_grant_rows(s, user.id)) == 1
 
 
@@ -111,7 +112,7 @@ def test_no_second_grant_after_burning_to_zero(tmp_path: Path) -> None:
         uid = user.id
     # User burns the whole grant.
     with session_scope(db_url) as s:
-        burn_tokens(s, user=s.get(User, uid), amount=25_000)
+        burn_tokens(s, user=s.get(User, uid), amount=signup_token_grant())
         s.commit()
     # Next sign-in must NOT re-grant.
     with session_scope(db_url) as s:
@@ -145,5 +146,5 @@ def test_invite_path_user_also_gets_grant(tmp_path: Path) -> None:
             s, _make_session(), backend_client=_StubBackendClient()  # type: ignore[arg-type]
         )
         s.commit()
-        assert user.token_balance == 25_000
+        assert user.token_balance == signup_token_grant()
         assert len(_grant_rows(s, user.id)) == 1
