@@ -38,6 +38,7 @@ import {
   WalletTransactionsResponse,
   formatCurrency,
 } from "@/lib/cases";
+import { TURN_APPROX_SHORT } from "@/lib/turn-copy";
 
 // Owned report row (GET /api/billing/questions/purchases). Mirrors the
 // backend ReportSummary the sidebar consumes; the list is deliberately
@@ -54,8 +55,7 @@ type ReportRow = {
   updated_at?: string | null;
 };
 
-const APPROX_DISCLOSURE =
-  "Counts are approximate — complex questions use more";
+const APPROX_DISCLOSURE = TURN_APPROX_SHORT;
 
 type FetchResult<T> =
   | { ok: true; data: T }

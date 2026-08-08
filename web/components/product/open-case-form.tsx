@@ -39,6 +39,7 @@ import {
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 import { cn } from "@/lib/cn";
+import { TURN_APPROX_SHORT } from "@/lib/turn-copy";
 
 // Only "address" is backed by a live data source in beta (see ABS-200).
 const ANCHOR_KIND_OPTIONS: AnchorKind[] = ["address"];
@@ -581,6 +582,13 @@ export function OpenCaseForm({
 // Healthy = accent dot + "~N turns left" (payments-off: "~N free trial
 // turns"); low/empty = brick border + alarm glyph; empty label is "0 turns".
 // aria-label expands the "~" to "approximately" for screen readers.
+//
+// ABS-452: a non-zero figure here is the first turn count a user ever sees, and
+// it reads as a hard count ("I have 150 turns") unless we say otherwise — one
+// multi-attribute evaluation can cost ~100 turns' worth of tokens. The standard
+// approximate disclosure rides under the chip, and on the aria-label + title so
+// it reaches assistive tech and hover. Suppressed at zero, where "0 turns" has
+// no variance to caveat.
 function BalanceChip({ wallet }: { wallet: WalletResponse | null }) {
   if (!wallet) return null;
   const turns = Math.max(0, wallet.approx_turns_remaining);
@@ -594,17 +602,21 @@ function BalanceChip({ wallet }: { wallet: WalletResponse | null }) {
     : paid
       ? `~${turns} turns left`
       : `~${turns} free trial turns`;
-  const ariaLabel = empty
+  const baseAriaLabel = empty
     ? "0 turns"
     : paid
       ? `approximately ${turns} turns left`
       : `approximately ${turns} free trial turns`;
+  const ariaLabel = empty
+    ? baseAriaLabel
+    : `${baseAriaLabel}. ${TURN_APPROX_SHORT}.`;
 
   return (
     <div className="flex flex-col gap-1.5" data-testid="balance-chip">
       <span
         role="img"
         aria-label={ariaLabel}
+        title={empty ? undefined : TURN_APPROX_SHORT}
         className={cn(
           "inline-flex items-center gap-2 self-start",
           attention ? "border-[1.5px] border-brick" : "border border-hair",
@@ -639,6 +651,14 @@ function BalanceChip({ wallet }: { wallet: WalletResponse | null }) {
       <Mono muted size={9}>
         OPENING IS FREE
       </Mono>
+      {!empty && (
+        <span
+          data-testid="balance-chip-approx-note"
+          className="text-text-muted text-[11px] leading-[1.45] max-w-[34ch]"
+        >
+          {TURN_APPROX_SHORT}
+        </span>
+      )}
     </div>
   );
 }
