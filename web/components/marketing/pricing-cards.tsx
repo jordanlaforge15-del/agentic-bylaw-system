@@ -27,6 +27,7 @@ import {
   type TopupCatalogResponse,
   type TopupOption,
 } from "@/lib/cases";
+import { TURN_APPROX_LONG } from "@/lib/turn-copy";
 
 // Real support address (not the mockup placeholder).
 const SUPPORT_EMAIL = "info@agenticbylawsystems.com";
@@ -249,8 +250,7 @@ function TopUpCard({
         </div>
       </div>
       <div className="flex-1 text-[12.5px] text-text-muted leading-[1.5]">
-        Turn counts are approximate — a longer, more complex reply draws more
-        from your balance than a short one.
+        {TURN_APPROX_LONG}
       </div>
       <TopUpButton
         sku={option.sku}
