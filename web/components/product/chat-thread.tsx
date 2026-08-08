@@ -208,7 +208,12 @@ function AgentMsg({ msg, idx, sessionId, feedbackMap }: { msg: AgentMessage; idx
         )}
 
         {msg.messageDbId != null && sessionId != null && (
+          // Keyed on session + message so a client-side case switch (which
+          // reuses this component instance — thread messages are keyed by
+          // array index) remounts the widget instead of keeping the previous
+          // case's selected thumbs/flag state. ABS-421.
           <MessageFeedback
+            key={`${sessionId}:${msg.messageDbId}`}
             sessionId={sessionId}
             messageId={msg.messageDbId}
             savedFeedback={feedbackMap?.[msg.messageDbId]}
