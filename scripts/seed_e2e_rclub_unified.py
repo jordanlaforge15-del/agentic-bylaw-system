@@ -28,10 +28,17 @@ ABS-431 convention) carrying:
 * **Zone-profile fragments** — Table 5 (height/coverage), Table 3
   (setbacks), Table 1A/1B use rows, Part II zone establishment rows, and the
   Part V §120 parking rule — the corpus ``get_zone_profile`` composes over.
+* **A parcel fabric** (``e2e_rclub_parcels``, ``role: property_parcels``)
+  carrying the two ABS-435 lot-depth fixtures. Base geography, not an
+  overlay — it exists so the abuts predicate can measure from the lot
+  boundary instead of the geocoded rooftop point.
 * **Geocode-cache rows** for ``100 Robie Street`` (inside every polygon
   overlay), ``6184 Quinpool Road`` (~10 m off the Schedule 7 Quinpool
-  centreline, so only the buffered abuts query matches), and the
-  ``500 Nowhere Road`` definitive-negative control.
+  centreline, so only the buffered abuts query matches), the
+  ``500 Nowhere Road`` definitive-negative control, and the ABS-435 pair —
+  ``6321 Quinpool Road`` (deep lot: rooftop 37 m out, front lot line 9 m out,
+  must abut) and ``12 Backlot Lane`` (rooftop 28 m out but front lot line
+  25 m out, must not).
 
 The document name comes from the ABS-431 naming convention
 (``scripts/e2e_fixture_names.py``): it references the real bylaw but carries
@@ -341,6 +348,63 @@ _QUINPOOL_POINT: dict[str, Any] = {
     "coordinates": [-63.6070, _QUINPOOL_LINE_LAT + 0.00009],
 }
 
+# ABS-435: the lot-depth fixtures. A civic geocode returns a rooftop point, so
+# its distance to the centreline is dominated by how deep the lot is, not by
+# whether the lot fronts the street — which is why abutment is measured from
+# the parcel polygon. These two lots pin both directions of that:
+#
+#   6321 Quinpool Rd — deep commercial lot. Rooftop 37 m off the corridor
+#     (outside the 30 m point buffer), front lot line 9 m off. Must abut.
+#     This is the ABS-435 false negative, mirroring the real dev-DB address.
+#   12 Backlot Lane  — lot on the block behind. Rooftop 28 m off (INSIDE the
+#     point buffer), front lot line 25 m off. Must NOT abut — the guard that
+#     keeps this a measurement fix rather than a threshold bump.
+DEEP_LOT_ADDRESS_RAW = "6321 Quinpool Road"
+DEEP_LOT_ADDRESS_NORMALIZED = "civic:6321 quinpool rd"
+DEEP_LOT_LON = -63.6055
+
+BACK_LOT_ADDRESS_RAW = "12 Backlot Lane"
+BACK_LOT_ADDRESS_NORMALIZED = "civic:12 backlot ln"
+BACK_LOT_LON = -63.6045
+
+PARCELS_DATASET_NAME = "e2e_rclub_parcels"
+
+_M_PER_DEG_LAT = 111_320.0
+# Half-width of the synthetic lots in degrees of longitude at Quinpool's
+# latitude (cos 44.646° ≈ 0.712). Narrow enough that neither lot overlaps the
+# other or swallows the 6184 Quinpool fixture point.
+_LOT_HALF_WIDTH_DEG = 15.0 / (_M_PER_DEG_LAT * 0.712)
+
+
+def _lat_north_of_quinpool(metres: float) -> float:
+    return _QUINPOOL_LINE_LAT + metres / _M_PER_DEG_LAT
+
+
+def _lot_polygon(lon: float, *, front_m: float, rear_m: float) -> dict[str, Any]:
+    """A rectangular lot fronting the Quinpool corridor.
+
+    ``front_m`` / ``rear_m`` are the front and rear lot lines' distances north
+    of the (constant-latitude) corridor centreline.
+    """
+    west, east = lon - _LOT_HALF_WIDTH_DEG, lon + _LOT_HALF_WIDTH_DEG
+    south, north = _lat_north_of_quinpool(front_m), _lat_north_of_quinpool(rear_m)
+    return {
+        "type": "Polygon",
+        "coordinates": [
+            [[west, south], [east, south], [east, north], [west, north], [west, south]]
+        ],
+    }
+
+
+_DEEP_LOT_POINT: dict[str, Any] = {
+    "type": "Point",
+    "coordinates": [DEEP_LOT_LON, _lat_north_of_quinpool(37.0)],
+}
+_BACK_LOT_POINT: dict[str, Any] = {
+    "type": "Point",
+    "coordinates": [BACK_LOT_LON, _lat_north_of_quinpool(28.0)],
+}
+
 # Negative control — far from every designated corridor and outside every
 # polygon overlay.
 CONTROL_ADDRESS_RAW = "500 Nowhere Road"
@@ -414,6 +478,43 @@ def _pocs_feature_collection() -> dict[str, Any]:
             },
         ],
     }
+
+
+def _parcels_feature_collection() -> dict[str, Any]:
+    return {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"PID": "E2E-RCLUB-DEEP", "CIVIC": DEEP_LOT_ADDRESS_RAW},
+                "geometry": _lot_polygon(DEEP_LOT_LON, front_m=9.0, rear_m=49.0),
+            },
+            {
+                "type": "Feature",
+                "properties": {"PID": "E2E-RCLUB-BACK", "CIVIC": BACK_LOT_ADDRESS_RAW},
+                "geometry": _lot_polygon(BACK_LOT_LON, front_m=25.0, rear_m=65.0),
+            },
+        ],
+    }
+
+
+def _parcels_config_yaml(geojson_path: Path) -> str:
+    # Base geography, not a bylaw overlay: no links_to, and the role tag is
+    # what RetrievalService._parcels_dataset_ids looks for.
+    return (
+        f"name: {PARCELS_DATASET_NAME}\n"
+        "publisher: e2e_seed\n"
+        "format: geojson\n"
+        f"source_path: {geojson_path}\n"
+        "crs: EPSG:4326\n"
+        "role: property_parcels\n"
+        "attributes:\n"
+        "  feature_key: PID\n"
+        "  canonical:\n"
+        "    parcel_id: { from: PID, type: string }\n"
+        "  ignore: [CIVIC]\n"
+    )
 
 
 def _polygon_config_yaml(overlay: dict[str, Any], geojson_path: Path) -> str:
@@ -490,6 +591,20 @@ _GEOCODE_ROWS: tuple[tuple[str, str, dict[str, Any], float, str], ...] = (
         _CONTROL_POINT,
         0.95,
         "seeded for the unified RC-LUB e2e corpus (negative control)",
+    ),
+    (
+        DEEP_LOT_ADDRESS_NORMALIZED,
+        DEEP_LOT_ADDRESS_RAW,
+        _DEEP_LOT_POINT,
+        0.95,
+        "seeded for the unified RC-LUB e2e corpus (ABS-435 deep lot on corridor)",
+    ),
+    (
+        BACK_LOT_ADDRESS_NORMALIZED,
+        BACK_LOT_ADDRESS_RAW,
+        _BACK_LOT_POINT,
+        0.95,
+        "seeded for the unified RC-LUB e2e corpus (ABS-435 back lot control)",
     ),
 )
 
@@ -822,6 +937,23 @@ def dataset_converged(session, *, name: str, geojson_text: str) -> bool:
     )
 
 
+def role_dataset_converged(session, *, name: str, geojson_text: str) -> bool:
+    """``dataset_converged`` for a base-geography dataset (ABS-435 parcels).
+
+    Same content-hash check, minus the linkage requirement: a ``role`` dataset
+    is not bound to a bylaw fragment, so ``linked_fragment_id`` is always None
+    and the linked check would force a pointless re-ingest on every run.
+    """
+    expected = hashlib.sha256(geojson_text.encode("utf-8")).hexdigest()
+    row = session.scalar(select(ExternalDataset).where(ExternalDataset.name == name))
+    return (
+        row is not None
+        and row.content_hash == expected
+        and row.parse_status == ParseStatus.PARSED
+        and (row.metadata_json or {}).get("role") == "property_parcels"
+    )
+
+
 def _ensure_geocode_cache(
     session, *, normalized: str, raw: str, point: dict[str, Any],
     confidence: float, detail: str,
@@ -921,6 +1053,14 @@ def _corpus_converged(session, dataset_specs: list[tuple[str, str]]) -> bool:
     for name, geojson_text in dataset_specs:
         if not dataset_converged(session, name=name, geojson_text=geojson_text):
             return False
+    # The parcel fabric is base geography (no linked fragment), so it converges
+    # on its own predicate rather than through ``dataset_specs``.
+    if not role_dataset_converged(
+        session,
+        name=PARCELS_DATASET_NAME,
+        geojson_text=json.dumps(_parcels_feature_collection()),
+    ):
+        return False
     return _geocode_converged(session)
 
 
@@ -1000,6 +1140,23 @@ def main() -> int:
                 result = ingest_geo_dataset(session, cfg_path)
                 if result.link_result.status == "linked":
                     linked += 1
+
+            # ABS-435 parcel fabric. Base geography, so it is not counted in
+            # ``linked`` (nothing to link to) — it exists so the abuts
+            # predicate can measure from the lot boundary instead of the
+            # geocoded rooftop point.
+            parcels_geojson_text = json.dumps(_parcels_feature_collection())
+            if not role_dataset_converged(
+                session, name=PARCELS_DATASET_NAME, geojson_text=parcels_geojson_text
+            ):
+                _drop_existing_dataset(session, PARCELS_DATASET_NAME)
+                geojson_path = work_dir / f"{PARCELS_DATASET_NAME}.geojson"
+                geojson_path.write_text(parcels_geojson_text, encoding="utf-8")
+                cfg_path = work_dir / f"{PARCELS_DATASET_NAME}.yaml"
+                cfg_path.write_text(
+                    _parcels_config_yaml(geojson_path), encoding="utf-8"
+                )
+                ingest_geo_dataset(session, cfg_path)
 
             for normalized, raw, point, confidence, detail in _GEOCODE_ROWS:
                 _ensure_geocode_cache(

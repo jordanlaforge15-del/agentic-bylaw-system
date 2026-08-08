@@ -28,6 +28,11 @@ format: geojson
 # halifax_street_centerlines ingested) whenever HRM refreshes the centreline
 # layer or the schedule's designated extents change; the SEGMENT_ID feature_key
 # keeps re-ingest idempotent for downstream consumers either way.
+#
+# Deployment note: the corrected geometry only reaches an existing database
+# once this dataset is re-ingested there —
+#   layer1 ingest-dataset src/layer1/datasets/halifax_pedestrian_oriented_commercial_streets.yaml
+# Until then that database keeps serving the drifted ABS-349 lines.
 source_path: data/geo-datasets/pedestrian_oriented_commercial_streets_schedule7.geojson
 crs: EPSG:4326
 

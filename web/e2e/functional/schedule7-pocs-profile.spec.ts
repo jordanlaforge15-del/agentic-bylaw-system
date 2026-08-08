@@ -30,6 +30,15 @@
 // 2. Each test posts to POST /v1/_test/address-profile and asserts on the
 //    AddressProfile's abuts_pedestrian_street branch.
 //
+// Lot-depth measurement (ABS-435)
+// -------------------------------
+// The seed also ingests a parcel fabric (role property_parcels) with two
+// lot-depth fixtures, because abutment is measured from the parcel boundary
+// rather than the geocoded rooftop point — see the 6321 Quinpool Road and
+// 12 Backlot Lane tests for the full rationale. That path is PostGIS-specific
+// (an ST_Contains parcel lookup feeding an ST_DWithin against the corridor),
+// so e2e is where the two queries are proven to compose.
+//
 // Shared-document regression (ABS-350 seed fix, commits 4f58978 / 24b3803)
 // ------------------------------------------------------------------------
 // Schedule 7 is part of the Regional Centre Land Use By-Law, the same bylaw the
@@ -152,6 +161,62 @@ test("6184 Quinpool Rd abuts a Schedule 7 pedestrian-oriented commercial street"
   expect(pocsCitation, "expected a pedestrian_street citation").toBeTruthy();
   expect(pocsCitation?.citation_path).toBe("schedule_7");
   expect(pocsCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law (Unified RC-LUB E2E)");
+});
+
+
+test("6321 Quinpool Rd — a deep lot on the corridor abuts it (ABS-435)", async ({
+  request,
+}) => {
+  // ABS-435 regression, on the real PostGIS stack.
+  //
+  // A civic geocode returns a rooftop/centroid point, so its distance to the
+  // street centreline is dominated by lot depth, not by whether the lot fronts
+  // the street. Over the HRM parcels along Quinpool Road that distance runs
+  // 0.1-283 m for parcels that genuinely front it and starts at 26.5 m for
+  // parcels that don't — the populations overlap, so no point threshold
+  // separates them. 6321 Quinpool Rd (rooftop 36.7 m out, squarely on the
+  // designated corridor) therefore reported abuts_pedestrian_street=false, and
+  // that flag picks between s.38(2) (ground-floor office prohibited on a POCS
+  // street) and s.69(d) (permitted otherwise) — so the false negative produces
+  // the wrong permitted-use answer.
+  //
+  // The fix measures from the parcel polygon instead. The seeded fixture
+  // mirrors the real address: rooftop 37 m off the corridor (outside the 30 m
+  // point buffer), front lot line 9 m off (inside the 15 m parcel buffer).
+  // Only the parcel path can make this true, and only against the corrected
+  // corridor geometry — the pre-ABS-435 hand-traced Quinpool line ran 130 m
+  // from this address.
+  const profile = await postProfile(request, "6321 Quinpool Road");
+
+  expect(profile.unresolvable).toBe(false);
+  expect(profile.abuts_pedestrian_street).toBe(true);
+
+  const pocs = profile.overlays.find((o) => o.kind === "pedestrian_street");
+  expect(pocs, "expected a pedestrian_street overlay").toBeTruthy();
+  expect(pocs?.label).toBe("Quinpool Road");
+  expect(pocs?.citation).toBe("Schedule 7");
+
+  const pocsCitation = profile.citations.find((c) => c.backs.includes("pedestrian_street"));
+  expect(pocsCitation, "expected a pedestrian_street citation").toBeTruthy();
+  expect(pocsCitation?.citation_path).toBe("schedule_7");
+});
+
+
+test("a back lot inside the point buffer does not abut (ABS-435 guard)", async ({
+  request,
+}) => {
+  // The guard that keeps ABS-435 a measurement fix rather than a threshold
+  // bump. This lot's rooftop point is 28 m from the corridor — INSIDE the 30 m
+  // point buffer, so the pre-fix code called it abutting — but its front lot
+  // line is 25 m out, so it does not front the designated street. Simply
+  // widening the point buffer to catch 6321 Quinpool would have entrenched
+  // this false positive; measuring from the parcel keeps it a definitive
+  // false, which is what lets the agent apply s.69(d).
+  const profile = await postProfile(request, "12 Backlot Lane");
+
+  expect(profile.unresolvable).toBe(false);
+  expect(profile.abuts_pedestrian_street).toBe(false);
+  expect(profile.overlays.some((o) => o.kind === "pedestrian_street")).toBe(false);
 });
 
 
