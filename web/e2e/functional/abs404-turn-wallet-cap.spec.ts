@@ -39,7 +39,6 @@ import { expect, test } from "@playwright/test";
 
 import { E2E_API_URL } from "../fixtures/test-env";
 import {
-  CHAT_MIN_BALANCE,
   SIGNUP_GRANT,
   TOKENS_PER_TURN,
   TURN_MAX_WALLET_TOKENS,
@@ -117,15 +116,37 @@ async function chatSse(
   return body;
 }
 
-function sseEvents(body: string): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [];
+/** One SSE frame: the `event:` name and its parsed `data:` payload. */
+type SseFrame = { name: string; data: Record<string, unknown> };
+
+/**
+ * Parse the raw stream into named frames.
+ *
+ * The name has to come off the `event:` line: `token_balance`'s payload
+ * carries no self-describing field, so a parser that reads only `data:`
+ * lines can never find it. (`tool_loop_metrics` happens to repeat its
+ * name in a `type` key, which is why a data-only parser finds that one
+ * and silently misses the other.)
+ */
+function sseFrames(body: string): SseFrame[] {
+  const out: SseFrame[] = [];
+  let name = "message";
   for (const line of body.split(/\r?\n/)) {
-    if (!line.startsWith("data: ")) continue;
+    if (line.startsWith("event:")) {
+      name = line.slice("event:".length).trim();
+      continue;
+    }
+    if (!line.startsWith("data: ")) {
+      // A blank line closes the frame; the next one is unnamed until
+      // its own `event:` line says otherwise.
+      if (line.trim() === "") name = "message";
+      continue;
+    }
     const payload = line.slice("data: ".length);
     if (!payload || payload === "[DONE]") continue;
     try {
       const parsed: unknown = JSON.parse(payload);
-      if (isRecord(parsed)) out.push(parsed);
+      if (isRecord(parsed)) out.push({ name, data: parsed });
     } catch {
       // Non-JSON keepalive / text frame — not an event we assert on.
     }
@@ -142,10 +163,10 @@ test("one runaway turn is capped in the wallet's own unit, not just in estimated
     caseId,
     "MOCK_WALLET_CAP_TRIP expensive turn that no input estimator can see",
   );
-  const events = sseEvents(body);
+  const frames = sseFrames(body);
 
   // 1. The MEASURED breaker is the one that fired.
-  const metrics = events.find((e) => e.type === "tool_loop_metrics");
+  const metrics = frames.find((f) => f.name === "tool_loop_metrics")?.data;
   expect(
     metrics,
     "tool_loop_metrics event must be present in the SSE stream",
@@ -164,7 +185,7 @@ test("one runaway turn is capped in the wallet's own unit, not just in estimated
   //    synthesis call the user is still owed. Allowing 3x the ceiling
   //    leaves generous room for that slack term while staying far below
   //    the ~1.2M an unbounded turn reaches at the mock's hard cap.
-  const balance = events.find((e) => e.event === "token_balance");
+  const balance = frames.find((f) => f.name === "token_balance")?.data;
   expect(
     balance,
     "token_balance event must be present — the UI decrements from it",
@@ -181,20 +202,28 @@ test("one runaway turn is capped in the wallet's own unit, not just in estimated
       "ceiling — the per-turn wallet bound is not holding",
   ).toBeLessThan(3 * TURN_MAX_WALLET_TOKENS);
 
-  // 3. And therefore the account is not locked out. This is the harm
-  //    the ticket describes, stated directly.
+  // 3. And therefore a brand-new account is not locked out by its first
+  //    question — the harm the ticket describes, stated directly.
   //
-  //    Lockout is `balance <= CHAT_MIN_BALANCE` (the pre-flight floor,
-  //    0), so a positive balance is the assertion. Deliberately NOT
-  //    `approx_turns_remaining > 0`: that display figure floors to 0
-  //    below one whole turn, and against the ABS-404 3-turn grant a
-  //    worst-case runaway first question can legitimately land there
-  //    with chat still working. Asserting on it would pin a display
-  //    rounding rule while claiming to test a lockout.
-  const balanceTokens = Number(balance?.balance_tokens ?? 0);
+  //    Stated as burn-vs-grant, NOT as the balance on the wire: this
+  //    spec's user is seeded by `seed_e2e_user.py`, which tops the
+  //    wallet far above the signup grant, so its post-turn balance
+  //    would stay comfortably positive even with the breaker deleted.
+  //    Only comparing the burn against the grant a real new account
+  //    actually gets makes this assertion load-bearing — an unbounded
+  //    turn reaches ~1.2M at the mock's hard cap, more than double the
+  //    grant, which is a first question that ends the account.
+  //
+  //    Deliberately NOT `approx_turns_remaining > 0` either: that
+  //    display figure floors to 0 below one whole turn, and against the
+  //    ABS-404 3-turn grant a worst-case runaway first question can
+  //    legitimately land there with chat still working. Asserting on it
+  //    would pin a display rounding rule while claiming to test a
+  //    lockout.
   expect(
-    balanceTokens,
-    `a brand-new wallet (grant ${SIGNUP_GRANT}) went to ${balanceTokens} ` +
-      "after ONE question — the ABS-404 lockout has regressed",
-  ).toBeGreaterThan(CHAT_MIN_BALANCE);
+    burned,
+    `one question burned ${burned} of a ${SIGNUP_GRANT}-token signup grant — ` +
+      "a new account cannot survive its own first turn, which is the " +
+      "ABS-404 lockout",
+  ).toBeLessThan(SIGNUP_GRANT);
 });
