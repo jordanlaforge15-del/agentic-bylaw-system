@@ -26,7 +26,7 @@ import {
 } from "../auth/fixtures";
 
 // Design-spec default the e2e FastAPI env does not override.
-const SIGNUP_GRANT = 25_000;
+import { SIGNUP_GRANT } from "../fixtures/wallet-params";
 
 type SseEvent = { event: string; data: string };
 

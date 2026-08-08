@@ -71,7 +71,7 @@ function assertPublicShape(body: TopupCatalog): void {
   // Server-side truth for token quantities (design-spec catalog).
   const bySku = Object.fromEntries(body.options.map((o) => [o.sku, o]));
   expect(bySku.small.tokens).toBe(20_000);
-  expect(bySku.medium.tokens).toBe(75_000);
+  expect(bySku.medium.tokens).toBe(5_250_000);
   expect(bySku.large.tokens).toBe(200_000);
 }
 

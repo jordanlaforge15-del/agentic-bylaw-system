@@ -21,22 +21,29 @@ import {
   signInAs,
   test,
 } from "../auth/fixtures";
+import {
+  CHAT_MIN_BALANCE,
+  LOW_BALANCE_WARN,
+  TOKENS_PER_TURN,
+  TOPUP_TURNS,
+  turnsToTokens,
+} from "../fixtures/wallet-params";
 
 const OUT_OF_TOKENS_WALLET = {
   balance_tokens: 0,
   approx_turns_remaining: 0,
-  tokens_per_turn: 2500,
+  tokens_per_turn: TOKENS_PER_TURN,
   low_balance: true,
-  warn_threshold_tokens: 5000,
-  floor_tokens: 0,
+  warn_threshold_tokens: LOW_BALANCE_WARN,
+  floor_tokens: CHAT_MIN_BALANCE,
   chat_enabled: false,
   payments_enabled: true,
 };
 
 const TOPPED_UP_WALLET = {
   ...OUT_OF_TOKENS_WALLET,
-  balance_tokens: 20_000,
-  approx_turns_remaining: 8,
+  balance_tokens: turnsToTokens(TOPUP_TURNS.small),
+  approx_turns_remaining: TOPUP_TURNS.small,
   low_balance: false,
   chat_enabled: true,
 };

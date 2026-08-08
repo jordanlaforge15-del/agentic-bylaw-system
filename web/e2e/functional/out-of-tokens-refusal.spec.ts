@@ -20,14 +20,19 @@ import {
   signInAs,
   test,
 } from "../auth/fixtures";
+import {
+  CHAT_MIN_BALANCE,
+  LOW_BALANCE_WARN,
+  TOKENS_PER_TURN,
+} from "../fixtures/wallet-params";
 
 const OUT_OF_TOKENS_WALLET_PAYMENTS_ON = {
   balance_tokens: 0,
   approx_turns_remaining: 0,
-  tokens_per_turn: 2500,
+  tokens_per_turn: TOKENS_PER_TURN,
   low_balance: true,
-  warn_threshold_tokens: 5000,
-  floor_tokens: 0,
+  warn_threshold_tokens: LOW_BALANCE_WARN,
+  floor_tokens: CHAT_MIN_BALANCE,
   chat_enabled: false,
   payments_enabled: true,
 };
