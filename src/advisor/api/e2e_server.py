@@ -1332,6 +1332,10 @@ class _SeedSessionBody(BaseModel):
     clause_text: str = (
         "The minimum front yard setback shall be 3.0 metres from the property line."
     )
+    # Final assistant turn. Overridable so a spec can seed markdown that
+    # exercises the renderer — e.g. an attribute table whose cells carry
+    # inline citation references (ABS-451).
+    assistant_text: str | None = None
 
 
 def _mount_seed_session_endpoint(app: FastAPI) -> None:
@@ -1447,7 +1451,8 @@ def _mount_seed_session_endpoint(app: FastAPI) -> None:
                     "sequence": 3,
                     "role": "assistant",
                     "content_json": (
-                        "Based on the bylaw evidence, the front yard setback is 3 m."
+                        body.assistant_text
+                        or "Based on the bylaw evidence, the front yard setback is 3 m."
                     ),
                 },
             ]
