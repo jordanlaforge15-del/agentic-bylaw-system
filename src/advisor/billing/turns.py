@@ -51,12 +51,51 @@ factor (70x) and the turn counts the product promises are unchanged:
 * chat floor              0 ->         0  (0 turns — unchanged)
 
 The paid top-up SKUs in ``advisor.billing.topups`` are rescaled by the
-same factor for the same reason. Cost note for ABS-404 (which owns grant
-sizing / pricing strategy, not this ticket): at the ~$0.55 USD / 100k
-wallet tokens anchor, a 175k turn costs ~$0.96 and the 10-turn signup
-grant is ~$9.60 of API spend per new account. That is a live exposure —
-dial ``ADVISOR_SIGNUP_TOKEN_GRANT`` down on prod if it needs to be
-smaller before ABS-404 settles; no deploy is required.
+same factor for the same reason.
+
+Grant sizing (ABS-404, 2026-08-08)
+----------------------------------
+ABS-416 left a cost note here putting a 175k turn at ~$0.96 and the
+10-turn signup grant at ~$9.60 of API spend per account, against a
+"~$0.55 USD / 100k wallet tokens" anchor. **That anchor was wrong by
+~5x**, and this is the ticket that owns the number, so it is corrected
+here rather than left to mislead the next person sizing the grant.
+
+``docs/COST_MODEL.md`` measured it directly against the real API
+(ABS-303, N=8, current prod config). The wallet counts
+``input + output`` only; cache writes and reads are 35% of the dollar
+cost and are invisible to it. So the honest denominator is cost per
+*wallet-counted* token, and that is **~$28.9 / MTok USD** —
+``$2.89 / 100k``, not ``$0.55 / 100k``.
+
+At that rate:
+
+===========================  ==================  ==================
+Item                          Was believed         Actually
+===========================  ==================  ==================
+One 175k turn                 $0.96                ~$5.05
+10-turn signup grant          $9.60                ~$50.50
+===========================  ==================  ==================
+
+Even the absolute floor — pretending every counted token is uncached
+input at $15/MTok and cache costs nothing — puts a turn at $2.63 and a
+10-turn grant at $26. There is no reading in which a free, no-card
+signup should carry that.
+
+``DEFAULT_SIGNUP_TOKEN_GRANT`` is therefore **3 turns** (525,000). Three
+is enough to evaluate the product — the harm this ticket was filed for
+was a new account locked out after *one* question — while cutting
+per-account exposure to ~$15 at the measured rate. It stays a
+no-restart env knob (``ADVISOR_SIGNUP_TOKEN_GRANT``), so trial-to-paid
+conversion data can move it either way without a deploy.
+
+The **top-up price ladder is deliberately NOT changed here**: at
+$28.9/MTok every SKU sells turns for roughly a quarter of what they
+cost, but list prices are a revenue decision, not an engineering one.
+Recorded as a blocking item on the beta-pivot decision doc's open
+questions instead — it must be settled before
+``ADVISOR_PAYMENTS_ENABLED`` goes true, since selling below cost is only
+harmless while nothing can actually be sold.
 """
 from __future__ import annotations
 
@@ -67,9 +106,17 @@ logger = logging.getLogger(__name__)
 
 # Calibrated against measured prod burn — see the module docstring.
 DEFAULT_TOKENS_PER_TURN = 175_000
-DEFAULT_SIGNUP_TOKEN_GRANT = 10 * DEFAULT_TOKENS_PER_TURN  # 1,750,000
+# ABS-404: 3 turns, not 10 — see "Grant sizing" above. Sized against the
+# measured ~$28.9/MTok wallet-counted cost, not the ~$5.5/MTok anchor
+# ABS-416 assumed.
+DEFAULT_SIGNUP_TOKEN_GRANT = 3 * DEFAULT_TOKENS_PER_TURN  # 525,000
 DEFAULT_CHAT_MIN_BALANCE_TOKENS = 0
-DEFAULT_LOW_BALANCE_WARN_TOKENS = 2 * DEFAULT_TOKENS_PER_TURN  # 350,000
+# ABS-404: 1 turn, not 2. The threshold was sized in turns against a
+# 10-turn grant, where 2 turns meant "20% left — time to act". Against
+# the 3-turn grant above, 2 turns is 67% left: the warning would fire on
+# every new user's first question and stop meaning anything. One turn
+# still leaves room to ask something and then top up.
+DEFAULT_LOW_BALANCE_WARN_TOKENS = 1 * DEFAULT_TOKENS_PER_TURN  # 175,000
 
 
 def _read_int(name: str, default: int, *, minimum: int | None = None) -> int:

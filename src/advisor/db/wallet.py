@@ -246,17 +246,46 @@ def grant_signup_tokens_if_needed(db: Session, *, user: User) -> bool:
     amount of 0 still marks the flag (the user is considered onboarded) but
     writes no ledger row.
 
+    Concurrency (ABS-404)
+    ---------------------
+    The flag check and the flag set MUST happen under the user row's
+    write lock. This function runs on *every* authenticated request, and
+    a fresh sign-in fires several of them in parallel; when the
+    check-and-set was a plain in-memory read of ``user.metadata_json``,
+    two concurrent requests both saw the flag unset, both set it, and
+    both wrote a grant row. Production did exactly that on 2026-07-17:
+    two ``+25,000`` ledger entries for one user, same timestamp to the
+    second. ``grant_tokens`` locks the row, but only *after* the race
+    has already been lost, so the lock protected the arithmetic and not
+    the idempotency.
+
+    So we take ``SELECT … FOR UPDATE`` here and re-read the flag from
+    the locked row. ``populate_existing=True`` is load-bearing for the
+    same reason it is in ``_apply_entry``: ``user`` is already in the
+    session's identity map (the auth dependency just resolved it), so
+    without it the locked re-select hands back the cached instance and
+    its stale ``metadata_json`` — re-opening the very race the lock is
+    here to close. On sqlite ``FOR UPDATE`` is a no-op, which is why the
+    regression test for this is Postgres-gated, alongside the existing
+    lost-update test in ``test_wallet_concurrency_pg.py``.
+
     Returns ``True`` if the grant was applied this call, ``False`` if the
     user already held it. Does not commit — the caller owns the transaction.
     """
     from advisor.billing.turns import signup_token_grant  # noqa: PLC0415
 
-    if user.metadata_json.get("token_grant_issued"):
+    locked = db.execute(
+        select(User)
+        .where(User.id == user.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+    if locked.metadata_json.get("token_grant_issued"):
         return False
-    user.metadata_json["token_grant_issued"] = True
+    locked.metadata_json["token_grant_issued"] = True
     amount = signup_token_grant()
     if amount > 0:
-        grant_tokens(db, user=user, amount=amount, reason="signup_grant")
+        grant_tokens(db, user=locked, amount=amount, reason="signup_grant")
     else:
         db.flush()
     return True

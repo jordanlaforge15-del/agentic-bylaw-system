@@ -81,6 +81,17 @@ Scenario keywords in the user message override the default rules:
   ``terminated_reason="cumulative_cost_trip"``. Use on a Complex-tier
   case (``max_iterations=55``) so the iteration cap can't fire first.
 
+* ``"MOCK_WALLET_CAP_TRIP"`` (ABS-404) — the inverse of the scenario
+  above: every round returns a TINY payload paired with a LARGE reported
+  usage (80k in + 20k out), so the turn's measured wallet burn climbs
+  while every pre-flight estimate stays small. Neither estimator breaker
+  can see this — the char heuristic under-counts tool_results and never
+  models output tokens — which is exactly how one prod turn burned
+  247,566 wallet tokens under a 165k cumulative ceiling. Only the
+  measured wallet breaker can end it, with
+  ``terminated_reason="wallet_cap_trip"``. Drives the ABS-404 e2e that
+  pins the per-turn burn bound on the wire.
+
 * ``"MOCK_FAN_OUT"`` — the first-turn response contains TWO
   ``search_bylaw_evidence`` ``tool_use`` blocks in a single assistant
   message (parallel fan-out). The tool loop executes both in parallel
@@ -152,6 +163,25 @@ _CUMULATIVE_TRIP_PREAMBLE_CHARS = 80_000
 # Hard stop so a regression that disables the breaker surfaces as a
 # normal answer (visible test failure) rather than an unbounded loop.
 _CUMULATIVE_TRIP_MAX_ROUNDS = 40
+
+# ABS-404 wallet-cap scenario. The inverse of the cumulative-trip shape
+# above: a TINY payload (so every estimator stays quiet) paired with a
+# LARGE reported usage. That is the production shape the estimators
+# cannot see — the char heuristic under-counts JSON tool_results and
+# never models output tokens at all — and it is what let one prod turn
+# burn 247,566 wallet tokens under a 165k cumulative ceiling.
+#
+# 100k measured per round against the default 350k ceiling (2 x 175k)
+# trips on the 5th iteration, comfortably inside the tier-less
+# iteration cap of 20. Split across input and output deliberately: an
+# input-only burn would leave the wallet breaker indistinguishable from
+# an input-token estimator that happened to be calibrated correctly.
+_WALLET_CAP_ROUND_INPUT_TOKENS = 80_000
+_WALLET_CAP_ROUND_OUTPUT_TOKENS = 20_000
+# Hard stop, same rationale as above — and sized so a regression that
+# removes the breaker burns ~1.2M tokens instead of ~450k, which the e2e
+# assertion on ``burned_tokens`` separates cleanly.
+_WALLET_CAP_MAX_ROUNDS = 12
 
 # ABS-372: retry-a-cost_ceiling-trip scenario (``MOCK_COST_CEILING_ONCE``).
 # The buy-an-answer engine retries a nondeterministic cost_ceiling trip on a
@@ -431,6 +461,27 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
                 tool_input={"query": f"cumulative round {rounds_done + 1}"},
                 preamble="C" * _CUMULATIVE_TRIP_PREAMBLE_CHARS,
                 usage=TokenUsage(input_tokens=80, output_tokens=24),
+            )
+        return _final_answer_response(user_text)
+
+    if "MOCK_WALLET_CAP_TRIP" in user_text:
+        # ABS-404: keep issuing cheap-looking search rounds that each
+        # REPORT a large measured usage, so the turn's wallet burn climbs
+        # while every estimator stays quiet. Only the measured wallet
+        # breaker can end this turn; if it is broken the loop runs to the
+        # hard cap and answers, and the e2e assertions on
+        # terminated_reason and burned_tokens both fail loudly.
+        rounds_done = _count_search_rounds(request)
+        if rounds_done < _WALLET_CAP_MAX_ROUNDS:
+            return tool_use_response(
+                tool_id=f"t-walletcap-{rounds_done + 1}",
+                tool_name="search_bylaw_evidence",
+                tool_input={"query": f"wallet cap round {rounds_done + 1}"},
+                preamble=f"Expensive round {rounds_done + 1}.",
+                usage=TokenUsage(
+                    input_tokens=_WALLET_CAP_ROUND_INPUT_TOKENS,
+                    output_tokens=_WALLET_CAP_ROUND_OUTPUT_TOKENS,
+                ),
             )
         return _final_answer_response(user_text)
 

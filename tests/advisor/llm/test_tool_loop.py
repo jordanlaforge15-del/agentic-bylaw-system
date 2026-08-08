@@ -13,11 +13,13 @@ from advisor.llm import (
     LLMRole,
     Message,
     TextBlock,
+    TokenUsage,
     ToolDefinition,
     ToolResultBlock,
     ToolUseBlock,
     run_tool_loop,
 )
+from advisor.llm.budget import default_wallet_token_ceiling
 from advisor.llm.mock import MockGateway, text_response, tool_use_response
 from advisor.llm.tool_loop import ToolLoopError, text_of
 
@@ -719,3 +721,331 @@ async def test_tool_invocation_records_latency_on_handler_error():
 # compaction) tests removed alongside the reverted production code. See
 # evals/token_savings/20260610-ABS303-real-api-validation/ROLLUP.md for the
 # evidence that drove the revert (both optimizations were net-negative).
+
+
+# ----------------------------------------------------------------------
+# ABS-404: measured wallet-token breaker
+#
+# The two breakers above are pre-flight ESTIMATES of input tokens. The
+# chat wallet burns MEASURED input+output. Production showed the gap is
+# not academic: a turn that never tripped the 165k cumulative ceiling
+# still burned 247,566 wallet tokens, and with the pre-flight floor at 0
+# a user holding one token may start such a turn. These pin the third
+# breaker, the only one denominated in the unit the wallet charges.
+# ----------------------------------------------------------------------
+
+
+def _fat_usage(input_tokens: int, output_tokens: int = 0) -> TokenUsage:
+    return TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+
+
+@pytest.mark.asyncio
+async def test_wallet_breaker_trips_on_measured_burn():
+    """A loop whose ESTIMATES stay tiny but whose MEASURED usage is huge
+    trips the wallet breaker. This is the ABS-404 shape exactly: the
+    handler returns almost nothing (so the char estimator sees a small
+    request) while the gateway reports a large real burn. Neither
+    estimator breaker can see this; the wallet breaker must."""
+    calls = {"i": 0}
+
+    def script(req: CompletionRequest):
+        calls["i"] += 1
+        if not req.tools:
+            return text_response("synth", usage=_fat_usage(1_000, 100))
+        return tool_use_response(
+            tool_id=f"tu_{calls['i']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+            usage=_fat_usage(60_000, 5_000),
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def tiny_handler(_payload):
+        return "ok"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": tiny_handler},
+        # Generous estimator budgets — only the wallet ceiling can fire.
+        token_budget=10_000_000,
+        cumulative_token_budget=10_000_000,
+        wallet_token_ceiling=100_000,
+    )
+
+    assert result.terminated_reason == "wallet_cap_trip"
+    assert result.circuit_trip is not None
+    assert result.circuit_trip.budget == 100_000
+    # The recorded figure is the MEASURED burn that crossed the ceiling,
+    # so it is at or above it (65k after round 1, 130k after round 2).
+    assert result.circuit_trip.estimated_input_tokens >= 100_000
+    # Round 1 is always allowed: nothing has been measured before it.
+    assert result.circuit_trip.iteration >= 2
+    # The user is still owed an answer.
+    assert text_of(result.final_response) == "synth"
+
+
+@pytest.mark.asyncio
+async def test_wallet_breaker_counts_output_tokens_like_the_wallet_does():
+    """The wallet burns ``input + output``. A turn whose burn is mostly
+    OUTPUT must trip too — the estimator breakers model input only, so
+    output-heavy runaway turns are invisible to them by construction."""
+    calls = {"i": 0}
+
+    def script(req: CompletionRequest):
+        calls["i"] += 1
+        if not req.tools:
+            return text_response("synth", usage=_fat_usage(10, 10))
+        return tool_use_response(
+            tool_id=f"tu_{calls['i']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+            # Almost entirely output — invisible to an input estimator.
+            usage=_fat_usage(100, 40_000),
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def tiny_handler(_payload):
+        return "ok"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": tiny_handler},
+        token_budget=10_000_000,
+        cumulative_token_budget=10_000_000,
+        wallet_token_ceiling=50_000,
+    )
+
+    assert result.terminated_reason == "wallet_cap_trip"
+    assert result.circuit_trip is not None
+    assert result.circuit_trip.estimated_input_tokens >= 50_000
+
+
+@pytest.mark.asyncio
+async def test_wallet_breaker_cannot_fire_on_the_first_request():
+    """Nothing has been measured before round 1, so a first-request
+    blowout is still reported as ``cost_circuit_trip``. That is the
+    correct attribution: a request that never shipped burned no wallet
+    tokens, so the wallet ceiling has nothing to say about it."""
+    gateway = MockGateway(scripted=[text_response("bounded synthesis")])
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={},
+        token_budget=1,
+        wallet_token_ceiling=1,
+    )
+
+    assert result.terminated_reason == "cost_circuit_trip"
+
+
+@pytest.mark.asyncio
+async def test_wallet_breaker_takes_precedence_over_the_estimators():
+    """When the turn has ALREADY overspent in wallet terms, that is
+    reported even though the next request would also trip an estimator.
+    Measured overspend is ground truth; an estimate is a guess, and the
+    audit trail should name the thing that actually happened."""
+    calls = {"i": 0}
+
+    def script(req: CompletionRequest):
+        calls["i"] += 1
+        if not req.tools:
+            return text_response("synth")
+        return tool_use_response(
+            tool_id=f"tu_{calls['i']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+            usage=_fat_usage(80_000, 1_000),
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def fat_handler(_payload):
+        # Big enough that the per-request estimator would also trip on
+        # round 2 if the wallet breaker didn't get there first.
+        return "z" * 4_000
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": fat_handler},
+        token_budget=500,
+        cumulative_token_budget=500,
+        wallet_token_ceiling=50_000,
+    )
+
+    assert result.terminated_reason == "wallet_cap_trip"
+
+
+@pytest.mark.asyncio
+async def test_wallet_breaker_pass_through_under_ceiling():
+    """A normal turn well under the ceiling terminates organically with
+    no trip recorded — the breaker must not tax ordinary traffic."""
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1",
+                tool_name="search_bylaw_evidence",
+                tool_input={"q": "x"},
+                usage=_fat_usage(1_000, 200),
+            ),
+            text_response("organic answer.", usage=_fat_usage(1_200, 300)),
+        ]
+    )
+
+    async def handler(_payload):
+        return "small result"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+        wallet_token_ceiling=350_000,
+    )
+
+    assert result.terminated_reason == "end_turn"
+    assert result.circuit_trip is None
+    assert text_of(result.final_response) == "organic answer."
+
+
+@pytest.mark.asyncio
+async def test_wallet_breaker_disabled_by_non_positive_ceiling():
+    """``wallet_token_ceiling=0`` disables the breaker for rails that
+    are not wallet-billed. ``advisor.billing.answers.run_turn`` relies
+    on this: a paid report is bounded by its own per-slug budget, and a
+    chat wallet ceiling must never truncate an answer already paid for."""
+    calls = {"i": 0}
+
+    def script(req: CompletionRequest):
+        calls["i"] += 1
+        if calls["i"] >= 3 or not req.tools:
+            return text_response("organic answer.", usage=_fat_usage(90_000, 9_000))
+        return tool_use_response(
+            tool_id=f"tu_{calls['i']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+            usage=_fat_usage(90_000, 9_000),
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def handler(_payload):
+        return "ok"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+        wallet_token_ceiling=0,
+    )
+
+    # ~198k measured across the rounds — far past any sane ceiling — yet
+    # the turn ran to its natural end because the breaker is off.
+    assert result.terminated_reason == "end_turn"
+    assert result.circuit_trip is None
+    assert result.total_usage is not None
+    assert (
+        result.total_usage.input_tokens + result.total_usage.output_tokens
+        > 100_000
+    )
+
+
+@pytest.mark.asyncio
+async def test_wallet_breaker_records_synthesis_round_in_metrics():
+    """The forced-synthesis round is appended to ``per_iteration`` on a
+    wallet trip, so the round that carries the ceiling's slack term is
+    visible to observability rather than silently uncounted."""
+    calls = {"i": 0}
+
+    def script(req: CompletionRequest):
+        calls["i"] += 1
+        if not req.tools:
+            return text_response("synth", usage=_fat_usage(500, 100))
+        return tool_use_response(
+            tool_id=f"tu_{calls['i']}",
+            tool_name="search_bylaw_evidence",
+            tool_input={"q": "x"},
+            usage=_fat_usage(60_000, 0),
+        )
+
+    gateway = MockGateway(callable_=script)
+
+    async def handler(_payload):
+        return "ok"
+
+    result = await run_tool_loop(
+        gateway,
+        request=_request_with_tool(),
+        handlers={"search_bylaw_evidence": handler},
+        wallet_token_ceiling=100_000,
+    )
+
+    assert result.terminated_reason == "wallet_cap_trip"
+    iters = [m.iteration for m in result.per_iteration]
+    assert iters == sorted(iters)
+    assert iters[0] == 1
+    # Last round is the tools-stripped synthesis call.
+    assert result.per_iteration[-1].tool_call_count == 0
+    # And its usage is included in the aggregate the wallet will burn,
+    # which is why the documented bound is "ceiling + one synthesis
+    # request" rather than "ceiling".
+    assert result.total_usage is not None
+    assert (
+        result.total_usage.input_tokens + result.total_usage.output_tokens
+        > 100_000
+    )
+
+
+@pytest.mark.asyncio
+async def test_mock_wallet_cap_scenario_trips_the_wallet_breaker():
+    """The ``MOCK_WALLET_CAP_TRIP`` dispatcher scenario and the breaker
+    agree (ABS-404).
+
+    The e2e spec that pins the per-turn burn bound on the wire depends on
+    these two staying in sync — if the scenario's per-round usage or the
+    default ceiling drifts apart, that spec fails for an unrelated
+    reason. Cheap to assert here, where no stack is needed.
+    """
+    from advisor.llm.mock_dispatcher import _dispatch
+
+    request = CompletionRequest(
+        model="claude-opus-4-5",
+        system="You are a planner. anchor_label: 200 Barrington",
+        messages=[
+            Message(
+                role=LLMRole.USER,
+                content="MOCK_WALLET_CAP_TRIP expensive turn",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                name="search_bylaw_evidence",
+                description="Search the RCLUB.",
+                input_schema={"type": "object"},
+            )
+        ],
+    )
+
+    async def handler(_payload):
+        return "tiny evidence blob"
+
+    result = await run_tool_loop(
+        MockGateway(callable_=_dispatch),
+        request=request,
+        handlers={"search_bylaw_evidence": handler},
+        max_iterations=20,
+    )
+
+    assert result.terminated_reason == "wallet_cap_trip"
+    # Neither estimator could have caught this: the payload is tiny.
+    assert result.total_usage is not None
+    burned = result.total_usage.input_tokens + result.total_usage.output_tokens
+    ceiling = default_wallet_token_ceiling()
+    # Bounded by ceiling + the one synthesis call, and nowhere near the
+    # ~1.2M the scenario reaches at its hard cap with the breaker gone.
+    assert burned >= ceiling
+    assert burned < 3 * ceiling

@@ -60,6 +60,7 @@ from advisor.llm.budget import (
     CircuitTripInfo,
     default_cumulative_token_budget,
     default_token_budget,
+    default_wallet_token_ceiling,
 )
 from advisor.llm.mock import MockGateway
 from advisor.llm.tool_loop import ToolHandler, run_tool_loop
@@ -151,6 +152,17 @@ class ChatSession:
     # catalog.
     cumulative_token_budget: int = field(
         default_factory=default_cumulative_token_budget
+    )
+    # ABS-404: per-turn ceiling on MEASURED wallet tokens (input +
+    # output), enforced by the third breaker in ``run_tool_loop``. The
+    # two budgets above are pre-flight estimates of input tokens; this
+    # is the only one denominated in the unit ``_settle_token_burn``
+    # actually charges, so it is the only one that bounds how deep a
+    # single turn can drive a wallet negative. Default reads
+    # ``ADVISOR_TURN_MAX_WALLET_TOKENS``, falling back to two turns'
+    # worth of ``ADVISOR_TOKENS_PER_TURN``.
+    wallet_token_ceiling: int = field(
+        default_factory=default_wallet_token_ceiling
     )
     # Set by ``send_user_message_blocking`` when the cost-circuit
     # breaker fires on the most recent turn — ``None`` for turns that
@@ -278,6 +290,7 @@ class ChatSession:
             handlers=self.tool_handlers,
             token_budget=self.token_budget,
             cumulative_token_budget=self.cumulative_token_budget,
+            wallet_token_ceiling=self.wallet_token_ceiling,
             max_iterations=(
                 _tier_def.max_iterations
                 if _tier_def

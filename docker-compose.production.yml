@@ -87,12 +87,18 @@ services:
       ADVISOR_ENABLED_QUESTIONS: ${ADVISOR_ENABLED_QUESTIONS:-}
       # Token wallet / turns parameters (ABS-380), calibrated against measured
       # prod burn on ABS-416 — a real grounded question costs 103k-248k tokens.
+      # Grant and warn threshold resized on ABS-404 against the measured cost
+      # per wallet-counted token (~$28.9/MTok, docs/COST_MODEL.md).
       # Fallbacks here MUST track src/advisor/billing/turns.py.
       ADVISOR_TOKENS_PER_TURN: ${ADVISOR_TOKENS_PER_TURN:-175000}
-      ADVISOR_SIGNUP_TOKEN_GRANT: ${ADVISOR_SIGNUP_TOKEN_GRANT:-1750000}
+      ADVISOR_SIGNUP_TOKEN_GRANT: ${ADVISOR_SIGNUP_TOKEN_GRANT:-525000}
       ADVISOR_CHAT_MIN_BALANCE_TOKENS: ${ADVISOR_CHAT_MIN_BALANCE_TOKENS:-0}
-      ADVISOR_LOW_BALANCE_WARN_TOKENS: ${ADVISOR_LOW_BALANCE_WARN_TOKENS:-350000}
+      ADVISOR_LOW_BALANCE_WARN_TOKENS: ${ADVISOR_LOW_BALANCE_WARN_TOKENS:-175000}
       ADVISOR_CHAT_MAX_ITERATIONS: ${ADVISOR_CHAT_MAX_ITERATIONS:-20}
+      # ABS-404: per-turn ceiling on MEASURED wallet tokens (input + output).
+      # The only breaker in the unit the wallet charges — the ABS-291/305 ones
+      # estimate input tokens and cannot see an output-heavy runaway turn.
+      ADVISOR_TURN_MAX_WALLET_TOKENS: ${ADVISOR_TURN_MAX_WALLET_TOKENS:-350000}
       # Stripe — required only when ADVISOR_PAYMENTS_ENABLED=true. Token
       # top-up Price IDs (ABS-381). Legacy STRIPE_PRICE_<TIER>_<PACK> IDs are
       # RETIRED (checkout/pack → 410); do not configure them.

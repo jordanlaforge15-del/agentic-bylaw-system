@@ -3,7 +3,8 @@
 // Reconciled from the old ABS-314 free-question / CaseCredit trial grant to the
 // beta pivot (docs/decisions/2026-07-beta-pivot-turn-wallet-gated-reports.md,
 // D2): a brand-new user's wallet receives a one-time ADVISOR_SIGNUP_TOKEN_GRANT
-// (recalibrated on ABS-416; still ~10 turns) the first time they authenticate, lazily
+// (rate recalibrated on ABS-416, grant resized to ~3 turns on ABS-404 against
+// the measured cost anchor) the first time they authenticate, lazily
 // in resolve_or_create_user and idempotent on the `token_grant_issued` flag.
 //
 // This spec verifies:
@@ -59,7 +60,7 @@ test("brand-new user is granted the signup token wallet on first request", async
   expect(body.balance_tokens, "signup grant funds the wallet").toBe(
     SIGNUP_GRANT,
   );
-  // Backend-owned turns conversion: floor(1750000 / 175000) == 10.
+  // Backend-owned turns conversion: floor(525000 / 175000) == 3.
   expect(body.tokens_per_turn).toBe(TOKENS_PER_TURN);
   expect(body.approx_turns_remaining).toBe(SIGNUP_GRANT_TURNS);
   // The grant is well above the warn threshold: the trial user starts healthy.
