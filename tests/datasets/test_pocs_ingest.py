@@ -74,10 +74,12 @@ def test_pocs_config_parses_to_designated_corridors(tmp_path: Path):
         assert {
             f.canonical_attributes_json["street_name"] for f in features
         } == EXPECTED_STREETS
-        # Every feature is a designated segment geometry (LineString) — the
-        # whole point is that ST_Intersects has real geometry to match against.
+        # Every feature is a designated corridor geometry — the whole point is
+        # that the spatial predicates have real geometry to match against.
+        # Since ABS-435 each corridor is the set of HRM centreline segments
+        # between its bounding cross-streets, hence MultiLineString.
         assert all(
-            f.geometry_geojson["type"] == "LineString" for f in features
+            f.geometry_geojson["type"] == "MultiLineString" for f in features
         )
         # The raw schedule provenance is retained even though it's not canonical.
         quinpool = next(
@@ -85,6 +87,58 @@ def test_pocs_config_parses_to_designated_corridors(tmp_path: Path):
             if f.canonical_attributes_json["street_name"] == "Quinpool Road"
         )
         assert quinpool.attributes_json["SCHEDULE"] == "Schedule 7"
+
+
+# Real geocode for the ABS-435 address, from the dev-database geocode cache
+# (Google Maps resolver, confidence 0.95). It sits on the designated Quinpool
+# Road corridor; the pre-ABS-435 hand-traced line ran 130.2 m away from it.
+_CIVIC_6321_QUINPOOL = (-63.5992654, 44.6452024)
+
+# The true rooftop-to-centreline distance at 6321 Quinpool Rd is 36.8 m (a deep
+# commercial lot). 50 m gives headroom for a future centreline refresh while
+# still failing hard on the ~130 m tracing drift this ticket fixed.
+_MAX_CORRIDOR_DRIFT_M = 50.0
+
+
+def test_quinpool_corridor_follows_the_real_roadway(tmp_path: Path):
+    """Geometry regression for the ABS-435 tracing drift.
+
+    The committed corridor must actually run past civic 6321 Quinpool Road.
+    Before ABS-435 the hand-digitized line was 130 m off, which is what made
+    get_address_profile report abuts_pedestrian_street=false for an address on
+    a designated corridor — flipping the s.38(2)/s.69(d) ground-floor-use
+    branch to the wrong side.
+    """
+    import json
+    import math
+
+    from shapely.geometry import Point, shape
+    from shapely.ops import transform
+
+    config = CONFIG_PATH.read_text(encoding="utf-8")
+    geojson_path = next(
+        line.split(":", 1)[1].strip()
+        for line in config.splitlines()
+        if line.startswith("source_path:")
+    )
+    collection = json.loads(Path(geojson_path).read_text(encoding="utf-8"))
+    quinpool = next(
+        f for f in collection["features"]
+        if f["properties"]["STREET"] == "Quinpool Road"
+    )
+
+    # Project into a local metre frame centred on the address so shapely's
+    # planar distance is real metres (a degree of longitude is ~30% shorter
+    # than a degree of latitude at Halifax's latitude).
+    lon0, lat0 = _CIVIC_6321_QUINPOOL
+    m_per_deg_lat = 111_320.0
+    m_per_deg_lon = m_per_deg_lat * math.cos(math.radians(lat0))
+
+    def to_metres(x, y, z=None):
+        return ((x - lon0) * m_per_deg_lon, (y - lat0) * m_per_deg_lat)
+
+    corridor_m = transform(to_metres, shape(quinpool["geometry"]))
+    assert corridor_m.distance(Point(0.0, 0.0)) < _MAX_CORRIDOR_DRIFT_M
 
 
 def test_pocs_links_to_regional_centre_schedule_7_fragment(tmp_path: Path):

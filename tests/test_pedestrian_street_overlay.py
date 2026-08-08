@@ -350,3 +350,196 @@ def test_intersects_predicate_misses_line_point(seeded_db: str) -> None:
             predicate="intersects",
         )
     assert matches == []
+
+
+# --- ABS-435: abutment measured from the parcel, not the rooftop point ------
+#
+# A civic geocode returns a rooftop/centroid point, so the point-to-centreline
+# distance is dominated by lot depth rather than by whether the lot fronts the
+# street. Over the HRM parcels along Quinpool Road the distance runs 0.1–283 m
+# for parcels that genuinely front it and starts at 26.5 m for parcels that do
+# not — the populations overlap, so no point threshold separates them. That is
+# how 6321 Quinpool Rd (36.7 m out, squarely on the corridor) reported
+# abuts_pedestrian_street=false. Measured from the parcel boundary the question
+# IS separable: the front lot line sits on the right-of-way edge.
+#
+# These two fixtures pin both directions of that change on one corpus:
+#   deep lot  — rooftop 37 m out, front lot line 9 m out  -> True  (was False)
+#   back lot  — rooftop 28 m out, front lot line 25 m out -> False (was True)
+# The back lot is the guard that makes this a measurement fix and not a
+# threshold bump: simply widening the point buffer to catch the deep lot would
+# have started reporting the back lot as abutting.
+
+_DEEP_LOT_ADDRESS = "6321 Quinpool Road"
+_DEEP_LOT_NORMALIZED = "civic:6321 quinpool rd"
+_DEEP_LOT_LON = -63.6055
+
+_BACK_LOT_ADDRESS = "12 Backlot Lane"
+_BACK_LOT_NORMALIZED = "civic:12 backlot ln"
+_BACK_LOT_LON = -63.6045
+
+_M_PER_DEG_LAT = 111_320.0
+# Half-width of the synthetic lots, in degrees of longitude at Quinpool's
+# latitude. Narrow enough that the two lots never overlap each other or the
+# 6184 Quinpool fixture point.
+_LOT_HALF_WIDTH_DEG = 15.0 / (_M_PER_DEG_LAT * 0.712)
+
+
+def _lat_north_of_quinpool(metres: float) -> float:
+    return _QUINPOOL_LAT + metres / _M_PER_DEG_LAT
+
+
+def _lot_polygon(lon: float, *, front_m: float, rear_m: float) -> dict:
+    """A rectangular lot fronting the Quinpool corridor.
+
+    ``front_m`` / ``rear_m`` are the front and rear lot lines' distances north
+    of the (constant-latitude) centreline.
+    """
+    west, east = lon - _LOT_HALF_WIDTH_DEG, lon + _LOT_HALF_WIDTH_DEG
+    south, north = _lat_north_of_quinpool(front_m), _lat_north_of_quinpool(rear_m)
+    return {
+        "type": "Polygon",
+        "coordinates": [
+            [[west, south], [east, south], [east, north], [west, north], [west, south]]
+        ],
+    }
+
+
+def _polygon_bbox(geom: dict) -> dict:
+    ring = geom["coordinates"][0]
+    xs = [c[0] for c in ring]
+    ys = [c[1] for c in ring]
+    return {"minx": min(xs), "miny": min(ys), "maxx": max(xs), "maxy": max(ys)}
+
+
+def _add_parcels_dataset(session) -> int:
+    """A parcel fabric tagged role=property_parcels, the way HRM's is."""
+    dataset = ExternalDataset(
+        name="halifax_property_parcels",
+        publisher="HRM",
+        format="geojson",
+        content_hash="hash-parcels",
+        crs="EPSG:4326",
+        feature_count=2,
+        schema_mapping_json={},
+        parse_status=ParseStatus.PARSED,
+        metadata_json={"role": "property_parcels"},
+    )
+    session.add(dataset)
+    session.flush()
+    for key, geom in (
+        ("PID-DEEP", _lot_polygon(_DEEP_LOT_LON, front_m=9.0, rear_m=49.0)),
+        ("PID-BACK", _lot_polygon(_BACK_LOT_LON, front_m=25.0, rear_m=65.0)),
+    ):
+        session.add(
+            ExternalDatasetFeature(
+                external_dataset_id=dataset.id,
+                feature_key=key,
+                attributes_json={},
+                canonical_attributes_json={"parcel_id": key},
+                geometry_geojson=geom,
+                geometry_bbox_json=_polygon_bbox(geom),
+                parse_status=ParseStatus.PARSED,
+                metadata_json={},
+            )
+        )
+    session.flush()
+    return dataset.id
+
+
+@pytest.fixture()
+def seeded_db_with_parcels(tmp_path: Path) -> str:
+    """POCS corpus plus a parcel fabric and the two lot-depth fixtures."""
+    db_url = f"sqlite:///{tmp_path / 'pocs_parcels.db'}"
+    create_layer1(db_url)
+    create_layer2(db_url)
+    with session_scope(db_url) as session:
+        document_id = _base_corpus(session)
+        frag = _add_fragment(
+            session, document_id=document_id, label="Schedule 7", path="schedule_7"
+        )
+        _add_pocs_dataset(session, fragment_id=frag)
+        _add_parcels_dataset(session)
+        _add_geocode(
+            session,
+            normalized=_DEEP_LOT_NORMALIZED,
+            raw=_DEEP_LOT_ADDRESS,
+            point={
+                "type": "Point",
+                "coordinates": [_DEEP_LOT_LON, _lat_north_of_quinpool(37.0)],
+            },
+        )
+        _add_geocode(
+            session,
+            normalized=_BACK_LOT_NORMALIZED,
+            raw=_BACK_LOT_ADDRESS,
+            point={
+                "type": "Point",
+                "coordinates": [_BACK_LOT_LON, _lat_north_of_quinpool(28.0)],
+            },
+        )
+    return db_url
+
+
+def test_deep_lot_on_corridor_abuts_via_parcel(seeded_db_with_parcels: str) -> None:
+    """AC — 6321 Quinpool Rd reports abuts_pedestrian_street=true.
+
+    The rooftop point is 37 m from the centreline, beyond DEFAULT_ABUT_DISTANCE_M,
+    but the lot fronts the corridor 9 m out. This is the ABS-435 false negative.
+    """
+    with session_scope(seeded_db_with_parcels) as session:
+        profile = RetrievalService(session).get_address_profile(_DEEP_LOT_ADDRESS)
+
+    assert profile.unresolvable is False
+    assert profile.abuts_pedestrian_street is True
+    pocs = [o for o in profile.overlays if o.kind == "pedestrian_street"]
+    assert pocs and pocs[0].label == "Quinpool Road"
+
+
+def test_deep_lot_would_miss_on_the_rooftop_point_alone(
+    seeded_db_with_parcels: str,
+) -> None:
+    """Pins WHY the fix is the parcel and not the geometry alone: even against
+    the corrected corridor the rooftop point is outside the point buffer."""
+    location = ResolvedLocation(
+        kind="point",
+        geometry={
+            "type": "Point",
+            "coordinates": [_DEEP_LOT_LON, _lat_north_of_quinpool(37.0)],
+        },
+    )
+    with session_scope(seeded_db_with_parcels) as session:
+        matches = query_features(
+            session,
+            dataset_id=_pocs_dataset_id(session),
+            location=location,
+            predicate="abuts",
+            abut_distance_m=DEFAULT_ABUT_DISTANCE_M,
+        )
+    assert matches == []
+
+
+def test_back_lot_within_the_point_buffer_does_not_abut(
+    seeded_db_with_parcels: str,
+) -> None:
+    """The guard against a naive threshold bump.
+
+    This lot's rooftop point is 28 m from the corridor — inside the 30 m point
+    buffer — but its front lot line is 25 m out, so it does not front the
+    designated street. Measuring from the parcel keeps it a definitive False.
+    """
+    with session_scope(seeded_db_with_parcels) as session:
+        profile = RetrievalService(session).get_address_profile(_BACK_LOT_ADDRESS)
+
+    assert profile.unresolvable is False
+    assert profile.abuts_pedestrian_street is False
+    assert not [o for o in profile.overlays if o.kind == "pedestrian_street"]
+
+
+def test_parcel_upgrade_is_skipped_without_a_parcel_fabric(seeded_db: str) -> None:
+    """No parcels dataset in scope — the point path still answers, and the
+    shallow-lot fixture (6184 Quinpool, 10 m out) stays True."""
+    with session_scope(seeded_db) as session:
+        profile = RetrievalService(session).get_address_profile("6184 Quinpool Road")
+
+    assert profile.abuts_pedestrian_street is True
