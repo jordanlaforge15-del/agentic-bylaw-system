@@ -132,12 +132,7 @@ def stage_upload(
                     break
                 out.write(chunk)
     except OSError as exc:
-        logger.error(
-            "submission storage is not writable: root=%s error=%s",
-            root,
-            exc,
-            exc_info=True,
-        )
+        logger.exception("submission storage is not writable: root=%s", root)
         raise HTTPException(
             status_code=503,
             detail={
