@@ -104,6 +104,21 @@ Per-credit expected cost is therefore ~$2–3 CAD, not ~$18 CAD.
    The worst case is now a chosen ceiling rather than `max_iterations ×
    per-request cap`. This is also the load-bearing cost primitive for the
    priced-question catalog — it bounds the cost of each PAID answer.
+
+   **ABS-404 adds a third, MEASURED breaker** for the chat-wallet rail. Both
+   breakers above are pre-flight *estimates* of *input* tokens, and §1 is
+   exactly why that is not enough: the wallet bills `input + output`, output
+   is never estimated, and the 4-chars/token heuristic under-counts JSON
+   tool_results. A prod turn burned 247,566 wallet tokens under the 165k
+   cumulative cap. The new breaker sums the provider's *reported*
+   `input + output` between iterations and forces synthesis
+   (`terminated_reason="wallet_cap_trip"`) at
+   `ADVISOR_TURN_MAX_WALLET_TOKENS` (default `2 × ADVISOR_TOKENS_PER_TURN`
+   = 350k ≈ **$10** at the $28.9/MTok wallet-counted rate below). It is
+   disabled on the paid-report rail, which is bounded by its own per-slug
+   budget instead. Note the two ceilings are in different units and should
+   not be compared directly: 165k billed-equivalent *input* tokens versus
+   350k measured *wallet-counted* tokens.
 2. **Cap-hit forced synthesis costs $2–3.50 per occurrence** (output-heavy,
    3000+ tokens). Currently 0% cap-hit rate in the measured prod posture
    (the ABS-304 revert eliminated the WI-1/WI-4-induced failure mode), but

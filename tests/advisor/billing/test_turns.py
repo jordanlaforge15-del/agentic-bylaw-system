@@ -15,9 +15,9 @@ def test_defaults_match_measured_calibration() -> None:
     # tokens). The dependent knobs are whole multiples of the rate, so the
     # turn counts the product advertises stay exactly what they were.
     assert turns.tokens_per_turn() == 175_000
-    assert turns.signup_token_grant() == 1_750_000
+    assert turns.signup_token_grant() == 525_000
     assert turns.chat_min_balance_tokens() == 0
-    assert turns.low_balance_warn_tokens() == 350_000
+    assert turns.low_balance_warn_tokens() == 175_000
 
 
 def test_default_knobs_are_whole_turns() -> None:
@@ -30,9 +30,9 @@ def test_default_knobs_are_whole_turns() -> None:
     """
     per_turn = turns.tokens_per_turn()
     assert turns.signup_token_grant() % per_turn == 0
-    assert turns.signup_token_grant() // per_turn == 10
+    assert turns.signup_token_grant() // per_turn == 3
     assert turns.low_balance_warn_tokens() % per_turn == 0
-    assert turns.low_balance_warn_tokens() // per_turn == 2
+    assert turns.low_balance_warn_tokens() // per_turn == 1
 
 
 def test_approx_turns_floors_division(monkeypatch) -> None:

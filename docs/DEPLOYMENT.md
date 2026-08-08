@@ -218,10 +218,11 @@ ADVISOR_BILLING_SUCCESS_URL, ADVISOR_BILLING_CANCEL_URL
 # no rebuild. Defaults below are measured against prod burn: a real grounded
 # question costs 103k-248k tokens (src/advisor/billing/turns.py has the sample).
 ADVISOR_TOKENS_PER_TURN=175000          # display divisor (backend-owned "~N turns")
-ADVISOR_SIGNUP_TOKEN_GRANT=1750000      # one-time new-user wallet grant (10 turns)
+ADVISOR_SIGNUP_TOKEN_GRANT=525000       # one-time new-user wallet grant (3 turns)
 ADVISOR_CHAT_MIN_BALANCE_TOKENS=0       # pre-flight floor: chat 402s at balance <= floor
-ADVISOR_LOW_BALANCE_WARN_TOKENS=350000  # "low balance" at <= warn (2 turns)
+ADVISOR_LOW_BALANCE_WARN_TOKENS=175000  # "low balance" at <= warn (1 turn)
 ADVISOR_CHAT_MAX_ITERATIONS=20          # tool-loop cap per chat turn
+ADVISOR_TURN_MAX_WALLET_TOKENS=350000   # per-turn ceiling on MEASURED burn (2 turns)
 
 # Per-report gate (ABS-384): which of the five report SKUs are on sale
 ADVISOR_ENABLED_QUESTIONS   # csv slugs; `*` = all; unset/empty = NONE (deny-by-default)
@@ -230,13 +231,23 @@ ADVISOR_ENABLED_QUESTIONS   # csv slugs; `*` = all; unset/empty = NONE (deny-by-
 DEMO_PASSWORD=$$<password>    # NB: literal $ in value must be escaped as $$ for compose
 ```
 
-> **Signup-grant cost note (ABS-404 owns the final sizing).** At the ~$0.55 USD
-> per 100k wallet-token anchor, one 175k turn costs ~$0.96, so the 10-turn
-> signup grant is ~$9.60 of API spend per new account. If that exposure is too
-> large for the current invite volume, lower `ADVISOR_SIGNUP_TOKEN_GRANT` in the
-> prod env and `docker compose up -d advisor` — no code change or rebuild
-> needed, and the "~N turns" the free-trial card advertises follows the env
-> value automatically.
+> **Signup-grant cost note (resized on ABS-404).** The `~$0.55 USD per 100k
+> wallet-token` anchor this note used to quote was wrong by ~5x. The wallet
+> counts `input + output` only, while cache writes and reads are 35% of the
+> dollar cost — so the real figure is cost per *wallet-counted* token, measured
+> at **~$28.9/MTok USD** (`docs/COST_MODEL.md`, ABS-303 real-API run). One 175k
+> turn is therefore ~$5.05, not ~$0.96, and the old 10-turn grant was ~$50 of
+> API spend per free, no-card signup rather than ~$9.60. The default is now 3
+> turns (~$15). Both knobs are read fresh per request, so retuning either is
+> `docker compose up -d advisor` — no code change or rebuild — and the "~N
+> turns" the free-trial card advertises follows the env value automatically.
+
+> **Do not set `ADVISOR_TURN_MAX_WALLET_TOKENS=0`.** Non-positive values fall
+> back to the derived default by design: zero would otherwise disable the only
+> breaker that bounds a turn in the unit the wallet charges, restoring the
+> unbounded burn ABS-404 fixed. Raise it if grounded answers are being
+> truncated; the trip is auditable as `trip_reason=wallet_cap_trip` on the
+> `llm_call` UsageEvent's `metadata_json`.
 
 ### Compose variable substitution
 

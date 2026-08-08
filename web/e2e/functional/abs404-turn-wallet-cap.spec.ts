@@ -39,6 +39,7 @@ import { expect, test } from "@playwright/test";
 
 import { E2E_API_URL } from "../fixtures/test-env";
 import {
+  CHAT_MIN_BALANCE,
   SIGNUP_GRANT,
   TOKENS_PER_TURN,
   TURN_MAX_WALLET_TOKENS,
@@ -181,13 +182,19 @@ test("one runaway turn is capped in the wallet's own unit, not just in estimated
   ).toBeLessThan(3 * TURN_MAX_WALLET_TOKENS);
 
   // 3. And therefore the account is not locked out. This is the harm
-  //    the ticket describes, stated directly: a brand-new wallet must
-  //    survive its first question with turns to spare.
+  //    the ticket describes, stated directly.
+  //
+  //    Lockout is `balance <= CHAT_MIN_BALANCE` (the pre-flight floor,
+  //    0), so a positive balance is the assertion. Deliberately NOT
+  //    `approx_turns_remaining > 0`: that display figure floors to 0
+  //    below one whole turn, and against the ABS-404 3-turn grant a
+  //    worst-case runaway first question can legitimately land there
+  //    with chat still working. Asserting on it would pin a display
+  //    rounding rule while claiming to test a lockout.
   const balanceTokens = Number(balance?.balance_tokens ?? 0);
   expect(
     balanceTokens,
     `a brand-new wallet (grant ${SIGNUP_GRANT}) went to ${balanceTokens} ` +
       "after ONE question — the ABS-404 lockout has regressed",
-  ).toBeGreaterThan(0);
-  expect(Number(balance?.approx_turns_remaining ?? 0)).toBeGreaterThan(0);
+  ).toBeGreaterThan(CHAT_MIN_BALANCE);
 });
