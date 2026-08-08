@@ -135,3 +135,76 @@ def test_concurrent_signup_grants_issue_exactly_once() -> None:
         )
         assert user.token_balance == grant
         assert user.metadata_json.get("token_grant_issued") is True
+
+
+@pg_only
+def test_schema_refuses_a_second_signup_grant_without_the_app_lock() -> None:
+    """The one-grant rule holds even with the service's lock out of the
+    picture (ABS-415).
+
+    ABS-404's ``SELECT … FOR UPDATE`` fixed the racing *caller*; this pins
+    the backstop underneath it. Ten threads write the signup grant
+    directly through ``grant_tokens`` — no flag check, no user-row lock,
+    exactly the shape of the production double-grant — and the partial
+    unique index ``uq_advisor_token_transaction_signup_grant`` is the only
+    thing standing between them and a doubled wallet. Exactly one commits;
+    the rest die on an IntegrityError with their balance move rolled back
+    alongside their ledger row.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from advisor.db.wallet import REASON_SIGNUP_GRANT, grant_tokens
+
+    suffix = uuid.uuid4().hex[:12]
+    with session_scope(_DB_URL) as db:
+        user = User(
+            clerk_user_id=f"abs415-schema-{suffix}",
+            email=f"abs415-schema-{suffix}@test.local",
+            token_balance=0,
+        )
+        db.add(user)
+        db.flush()
+        uid = user.id
+
+    start = threading.Barrier(10)
+    outcomes: list[bool] = []
+    lock = threading.Lock()
+
+    def _grant() -> None:
+        start.wait()
+        try:
+            with session_scope(_DB_URL) as db:
+                user = db.get(User, uid)
+                grant_tokens(
+                    db, user=user, amount=25_000, reason=REASON_SIGNUP_GRANT
+                )
+            ok = True
+        except IntegrityError:
+            ok = False
+        with lock:
+            outcomes.append(ok)
+
+    threads = [threading.Thread(target=_grant) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert sum(outcomes) == 1, (
+        f"{sum(outcomes)} of 10 concurrent signup grants committed; "
+        "the partial unique index is not enforcing one-per-user"
+    )
+    with session_scope(_DB_URL) as db:
+        user = db.get(User, uid)
+        rows = (
+            db.query(TokenTransaction)
+            .filter(
+                TokenTransaction.user_id == uid,
+                TokenTransaction.entry_type == "grant",
+            )
+            .all()
+        )
+        assert len(rows) == 1
+        # The balance moved exactly once: a rejected insert must not leave
+        # its half of the read-modify-write behind.
+        assert user.token_balance == 25_000

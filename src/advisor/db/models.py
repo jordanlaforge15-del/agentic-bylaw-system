@@ -180,6 +180,27 @@ class TokenTransaction(Base):
             "user_id",
             "id",
         ),
+        # ABS-415: the signup free-trial grant is one per user, forever, and
+        # the database is what says so. The application check-and-set in
+        # ``wallet.grant_signup_tokens_if_needed`` is serialised on the user
+        # row (ABS-404), but that only binds callers that take the lock;
+        # production shipped two ``+25,000`` grants for one user on
+        # 2026-07-17 precisely because an app-level guard was the only guard.
+        # This is the same defence-in-depth the top-up path already gets from
+        # UNIQUE(stripe_checkout_session_id): a second signup grant is not
+        # "unlikely", it is impossible. Scoped to the signup reason so admin
+        # gifts (also ``grant`` rows) stay unconstrained.
+        Index(
+            "uq_advisor_token_transaction_signup_grant",
+            "user_id",
+            unique=True,
+            postgresql_where=text(
+                "entry_type = 'grant' AND reason = 'signup_grant'"
+            ),
+            sqlite_where=text(
+                "entry_type = 'grant' AND reason = 'signup_grant'"
+            ),
+        ),
     )
 
     # BigInteger PK on Postgres (this ledger is high-volume and append-only),
