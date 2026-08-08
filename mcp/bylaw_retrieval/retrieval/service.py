@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
-from typing import Callable
+from typing import Any, Callable
 
 from sqlalchemy import (
     Select,
@@ -246,10 +246,10 @@ class RetrievalService:
         """
         self.session = session
         self._default_document_id_resolver = default_document_id_resolver
-        # Memo for the ABS-435 parcel upgrade: one indexed ST_Contains per
-        # distinct resolved location, reused across the datasets and fragments
-        # a single request touches.
-        self._abut_location_cache: dict[str, tuple[ResolvedLocation, float]] = {}
+        # Memo for the ABS-435 parcel upgrade, keyed by resolved geometry: one
+        # indexed ST_Contains per distinct location, reused across the datasets
+        # and fragments a single request touches. None = looked up, no parcel.
+        self._abut_location_cache: dict[str, dict[str, Any] | None] = {}
 
     def _resolve_default_document_ids(self) -> list[int] | None:
         if self._default_document_id_resolver is None:
@@ -1375,36 +1375,50 @@ class RetrievalService:
             return resolved, PARCEL_ABUT_DISTANCE_M
 
         cache_key = json.dumps(resolved.geometry, sort_keys=True)
-        cached = self._abut_location_cache.get(cache_key)
-        if cached is not None:
-            return cached
+        if cache_key in self._abut_location_cache:
+            parcel_geometry = self._abut_location_cache[cache_key]
+        else:
+            parcel_geometry = self._containing_parcel_geometry(resolved)
+            self._abut_location_cache[cache_key] = parcel_geometry
 
-        result = (resolved, DEFAULT_ABUT_DISTANCE_M)
+        if parcel_geometry is None:
+            return resolved, DEFAULT_ABUT_DISTANCE_M
+        # Rebuild the location from THIS caller's resolved location rather than
+        # caching the ResolvedLocation itself: the cache is keyed by geometry
+        # alone, so a shared entry must not carry another address's confidence
+        # or reference_text.
+        return (
+            ResolvedLocation(
+                kind="parcel",
+                geometry=parcel_geometry,
+                confidence=resolved.confidence,
+                source=f"{resolved.source}+parcel",
+                reference_text=resolved.reference_text,
+            ),
+            PARCEL_ABUT_DISTANCE_M,
+        )
+
+    def _containing_parcel_geometry(
+        self, resolved: ResolvedLocation
+    ) -> dict[str, Any] | None:
+        """GeoJSON of the parcel containing ``resolved``, or None."""
         parcels_ids = self._parcels_dataset_ids()
-        if parcels_ids:
-            try:
-                point = shapely_shape(resolved.geometry)
-            except (TypeError, ValueError, KeyError):
-                point = None
-            if point is not None and not point.is_empty:
-                if point.geom_type != "Point":
-                    point = point.representative_point()
-                parcel = find_containing_feature(
-                    self.session, dataset_ids=parcels_ids, point=point
-                )
-                if parcel is not None and parcel.geometry_geojson:
-                    result = (
-                        ResolvedLocation(
-                            kind="parcel",
-                            geometry=parcel.geometry_geojson,
-                            confidence=resolved.confidence,
-                            source=f"{resolved.source}+parcel",
-                            reference_text=resolved.reference_text,
-                        ),
-                        PARCEL_ABUT_DISTANCE_M,
-                    )
-        self._abut_location_cache[cache_key] = result
-        return result
+        if not parcels_ids:
+            return None
+        try:
+            point = shapely_shape(resolved.geometry)
+        except (TypeError, ValueError, KeyError):
+            return None
+        if point.is_empty:
+            return None
+        if point.geom_type != "Point":
+            point = point.representative_point()
+        parcel = find_containing_feature(
+            self.session, dataset_ids=parcels_ids, point=point
+        )
+        if parcel is None or not parcel.geometry_geojson:
+            return None
+        return parcel.geometry_geojson
 
     def _location_for_role(
         self, role: str, resolved: ResolvedLocation
