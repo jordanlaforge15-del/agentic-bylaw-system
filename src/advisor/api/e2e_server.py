@@ -2468,7 +2468,10 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
             finally:
                 db.close()
 
-            if not body.refine_message:
+            # A non-captured answer has nothing to refine — hand the state
+            # back so the spec fails on the real assertion (status) rather
+            # than on an opaque RefinementNotAvailableError 500.
+            if not body.refine_message or state.get("status") != "captured":
                 return state
 
             # Sibling proof for run_refinement — a fresh low-cap connection
