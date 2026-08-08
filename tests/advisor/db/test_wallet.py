@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
+from advisor.billing.turns import signup_token_grant
 from advisor.db.models import TokenTransaction, User
 from advisor.db.wallet import (
     adjust_tokens,
@@ -221,12 +222,14 @@ def test_signup_grant_is_idempotent(tmp_path: Path) -> None:
         user = s.get(User, uid)
         assert grant_signup_tokens_if_needed(s, user=user) is True
         assert user.metadata_json.get("token_grant_issued") is True
-        assert user.token_balance == 25_000
+        # Read the configured grant rather than a literal so a re-calibration
+        # of the wallet parameters (ABS-416) doesn't red-herring this test.
+        assert user.token_balance == signup_token_grant()
 
     with session_scope(db_url) as s:
         user = s.get(User, uid)
         # Second call is a no-op — no second grant even after burning to 0.
-        burn_tokens(s, user=user, amount=25_000)
+        burn_tokens(s, user=user, amount=signup_token_grant())
         assert grant_signup_tokens_if_needed(s, user=user) is False
 
     with session_scope(db_url) as s:

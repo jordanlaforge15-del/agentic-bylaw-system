@@ -20,13 +20,23 @@ for metadata-less events.
 
 Business parameters
 -------------------
-Token quantities and prices come from the design spec's business-parameters
-table and are placeholders pending final launch pricing — confirm before
-launch:
+Prices come from the design spec's business-parameters table and are
+placeholders pending final launch pricing — confirm before launch. The
+token quantities were rescaled on ABS-416 when ``DEFAULT_TOKENS_PER_TURN``
+was recalibrated from 2,500 to 175,000 against measured prod burn: each
+SKU keeps the number of turns it has always advertised (and its price),
+so only the token expression of that promise changed. Without the rescale
+every SKU would have rendered "~0 turns" on the pricing page.
 
-* ``small``  — 20,000 tokens, $15 CAD.
-* ``medium`` — 75,000 tokens, $50 CAD.
-* ``large``  — 200,000 tokens, $120 CAD.
+* ``small``  —  8 turns =  1,400,000 tokens, $15 CAD.
+* ``medium`` — 30 turns =  5,250,000 tokens, $50 CAD.
+* ``large``  — 80 turns = 14,000,000 tokens, $120 CAD.
+
+The quantities are literal ints, deliberately NOT derived from
+``turns.tokens_per_turn()``: what a purchase credits must be stable and
+auditable against the price paid, so it must not move when an operator
+flips the display divisor. A future recalibration therefore has to touch
+this table too — the ABS-416 regression test pins the turn counts.
 """
 from __future__ import annotations
 
@@ -73,24 +83,25 @@ class Topup:
         return f"STRIPE_PRICE_TOPUP_{self.sku.upper()}"
 
 
-# Top-up catalog. Token quantities and prices come straight from the design
-# spec; adjusting either is a code change + test update.
+# Top-up catalog. Prices come straight from the design spec; token
+# quantities are the ABS-416 recalibration of the same advertised turn
+# counts. Adjusting either is a code change + test update.
 TOPUP_SMALL_DEF = Topup(
     sku=TOPUP_SMALL,
     display_name="Small top-up",
-    tokens=20_000,
+    tokens=1_400_000,  # 8 turns @ 175k
     price_cents=1500,  # $15 CAD
 )
 TOPUP_MEDIUM_DEF = Topup(
     sku=TOPUP_MEDIUM,
     display_name="Medium top-up",
-    tokens=75_000,
+    tokens=5_250_000,  # 30 turns @ 175k
     price_cents=5000,  # $50 CAD
 )
 TOPUP_LARGE_DEF = Topup(
     sku=TOPUP_LARGE,
     display_name="Large top-up",
-    tokens=200_000,
+    tokens=14_000_000,  # 80 turns @ 175k
     price_cents=12000,  # $120 CAD
 )
 

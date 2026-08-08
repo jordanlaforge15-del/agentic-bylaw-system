@@ -17,10 +17,12 @@ import {
   signInAs,
   test,
 } from "../auth/fixtures";
+import {
+  SIGNUP_GRANT,
+  SIGNUP_GRANT_TURNS,
+} from "../fixtures/wallet-params";
 
-const SIGNUP_GRANT = 25_000;
-const TOKENS_PER_TURN = 2_500;
-const INITIAL_TURNS = SIGNUP_GRANT / TOKENS_PER_TURN; // 10
+const INITIAL_TURNS = SIGNUP_GRANT_TURNS; // 10
 
 // Tier display names the strip must never render (retired vocabulary). The
 // word "complex" on its own is intentionally NOT matched — it appears
@@ -51,7 +53,10 @@ test("strip shows Case # and ~turns seeded from the wallet, no token/tier copy",
     /Counts are approximate — complex questions use more/i,
   );
   // No raw token counts and no tier vocabulary anywhere in the DOM copy.
-  await expect(strip).not.toContainText(/25[,.]?000|tokens?\b/i);
+  // Raw token counts never appear — neither the grant nor the divisor.
+  await expect(strip).not.toContainText(
+    new RegExp(`${SIGNUP_GRANT.toLocaleString("en-CA")}|tokens?\\b`, "i"),
+  );
   await expect(strip).not.toContainText(TIER_VOCAB);
 });
 

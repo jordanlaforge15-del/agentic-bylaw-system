@@ -48,16 +48,25 @@ graduate to "quality" and be turned on without a redeploy.
    "Counts are approximate — complex questions use more." Calibrate the factor
    by replaying the ABS-305 estimator over persisted transcripts before launch.
 
-### Business parameters (defaults; confirm before launch copy freezes)
+### Business parameters (calibrated on ABS-416, 2026-08-08)
 
-| Parameter | Default |
-| -- | -- |
-| `ADVISOR_TOKENS_PER_TURN` | 2,500 (calibrate from transcript replay) |
-| `ADVISOR_SIGNUP_TOKEN_GRANT` | 25,000 ≈ ~10 turns |
-| Top-ups (CAD) | small $15 → 20k ≈ ~8 turns · medium $50 → 75k ≈ ~30 · large $120 → 200k ≈ ~80 |
-| `ADVISOR_CHAT_MIN_BALANCE_TOKENS` (floor) | 0 |
-| `ADVISOR_LOW_BALANCE_WARN_TOKENS` (warn) | 5,000 |
-| `ADVISOR_CHAT_MAX_ITERATIONS` | 20 |
+| Parameter | Default | Was (placeholder) |
+| -- | -- | -- |
+| `ADVISOR_TOKENS_PER_TURN` | 175,000 | 2,500 |
+| `ADVISOR_SIGNUP_TOKEN_GRANT` | 1,750,000 = 10 turns | 25,000 |
+| Top-ups (CAD) | small $15 → 1.4M = 8 turns · medium $50 → 5.25M = 30 · large $120 → 14M = 80 | 20k / 75k / 200k |
+| `ADVISOR_CHAT_MIN_BALANCE_TOKENS` (floor) | 0 | 0 |
+| `ADVISOR_LOW_BALANCE_WARN_TOKENS` (warn) | 350,000 = 2 turns | 5,000 |
+| `ADVISOR_CHAT_MAX_ITERATIONS` | 20 | 20 |
+
+The 2,500 placeholder was ~70x low: measured against prod, a real grounded
+question burns 103k–248k tokens, so every surface promised dozens-to-hundreds
+of questions against a wallet worth a handful. 175,000 is the midpoint of the
+two full-research prod questions and sits above the recent all-turn mean, so
+the advertised count errs toward under-promising. The token-denominated knobs
+were all sized in *turns* against the old rate, so each is rescaled by the same
+factor and the turn counts the product advertises are unchanged. Full sample
+and derivation: `src/advisor/billing/turns.py`.
 
 ## Design specification (D1–D8)
 
@@ -188,13 +197,21 @@ backend before web** — the 0023 migration is additive / zero-downtime.
 
 ## Open decisions (confirm before launch copy freezes)
 
-1. **`ADVISOR_TOKENS_PER_TURN` value** — 2,500 is a placeholder; calibrate from
-   the ABS-305 estimator replay over persisted `transcript_json` (zero API
-   spend) before the pricing copy freezes.
-2. **Top-up amounts / prices** — the $15 / $50 / $120 ladder is a default; the
-   token grants per SKU depend on the calibrated factor above.
-3. **Signup grant size** — 25,000 (~10 turns) is generous for a trial; revisit
-   against trial-to-paid conversion once the factor is calibrated.
+1. ~~**`ADVISOR_TOKENS_PER_TURN` value**~~ — **RESOLVED (ABS-416, 2026-08-08):**
+   175,000, calibrated against measured prod burn rather than transcript
+   replay. Prod's `advisor_usage_event` already records one row per assistant
+   turn whose totals match the wallet burn exactly, so the ground truth was
+   directly available and no replay was needed.
+2. ~~**Top-up token grants per SKU**~~ — **RESOLVED (ABS-416):** rescaled with
+   the factor so each SKU still credits the turns it advertises (8 / 30 / 80).
+   The **$15 / $50 / $120 price ladder itself is still open** and belongs to
+   ABS-404. At the ~$0.55 USD / 100k-token anchor a 175k turn costs ~$0.96
+   against $1.50–$1.88 of revenue per turn — a real but thin gross margin that
+   the pricing work should confirm before launch.
+3. **Signup grant size** — still open, and now materially more expensive:
+   10 turns is ~$9.60 of API spend per new account. Revisit against
+   trial-to-paid conversion on ABS-404. `ADVISOR_SIGNUP_TOKEN_GRANT` is a
+   no-restart env knob, so shrinking it is an ops flip, not a deploy.
 
 ## Not doing (in this pivot)
 

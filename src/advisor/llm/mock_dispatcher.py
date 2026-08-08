@@ -491,9 +491,20 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
         # turn trips the pre-flight ``insufficient_tokens`` floor. Answers
         # directly (no grounding tool) with a usage large enough to overdraw
         # the signup grant. Used by the out-of-tokens e2e.
+        #
+        # Derived from the configured grant rather than hardcoded (ABS-416):
+        # the literal 30,000 here was sized against the old 25,000-token
+        # grant and silently stopped overdrawing anything when the grant was
+        # recalibrated to 1,750,000, turning the out-of-tokens e2e green for
+        # the wrong reason. Imported lazily: ``advisor.billing.__init__``
+        # pulls in the router, which reaches back into ``advisor.llm``.
+        from advisor.billing.turns import signup_token_grant
+
         return text_response(
             "Draining the wallet for the out-of-tokens scenario.",
-            usage=TokenUsage(input_tokens=30_000, output_tokens=0),
+            usage=TokenUsage(
+                input_tokens=signup_token_grant() + 5_000, output_tokens=0
+            ),
             stop_reason="end_turn",
         )
 

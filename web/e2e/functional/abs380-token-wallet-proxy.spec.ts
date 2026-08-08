@@ -25,8 +25,10 @@ import {
 } from "../auth/fixtures";
 
 // Design-spec defaults, which the e2e FastAPI env does not override.
-const SIGNUP_GRANT = 25_000;
-const TOKENS_PER_TURN = 2_500;
+import {
+  SIGNUP_GRANT,
+  TOKENS_PER_TURN,
+} from "../fixtures/wallet-params";
 
 test("fresh authed user: granted wallet via /api/billing proxy", async ({
   context,
@@ -73,7 +75,7 @@ test("fresh authed user: granted wallet via /api/billing proxy", async ({
     Math.floor(wallet.balance_tokens / wallet.tokens_per_turn),
   );
   expect(wallet.chat_enabled).toBe(true); // balance well above floor
-  expect(wallet.low_balance).toBe(false); // 25000 > 5000 warn threshold
+  expect(wallet.low_balance).toBe(false); // grant > warn threshold
   expect(typeof wallet.warn_threshold_tokens).toBe("number");
   expect(typeof wallet.floor_tokens).toBe("number");
   // Billing is dormant in e2e → top-ups not purchasable yet.

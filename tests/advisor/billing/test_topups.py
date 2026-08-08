@@ -24,6 +24,7 @@ from advisor.billing.topups import (
     topup_for,
     topup_for_stripe_price_id,
 )
+from advisor.billing.turns import tokens_per_turn
 from advisor.db.models import User
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
@@ -36,9 +37,22 @@ def test_catalog_quantities_and_prices() -> None:
     small = topup_for("small")
     medium = topup_for("medium")
     large = topup_for("large")
-    assert (small.tokens, small.price_cents) == (20_000, 1500)
-    assert (medium.tokens, medium.price_cents) == (75_000, 5000)
-    assert (large.tokens, large.price_cents) == (200_000, 12000)
+    assert (small.tokens, small.price_cents) == (1_400_000, 1500)
+    assert (medium.tokens, medium.price_cents) == (5_250_000, 5000)
+    assert (large.tokens, large.price_cents) == (14_000_000, 12000)
+
+
+def test_catalog_advertises_the_same_turn_counts_as_before_abs416() -> None:
+    """Each SKU must still be worth the turns it has always advertised.
+
+    ABS-416 rescaled the token quantities by the same factor as
+    ``DEFAULT_TOKENS_PER_TURN`` so the pricing page's "~N turns · $X"
+    is unchanged. Left unscaled, every SKU would have rendered "~0
+    turns" — so pin the turn count, not just the token literal.
+    """
+    per_turn = tokens_per_turn()
+    assert [t.tokens // per_turn for t in all_topups()] == [8, 30, 80]
+    assert all(t.tokens % per_turn == 0 for t in all_topups())
 
 
 def test_catalog_is_cheapest_first() -> None:

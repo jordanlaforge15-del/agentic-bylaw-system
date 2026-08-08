@@ -60,10 +60,16 @@ export type TopupOption = {
 // "Pay by the turn" pricing page (ABS-387). `payments_enabled` is false
 // in the beta posture; every option is then `available: false` ("coming
 // soon") and the page shows the private-beta banner.
+// `signup_grant_approx_turns` is the free-trial card's turn count (ABS-416).
+// Backend-owned like every other turn figure — the card used to hardcode
+// "~10 turns", which was both untrue under the old conversion rate and
+// unable to track a recalibration of it.
 export type TopupCatalogResponse = {
   payments_enabled: boolean;
   currency: string;
   tokens_per_turn: number;
+  signup_grant_tokens: number;
+  signup_grant_approx_turns: number;
   options: TopupOption[];
 };
 

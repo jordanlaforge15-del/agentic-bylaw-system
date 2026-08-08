@@ -78,13 +78,13 @@ def test_topup_credits_wallet_from_server_catalog(tmp_path: Path) -> None:
         assert result.note == "topup_credited"
 
     with session_scope(db_url) as s:
-        # Server catalog says medium = 75,000 tokens — the tampered metadata
+        # Server catalog says medium = 5,250,000 tokens — the tampered metadata
         # amount is ignored.
-        assert get_balance(s, user_id=user_id) == 75_000
+        assert get_balance(s, user_id=user_id) == 5_250_000
         txns = list(s.query(TokenTransaction).all())
         assert len(txns) == 1
         assert txns[0].entry_type == "topup"
-        assert txns[0].amount_tokens == 75_000
+        assert txns[0].amount_tokens == 5_250_000
         assert txns[0].stripe_checkout_session_id == "cs_topup_1"
         # No case-credit pack rows: the top-up branch ran first.
         assert s.query(CasePurchase).count() == 0
@@ -107,7 +107,7 @@ def test_topup_price_id_reverse_lookup_without_metadata(tmp_path: Path) -> None:
         assert result.note == "topup_credited"
 
     with session_scope(db_url) as s:
-        assert get_balance(s, user_id=user_id) == 200_000
+        assert get_balance(s, user_id=user_id) == 14_000_000
 
 
 def test_same_event_redelivered_is_no_op(tmp_path: Path) -> None:
@@ -124,7 +124,7 @@ def test_same_event_redelivered_is_no_op(tmp_path: Path) -> None:
         assert result.note == "duplicate_event"
 
     with session_scope(db_url) as s:
-        assert get_balance(s, user_id=user_id) == 20_000
+        assert get_balance(s, user_id=user_id) == 1_400_000
         assert s.query(TokenTransaction).count() == 1
 
 
@@ -154,7 +154,7 @@ def test_different_event_same_session_is_no_op(tmp_path: Path) -> None:
         assert result.note == "duplicate_topup"
 
     with session_scope(db_url) as s:
-        assert get_balance(s, user_id=user_id) == 20_000
+        assert get_balance(s, user_id=user_id) == 1_400_000
         assert s.query(TokenTransaction).count() == 1
 
 

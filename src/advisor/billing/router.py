@@ -148,6 +148,12 @@ class TopupCatalogResponse(BaseModel):
     ``tokens_per_turn`` is echoed so the UI can present each top-up as
     "~N turns" consistently with the wallet view; the per-option
     ``approx_turns`` is the backend's own computation of that.
+
+    ``signup_grant_approx_turns`` is here so the pricing page's free-trial
+    card renders the same backend-owned figure as every other turn count
+    instead of hardcoding one (ABS-416: the card claimed "~10 turns" while
+    the grant covered a fraction of one real question, and a hardcoded
+    string cannot track a recalibration).
     """
 
     payments_enabled: bool = Field(
@@ -160,6 +166,20 @@ class TopupCatalogResponse(BaseModel):
     currency: str = "CAD"
     tokens_per_turn: int = Field(
         ..., description="ADVISOR_TOKENS_PER_TURN — the display divisor."
+    )
+    signup_grant_tokens: int = Field(
+        ...,
+        description=(
+            "ADVISOR_SIGNUP_TOKEN_GRANT — tokens a brand-new wallet is "
+            "granted once on first sign-in."
+        ),
+    )
+    signup_grant_approx_turns: int = Field(
+        ...,
+        description=(
+            "floor(signup_grant_tokens / tokens_per_turn) — backend-owned "
+            "turns conversion for the free-trial card."
+        ),
     )
     options: list[TopupOption]
 
@@ -1233,6 +1253,7 @@ def _build_topup_catalog(
     """
     pricing = get_pricing_settings()
     per_turn = turns.tokens_per_turn()
+    signup_grant = turns.signup_token_grant()
     options: list[TopupOption] = []
     for topup in all_topups():
         price_id = (
@@ -1254,6 +1275,8 @@ def _build_topup_catalog(
         payments_enabled=payments_enabled,
         currency=pricing.display_currency,
         tokens_per_turn=per_turn,
+        signup_grant_tokens=signup_grant,
+        signup_grant_approx_turns=turns.approx_turns_remaining(signup_grant),
         options=options,
     )
 

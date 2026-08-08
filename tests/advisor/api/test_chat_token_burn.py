@@ -213,7 +213,13 @@ def _scripted(input_tokens: int, output_tokens: int) -> MockGateway:
 # --------------------------------------------------------------------------
 # Happy path: balance 10,000, floor 0, usage 1,200 in / 300 out
 # --------------------------------------------------------------------------
-def test_burn_happy_path(tmp_path: Path) -> None:
+def test_burn_happy_path(tmp_path: Path, monkeypatch) -> None:
+    # Pin the wallet display parameters: this test is about burn mechanics
+    # and the SSE payload shape, not about the calibrated production values
+    # (recalibrated on ABS-416), so it seeds a small balance and states the
+    # divisor / warn threshold it expects.
+    monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "2500")
+    monkeypatch.setenv("ADVISOR_LOW_BALANCE_WARN_TOKENS", "5000")
     db_url = f"sqlite:///{tmp_path / 'a.db'}"
     create_all(db_url)
     db_session_factory, factory = _build_factory(db_url)

@@ -26,6 +26,7 @@ import {
   signInAs,
   test,
 } from "../auth/fixtures";
+import { TOPUP_TURNS } from "../fixtures/wallet-params";
 
 type TopupOption = {
   sku: string;
@@ -68,11 +69,15 @@ function assertPublicShape(body: TopupCatalog): void {
     expect(opt.available).toBe(false);
   }
 
-  // Server-side truth for token quantities (design-spec catalog).
+  // Server-side truth for token quantities. Asserted as the turn count each
+  // SKU advertises rather than a raw token literal: ABS-416 rescaled the
+  // quantities with the conversion rate precisely so the advertised turns
+  // stayed put, and that invariant is what actually matters here.
   const bySku = Object.fromEntries(body.options.map((o) => [o.sku, o]));
-  expect(bySku.small.tokens).toBe(20_000);
-  expect(bySku.medium.tokens).toBe(75_000);
-  expect(bySku.large.tokens).toBe(200_000);
+  for (const [sku, turns] of Object.entries(TOPUP_TURNS)) {
+    expect(bySku[sku].tokens).toBe(turns * body.tokens_per_turn);
+    expect(bySku[sku].approx_turns).toBe(turns);
+  }
 }
 
 test("top-up catalog is public via /api/billing/topups (signed-out)", async ({

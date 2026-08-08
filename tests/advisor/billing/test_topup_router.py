@@ -98,7 +98,7 @@ def _headers() -> dict:
 
 
 def test_topups_catalog_payments_on(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "2500")
+    monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "175000")
     db_url = _db_url(tmp_path)
     _seed(db_url)
     client = _live_client(db_url)
@@ -108,15 +108,42 @@ def test_topups_catalog_payments_on(tmp_path: Path, monkeypatch) -> None:
     body = r.json()
     assert body["payments_enabled"] is True
     assert body["currency"] == "CAD"
-    assert body["tokens_per_turn"] == 2_500
+    assert body["tokens_per_turn"] == 175_000
     assert [o["sku"] for o in body["options"]] == ["small", "medium", "large"]
     medium = next(o for o in body["options"] if o["sku"] == "medium")
-    assert medium["tokens"] == 75_000
+    assert medium["tokens"] == 5_250_000
     assert medium["price_cents"] == 5000
-    # Backend-owned turns conversion: floor(75000 / 2500) == 30.
+    # Backend-owned turns conversion: floor(5250000 / 175000) == 30.
     assert medium["approx_turns"] == 30
     # available = payments_enabled AND price id configured.
     assert all(o["available"] is True for o in body["options"])
+
+
+def test_topups_catalog_carries_signup_grant_turns(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The free-trial card's "~N turns" is backend-owned too (ABS-416).
+
+    It used to be a hardcoded "~10 turns" on the pricing page, which was
+    untrue under the old conversion rate and could not track a
+    re-calibration. The catalog now carries the figure so the card
+    renders it verbatim.
+    """
+    monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "175000")
+    monkeypatch.setenv("ADVISOR_SIGNUP_TOKEN_GRANT", "1750000")
+    db_url = _db_url(tmp_path)
+    _seed(db_url)
+    client = _live_client(db_url)
+
+    body = client.get("/v1/billing/topups").json()
+    assert body["signup_grant_tokens"] == 1_750_000
+    assert body["signup_grant_approx_turns"] == 10
+
+    # …and it follows the env with no restart, like every other knob.
+    monkeypatch.setenv("ADVISOR_SIGNUP_TOKEN_GRANT", "350000")
+    body = client.get("/v1/billing/topups").json()
+    assert body["signup_grant_tokens"] == 350_000
+    assert body["signup_grant_approx_turns"] == 2
 
 
 def test_topups_available_false_when_price_unset(tmp_path: Path) -> None:

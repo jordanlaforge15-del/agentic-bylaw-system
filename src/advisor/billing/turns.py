@@ -13,8 +13,50 @@ with a config flip and no process restart — the same convention
 ``_conversation_entry_enabled`` uses for ``ADVISOR_CONVERSATION_ENTRY_ENABLED``.
 The acceptance test "factor change effective without restart" pins this.
 
-Defaults come from the design spec's business-parameters table; they are
-placeholders pending the transcript-replay calibration recorded on ABS-380.
+Calibration (ABS-416, 2026-08-08)
+---------------------------------
+The original defaults came from the design spec's business-parameters
+table and were explicit placeholders. They were wrong by ~70x: a turn was
+assumed to cost 2,500 tokens, so the wallet advertised dozens-to-hundreds
+of questions where it actually covered a handful.
+
+Measured against production, queried 2026-08-08. In prod one
+``advisor_usage_event`` row of ``event_type='llm_call'`` is one assistant
+turn (the whole tool loop is aggregated into it) — verified by matching
+each row against its ``advisor_token_transaction`` burn, which agrees
+exactly (e.g. 243,820 in + 3,746 out == the -247,566 burn):
+
+===============================================  ======  ========  ========
+Sample                                                n    median      mean
+===============================================  ======  ========  ========
+Wallet burns (every burn ever recorded in prod)       3   103,014   120,022
+Turns on the current case flow (2026-06 onward)       4   110,610   119,568
+Full-research turns, all history (>= 50k)            12   192,724   271,650
+===============================================  ======  ========  ========
+
+Burn is strongly bimodal: intake / clarifying / short follow-up turns land
+in the 300–25k band, while a real grounded research question lands in the
+100k–250k band. The two full-research prod questions cited on ABS-416 are
+247,566 and 103,014 tokens; ``DEFAULT_TOKENS_PER_TURN`` is set to 175,000,
+their midpoint (175,290 rounded). That sits above the recent all-turn mean
+(~120k), so the count we advertise errs toward *under*-promising — the
+correct direction for a bug whose harm was over-promising.
+
+Every other token-denominated parameter here was sized against the 2,500
+assumption in units of turns, so all of them are rescaled by the same
+factor (70x) and the turn counts the product promises are unchanged:
+
+* signup grant       25,000 -> 1,750,000  (10 turns, as advertised)
+* low-balance warn    5,000 ->   350,000  (2 turns, as before)
+* chat floor              0 ->         0  (0 turns — unchanged)
+
+The paid top-up SKUs in ``advisor.billing.topups`` are rescaled by the
+same factor for the same reason. Cost note for ABS-404 (which owns grant
+sizing / pricing strategy, not this ticket): at the ~$0.55 USD / 100k
+wallet tokens anchor, a 175k turn costs ~$0.96 and the 10-turn signup
+grant is ~$9.60 of API spend per new account. That is a live exposure —
+dial ``ADVISOR_SIGNUP_TOKEN_GRANT`` down on prod if it needs to be
+smaller before ABS-404 settles; no deploy is required.
 """
 from __future__ import annotations
 
@@ -23,11 +65,11 @@ import os
 
 logger = logging.getLogger(__name__)
 
-# Design-spec defaults (2026-07-beta-pivot-turn-wallet-gated-reports.md).
-DEFAULT_TOKENS_PER_TURN = 2_500
-DEFAULT_SIGNUP_TOKEN_GRANT = 25_000
+# Calibrated against measured prod burn — see the module docstring.
+DEFAULT_TOKENS_PER_TURN = 175_000
+DEFAULT_SIGNUP_TOKEN_GRANT = 10 * DEFAULT_TOKENS_PER_TURN  # 1,750,000
 DEFAULT_CHAT_MIN_BALANCE_TOKENS = 0
-DEFAULT_LOW_BALANCE_WARN_TOKENS = 5_000
+DEFAULT_LOW_BALANCE_WARN_TOKENS = 2 * DEFAULT_TOKENS_PER_TURN  # 350,000
 
 
 def _read_int(name: str, default: int, *, minimum: int | None = None) -> int:

@@ -213,13 +213,15 @@ ADVISOR_BILLING_SUCCESS_URL, ADVISOR_BILLING_CANCEL_URL
 # them; POST /v1/billing/checkout/pack now answers 410 packs_retired. Do NOT
 # configure them — they sell nothing.
 
-# Token wallet / turns parameters (ABS-380). Read fresh per request — a
-# re-calibration takes effect on `docker compose up -d advisor`, no rebuild.
-ADVISOR_TOKENS_PER_TURN=2500          # display divisor (backend-owned "~N turns")
-ADVISOR_SIGNUP_TOKEN_GRANT=25000      # one-time new-user wallet grant (~10 turns)
-ADVISOR_CHAT_MIN_BALANCE_TOKENS=0     # pre-flight floor: chat 402s at balance <= floor
-ADVISOR_LOW_BALANCE_WARN_TOKENS=5000  # wallet flips to "low balance" at <= warn
-ADVISOR_CHAT_MAX_ITERATIONS=20        # tool-loop cap per chat turn
+# Token wallet / turns parameters (ABS-380, recalibrated ABS-416). Read fresh
+# per request — a re-calibration takes effect on `docker compose up -d advisor`,
+# no rebuild. Defaults below are measured against prod burn: a real grounded
+# question costs 103k-248k tokens (src/advisor/billing/turns.py has the sample).
+ADVISOR_TOKENS_PER_TURN=175000          # display divisor (backend-owned "~N turns")
+ADVISOR_SIGNUP_TOKEN_GRANT=1750000      # one-time new-user wallet grant (10 turns)
+ADVISOR_CHAT_MIN_BALANCE_TOKENS=0       # pre-flight floor: chat 402s at balance <= floor
+ADVISOR_LOW_BALANCE_WARN_TOKENS=350000  # "low balance" at <= warn (2 turns)
+ADVISOR_CHAT_MAX_ITERATIONS=20          # tool-loop cap per chat turn
 
 # Per-report gate (ABS-384): which of the five report SKUs are on sale
 ADVISOR_ENABLED_QUESTIONS   # csv slugs; `*` = all; unset/empty = NONE (deny-by-default)
@@ -227,6 +229,14 @@ ADVISOR_ENABLED_QUESTIONS   # csv slugs; `*` = all; unset/empty = NONE (deny-by-
 # Shared-password gate
 DEMO_PASSWORD=$$<password>    # NB: literal $ in value must be escaped as $$ for compose
 ```
+
+> **Signup-grant cost note (ABS-404 owns the final sizing).** At the ~$0.55 USD
+> per 100k wallet-token anchor, one 175k turn costs ~$0.96, so the 10-turn
+> signup grant is ~$9.60 of API spend per new account. If that exposure is too
+> large for the current invite volume, lower `ADVISOR_SIGNUP_TOKEN_GRANT` in the
+> prod env and `docker compose up -d advisor` — no code change or rebuild
+> needed, and the "~N turns" the free-trial card advertises follows the env
+> value automatically.
 
 ### Compose variable substitution
 
