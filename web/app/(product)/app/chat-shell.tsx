@@ -39,6 +39,8 @@ import { Composer } from "@/components/product/composer";
 import { BalanceStrip } from "@/components/product/balance-strip";
 import { TopUpPrompt } from "@/components/product/top-up-prompt";
 import { ParcelPane } from "@/components/product/parcel-pane";
+import { CitationViewerProvider } from "@/components/product/citation-viewer";
+import type { CitationRef } from "@/lib/citations";
 import { AddressPill } from "@/components/product/address-pill";
 import { ParcelFab } from "@/components/product/parcel-fab";
 import { ChatDisclaimerBar } from "@/components/product/chat-disclaimer-bar";
@@ -48,6 +50,7 @@ import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { useMediaQuery, BREAKPOINTS } from "@/lib/use-media-query";
 import type { AgentMessage, Message } from "@/lib/mock";
 import {
+  collectCitations,
   extractParcelContext,
   type BackendMessage,
   type ParcelContext,
@@ -112,6 +115,13 @@ function ProductAppPageInner() {
   // session's spatial-join tool results; null when the conversation
   // has no address-bearing question yet.
   const [parcel, setParcel] = useState<ParcelContext | null>(null);
+  // Every clause the agent retrieved in this session, uncapped (ABS-451).
+  // Feeds the inline-citation index so "(Section 442)" written in a reply
+  // or a table cell opens the same clause drawer as the rail card. Kept
+  // separate from `parcel.cited` because the parcel context only exists
+  // once a spatial join lands — a pure bylaw-text question has citations
+  // but no parcel.
+  const [citations, setCitations] = useState<CitationRef[]>([]);
   const [feedbackMap, setFeedbackMap] = useState<Record<number, SavedFeedback>>({});
   const abortRef = useRef<AbortController | null>(null);
   // Per-case message snapshot. Saved when the user navigates away from a case
@@ -400,6 +410,7 @@ function ProductAppPageInner() {
   const refreshFromSession = async (sessionId: string | null) => {
     if (!sessionId) {
       setParcel(null);
+      setCitations([]);
       return;
     }
     try {
@@ -439,6 +450,7 @@ function ProductAppPageInner() {
       };
       const enriched = attachDbIds(data.messages, data.message_db_ids);
       setParcel(extractParcelContext(enriched));
+      setCitations(collectCitations(enriched));
       setMessages(translateHistory(enriched));
       setFeedbackMap(fbMap);
       // Keep the case-billing context aligned with the authoritative
@@ -833,6 +845,7 @@ function ProductAppPageInner() {
       setCaseIdBoth(newCaseId);
       setCaseNumber(typeof data.case_number === "number" ? data.case_number : null);
       setParcel(extractParcelContext(enriched));
+      setCitations(collectCitations(enriched));
       // Keep URL in sync so reloads and shared links land on the right case.
       // Only user-initiated calls (updateUrl=true) update the URL; the
       // restore effect passes updateUrl=false so it never races with a
@@ -970,9 +983,13 @@ function ProductAppPageInner() {
   };
 
   return (
-    // dvh tracks the iOS dynamic viewport so the composer doesn't
-    // disappear behind the URL bar collapse/expand. overflow-hidden
-    // keeps the chat thread's scroll contained.
+    // The citation viewer wraps the whole workspace so the clause drawer
+    // is a single shared surface: rail cards, inline references in agent
+    // prose, and table cells all open the same panel (ABS-451).
+    <CitationViewerProvider citations={citations}>
+    {/* dvh tracks the iOS dynamic viewport so the composer doesn't
+      * disappear behind the URL bar collapse/expand. overflow-hidden
+      * keeps the chat thread's scroll contained. */}
     <div className="h-dvh flex flex-col bg-surface text-text overflow-hidden">
       <AppHeader
         reading={headerReading}
@@ -1193,6 +1210,7 @@ function ProductAppPageInner() {
         </Drawer>
       )}
     </div>
+    </CitationViewerProvider>
   );
 }
 

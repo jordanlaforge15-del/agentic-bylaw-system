@@ -8,11 +8,19 @@
 // accent colour for emphasis. We deliberately do *not* allow raw HTML
 // — the LLM's output isn't trusted enough to bypass markdown's escape
 // rules.
+//
+// ABS-451: every text-bearing override runs its children through
+// <CitationText>, which turns inline references the agent actually
+// retrieved ("(Section 442)", "(Schedule 15)") into buttons that open
+// the clause drawer. Code spans, code blocks, and links are the
+// deliberate exceptions — a citation-shaped string inside them is not a
+// citation. Outside a CitationViewerProvider the wrapper is a no-op.
 
 "use client";
 
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { CitationText } from "@/components/product/inline-citation";
 
 const COMPONENTS: Components = {
   h1: ({ children }) => (
@@ -24,7 +32,7 @@ const COMPONENTS: Components = {
         lineHeight: 1.15,
       }}
     >
-      {children}
+      <CitationText>{children}</CitationText>
     </h1>
   ),
   h2: ({ children }) => (
@@ -36,7 +44,7 @@ const COMPONENTS: Components = {
         lineHeight: 1.2,
       }}
     >
-      {children}
+      <CitationText>{children}</CitationText>
     </h2>
   ),
   h3: ({ children }) => (
@@ -44,24 +52,38 @@ const COMPONENTS: Components = {
       className="font-sans font-semibold mt-2.5 mb-1"
       style={{ fontSize: 15, letterSpacing: "-0.015em" }}
     >
-      {children}
+      <CitationText>{children}</CitationText>
     </h3>
   ),
-  p: ({ children }) => <p className="my-2">{children}</p>,
-  strong: ({ children }) => (
-    <strong className="font-semibold text-text">{children}</strong>
+  p: ({ children }) => (
+    <p className="my-2">
+      <CitationText>{children}</CitationText>
+    </p>
   ),
-  em: ({ children }) => <em className="italic">{children}</em>,
+  strong: ({ children }) => (
+    <strong className="font-semibold text-text">
+      <CitationText>{children}</CitationText>
+    </strong>
+  ),
+  em: ({ children }) => (
+    <em className="italic">
+      <CitationText>{children}</CitationText>
+    </em>
+  ),
   ul: ({ children }) => <ul className="list-disc pl-6 my-2">{children}</ul>,
   ol: ({ children }) => <ol className="list-decimal pl-6 my-2">{children}</ol>,
-  li: ({ children }) => <li className="my-0.5">{children}</li>,
+  li: ({ children }) => (
+    <li className="my-0.5">
+      <CitationText>{children}</CitationText>
+    </li>
+  ),
   hr: () => <hr className="border-0 border-t border-hair my-4" />,
   blockquote: ({ children }) => (
     <blockquote
       className="my-2 pl-3 italic text-text-muted"
       style={{ borderLeft: "2px solid var(--accent)" }}
     >
-      {children}
+      <CitationText>{children}</CitationText>
     </blockquote>
   ),
   a: ({ children, href }) => (
@@ -147,7 +169,7 @@ const COMPONENTS: Components = {
         fontWeight: 500,
       }}
     >
-      {children}
+      <CitationText>{children}</CitationText>
     </th>
   ),
   td: ({ children }) => (
@@ -158,7 +180,7 @@ const COMPONENTS: Components = {
         verticalAlign: "top",
       }}
     >
-      {children}
+      <CitationText>{children}</CitationText>
     </td>
   ),
 };
