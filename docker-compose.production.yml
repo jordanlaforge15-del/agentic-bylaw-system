@@ -76,6 +76,15 @@ services:
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      # ABS-87: submission uploads (POST /v1/submissions, POST
+      # /v1/integrations/submissions) stage the file on disk before the IFC /
+      # PDF extractors read it. This container is `read_only: true`, so the
+      # path MUST point at the `bylaw-submissions` volume mounted below —
+      # the default (`data/submissions`, relative to /app) is on the
+      # read-only layer and every upload would 503. Verify after deploy with
+      # `curl -s https://api.agenticbylawsystems.com/healthz | jq
+      # .checks.submission_storage` → "ok".
+      SUBMISSION_STORAGE_DIR: ${SUBMISSION_STORAGE_DIR:-/var/lib/bylaw/submissions}
       # Beta pivot billing matrix (ABS-379) — turn-based token wallet +
       # per-slug gated reports. See .env.example for the full annotation.
       ADVISOR_BILLING_ENABLED: ${ADVISOR_BILLING_ENABLED:-true}
@@ -110,11 +119,22 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      # ABS-87: the ONLY writable non-tmpfs path in this container. Uploaded
+      # IFC / PDF artefacts land in `<mount>/user-<id>/<filename>`. Owned by
+      # UID 1000 to match the container user (see docs/DEPLOYMENT.md for the
+      # one-time chown when adding the volume to a running deployment).
+      - bylaw-submissions:/var/lib/bylaw/submissions
     networks:
       - default
     cap_drop:
       - ALL
     read_only: true
+    # Scratch space for uvicorn / the parsers. Sized to match the preflight
+    # gate in scripts/preflight_advisor_image.sh, which runs the image under
+    # these same constraints before a container swap.
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     mem_limit: 1024m
     pids_limit: 300
     user: "1000:1000"
@@ -126,7 +146,9 @@ services:
         max-size: "25m"
         max-file: "5"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # /healthz is the only health route the app mounts (see
+      # advisor/api/app.py); /health 404s and marks the container unhealthy.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -208,3 +230,12 @@ volumes:
   caddy-config:
   bylaw-postgres-data:
     name: bylaw_bylaw_postgres_data
+  # ABS-87. Submission artefacts are *reproducible inputs*, not system of
+  # record — the extracted attributes, decisions and audit trail all live in
+  # Postgres, and the pipeline never re-reads the file after ingest. The
+  # nightly pg_dump therefore remains the complete backup; this volume is
+  # explicitly out of the backup story (losing it costs the architect a
+  # re-upload, nothing more). Revisit if a future feature re-parses the
+  # original artefact on demand.
+  bylaw-submissions:
+    name: bylaw_submissions

@@ -8,7 +8,8 @@ gateway, in-memory sessions, RetrievalService bound to the configured
 DB URL).
 
 Endpoints:
-* ``GET /healthz`` — deep health check (DB connectivity via SELECT 1); no auth required.
+* ``GET /healthz`` — deep health check (DB connectivity via SELECT 1, plus a
+  writability probe of the submission storage root); no auth required.
 * ``GET /readyz`` — readiness probe (requires DB reachable); no auth required.
 * ``POST /v1/chat`` — send a message, get an SSE stream of events.
 * ``GET /v1/chat/sessions/{session_id}`` — debug endpoint that
@@ -543,6 +544,32 @@ def create_app(
             logger.warning("healthz: database connectivity check failed", exc_info=True)
             return "unreachable"
 
+    def _check_submission_storage() -> str:
+        """Return ``"ok"`` if uploads can be staged on disk, else ``"unwritable"``.
+
+        ABS-87: the advisor runs read-only in production, so the upload
+        endpoints only work when a writable volume is mounted at
+        ``SUBMISSION_STORAGE_DIR``. Reporting it here makes a missing
+        volume a one-curl post-deploy check instead of something the
+        first real uploader discovers. Deliberately does NOT flip the
+        overall status to 503 — submissions are not on the chat critical
+        path, and paging the whole service (the availability monitor
+        polls this endpoint) for a degraded side feature is the wrong
+        trade.
+        """
+        from advisor.api.submission_storage import (  # noqa: PLC0415
+            STORAGE_UNWRITABLE,
+            probe_storage_root,
+        )
+
+        try:
+            return probe_storage_root()
+        except Exception:  # noqa: BLE001 — health checks never raise
+            logger.warning(
+                "healthz: submission storage check failed", exc_info=True
+            )
+            return STORAGE_UNWRITABLE
+
     @app.get("/healthz", response_model=None)
     async def healthz():
         from fastapi.responses import JSONResponse  # noqa: PLC0415
@@ -553,6 +580,7 @@ def create_app(
         checks = {
             "database": db_status,
             "error_tracking": "sentry" if is_sentry_enabled() else "disabled",
+            "submission_storage": _check_submission_storage(),
         }
 
         try:

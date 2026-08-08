@@ -8,6 +8,7 @@ external deps (Anthropic, sqlite, etc.) are touched.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -77,6 +78,53 @@ def test_healthz_returns_ok_without_db():
     body = response.json()
     assert body["status"] == "ok"
     assert body["checks"]["database"] == "not_configured"
+
+
+def test_healthz_reports_submission_storage_ok_when_writable(tmp_path, monkeypatch):
+    """ABS-87: /healthz surfaces whether uploads can be staged on disk, so a
+    missing prod volume is caught by a curl instead of by the first user."""
+    from advisor.api import submission_storage
+
+    writable = tmp_path / "submissions"
+    writable.mkdir()
+    monkeypatch.setattr(
+        submission_storage, "resolve_storage_root", lambda *_a, **_k: writable
+    )
+    app = _make_app()
+    with TestClient(app) as client:
+        body = client.get("/healthz").json()
+    assert body["checks"]["submission_storage"] == "ok"
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="chmod cannot make a directory read-only for root",
+)
+def test_healthz_reports_submission_storage_unwritable(tmp_path, monkeypatch):
+    """The prod-without-a-volume shape: reported, but not service-fatal."""
+    import stat as _stat
+
+    from advisor.api import submission_storage
+
+    app = _make_app()
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(_stat.S_IRUSR | _stat.S_IXUSR)
+    monkeypatch.setattr(
+        submission_storage, "resolve_storage_root", lambda *_a, **_k: locked
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get("/healthz")
+    finally:
+        locked.chmod(_stat.S_IRWXU)
+
+    body = response.json()
+    assert body["checks"]["submission_storage"] == "unwritable"
+    # A degraded side feature must not take the whole service out of
+    # rotation — the availability monitor pages on a non-200 here.
+    assert response.status_code == 200
+    assert body["status"] == "ok"
 
 
 def test_healthz_returns_ok_with_healthy_db():

@@ -8,6 +8,8 @@ stack.
 """
 from __future__ import annotations
 
+import os
+import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -228,6 +230,52 @@ def test_upload_rejects_non_ifc_file(wired: _Wired, tmp_path: Path):
         )
     assert response.status_code == 415
     assert response.json()["detail"]["code"] == "unsupported_file_type"
+
+
+def test_upload_stages_file_under_the_storage_root(
+    wired: _Wired, tmp_path: Path
+):
+    """ABS-87: the acceptance path — the upload lands on disk under the
+    configured storage root, in the uploader's own directory."""
+    ifc = _make_ifc(tmp_path)
+    with ifc.open("rb") as f:
+        response = wired.client.post(
+            "/v1/submissions",
+            files={"file": ("demo.ifc", f, "application/octet-stream")},
+            data={"parcel_address": "TEST-001"},
+        )
+    assert response.status_code == 200, response.text
+    staged = tmp_path / "uploads" / f"user-{wired.user_id}" / "demo.ifc"
+    assert staged.is_file()
+    assert response.json()["source_artifact_path"] == str(staged)
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="chmod cannot make a directory read-only for root",
+)
+def test_upload_returns_503_when_storage_root_is_read_only(
+    wired: _Wired, tmp_path: Path
+):
+    """ABS-87: with no writable volume (prod's `read_only: true` container
+    and no mount), the upload must fail as a clearly-labelled 503 rather
+    than a bare OSError 500."""
+    storage_root = tmp_path / "uploads"
+    storage_root.mkdir(exist_ok=True)
+    storage_root.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        ifc = _make_ifc(tmp_path)
+        with ifc.open("rb") as f:
+            response = wired.client.post(
+                "/v1/submissions",
+                files={"file": ("demo.ifc", f, "application/octet-stream")},
+                data={"parcel_address": "TEST-001"},
+            )
+    finally:
+        storage_root.chmod(stat.S_IRWXU)
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "submission_storage_unavailable"
 
 
 # ----------------------------------------------------------------------
