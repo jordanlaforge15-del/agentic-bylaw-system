@@ -2005,6 +2005,26 @@ class _BuyAnswerRefineBody(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
 
 
+class _BuyAnswerSlowTurnBody(BaseModel):
+    """ABS-338: drive the answer (and optionally a refinement) on a
+    connection carrying a deliberately low
+    ``idle_in_transaction_session_timeout``, with an LLM turn slower than
+    that cap.
+
+    The production 500 was a real-Postgres behaviour: the request
+    transaction sat idle for the whole ~84s turn and the server-side cap
+    (60s, ABS-100) terminated the connection, so the settling UPDATE raised
+    ``IdleInTransactionSessionTimeout``. Waiting 60s in an e2e is absurd, so
+    this shrinks the SAME mechanism — 1s cap, 2.5s turn — through the real
+    Next-proxy ↔ FastAPI ↔ Postgres chain.
+    """
+
+    purchase_id: int
+    idle_cap_ms: int = Field(default=1000, ge=100, le=60_000)
+    turn_delay_s: float = Field(default=2.5, ge=0.0, le=30.0)
+    refine_message: str | None = Field(default=None, max_length=2000)
+
+
 class _BuyAnswerQuoteBody(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
 
@@ -2364,6 +2384,114 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
                 client=_mock_client(),
             )
             return _state(purchase)
+
+    @app.post("/v1/_test/buy-answer/answer-slow-turn")
+    async def buy_answer_run_slow(
+        body: _BuyAnswerSlowTurnBody,
+    ) -> dict[str, object]:
+        """ABS-338: run a SLOW answer turn under a low idle-in-txn cap.
+
+        Reproduces the production 500 in miniature against the real e2e
+        Postgres. Before the fix the request transaction stayed open across
+        the turn, so the cap terminated the connection and the settling
+        ``db.flush()`` raised ``IdleInTransactionSessionTimeout`` → HTTP 500.
+        After it, ``run_answer`` / ``run_refinement`` hold no transaction
+        while the turn runs, so there is nothing for the cap to kill.
+
+        The aggressive per-session cap rides a DEDICATED ``NullPool`` engine
+        so it can never leak onto a pooled connection another request reuses.
+        """
+        import asyncio  # noqa: PLC0415
+
+        from sqlalchemy import create_engine, text  # noqa: PLC0415
+        from sqlalchemy.orm import Session  # noqa: PLC0415
+        from sqlalchemy.pool import NullPool  # noqa: PLC0415
+
+        from layer1.config import get_settings as _layer1_settings  # noqa: PLC0415
+
+        class _SlowGateway:
+            """Delegates to the e2e MockGateway, but makes the turn's first
+            LLM call outlast the idle cap pinned on the request connection."""
+
+            name = "mock"
+
+            def __init__(self, inner: Any, delay_s: float) -> None:
+                self._inner = inner
+                self._delay_s = delay_s
+                self._slept = False
+
+            async def _maybe_sleep(self) -> None:
+                if not self._slept:
+                    self._slept = True
+                    await asyncio.sleep(self._delay_s)
+
+            async def complete(self, request):  # noqa: ANN001
+                await self._maybe_sleep()
+                return await self._inner.complete(request)
+
+            async def stream(self, request):  # noqa: ANN001
+                await self._maybe_sleep()
+                async for event in self._inner.stream(request):
+                    yield event
+
+        def _pin_idle_cap(db: Session) -> None:
+            if db.bind is not None and db.bind.dialect.name == "postgresql":
+                db.execute(
+                    text(
+                        "SET SESSION idle_in_transaction_session_timeout = "
+                        f"{int(body.idle_cap_ms)}"
+                    )
+                )
+
+        engine = create_engine(
+            _layer1_settings().database_url, poolclass=NullPool
+        )
+        try:
+            db = Session(bind=engine, expire_on_commit=False, future=True)
+            try:
+                _pin_idle_cap(db)
+                purchase = db.get(_QP, body.purchase_id)
+                if purchase is None:
+                    raise HTTPException(
+                        status_code=404, detail="purchase not found"
+                    )
+                purchase = await answer_flow.run_answer(
+                    db,
+                    purchase,
+                    gateway=_SlowGateway(app.state.gateway, body.turn_delay_s),
+                    persona=app.state.persona_text,
+                    retrieval_factory=app.state.retrieval_factory,
+                    client=_mock_client(),
+                )
+                state = _state(purchase)
+                db.commit()
+            finally:
+                db.close()
+
+            if not body.refine_message:
+                return state
+
+            # Sibling proof for run_refinement — a fresh low-cap connection
+            # and another slow turn, since the same flaw lived in both.
+            db = Session(bind=engine, expire_on_commit=False, future=True)
+            try:
+                _pin_idle_cap(db)
+                purchase = db.get(_QP, body.purchase_id)
+                answer = await answer_flow.run_refinement(
+                    db,
+                    purchase,
+                    message=body.refine_message,
+                    gateway=_SlowGateway(app.state.gateway, body.turn_delay_s),
+                    persona=app.state.persona_text,
+                    retrieval_factory=app.state.retrieval_factory,
+                )
+                state = {"refined_answer": answer, **_state(purchase)}
+                db.commit()
+                return state
+            finally:
+                db.close()
+        finally:
+            engine.dispose()
 
     @app.post("/v1/_test/buy-answer/refine")
     async def buy_answer_refine(body: _BuyAnswerRefineBody) -> dict[str, object]:
