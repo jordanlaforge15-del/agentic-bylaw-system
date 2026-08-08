@@ -124,6 +124,15 @@ function ProductAppPageInner() {
   // double-invoke and normal re-renders. Declared here (before the effect that
   // reads it) so the binding is initialized before the effect callback runs.
   const restoredCaseIdRef = useRef<number | null>(null);
+  // Case whose ``?first_message=`` auto-send has already fired (ABS-449).
+  // The restore effect skips that case: send() is the owner of its
+  // transcript until the turn settles. Declared here for the same reason as
+  // the ref above — the effect that reads it is defined earlier in the body.
+  const autoSendCaseIdRef = useRef<number | null>(null);
+  // True while an abort we asked for is in flight (case switch / "+ New
+  // reading"). Lets send() tell an expected cancellation apart from a turn
+  // that died on its own, which must surface an error + retry (ABS-449).
+  const intentionalAbortRef = useRef(false);
   // Mobile/tablet overlay state. Both default closed; opening one
   // doesn't close the other (parcel sheet on mobile sits above the
   // chat which sits behind the sidebar drawer when both happen, but
@@ -213,6 +222,11 @@ function ProductAppPageInner() {
   // mount (e.g. returning from a top-up checkout). Derived ``outOfTokens``
   // below OR's it with the wallet's own ``chat_enabled`` flag.
   const [refused, setRefused] = useState(false);
+  // Text of the last turn that failed (network error, backend error, empty
+  // or truncated stream, or an abort we didn't ask for). Non-null means the
+  // error block below renders a Retry button, so a dropped question is never
+  // an unrecoverable dead end (ABS-449).
+  const [failedSend, setFailedSend] = useState<string | null>(null);
   const outOfTokens = refused || (wallet !== null && !wallet.chat_enabled);
   // Keep the URL-derived caseId in sync when the user navigates with
   // a different ?case_id= without a full reload.
@@ -296,6 +310,21 @@ function ProductAppPageInner() {
   useEffect(() => {
     if (caseIdFromUrl === null) return;
     if (searchParams.get("first_message")) return;
+    // ABS-449: never restore over a turn that is already in flight. The
+    // auto-send below strips ``first_message`` with router.replace BEFORE
+    // awaiting send(), so this effect re-runs one render later with the
+    // param gone — and by then POST /v1/chat has already created the (still
+    // empty) chat session row server-side. Without this guard the fetch
+    // below finds that row, calls selectSession(), and selectSession's
+    // ``abortRef.current?.abort()`` kills the very stream that created it.
+    // The user's opening question was then never persisted and no error
+    // ever surfaced: the case sat with an unanswered question forever.
+    if (abortRef.current !== null) return;
+    // Same race, slower variant: if the auto-send for THIS case already
+    // fired, send() owns hydration for it (it calls refreshFromSession when
+    // the turn settles). Restoring here would either abort the stream or
+    // clobber the optimistic transcript with an empty server copy.
+    if (autoSendCaseIdRef.current === caseIdFromUrl) return;
     // Guard against running twice for the same case (React Strict Mode
     // double-invoke, or a re-render triggered by state settling).
     if (restoredCaseIdRef.current === caseIdFromUrl) return;
@@ -334,6 +363,7 @@ function ProductAppPageInner() {
     const firstMessage = searchParams.get("first_message");
     if (!firstMessage) return;
     autoSentFirstMessageRef.current = true;
+    autoSendCaseIdRef.current = caseIdFromUrl;
     const cleaned = new URLSearchParams(searchParams.toString());
     cleaned.delete("first_message");
     const nextUrl =
@@ -448,19 +478,33 @@ function ProductAppPageInner() {
     setThinking(true);
     setThinkLabel("Reading bylaw…");
     setError(null);
+    setFailedSend(null);
 
     const stopThinking = () => {
       setThinking(false);
     };
 
+    // Every way this turn can end without an answer routes through here, so
+    // the user always gets both a reason and a way to try again (ABS-449).
+    const failTurn = (message: string) => {
+      setError(message);
+      setFailedSend(text);
+    };
+
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    intentionalAbortRef.current = false;
 
     // Set when the turn is refused out-of-tokens (402). Guards the post-turn
     // refreshFromSession in the finally: reloading server history for a
     // resumed session would otherwise drop the optimistic user bubble and
     // lose the typed message.
     let refusedThisTurn = false;
+    // Set when the turn ends via abort. Also guards the post-turn
+    // refreshFromSession: an aborted turn wrote nothing server-side, so
+    // reloading history would erase the optimistic user bubble we're asking
+    // the user to retry.
+    let abortedThisTurn = false;
 
     try {
       const res = await fetch("/api/chat", {
@@ -507,7 +551,7 @@ function ProductAppPageInner() {
           );
           return;
         }
-        setError(
+        failTurn(
           `Backend error (${res.status}). ${detail.slice(0, 240) || "No body."}`,
         );
         return;
@@ -644,22 +688,35 @@ function ProductAppPageInner() {
       //   3. stream ended with no content    → flag it
       stopThinking();
       if (backendError) {
-        setError(humanizeBackendError(backendError));
+        failTurn(humanizeBackendError(backendError));
       } else if (!agentStarted) {
-        setError(
+        failTurn(
           "The agent didn't return any text. Try rephrasing — for an " +
             "address question, include the civic number and street " +
             "(e.g. \"What's the zone of 1967 Woodlawn Terrace?\").",
         );
       } else if (!messageStopped) {
-        setError(
+        failTurn(
           "The agent's response was cut off before completion. Try " +
             "asking again, or simplify the question.",
         );
       }
     } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        setError(`Network error: ${(e as Error).message}`);
+      if ((e as Error).name === "AbortError") {
+        abortedThisTurn = true;
+        // An abort we asked for (case switch, "+ New reading") is expected
+        // — the user moved on, so stay quiet. Any other abort means the
+        // request died with the question unanswered, which used to be
+        // completely silent (ABS-449).
+        if (!intentionalAbortRef.current) {
+          stopThinking();
+          failTurn(
+            "Your question wasn't sent — the request was interrupted " +
+              "before the agent could answer it. Nothing was charged.",
+          );
+        }
+      } else {
+        failTurn(`Network error: ${(e as Error).message}`);
       }
     } finally {
       stopThinking();
@@ -673,14 +730,51 @@ function ProductAppPageInner() {
       // always see the post-stream value the SSE handler set. Skipped on an
       // out-of-tokens refusal — nothing changed server-side, and reloading
       // history would drop the optimistic (still-typed) user message.
-      if (!refusedThisTurn) {
+      // Also skipped on an abort: the turn wrote nothing, so the server copy
+      // is behind the optimistic transcript and reloading it would drop the
+      // question the user is being asked to retry (ABS-449).
+      if (!refusedThisTurn && !abortedThisTurn) {
         void refreshFromSession(sessionIdRef.current);
       }
     }
   };
 
+  // Abort the turn in flight because the user asked for something else
+  // (switching cases, starting a new reading). Flagged so send() doesn't
+  // report it as a failure.
+  const abortActiveTurn = () => {
+    if (!abortRef.current) return;
+    intentionalAbortRef.current = true;
+    abortRef.current.abort();
+  };
+
+  // Re-send the question from a failed turn. The failed attempt left an
+  // optimistic user bubble (and possibly a partial reply) in the thread, so
+  // trim from that bubble onward before re-sending — otherwise the retry
+  // posts the same question twice in the transcript.
+  const retryFailedSend = () => {
+    const text = failedSend;
+    if (text === null || thinking) return;
+    setFailedSend(null);
+    setError(null);
+    setMessages((prev) => {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const m = prev[i];
+        if (m.kind === "user" && m.body === text) return prev.slice(0, i);
+      }
+      return prev;
+    });
+    void send(text);
+  };
+
   const selectSession = async (id: string, { updateUrl = false }: { updateUrl?: boolean } = {}) => {
     if (id === activeSessionId) return;
+    // Compare against the ref too: the streaming SSE handler writes the new
+    // session id to the ref immediately, while the state copy lands a render
+    // later. Without this, a caller that races a live stream (the restore
+    // effect, a double sidebar click) would abort the stream and reload the
+    // session it is already on (ABS-449).
+    if (id === sessionIdRef.current) return;
 
     // Snapshot current case messages before switching away. This preserves
     // the user's in-flight question (and any partial streaming reply) so
@@ -691,8 +785,9 @@ function ProductAppPageInner() {
       caseMessageCacheRef.current.set(caseIdRef.current, messages);
     }
 
-    abortRef.current?.abort();
+    abortActiveTurn();
     setError(null);
+    setFailedSend(null);
     setThinking(false);
     try {
       const [res, fbMap] = await Promise.all([
@@ -777,7 +872,7 @@ function ProductAppPageInner() {
     // chat" but actually kept billing on the prior case). Abort any
     // in-flight stream so it doesn't keep mutating state after we
     // navigate; the next /app mount starts fresh.
-    abortRef.current?.abort();
+    abortActiveTurn();
     setSidebarOpen(false);
     router.push("/cases/new");
   };
@@ -948,6 +1043,7 @@ function ProductAppPageInner() {
                 thinking={thinking}
                 thinkLabel={thinkLabel}
                 error={error}
+                onRetry={failedSend !== null ? retryFailedSend : undefined}
                 sessionId={activeSessionId}
                 feedbackMap={feedbackMap}
               />
