@@ -32,7 +32,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from advisor.billing.client import StripeClient
@@ -675,31 +674,61 @@ def _resolve_run_inputs(purchase: QuestionPurchase) -> tuple[str, int | None]:
     )
 
 
-def _relax_idle_timeout(db: Session) -> None:
-    """Opt *this request's* transaction out of Postgres'
-    ``idle_in_transaction_session_timeout`` for the duration of the long
-    LLM turn.
+# -- Transaction phasing around the LLM turn (ABS-338) -----------------------
+#
+# The buy-an-answer request used to hold ONE Postgres transaction open across
+# the entire (~84s worst case) LLM turn: the two request SELECTs (user resolve
+# + purchase load) opened it, the tool loop then ran with that transaction
+# idle, and the settling ``UPDATE`` was the next statement on it. Postgres'
+# ``idle_in_transaction_session_timeout`` (60s in dev/e2e, ABS-100 /
+# docker-compose.yml) measures exactly that gap and terminates the connection,
+# so the settling ``db.flush()`` raised
+# ``psycopg.errors.IdleInTransactionSessionTimeout`` → HTTP 500 on a grounded,
+# paid-for answer.
+#
+# The durable fix is to phase the flow so no transaction spans the turn:
+#
+#   1. load + validate, stamp ``answered_at``, COMMIT      (short txn)
+#   2. run the LLM turn                                    (NO txn at all)
+#   3. re-read the row and write the settlement, flush     (short txn)
+#
+# Between (1) and (3) the session holds no transaction, so the connection is
+# released to the pool and the idle cap has nothing to kill — which also means
+# the ABS-100 protection stays fully in force for every connection instead of
+# being opted out of (the interim ABS-339 ``SET LOCAL`` this replaces).
 
-    INTERIM (ABS-339) — REMOVE when ABS-338 lands. The buy-an-answer
-    request holds one DB transaction open across the ~84s LLM turn while
-    that transaction is idle; the global cap
-    (``docker-compose.yml`` ``idle_in_transaction_session_timeout``, ABS-100)
-    terminates the idle connection at 60s, so the settling ``UPDATE``
-    raises ``psycopg.errors.IdleInTransactionSessionTimeout`` → a 500.
 
-    ``SET LOCAL`` is *transaction-scoped*: it resets at commit/rollback, so
-    this opt-out can never leak to a pooled connection reused by another
-    request. The global cap (and the wedged-connection / held-lock
-    protection ABS-100 added) therefore stays in force for every other
-    connection — this is the scoped, responsible unblock, not the blunt
-    global override.
+def _release_request_txn(db: Session) -> None:
+    """Commit and release the request transaction before the long LLM turn.
 
-    No-op on non-Postgres backends (sqlite unit tests have no such GUC).
-    ``db.execute`` autobegins a transaction if one isn't open yet, so the
-    ``SET LOCAL`` always lands inside a transaction.
+    ``make_session_factory`` builds sessions with ``expire_on_commit=False``,
+    so every column already loaded on ``purchase`` stays usable across this
+    boundary — nothing below the commit lazy-loads, which would silently
+    reopen a transaction and re-create the bug. SQLAlchemy autobegins the next
+    transaction lazily on the first statement after this, i.e. in the settle
+    phase.
     """
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        db.execute(text("SET LOCAL idle_in_transaction_session_timeout = 0"))
+    db.commit()
+
+
+def _reload_for_settle(db: Session, purchase: QuestionPurchase) -> None:
+    """Re-read the purchase row at the start of the settle phase.
+
+    Opens the fresh short transaction that the settling ``UPDATE`` runs in and
+    picks up anything that changed while the turn was in flight (most
+    plausibly ABS-354's stale-``generating`` rescue force-settling the row).
+    Best-effort: a session left unusable by an infrastructure error still gets
+    to attempt its settlement against the in-memory object.
+    """
+    try:
+        db.refresh(purchase)
+    except Exception:  # noqa: BLE001 — settle on the in-memory row instead
+        logger.warning(
+            "could not re-read purchase %s before settling; settling on the "
+            "in-memory row",
+            purchase.id,
+            exc_info=True,
+        )
 
 
 async def run_answer(
@@ -728,6 +757,9 @@ async def run_answer(
     (``captured``/``voided``/``failed``) is returned unchanged. Raises
     ``PurchaseNotAuthorizedError`` if the card hasn't been authorized
     yet.
+
+    ABS-338: the turn runs with NO open DB transaction — see the phasing
+    note above ``_release_request_txn``.
     """
     if purchase.status in {"captured", "voided", "failed"}:
         return purchase
@@ -739,14 +771,17 @@ async def run_answer(
             f"purchase {purchase.id} is {purchase.status!r}, not authorized"
         )
 
-    # ABS-339 (interim; remove under ABS-338): this transaction stays open
-    # and idle across the long LLM turn below — opt it out of the global
-    # idle-in-transaction cap so it isn't killed mid-flight.
-    _relax_idle_timeout(db)
-
+    # -- Phase 1 (short txn): read everything the turn needs, stamp
+    # ``answered_at``, then COMMIT so the request transaction is released
+    # before the LLM call. Every read below the commit must already be
+    # loaded — a lazy load here would reopen the transaction the fix exists
+    # to close.
+    purchase_id = purchase.id
     prompt, cumulative_budget = _resolve_run_inputs(purchase)
     purchase.answered_at = utcnow()
+    _release_request_txn(db)
 
+    # -- Phase 2 (NO txn): the long LLM turn.
     try:
         # ABS-372: retry a nondeterministic cost_ceiling trip on a fresh
         # turn before voiding, so a single unlucky token-usage draw doesn't
@@ -758,15 +793,33 @@ async def run_answer(
             user_text=prompt,
             model=model,
             cumulative_token_budget=cumulative_budget,
-            purchase_id=purchase.id,
+            purchase_id=purchase_id,
         )
     except Exception:  # noqa: BLE001 — never leave a hold uncaptured
         logger.exception(
             "error running answer for purchase %s; voiding authorization",
-            purchase.id,
+            purchase_id,
         )
+        # -- Phase 3 (fresh short txn): settle the failure.
+        _reload_for_settle(db, purchase)
+        if purchase.status in {"captured", "voided", "failed"}:
+            return purchase
         _void(db, client, purchase, reason="internal_error", status="failed")
         db.flush()
+        return purchase
+
+    # -- Phase 3 (fresh short txn): settle the outcome. Re-read first so a
+    # row settled while the turn was in flight (ABS-354's stale-``generating``
+    # rescue) is not double-settled — capturing an already-voided hold would
+    # raise against Stripe.
+    _reload_for_settle(db, purchase)
+    if purchase.status in {"captured", "voided", "failed"}:
+        logger.warning(
+            "purchase %s was settled to %r while its answer turn was in "
+            "flight; leaving the settlement alone",
+            purchase_id,
+            purchase.status,
+        )
         return purchase
 
     purchase.transcript_json = _serialize(outcome.messages)
@@ -885,6 +938,10 @@ async def run_refinement(
     additional charge: refinements are served free under the original
     purchase. Raises ``RefinementNotAvailableError`` /
     ``WindowExhaustedError`` / ``NewQuestionError`` as appropriate.
+
+    ABS-338: like ``run_answer``, the turn (and the LLM new-question gate,
+    which is itself a network call) runs with NO open DB transaction — see
+    the phasing note above ``_release_request_txn``.
     """
     if purchase.status != "captured":
         raise RefinementNotAvailableError(
@@ -897,13 +954,16 @@ async def run_refinement(
     if purchase.refinement_count >= MAX_REFINEMENTS:
         raise WindowExhaustedError("refinements_exhausted")
 
-    # ABS-339 (interim; remove under ABS-338): the refinement turn (and the
-    # LLM new-question gate below) holds this transaction open and idle —
-    # opt it out of the global idle-in-transaction cap before either runs.
-    _relax_idle_timeout(db)
+    # -- Phase 1 (short txn): read everything the gates and the turn need,
+    # then COMMIT so neither the LLM new-question gate nor the refinement
+    # turn runs with the request transaction idle.
+    prior = _deserialize(purchase.transcript_json)
+    _, cumulative_budget = _resolve_run_inputs(purchase)
+    _release_request_txn(db)
 
-    # New-question gate: programmatic first (cheap, deterministic), then
-    # an optional persona-gated LLM check for ambiguous follow-ups.
+    # -- Phase 2 (NO txn): new-question gate — programmatic first (cheap,
+    # deterministic), then an optional persona-gated LLM check for
+    # ambiguous follow-ups — followed by the refinement turn itself.
     if is_new_question_programmatic(purchase, message):
         raise NewQuestionError(purchase.question_slug)
     if _is_ambiguous_followup(message) and await llm_is_new_question(
@@ -911,8 +971,6 @@ async def run_refinement(
     ):
         raise NewQuestionError(purchase.question_slug)
 
-    prior = _deserialize(purchase.transcript_json)
-    _, cumulative_budget = _resolve_run_inputs(purchase)
     outcome = await run_turn(
         gateway=gateway,
         persona=persona,
@@ -922,6 +980,11 @@ async def run_refinement(
         model=model,
         cumulative_token_budget=cumulative_budget,
     )
+
+    # -- Phase 3 (fresh short txn): persist the refined answer. Re-read
+    # first so ``refinement_count`` increments off the row's committed
+    # value rather than one that has been stale for the whole turn.
+    _reload_for_settle(db, purchase)
     purchase.transcript_json = _serialize(outcome.messages)
     purchase.refinement_count += 1
     purchase.answer_text = scrub_text(outcome.answer_text)
