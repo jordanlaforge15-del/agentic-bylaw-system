@@ -37,7 +37,7 @@ Four containers, all in the default Docker network so they reach each other by s
 |---|---|---|---|
 | `caddy` | `bylaw-caddy:latest` (built from `Dockerfile.caddy`) | 80, 443 public | Terminates TLS, routes by host, enforces rate limits |
 | `web` | `ghcr.io/jordanlaforge15-del/bylaw-web:X.Y.Z` | 3000 internal | Next.js standalone build. Reaches advisor at `http://advisor:8000` |
-| `advisor` | `ghcr.io/jordanlaforge15-del/bylaw-advisor:X.Y.Z` | 8000 internal | FastAPI / uvicorn. Reads/writes Postgres at `postgres:5432` |
+| `advisor` | `ghcr.io/jordanlaforge15-del/bylaw-advisor:X.Y.Z` | 8000 internal | FastAPI / uvicorn. Reads/writes Postgres at `postgres:5432`. Uploaded submission artefacts go to the `bylaw_submissions` volume at `/var/lib/bylaw/submissions` — the container's only writable non-tmpfs path (ABS-87) |
 | `postgres` | `bylaw-postgres:latest` (built from `Dockerfile.postgres`) | 5432 internal | PG16 + pgvector + PostGIS 3.4. Data in Docker named volume `bylaw_bylaw_postgres_data` |
 
 All containers run as non-root inside (UID 1000 advisor, UID 1001 nextjs), with `cap_drop: [ALL]`, `read_only: true` filesystems, `no-new-privileges:true`, and `mem_limit` / `pids_limit` caps. See `docker-compose.yml` on the server for the canonical config.
@@ -259,6 +259,58 @@ Values referenced from the YAML as `${VAR}` are interpolated from `.env`. **Any 
 2. **Advisor / postgres:** nothing else to do — both use `env_file: .env`. `docker compose up -d advisor` recreates the container with the new var. (Note: editing `.env` causes compose to also recreate `postgres` on the next `up -d` because it shares the same `env_file`. Postgres data lives in a named volume, so there's no data loss, but expect a brief DB restart.)
 3. **Web:** add to the `environment:` block in `/srv/bylaw/docker-compose.yml` *and* rebuild the image if it's a `NEXT_PUBLIC_*` value (those are baked at build time). Server-only web env vars only need a `docker compose up -d web`.
 
+### Submission artefact storage (ABS-87)
+
+The submission upload endpoints (`POST /v1/submissions` for the web UI,
+`POST /v1/integrations/submissions` for API-key/Speckle callers) stage the
+uploaded `.ifc` / `.pdf` on disk before the extractors read it — the IFC and
+APS parsers want a real path, not a stream. The advisor container is
+`read_only: true`, so that write needs a mounted volume; without one, every
+upload returns `503 {code:"submission_storage_unavailable"}`. (Before ABS-87
+the router `mkdir`'d its storage root at app construction and the whole
+container failed to boot — that's the ABS-70 / v0.8.4 incident.)
+
+Two moving parts, both mirrored in the repo's `docker-compose.production.yml`:
+
+* a `bylaw_submissions` named volume mounted at `/var/lib/bylaw/submissions`
+  on the `advisor` service;
+* `SUBMISSION_STORAGE_DIR=/var/lib/bylaw/submissions` in `/srv/bylaw/.env`.
+
+**One-time rollout on a running deployment:**
+
+```bash
+# 1. Add the volume mount + env var to the server's compose file to match
+#    docker-compose.production.yml (advisor service: `volumes:` entry;
+#    file bottom: the `bylaw-submissions` volume with `name: bylaw_submissions`).
+ssh bylaw-prod "vi /srv/bylaw/docker-compose.yml"
+
+# 2. Point the app at the mount.
+ssh bylaw-prod "echo 'SUBMISSION_STORAGE_DIR=/var/lib/bylaw/submissions' >> /srv/bylaw/.env"
+
+# 3. Recreate the advisor. Docker creates the named volume on first use,
+#    owned by root — the container runs as UID 1000 and cannot write to it
+#    until it's chowned, so do that before declaring victory.
+ssh bylaw-prod "cd /srv/bylaw && docker compose up -d advisor"
+ssh bylaw-prod "docker run --rm -v bylaw_submissions:/mnt alpine chown -R 1000:1000 /mnt"
+
+# 4. Verify — this is the check that would have caught the gap pre-deploy.
+ssh bylaw-prod "curl -s localhost:8000/healthz" | jq .checks.submission_storage
+# → "ok"   (a missing/unwritable mount reports "unwritable")
+```
+
+`checks.submission_storage` is deliberately **not** fatal to `/healthz` —
+`status` stays `ok` and the endpoint stays 200, because the availability
+monitor pages on a non-200 and a degraded upload feature shouldn't take the
+chat product out of rotation. Read the field, don't rely on the status code.
+
+**Backups: the volume is intentionally out of the backup story.** Uploaded
+artefacts are reproducible inputs, not system of record — the extracted
+attributes, overrides, approval decisions and audit trail are all in Postgres,
+and nothing re-reads the file after ingest. The nightly `pg_dump` therefore
+remains a complete backup; losing this volume costs an architect a re-upload
+and nothing else. Revisit if a feature ever re-parses the original artefact
+(e.g. re-running an improved extractor over historical submissions).
+
 ### Enabling / disabling a report SKU (ABS-384)
 
 `ADVISOR_ENABLED_QUESTIONS` gates the five priced-report slugs
@@ -370,6 +422,10 @@ docker compose -f /srv/bylaw/docker-compose.yml exec -T postgres \
 ```
 
 Tracked as a deploy follow-up: schedule this in cron and ship to a Hetzner Storage Box. For now, run by hand before risky migrations.
+
+This dump is the *complete* backup. The only other stateful volume,
+`bylaw_submissions` (uploaded IFC/PDF artefacts), is deliberately excluded —
+see [Submission artefact storage](#submission-artefact-storage-abs-87) for why.
 
 ### Running ops scripts
 
