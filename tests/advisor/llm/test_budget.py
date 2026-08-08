@@ -21,6 +21,7 @@ from advisor.llm import (
 )
 from advisor.llm.budget import (
     default_cumulative_token_budget,
+    default_wallet_token_ceiling,
     default_token_budget,
     estimate_request_input_tokens,
 )
@@ -358,3 +359,68 @@ def test_estimator_all_cache_flags_combine():
     est_cached = estimate_request_input_tokens(req)
     est_uncached = estimate_request_input_tokens(req_uncached)
     assert est_cached <= est_uncached * 0.2
+
+
+# ----------------------------------------------------------------------
+# ABS-404: the measured wallet-token ceiling
+# ----------------------------------------------------------------------
+
+
+def test_wallet_ceiling_derives_from_the_turn_size(monkeypatch) -> None:
+    """The default is two turns' worth, DERIVED from
+    ``ADVISOR_TOKENS_PER_TURN`` rather than a literal.
+
+    This is the property that matters: ABS-416 moved the turn size by
+    70x, and a literal ceiling would silently have re-scaled "how many
+    turns may one turn burn" along with it. Expressing it as a multiple
+    keeps that promise fixed across any future recalibration.
+    """
+    monkeypatch.delenv("ADVISOR_TURN_MAX_WALLET_TOKENS", raising=False)
+    monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "1000")
+    assert default_wallet_token_ceiling() == 2000
+    # Recalibrate the turn size; the ceiling follows, no restart.
+    monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "175000")
+    assert default_wallet_token_ceiling() == 350_000
+
+
+def test_wallet_ceiling_env_override_wins(monkeypatch) -> None:
+    monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "175000")
+    monkeypatch.setenv("ADVISOR_TURN_MAX_WALLET_TOKENS", "500000")
+    assert default_wallet_token_ceiling() == 500_000
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "not-a-number", "0", "-1"])
+def test_wallet_ceiling_bad_override_falls_back(monkeypatch, bad: str) -> None:
+    """A misconfigured ceiling must not take chat down, and must not
+    disable the breaker: 0 would truncate every turn after its first
+    iteration, and an operator zeroing the knob would silently restore
+    the unbounded burn this exists to prevent. Both fall back to the
+    derived default."""
+    monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "175000")
+    monkeypatch.setenv("ADVISOR_TURN_MAX_WALLET_TOKENS", bad)
+    assert default_wallet_token_ceiling() == 350_000
+
+
+def test_wallet_ceiling_is_not_cached(monkeypatch) -> None:
+    """Unlike the two estimator budgets, the wallet ceiling is read at
+    call time — ``advisor.billing.turns`` treats every wallet parameter
+    as retunable without a process restart and this one must match."""
+    monkeypatch.setenv("ADVISOR_TURN_MAX_WALLET_TOKENS", "111111")
+    assert default_wallet_token_ceiling() == 111_111
+    monkeypatch.setenv("ADVISOR_TURN_MAX_WALLET_TOKENS", "222222")
+    assert default_wallet_token_ceiling() == 222_222
+
+
+def test_wallet_ceiling_clears_every_measured_production_turn(monkeypatch) -> None:
+    """Regression guard on the calibration itself.
+
+    The ABS-416 prod sample puts a full-research turn at 103,014 and
+    247,566 measured wallet tokens against a 175k turn size. The ceiling
+    exists to catch the runaway tail, NOT to truncate real answers, so
+    every burn in that sample must clear it with room to spare.
+    """
+    monkeypatch.delenv("ADVISOR_TURN_MAX_WALLET_TOKENS", raising=False)
+    monkeypatch.delenv("ADVISOR_TOKENS_PER_TURN", raising=False)
+    ceiling = default_wallet_token_ceiling()
+    for measured_prod_burn in (103_014, 120_022, 247_566):
+        assert measured_prod_burn < ceiling

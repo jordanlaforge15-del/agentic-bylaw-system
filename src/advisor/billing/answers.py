@@ -540,6 +540,15 @@ async def run_turn(
     if cumulative_token_budget is not None:
         session_kwargs["cumulative_token_budget"] = cumulative_token_budget
     session = ChatSession(
+        # ABS-404: disable the chat wallet breaker on this rail. A report
+        # is paid for per slug in Stripe and never debits the token
+        # wallet, so the only ceiling that legitimately bounds it is the
+        # ABS-305 cumulative budget above — which several grounding-heavy
+        # slugs deliberately raise (ABS-360). Letting the chat wallet
+        # ceiling apply here would truncate an answer the user has
+        # already been charged for, at a threshold derived from a
+        # completely different SKU's economics.
+        wallet_token_ceiling=0,
         session_id=f"qp-{uuid.uuid4().hex[:12]}",
         user_id="question-purchase",
         system_prompt=persona,

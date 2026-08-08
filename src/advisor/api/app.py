@@ -1233,18 +1233,32 @@ def _patch_usage_event_tokens(
         return
     metadata: dict | None = None
     if trip is not None:
-        # ABS-305: both cost breakers (per-request and cumulative) record
-        # a ``CircuitTripInfo`` on ``last_turn_circuit_trip``. Carry the
+        # ABS-305 / ABS-404: all three cost breakers (per-request,
+        # cumulative, and the measured wallet ceiling) record a
+        # ``CircuitTripInfo`` on ``last_turn_circuit_trip``. Carry the
         # tool loop's ``terminated_reason`` so analytics can tell a
-        # single-oversized-request trip (``cost_circuit_trip``) apart
-        # from a whole-turn cumulative trip (``cumulative_cost_trip``);
-        # both still set the flat ``cost_circuit_trip`` boolean so the
+        # single-oversized-request trip (``cost_circuit_trip``) from a
+        # whole-turn cumulative trip (``cumulative_cost_trip``) from a
+        # measured wallet-ceiling trip (``wallet_cap_trip``); all three
+        # still set the flat ``cost_circuit_trip`` boolean so the
         # existing "any trip" query keeps working.
+        #
+        # ABS-404 note on units: for a ``wallet_cap_trip`` the
+        # ``estimated_input_tokens`` / ``turn_input_token_budget`` keys
+        # hold *measured wallet tokens* (input + output) rather than an
+        # input-token estimate. The key names are kept for backwards
+        # compatibility with existing analytics; ``trip_reason`` is the
+        # discriminator, and ``trip_unit`` states the unit outright so a
+        # query never has to infer it.
         metrics = chat_session.last_tool_loop_metrics
+        trip_reason = metrics.terminated_reason if metrics is not None else None
         metadata = {
             "cost_circuit_trip": True,
-            "trip_reason": (
-                metrics.terminated_reason if metrics is not None else None
+            "trip_reason": trip_reason,
+            "trip_unit": (
+                "measured_wallet_tokens"
+                if trip_reason == "wallet_cap_trip"
+                else "estimated_input_tokens"
             ),
             "estimated_input_tokens": trip.estimated_input_tokens,
             "turn_input_token_budget": trip.budget,
