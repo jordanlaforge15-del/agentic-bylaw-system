@@ -25,6 +25,17 @@ export const CHAT_MIN_BALANCE = 0;
 /** Turns a brand-new wallet is worth: floor(grant / per-turn) == 10. */
 export const SIGNUP_GRANT_TURNS = Math.floor(SIGNUP_GRANT / TOKENS_PER_TURN);
 
+/**
+ * ADVISOR_TURN_MAX_WALLET_TOKENS (ABS-404) — the per-turn ceiling on
+ * MEASURED wallet tokens (input + output), above which `run_tool_loop`
+ * forces synthesis. Derived in the backend as a multiple of
+ * TOKENS_PER_TURN rather than a literal, so it follows a recalibration;
+ * mirrored the same way here.
+ */
+export const TURN_WALLET_TOKEN_MULTIPLE = 2;
+export const TURN_MAX_WALLET_TOKENS =
+  TURN_WALLET_TOKEN_MULTIPLE * TOKENS_PER_TURN;
+
 /** Turn counts the paid top-up SKUs advertise, cheapest-first. */
 export const TOPUP_TURNS: Record<string, number> = {
   small: 8,

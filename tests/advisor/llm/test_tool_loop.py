@@ -19,6 +19,7 @@ from advisor.llm import (
     ToolUseBlock,
     run_tool_loop,
 )
+from advisor.llm.budget import default_wallet_token_ceiling
 from advisor.llm.mock import MockGateway, text_response, tool_use_response
 from advisor.llm.tool_loop import ToolLoopError, text_of
 
@@ -997,3 +998,54 @@ async def test_wallet_breaker_records_synthesis_round_in_metrics():
         result.total_usage.input_tokens + result.total_usage.output_tokens
         > 100_000
     )
+
+
+@pytest.mark.asyncio
+async def test_mock_wallet_cap_scenario_trips_the_wallet_breaker():
+    """The ``MOCK_WALLET_CAP_TRIP`` dispatcher scenario and the breaker
+    agree (ABS-404).
+
+    The e2e spec that pins the per-turn burn bound on the wire depends on
+    these two staying in sync — if the scenario's per-round usage or the
+    default ceiling drifts apart, that spec fails for an unrelated
+    reason. Cheap to assert here, where no stack is needed.
+    """
+    from advisor.llm.mock_dispatcher import _dispatch
+
+    request = CompletionRequest(
+        model="claude-opus-4-5",
+        system="You are a planner. anchor_label: 200 Barrington",
+        messages=[
+            Message(
+                role=LLMRole.USER,
+                content="MOCK_WALLET_CAP_TRIP expensive turn",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                name="search_bylaw_evidence",
+                description="Search the RCLUB.",
+                input_schema={"type": "object"},
+            )
+        ],
+    )
+
+    async def handler(_payload):
+        return "tiny evidence blob"
+
+    result = await run_tool_loop(
+        MockGateway(callable_=_dispatch),
+        request=request,
+        handlers={"search_bylaw_evidence": handler},
+        max_iterations=20,
+    )
+
+    assert result.terminated_reason == "wallet_cap_trip"
+    # Neither estimator could have caught this: the payload is tiny.
+    assert result.total_usage is not None
+    burned = result.total_usage.input_tokens + result.total_usage.output_tokens
+    ceiling = default_wallet_token_ceiling()
+    # Bounded by ceiling + the one synthesis call, and nowhere near the
+    # ~1.2M the scenario reaches at its hard cap with the breaker gone.
+    assert burned >= ceiling
+    assert burned < 3 * ceiling
