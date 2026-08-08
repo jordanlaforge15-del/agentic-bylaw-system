@@ -213,11 +213,15 @@ function ProductAppPageInner() {
 
   const [caseId, setCaseId] = useState<number | null>(caseIdFromUrl);
   const caseIdRef = useRef<number | null>(caseIdFromUrl);
+  const [caseNumber, setCaseNumber] = useState<number | null>(caseNumberFromUrl);
   const setCaseIdBoth = (id: number | null) => {
+    // ABS-453: binding to a different case invalidates the current case
+    // number. Clearing it here means the badge hides rather than showing the
+    // *previous* case's number until the new one resolves.
+    if (id !== caseIdRef.current) setCaseNumber(null);
     caseIdRef.current = id;
     setCaseId(id);
   };
-  const [caseNumber, setCaseNumber] = useState<number | null>(caseNumberFromUrl);
   const [caseAnchor, setCaseAnchor] = useState<{
     kind: string;
     label: string;
@@ -283,11 +287,17 @@ function ProductAppPageInner() {
 
   // Fetch the case anchor (kind + label) whenever caseId changes so
   // the parcel pane can show the address even before a spatial lookup.
+  // ABS-453: the same response carries ``user_case_number``, so this is also
+  // the earliest reliable source for the badge's case number on a direct URL
+  // load that omits ?case_number= (the SSE ``session`` event only arrives on
+  // the first turn). Picking it up here means the badge paints the
+  // user-facing number rather than flashing the internal id first.
   useEffect(() => {
     if (!caseId) {
       setCaseAnchor(null);
       return;
     }
+    let cancelled = false;
     void (async () => {
       try {
         const res = await fetch("/api/cases", { cache: "no-store" });
@@ -295,21 +305,31 @@ function ProductAppPageInner() {
         const data = (await res.json()) as {
           cases: Array<{
             id: number;
+            user_case_number: number;
             anchor_kind: string;
             anchor_label: string;
           }>;
         };
+        // A newer caseId won the race while this was in flight — its own
+        // run of this effect owns the state now.
+        if (cancelled) return;
         const matched = data.cases.find((c) => c.id === caseId);
         if (matched) {
           setCaseAnchor({
             kind: matched.anchor_kind,
             label: matched.anchor_label,
           });
+          if (typeof matched.user_case_number === "number") {
+            setCaseNumber(matched.user_case_number);
+          }
         }
       } catch {
         // Non-critical — parcel pane falls back to generic empty state.
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [caseId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // On direct URL load (reload, share link, browser back/forward) with
@@ -843,7 +863,12 @@ function ProductAppPageInner() {
       setFeedbackMap(fbMap);
       setSessionId(id);
       setCaseIdBoth(newCaseId);
-      setCaseNumber(typeof data.case_number === "number" ? data.case_number : null);
+      // ABS-453: only overwrite when the restore actually carried a number —
+      // blanking it would drop a number the case list already resolved and
+      // make the badge disappear after a restore.
+      if (typeof data.case_number === "number") {
+        setCaseNumber(data.case_number);
+      }
       setParcel(extractParcelContext(enriched));
       setCitations(collectCitations(enriched));
       // Keep URL in sync so reloads and shared links land on the right case.

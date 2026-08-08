@@ -53,12 +53,21 @@ export function BalanceStrip({
       aria-live="polite"
       className="border-t border-hair px-4 py-2 bg-surface-alt flex items-center gap-2.5 text-[12px]"
     >
-      <Mono muted size={10.5}>
-        Case #{caseNumber ?? caseId}
-      </Mono>
-      <span aria-hidden className="text-text-muted">
-        ·
-      </span>
+      {/* ABS-453: the badge shows the durable, user-facing case number only.
+       * It used to fall back to ``caseId`` (the internal DB id) while the
+       * number was still resolving, so a load briefly flashed "Case #17"
+       * before settling on "Case #7". Two different numbers in one element
+       * is worse than none — hold the segment back until it's known. */}
+      {caseNumber !== null && (
+        <>
+          <Mono muted size={10.5}>
+            Case #{caseNumber}
+          </Mono>
+          <span aria-hidden className="text-text-muted">
+            ·
+          </span>
+        </>
+      )}
       {lowBalance && (
         <span
           data-testid="balance-low-glyph"
