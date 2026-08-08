@@ -40,6 +40,13 @@ ENTRY_TOPUP = "topup"
 ENTRY_BURN = "burn"
 ENTRY_ADJUST = "adjust"
 
+# The ``reason`` stamped on the one-time signup free-trial grant. Load-bearing
+# beyond provenance: the partial unique index
+# ``uq_advisor_token_transaction_signup_grant`` keys off this exact literal
+# (see ``TokenTransaction.__table_args__``), so it is the DB's definition of
+# "the signup grant" and must not drift.
+REASON_SIGNUP_GRANT = "signup_grant"
+
 
 def _apply_entry(
     db: Session,
@@ -269,6 +276,27 @@ def grant_signup_tokens_if_needed(db: Session, *, user: User) -> bool:
     regression test for this is Postgres-gated, alongside the existing
     lost-update test in ``test_wallet_concurrency_pg.py``.
 
+    Schema backstop (ABS-415)
+    -------------------------
+    The lock above is an *application* invariant: it holds only for
+    callers that take it, in a transaction that reaches Postgres. It
+    does not survive a future caller that grants the signup tokens by
+    some other path, a hand-run SQL insert, or a refactor that drops the
+    ``FOR UPDATE``. So the "at most one signup grant per user" rule is
+    also written into the schema as the partial unique index
+    ``uq_advisor_token_transaction_signup_grant`` — the same
+    defence-in-depth shape ``credit_topup`` already gets from the UNIQUE
+    on ``stripe_checkout_session_id``.
+
+    Because that index turns a lost race into an ``IntegrityError``, the
+    insert runs inside a SAVEPOINT: tripping the index rolls the ledger
+    row *and* the balance move back together (the balance never moves
+    without its ledger row), and we return ``False`` instead of letting
+    a 500 escape into an ordinary authenticated request. The flag is
+    still set on the way out — the user demonstrably holds a grant, so
+    every subsequent request should short-circuit at the check above
+    rather than re-trip the index.
+
     Returns ``True`` if the grant was applied this call, ``False`` if the
     user already held it. Does not commit — the caller owns the transaction.
     """
@@ -282,12 +310,37 @@ def grant_signup_tokens_if_needed(db: Session, *, user: User) -> bool:
     ).scalar_one()
     if locked.metadata_json.get("token_grant_issued"):
         return False
-    locked.metadata_json["token_grant_issued"] = True
     amount = signup_token_grant()
     if amount > 0:
-        grant_tokens(db, user=locked, amount=amount, reason="signup_grant")
-    else:
-        db.flush()
+        try:
+            # SAVEPOINT so a tripped unique index rolls back the ledger
+            # row and the balance move as one, leaving the outer
+            # transaction (and the row lock) intact.
+            with db.begin_nested():
+                grant_tokens(
+                    db,
+                    user=locked,
+                    amount=amount,
+                    reason=REASON_SIGNUP_GRANT,
+                )
+        except IntegrityError:
+            # Schema said no: this user already holds a signup grant that
+            # our locked read didn't see. Absorb it, record the flag so we
+            # stop trying, and report "already granted".
+            logger.warning(
+                "duplicate signup token grant for user %s refused by "
+                "uq_advisor_token_transaction_signup_grant; "
+                "the wallet was not double-credited",
+                locked.id,
+            )
+            locked.metadata_json["token_grant_issued"] = True
+            db.flush()
+            return False
+    # Set the flag *after* the grant: a SAVEPOINT rollback expires the
+    # objects it touched, and setting it first would make the flag's fate
+    # depend on whether the insert succeeded.
+    locked.metadata_json["token_grant_issued"] = True
+    db.flush()
     return True
 
 
