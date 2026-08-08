@@ -32,12 +32,30 @@ ResolvedLocationKind = Literal["point", "shape", "parcel"]
 #      nearest segment answers "does this lot abut a designated street".
 SpatialPredicate = Literal["intersects", "abuts"]
 
-# Default abut buffer. A geocoded civic point sits at the building/parcel
-# centroid, typically 10–25 m off the street centreline; 30 m comfortably
-# spans a parcel + right-of-way half-width without bleeding onto the parallel
-# street one block over. Matches the 30 m distance the ABS-350 dataset
-# verification used against 6184 Quinpool Rd.
+# Abut buffer for a *point* location (a geocoded rooftop/centroid). This is a
+# degraded fallback, used only when no parcel fabric is ingested — measuring
+# abutment from a rooftop point is not reliably separable at any threshold.
+# Measured over the 1,267 HRM parcels within 200 m of the Quinpool Road
+# centreline (ABS-435): parcels that genuinely front the street have
+# rooftop-to-centreline distances from 0.1 m to 283 m (deep commercial lots),
+# while parcels that do NOT front it start at 26.5 m. The two populations
+# overlap across the whole usable range, so 30 m is a compromise, not a
+# separator: it under-reports deep lots (the ABS-435 false negative at 6321
+# Quinpool Rd, 36.7 m) and would over-report back-lots if raised.
+#
+# Prefer ``PARCEL_ABUT_DISTANCE_M`` against the parcel polygon — see below.
 DEFAULT_ABUT_DISTANCE_M = 30.0
+
+# Abut buffer when the location is the *parcel polygon* rather than a point.
+# Measured from the lot boundary the question becomes separable, because the
+# front lot line sits on the right-of-way edge: over the same Quinpool sample
+# the parcel-to-centreline distance is bimodal — a fronting cluster at 0–15 m
+# (peak 9–12 m, i.e. the ROW half-width) and a back-lot/far-side cluster
+# starting at 30 m, with only 6 of 1,267 parcels in the 15–30 m gap. 15 m sits
+# in that gap: wide enough for an arterial ROW like Quinpool or Barrington,
+# tight enough that a lot backing onto a designated street from the next block
+# never qualifies.
+PARCEL_ABUT_DISTANCE_M = 15.0
 
 
 @dataclass(frozen=True)

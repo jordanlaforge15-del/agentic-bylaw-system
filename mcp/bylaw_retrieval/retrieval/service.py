@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
-from typing import Callable
+from typing import Any, Callable
 
 from sqlalchemy import (
     Select,
@@ -90,6 +91,8 @@ from layer2.retrieval.datasets import _summarize_dataset
 from layer2.retrieval.geocode import resolve_location_with_detail
 from layer2.retrieval.location import LocationReference, RegexLocationExtractor
 from layer2.retrieval.spatial import (
+    DEFAULT_ABUT_DISTANCE_M,
+    PARCEL_ABUT_DISTANCE_M,
     ResolvedLocation,
     find_abutting_features,
     find_containing_feature,
@@ -243,6 +246,10 @@ class RetrievalService:
         """
         self.session = session
         self._default_document_id_resolver = default_document_id_resolver
+        # Memo for the ABS-435 parcel upgrade, keyed by resolved geometry: one
+        # indexed ST_Contains per distinct location, reused across the datasets
+        # and fragments a single request touches. None = looked up, no parcel.
+        self._abut_location_cache: dict[str, dict[str, Any] | None] = {}
 
     def _resolve_default_document_ids(self) -> list[int] | None:
         if self._default_document_id_resolver is None:
@@ -1343,6 +1350,88 @@ class RetrievalService:
         """Spatial predicate query_features should use for a given overlay role."""
         return "abuts" if role in self._ABUTS_OVERLAY_ROLES else "intersects"
 
+    def _abut_location(
+        self, resolved: ResolvedLocation
+    ) -> tuple[ResolvedLocation, float]:
+        """Upgrade a resolved location to the parcel polygon for abut tests (ABS-435).
+
+        "Does this lot abut a designated street" is a question about the *lot*,
+        but a civic geocode returns a rooftop/centroid point, and the distance
+        from that point to the centreline is dominated by lot depth: over the
+        HRM parcels along Quinpool Road it runs 0.1–283 m for parcels that
+        genuinely front the street, overlapping the range for parcels that
+        don't. No point threshold separates the two, which is how 6321 Quinpool
+        Rd (36.7 m from the centreline, squarely on the corridor) reported
+        ``abuts_pedestrian_street=false``.
+
+        Measured from the parcel boundary the question is separable — the front
+        lot line sits on the right-of-way edge — so when a parcel fabric is
+        ingested we swap the point for the parcel polygon containing it and use
+        the tighter ``PARCEL_ABUT_DISTANCE_M``. Falls back to the point (and the
+        looser, admittedly lossy ``DEFAULT_ABUT_DISTANCE_M``) when no parcels
+        dataset is in scope or the point falls outside every parcel.
+        """
+        if resolved.kind == "parcel":
+            return resolved, PARCEL_ABUT_DISTANCE_M
+
+        cache_key = json.dumps(resolved.geometry, sort_keys=True)
+        if cache_key in self._abut_location_cache:
+            parcel_geometry = self._abut_location_cache[cache_key]
+        else:
+            parcel_geometry = self._containing_parcel_geometry(resolved)
+            self._abut_location_cache[cache_key] = parcel_geometry
+
+        if parcel_geometry is None:
+            return resolved, DEFAULT_ABUT_DISTANCE_M
+        # Rebuild the location from THIS caller's resolved location rather than
+        # caching the ResolvedLocation itself: the cache is keyed by geometry
+        # alone, so a shared entry must not carry another address's confidence
+        # or reference_text.
+        return (
+            ResolvedLocation(
+                kind="parcel",
+                geometry=parcel_geometry,
+                confidence=resolved.confidence,
+                source=f"{resolved.source}+parcel",
+                reference_text=resolved.reference_text,
+            ),
+            PARCEL_ABUT_DISTANCE_M,
+        )
+
+    def _containing_parcel_geometry(
+        self, resolved: ResolvedLocation
+    ) -> dict[str, Any] | None:
+        """GeoJSON of the parcel containing ``resolved``, or None."""
+        parcels_ids = self._parcels_dataset_ids()
+        if not parcels_ids:
+            return None
+        try:
+            point = shapely_shape(resolved.geometry)
+        except (TypeError, ValueError, KeyError):
+            return None
+        if point.is_empty:
+            return None
+        if point.geom_type != "Point":
+            point = point.representative_point()
+        parcel = find_containing_feature(
+            self.session, dataset_ids=parcels_ids, point=point
+        )
+        if parcel is None or not parcel.geometry_geojson:
+            return None
+        return parcel.geometry_geojson
+
+    def _location_for_role(
+        self, role: str, resolved: ResolvedLocation
+    ) -> tuple[ResolvedLocation, float]:
+        """Location + abut buffer ``query_features`` should use for an overlay role.
+
+        Point-in-polygon overlays keep the resolved location as-is; only the
+        abuts roles pay for the parcel upgrade.
+        """
+        if role in self._ABUTS_OVERLAY_ROLES:
+            return self._abut_location(resolved)
+        return resolved, DEFAULT_ABUT_DISTANCE_M
+
     def get_address_profile(self, address: str) -> AddressProfile:
         """Resolve an address to its zone + overlay grounding context.
 
@@ -1797,11 +1886,15 @@ class RetrievalService:
             elif role == "pedestrian_street":
                 pedestrian_available = True
 
+            # ABS-435: abuts roles measure from the parcel polygon when a
+            # parcel fabric is ingested, not from the geocoded rooftop point.
+            role_location, abut_distance_m = self._location_for_role(role, resolved)
             matches = query_features(
                 self.session,
                 dataset_id=dataset.id,
-                location=resolved,
+                location=role_location,
                 predicate=self._predicate_for_role(role),
+                abut_distance_m=abut_distance_m,
             )
             if not matches:
                 continue
@@ -2053,11 +2146,14 @@ class RetrievalService:
                 and dataset.linked_fragment_id not in allowed_linked_fragment_ids
             ):
                 continue
+            role = self._overlay_role(dataset)
+            role_location, abut_distance_m = self._location_for_role(role, location)
             for match in query_features(
                 self.session,
                 dataset_id=dataset.id,
-                location=location,
-                predicate=self._predicate_for_role(self._overlay_role(dataset)),
+                location=role_location,
+                predicate=self._predicate_for_role(role),
+                abut_distance_m=abut_distance_m,
             ):
                 score = (
                     self._SPATIAL_CONTAINS_SCORE
@@ -2231,11 +2327,16 @@ class RetrievalService:
             )
             feature_matches: list[DatasetFeatureMatch] = []
             if resolved_location is not None:
+                role = self._overlay_role(dataset)
+                role_location, abut_distance_m = self._location_for_role(
+                    role, resolved_location
+                )
                 for match in query_features(
                     self.session,
                     dataset_id=dataset.id,
-                    location=resolved_location,
-                    predicate=self._predicate_for_role(self._overlay_role(dataset)),
+                    location=role_location,
+                    predicate=self._predicate_for_role(role),
+                    abut_distance_m=abut_distance_m,
                 ):
                     feature_matches.append(
                         DatasetFeatureMatch(
