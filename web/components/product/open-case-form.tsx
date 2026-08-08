@@ -45,6 +45,23 @@ const ANCHOR_KIND_OPTIONS: AnchorKind[] = ["address"];
 
 type Working = "idle" | "intake" | "checkout";
 
+// ABS-450: opening a case needs both an anchor and a first message. Returns
+// the guidance line naming whatever is still empty, or null once the form is
+// complete. Drives both the CTA's disabled state and the visible hint, so the
+// button never sits enabled-looking over a no-op click.
+function missingFieldsMessage(
+  anchorLabel: string,
+  question: string,
+): string | null {
+  const noAnchor = !anchorLabel.trim();
+  const noQuestion = !question.trim();
+  if (noAnchor && noQuestion)
+    return "Add a property address and your question to start.";
+  if (noAnchor) return "Add a property address to start.";
+  if (noQuestion) return "Add your question to start.";
+  return null;
+}
+
 export function OpenCaseForm({
   initialAnchorLabel = "",
   initialMessage = "",
@@ -179,8 +196,11 @@ export function OpenCaseForm({
   // credit) and land on /app with the question auto-sent. Idempotent on the
   // anchor server-side, so re-opening the same address reuses the case.
   async function startConversation() {
-    if (!anchorLabel.trim()) {
-      setError("Add a property address to start.");
+    // ABS-450: the CTA is disabled until both fields carry content, so this
+    // is the belt-and-braces path (keyboard/programmatic submits). It must
+    // still say *why* nothing happened rather than returning silently.
+    if (!anchorLabel.trim() || !question.trim()) {
+      setError(missingFieldsMessage(anchorLabel, question) ?? null);
       return;
     }
     setOpening(true);
@@ -388,6 +408,7 @@ export function OpenCaseForm({
 
   const busy = working !== "idle";
   const reportCount = menu?.questions.length ?? 0;
+  const missing = missingFieldsMessage(anchorLabel, question);
 
   return (
     <div className="flex flex-col">
@@ -485,16 +506,31 @@ export function OpenCaseForm({
       >
         <div className="flex justify-between items-end gap-7 flex-wrap">
           <BalanceChip wallet={wallet} />
-          <Btn
-            variant="accent"
-            size="lg"
-            onClick={startConversation}
-            disabled={opening || !anchorLabel.trim()}
-            data-testid="start-conversation-btn"
-            className="whitespace-nowrap"
-          >
-            {opening ? "Opening…" : "Start the conversation — free →"}
-          </Btn>
+          <div className="flex flex-col items-end gap-2">
+            <Btn
+              variant="accent"
+              size="lg"
+              onClick={startConversation}
+              disabled={opening || missing !== null}
+              aria-describedby={missing ? "start-conversation-hint" : undefined}
+              data-testid="start-conversation-btn"
+              className="whitespace-nowrap"
+            >
+              {opening ? "Opening…" : "Start the conversation — free →"}
+            </Btn>
+            {/* ABS-450: say what's still missing instead of leaving a dead
+                CTA. Present from first paint, so an empty-form click is
+                never a silent no-op. */}
+            {missing && (
+              <span
+                id="start-conversation-hint"
+                data-testid="start-conversation-hint"
+                className="text-[12.5px] text-text-muted text-right"
+              >
+                {missing}
+              </span>
+            )}
+          </div>
         </div>
         <BalanceNotice wallet={wallet} />
       </section>
