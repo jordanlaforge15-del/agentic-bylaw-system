@@ -115,8 +115,10 @@ test("empty (payments off): 0 turns + used-up notice, no ghost, CTA usable", asy
   );
   await expect(page.getByTestId("top-up-turns-btn")).toHaveCount(0);
 
-  // Free CTA works in every state: enabled once an anchor is present.
+  // Free CTA works in every state: enabled once the form is complete
+  // (ABS-450 — anchor *and* question).
   await page.getByPlaceholder(/1234 Main St, Halifax/).fill("500 Test Ave");
+  await page.getByPlaceholder(/Ask your question/).fill("Can I add a unit?");
   await expect(page.getByTestId("start-conversation-btn")).toBeEnabled();
 });
 

@@ -38,15 +38,22 @@ export function Btn({
   onMouseDown,
   onMouseUp,
   onMouseLeave,
+  disabled,
   ...rest
 }: Props) {
   return (
     <button
       {...rest}
+      disabled={disabled}
       className={cn(
-        "inline-flex items-center justify-center cursor-pointer font-sans font-semibold",
+        "inline-flex items-center justify-center font-sans font-semibold",
         "border-[1.5px] transition-[transform,opacity] duration-100",
         "tracking-[-0.01em]",
+        // ABS-450: a disabled Btn must *read* disabled. Without this it looked
+        // fully live while swallowing every click, so a user who hadn't filled
+        // the form saw nothing happen and assumed the app was broken. Mirrors
+        // the flag-report dialog's Submit affordance (opacity + not-allowed).
+        disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
         SIZES[size],
         VARIANTS[variant],
         className,
