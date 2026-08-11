@@ -51,6 +51,13 @@ advisor = [
   # don't 500 at request time. Mirrored in [bim] for non-advisor consumers.
   "pyproj>=3.6",
   "ifcopenshell>=0.7",
+  # advisor.llm.claude_code_translation validates each envelope tool call
+  # against the tool's declared input_schema (ABS-454). The API does that
+  # for us on the tool_use path; the `claude -p` envelope path has no such
+  # guarantee, so the check has to run in-process — including in prod,
+  # which installs `.[advisor]` only. jsonschema is also a [dev] dep, which
+  # is why the import resolves locally without this entry.
+  "jsonschema>=4.0",
 ]
 ingest = [
   "docling>=2.0",
