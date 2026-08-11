@@ -8,8 +8,13 @@
 // These are corpus/schema checks — no running server needed. They assert
 // against evals/regional_centre_bylaw_reference_index.json, the snapshot
 // scripts/build_bylaw_reference_index.py writes from document_id=4. The
-// snapshot exists because the 4,341-fragment Halifax ingest is not present in
+// snapshot exists because the ~4,300-fragment Halifax ingest is not present in
 // CI or in an e2e worktree database.
+//
+// That absence bounds what this spec can prove: it validates index-vs-prompts,
+// never index-vs-corpus. ABS-464 covers the latter in
+// tests/test_bylaw_reference_index_check.py, which runs the builder's --check
+// against a live Postgres and skips where there isn't one.
 //
 // Specifically asserts:
 //   1. All 20 cases have non-empty expected_bylaw_references.

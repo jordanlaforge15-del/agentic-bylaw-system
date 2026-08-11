@@ -20,7 +20,11 @@ Re-run this script after every re-ingest of the Regional Centre by-law:
     python scripts/build_bylaw_reference_index.py --db-url ...    # non-default DB
 
 ``--check`` exits non-zero if any reference fails to resolve against the live
-corpus, or if the committed snapshot has drifted from what the corpus now says.
+corpus, if the committed snapshot's per-reference resolutions have drifted from
+what the corpus now says, or if the snapshot's provenance (``document_id``,
+``source_fragment_count``, ``reference_count``) no longer describes the corpus it
+was generated from. ``tests/test_bylaw_reference_index_check.py`` runs this mode
+automatically wherever the real ingest is reachable, and skips where it is not.
 
 Reference grammar (the only forms allowed in the eval file)
 -----------------------------------------------------------
@@ -224,7 +228,12 @@ def unresolved(index: dict[str, Any]) -> list[str]:
 
 
 def _comparable(index: dict[str, Any]) -> Any:
-    """Strip fields that legitimately drift between ingests (row ids, counts)."""
+    """Strip per-match fields that legitimately move between ingests (row ids).
+
+    Provenance (``document_id``, ``source_fragment_count``, ``reference_count``)
+    is deliberately *not* compared here — it is not a per-reference property.
+    :func:`provenance_drift` owns that comparison.
+    """
     return {
         ref: {
             "kind": entry["kind"],
@@ -233,6 +242,35 @@ def _comparable(index: dict[str, Any]) -> Any:
         }
         for ref, entry in index["references"].items()
     }
+
+
+# Snapshot fields that record *which corpus the snapshot came from*, mapped to
+# the phrasing used when one of them no longer matches the live database.
+PROVENANCE_FIELDS = {
+    "document_id": "document row the snapshot was built from",
+    "source_fragment_count": "fragments in the corpus",
+    "reference_count": "references in the snapshot",
+}
+
+
+def provenance_drift(committed: dict[str, Any], live: dict[str, Any]) -> list[str]:
+    """Compare a committed snapshot's provenance against a freshly built one.
+
+    Pure — takes two index dicts, touches no database — so the guard itself can
+    be tested offline (ABS-464 DoD #5). Returns one human-readable line per
+    field that has drifted, naming both numbers; an empty list means the
+    snapshot describes the corpus it is being checked against.
+    """
+    drift: list[str] = []
+    for field, description in PROVENANCE_FIELDS.items():
+        expected = live.get(field)
+        actual = committed.get(field, "<absent>")
+        if actual != expected:
+            drift.append(
+                f"{field}: snapshot records {actual}, live corpus has {expected} "
+                f"({description})"
+            )
+    return drift
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -278,11 +316,36 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-        print(f"OK: {index['reference_count']} references resolve; snapshot is current.")
+        drift = provenance_drift(committed, index)
+        if drift:
+            print(
+                f"{INDEX_FILE.name} no longer describes the corpus it is being "
+                "checked against. Every reference still resolves, but the "
+                "snapshot's provenance has drifted:",
+                file=sys.stderr,
+            )
+            for line in drift:
+                print(f"  - {line}", file=sys.stderr)
+            print(
+                "Re-run without --check to regenerate the snapshot against the "
+                "current corpus, then review the diff.",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            f"OK: {index['reference_count']} references resolve against "
+            f"document_id={index['document_id']}, and the snapshot's provenance "
+            f"matches the live corpus ({index['source_fragment_count']} fragments)."
+        )
         return 0
 
     INDEX_FILE.write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n")
-    print(f"Wrote {INDEX_FILE.relative_to(REPO_ROOT)} ({index['reference_count']} references).")
+    print(
+        f"Wrote {INDEX_FILE.relative_to(REPO_ROOT)} "
+        f"({index['reference_count']} references, "
+        f"document_id={index['document_id']}, "
+        f"{index['source_fragment_count']} fragments in the corpus)."
+    )
     return 0
 
 

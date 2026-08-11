@@ -6,8 +6,12 @@ reference was checked, so the next person can re-check it without redoing the
 work.
 
 Everything below was derived from the Halifax **Regional Centre Land Use
-By-law** ingest, `document_id = 4`, 4,341 fragments, in the dev database
-(`postgresql+psycopg://layer1:layer1@localhost:5432/layer1`).
+By-law** ingest, `document_id = 4`, in the dev database
+(`postgresql+psycopg://layer1:layer1@localhost:5432/layer1`). It was 4,341
+fragments when this document was written and 4,337 after the ABS-461 re-ingest;
+the live figure is whatever `evals/regional_centre_bylaw_reference_index.json`
+records in `source_fragment_count`, which ABS-464 made `--check` verify rather
+than merely record.
 
 ## The three artefacts
 
@@ -17,8 +21,12 @@ By-law** ingest, `document_id = 4`, 4,341 fragments, in the dev database
 | `evals/regional_centre_bylaw_reference_index.json` | machine-readable proof: for each of the 101 distinct references, the SQL that resolved it, the matched `fragment_id`, its `citation_path`, page, and a text excerpt |
 | `scripts/build_bylaw_reference_index.py` | regenerates the index from the live corpus; `--check` re-verifies without writing |
 
-Guards: `tests/test_eval_bylaw_references.py` (pytest) and
-`web/e2e/functional/abs463-bylaw-reference-validation.spec.ts` (Playwright).
+Guards: `tests/test_eval_bylaw_references.py` (pytest),
+`web/e2e/functional/abs463-bylaw-reference-validation.spec.ts` (Playwright), and
+— added by ABS-464 — `tests/test_bylaw_reference_index_check.py`, which runs
+`--check` itself wherever the real ingest is reachable and skips where it is
+not. The first two validate **index-vs-prompts**; only the third can see
+**index-vs-corpus** drift, because only it touches Postgres.
 
 These two run **independently** — the Playwright spec re-implements the
 assertions against the same JSON rather than shelling out to pytest. Keep it
@@ -32,6 +40,12 @@ Playwright worker for 13-50s and starved the WebKit projects (`tablet-ipad`,
 .venv/bin/python scripts/build_bylaw_reference_index.py --check   # detect drift
 .venv/bin/python scripts/build_bylaw_reference_index.py           # accept it
 ```
+
+You do not have to remember to: `tests/test_bylaw_reference_index_check.py`
+runs `--check` as part of `make test` on any box that has the ingest. `--check`
+compares both the per-reference resolutions *and* the snapshot's provenance
+(`document_id`, `source_fragment_count`, `reference_count`), and names both the
+committed and the live value for every field that has moved.
 
 ## Reference grammar
 
