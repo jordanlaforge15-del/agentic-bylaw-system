@@ -46,28 +46,45 @@ def _make_fake_docker(tmp_path: Path, stale_port: str | None) -> Path:
     fake.write_text(
         "#!/usr/bin/env bash\n"
         f"log='{tmp_path}/docker.log'\n"
+        f"gone='{tmp_path}/removed'\n"
+        f"upok='{tmp_path}/upok'\n"
         f"stale_port='{stale_arg}'\n"
         "echo \"docker $*\" >> \"$log\"\n"
+        "# A container exists when one was there to begin with and hasn't\n"
+        "# been removed, or when a `compose up` has since created one.\n"
+        "exists() {\n"
+        '  if [[ -f "$upok" ]]; then return 0; fi\n'
+        '  if [[ -n "$stale_port" && ! -f "$gone" ]]; then return 0; fi\n'
+        "  return 1\n"
+        "}\n"
         "case \"$1 $2\" in\n"
         "  'compose version')\n"
         "    echo 'Docker Compose version v2.0.0'; exit 0;;\n"
         "  'compose ps')\n"
-        "    if [[ \"$*\" == *'-aq postgres'* ]]; then\n"
-        "      if [[ -n \"$stale_port\" ]]; then echo 'fakecontainer123'; fi\n"
+        "    if [[ \"$*\" == *postgres* ]]; then\n"
+        "      if exists; then echo 'fakecontainer123'; fi\n"
         "      exit 0\n"
         "    fi;;\n"
         "  'inspect fakecontainer123')\n"
-        "    if [[ -n \"$stale_port\" ]]; then echo \"$stale_port\"; fi\n"
+        "    # ABS-461: ensure_postgres asks two different questions of\n"
+        "    # inspect — what mapping was *requested* (HostConfig) and what\n"
+        "    # docker actually did (NetworkSettings). A healthy container\n"
+        "    # here publishes the port it was asked for.\n"
+        "    if [[ \"$*\" == *NetworkSettings* ]]; then\n"
+        "      echo \"${PG_PORT:-5433}\"\n"
+        "    elif [[ -n \"$stale_port\" ]]; then\n"
+        "      echo \"$stale_port\"\n"
+        "    fi\n"
         "    exit 0;;\n"
         "  'compose rm')\n"
-        "    exit 0;;\n"
+        '    touch "$gone"; rm -f "$upok"; exit 0;;\n'
         "  'compose exec')\n"
-        "    # ensure_postgres calls pg_isready via compose exec — pretend\n"
-        "    # postgres is healthy so the script returns early at the\n"
-        "    # 'already healthy' branch and we don't try to actually boot.\n"
-        "    exit 0;;\n"
+        "    # ensure_postgres calls pg_isready via compose exec. Ready iff\n"
+        "    # a container is actually there.\n"
+        "    if exists; then exit 0; fi\n"
+        "    exit 1;;\n"
         "  'compose up')\n"
-        "    exit 0;;\n"
+        '    touch "$upok"; rm -f "$gone"; exit 0;;\n'
         "esac\n"
         "exit 0\n"
     )
@@ -82,6 +99,7 @@ def _run_script(
     fake_bin: Path,
     extra_env: dict[str, str] | None = None,
     stop_at: str = "ensure_postgres",
+    timeout: int = 20,
 ) -> subprocess.CompletedProcess:
     """Write a patched copy of the script to ``tmp_path`` (so
     ``BASH_SOURCE[0]`` and the SCRIPT_DIR / REPO_ROOT computation
@@ -128,7 +146,7 @@ def _run_script(
         env=env,
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=timeout,
     )
 
 
@@ -439,3 +457,276 @@ class TestStopPidSurvivorCleanup:
         )
         assert result.returncode == 0
         assert "still bound after SIGTERM" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# ABS-461: "port is already allocated" handling
+# ---------------------------------------------------------------------------
+
+BIND_ERROR = (
+    "Error response from daemon: failed to set up container networking: "
+    "driver failed programming external connectivity on endpoint "
+    "nm-abs-461-postgres-e2e-1: Bind for 0.0.0.0:5434 failed: "
+    "port is already allocated"
+)
+
+
+def _make_port_conflict_docker(
+    tmp_path: Path,
+    *,
+    holder_project: str,
+    up_failures: int,
+    up_error: str = BIND_ERROR,
+    published_port: str = "5434",
+    already_running: bool = False,
+) -> Path:
+    """Fake `docker` for the port-contention path.
+
+    ``holder_project`` is the compose-project label of the container
+    reported by ``docker ps --filter publish=<PG_PORT>``; empty means no
+    container publishes the port (a non-Docker holder). ``up_failures``
+    is how many ``compose up`` calls fail with ``up_error`` before one
+    succeeds — so a transient sibling teardown is 1-2 and a squatter
+    that never lets go is a large number.
+
+    ``published_port`` is what our own container reports under
+    ``NetworkSettings.Ports`` once it's up. Setting it to "" reproduces
+    the silent variant of the bug: `up` succeeds, the container runs and
+    answers pg_isready in-container, but docker dropped the host mapping
+    because the port was taken. ``already_running`` pre-seeds that state
+    so the reuse fast path meets it.
+
+    ``lsof`` is shadowed too: describe_port_holder falls back to it when
+    no container matches, and the test must not depend on whatever is
+    really listening on the host.
+    """
+    bin_dir = tmp_path / "fake_bin"
+    bin_dir.mkdir(exist_ok=True)
+    if already_running:
+        (tmp_path / "state.upok").write_text("1")
+    fake = bin_dir / "docker"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        f"log='{tmp_path}/docker.log'\n"
+        f"state='{tmp_path}/state'\n"
+        f"holder_project='{holder_project}'\n"
+        f"published_port='{published_port}'\n"
+        f"up_failures={up_failures}\n"
+        'echo "docker $*" >> "$log"\n'
+        "bump() {\n"
+        '  local f="$state.$1" n=0\n'
+        '  [[ -f "$f" ]] && n=$(cat "$f")\n'
+        '  n=$((n + 1)); echo "$n" > "$f"; echo "$n"\n'
+        "}\n"
+        'case "$1 $2" in\n'
+        "  'compose version') echo 'Docker Compose version v2.0.0'; exit 0;;\n"
+        "  'compose ps')\n"
+        # Our container exists only once a `compose up` has succeeded
+        # (or the test pre-seeded it as already running).
+        '    if [[ -f "$state.upok" ]]; then echo ourpg123; fi\n'
+        "    exit 0;;\n"
+        "  'compose exec')\n"
+        # pg_isready runs inside the container: ready iff it exists,
+        # regardless of whether the host mapping survived.
+        '    if [[ -f "$state.upok" ]]; then exit 0; fi\n'
+        "    exit 1;;\n"
+        "  'compose up')\n"
+        "    n=$(bump up)\n"
+        '    if [[ "$n" -le "$up_failures" ]]; then\n'
+        f'      echo {up_error!r} >&2\n'
+        "      exit 1\n"
+        "    fi\n"
+        '    touch "$state.upok"\n'
+        "    exit 0;;\n"
+        "  'compose rm')\n"
+        '    rm -f "$state.upok"; exit 0;;\n'
+        "  'ps -q')\n"
+        '    if [[ -n "$holder_project" ]]; then echo holder123; fi\n'
+        "    exit 0;;\n"
+        "  'rm -f') exit 0;;\n"
+        "esac\n"
+        'if [[ "$1" == inspect ]]; then\n'
+        '  if [[ "$2" == ourpg123 ]]; then echo "$published_port"\n'
+        '  elif [[ "$*" == *".Config.Labels"* ]]; then echo "$holder_project"\n'
+        '  elif [[ "$*" == *".Name"* ]]; then echo /holder-postgres-e2e-1\n'
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    fake.chmod(0o755)
+    fake_lsof = bin_dir / "lsof"
+    fake_lsof.write_text("#!/usr/bin/env bash\nexit 1\n")
+    fake_lsof.chmod(0o755)
+    return bin_dir
+
+
+# ensure_postgres derives our compose project from the repo root's base
+# name, and _run_script builds that root at <tmp>/fake_repo.
+OUR_PROJECT = "fake_repo"
+
+_FAST_RETRY = {
+    "E2E_PORT_RETRY_ATTEMPTS": "3",
+    "E2E_PORT_RETRY_DELAY_SECS": "0",
+    "E2E_PORT_PUBLISH_POLLS": "1",
+}
+
+
+class TestPortAlreadyAllocated:
+    """ABS-461: the post-merge regression gate reported a test failure
+    that was really `Bind for 0.0.0.0:5434 failed: port is already
+    allocated` — a sibling worktree holding this worktree's PG_PORT.
+    No test ran; the output gave the reviewer nothing to act on.
+
+    ensure_postgres must now distinguish the cases: reclaim the port
+    when the holder is our own orphan, ride out a transient collision,
+    and otherwise fail with an actionable message — never killing a
+    foreign holder, which could be a sibling suite mid-run."""
+
+    def test_own_orphan_is_removed_and_retried(self, tmp_path: Path):
+        fake_bin = _make_port_conflict_docker(
+            tmp_path, holder_project=OUR_PROJECT, up_failures=1
+        )
+        result = _run_script(
+            "e2e-up.sh",
+            tmp_path=tmp_path,
+            fake_bin=fake_bin,
+            extra_env={"PG_PORT": "5434", **_FAST_RETRY},
+        )
+        assert result.returncode == 0, f"stderr={result.stderr}"
+        assert "held by our own orphaned container" in result.stdout
+        docker_log = (tmp_path / "docker.log").read_text()
+        assert "docker rm -f holder123" in docker_log, docker_log
+
+    def test_foreign_holder_is_never_killed(self, tmp_path: Path):
+        """A sibling worktree's container must survive: we report, we
+        don't reclaim."""
+        fake_bin = _make_port_conflict_docker(
+            tmp_path, holder_project="nm-abs-460", up_failures=99
+        )
+        result = _run_script(
+            "e2e-up.sh",
+            tmp_path=tmp_path,
+            fake_bin=fake_bin,
+            extra_env={"PG_PORT": "5434", **_FAST_RETRY},
+        )
+        assert result.returncode != 0
+        docker_log = (tmp_path / "docker.log").read_text()
+        assert "rm -f" not in docker_log, f"foreign holder killed: {docker_log}"
+        # The message must name the holder *and* its worktree, so the
+        # operator knows which stack to tear down.
+        assert "holder-postgres-e2e-1" in result.stderr
+        assert "compose project nm-abs-460" in result.stderr
+        assert "not a test or code failure" in result.stderr
+        assert "E2E_FASTAPI_PORT" in result.stderr
+
+    def test_transient_collision_is_ridden_out(self, tmp_path: Path):
+        """A sibling tearing down while we start is not a failure — the
+        retry loop should recover without operator involvement."""
+        fake_bin = _make_port_conflict_docker(
+            tmp_path, holder_project="nm-abs-460", up_failures=2
+        )
+        result = _run_script(
+            "e2e-up.sh",
+            tmp_path=tmp_path,
+            fake_bin=fake_bin,
+            extra_env={"PG_PORT": "5434", **_FAST_RETRY},
+        )
+        assert result.returncode == 0, f"stderr={result.stderr}"
+        assert "already allocated — waiting" in result.stdout
+        docker_log = (tmp_path / "docker.log").read_text()
+        assert "rm -f" not in docker_log
+
+    def test_unidentifiable_holder_still_explains_itself(self, tmp_path: Path):
+        """No container publishes the port (a stray uvicorn, a tunnel).
+        We can't name it, but the guidance must still print."""
+        fake_bin = _make_port_conflict_docker(
+            tmp_path, holder_project="", up_failures=99
+        )
+        result = _run_script(
+            "e2e-up.sh",
+            tmp_path=tmp_path,
+            fake_bin=fake_bin,
+            extra_env={"PG_PORT": "5434", **_FAST_RETRY},
+        )
+        assert result.returncode != 0
+        assert "already bound by another process" in result.stderr
+        assert "parallel-worktrees" in result.stderr
+
+    def test_unrelated_up_failure_is_not_retried(self, tmp_path: Path):
+        """A non-port `compose up` failure must keep failing fast — no
+        15s wait, no port guidance to mislead the reader."""
+        fake_bin = _make_port_conflict_docker(
+            tmp_path,
+            holder_project="nm-abs-460",
+            up_failures=99,
+            up_error="Error response from daemon: no such image: postgis/postgis",
+        )
+        result = _run_script(
+            "e2e-up.sh",
+            tmp_path=tmp_path,
+            fake_bin=fake_bin,
+            extra_env={"PG_PORT": "5434", **_FAST_RETRY},
+        )
+        assert result.returncode != 0
+        assert "no such image" in result.stderr
+        assert "already bound by" not in result.stderr
+        docker_log = (tmp_path / "docker.log").read_text()
+        assert docker_log.count("compose up") == 1, docker_log
+
+
+class TestSilentlyUnpublishedContainer:
+    """ABS-461, the dangerous half of the same bug. When the host port is
+    taken, docker does not always fail the `up`: it can start the
+    container with HostConfig.PortBindings still requesting :5434 and
+    NetworkSettings.Ports empty. `pg_isready` runs *inside* the container
+    so it passes, ensure_postgres declares success, and every host-side
+    client — alembic, uvicorn, Playwright globalSetup — then connects to
+    localhost:5434, which belongs to whoever won the port. That is the
+    "database layer1_test does not exist" symptom, and it must never be
+    reported as a healthy stack."""
+
+    def test_up_succeeding_without_a_host_mapping_is_rejected(self, tmp_path: Path):
+        fake_bin = _make_port_conflict_docker(
+            tmp_path,
+            holder_project="nm-abs-460",
+            up_failures=0,  # `up` always "succeeds"
+            published_port="",  # ...but the mapping was dropped
+        )
+        result = _run_script(
+            "e2e-up.sh",
+            tmp_path=tmp_path,
+            fake_bin=fake_bin,
+            extra_env={"PG_PORT": "5434", **_FAST_RETRY},
+        )
+        assert result.returncode != 0, (
+            "an unpublished container was accepted as a healthy stack; "
+            f"stdout={result.stdout}"
+        )
+        assert "not publishing host port 5434" in result.stderr
+        # The unusable container must be dropped, not left running for
+        # the rest of the suite to connect around.
+        docker_log = (tmp_path / "docker.log").read_text()
+        assert "compose rm -fsv postgres-e2e" in docker_log, docker_log
+
+    def test_reuse_path_rejects_an_unpublished_container(self, tmp_path: Path):
+        """Same check on the other entry point: a container left over
+        from a previous run answers pg_isready but publishes nothing."""
+        fake_bin = _make_port_conflict_docker(
+            tmp_path,
+            holder_project="nm-abs-460",
+            up_failures=0,
+            published_port="",
+            already_running=True,
+        )
+        result = _run_script(
+            "e2e-up.sh",
+            tmp_path=tmp_path,
+            fake_bin=fake_bin,
+            extra_env={"PG_PORT": "5434", **_FAST_RETRY},
+        )
+        assert "already healthy on :5434 — reusing" not in result.stdout, (
+            "reused a container that isn't reachable on the host port"
+        )
+        assert "running but not publishing :5434 — recreating" in result.stdout
+        assert result.returncode != 0
