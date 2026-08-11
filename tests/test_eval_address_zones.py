@@ -41,6 +41,10 @@ PROMPTS_FILE = REPO_ROOT / "evals" / "regional_centre_test_prompts.json"
 
 DEFAULT_DB_URL = "postgresql+psycopg://layer1:layer1@localhost:5432/layer1"
 
+# The Regional Centre Land Use By-law's area id in the HRM zoning dataset,
+# matching scripts/zone_address_picker.REGIONAL_CENTRE_BYLAW_AREA_ID.
+REGIONAL_CENTRE_BYLAW_AREA_ID = "23"
+
 # ABS-466's vocabulary. "rooftop" is the only value that means the point was
 # matched to a building; everything else is an estimate of some kind.
 RESOLUTION_QUALITIES = {"rooftop", "interpolated", "centroid", "approximate", "unknown"}
@@ -168,11 +172,17 @@ def test_no_two_cases_share_an_address() -> None:
 
 @pytest.fixture(scope="module")
 def retrieval_session():
-    """A session over a database carrying the zoning dataset, or a clean skip.
+    """A session over the real Regional Centre zoning corpus, or a clean skip.
 
-    Skips — never fails — when Postgres is unreachable or the zoning overlay
-    is not ingested, so the offline suite runs on a plane. Where the data *is*
+    Skips — never fails — when Postgres is unreachable or the schedule is not
+    ingested, so the offline suite runs on a plane. Where the data *is*
     present, the tests below are the gate.
+
+    The probe asks specifically for Regional Centre polygons rather than for
+    "some dataset called zoning". An e2e worktree database carries seeded
+    ``e2e_*`` overlay datasets that satisfy the looser question but contain
+    none of these addresses, so pointing DATABASE_URL at one would fail every
+    case for a reason that has nothing to do with the eval file.
     """
     sa = pytest.importorskip("sqlalchemy", reason="sqlalchemy not installed")
     pytest.importorskip("shapely", reason="shapely not installed")
@@ -182,20 +192,23 @@ def retrieval_session():
     try:
         engine = sa.create_engine(db_url, connect_args={"connect_timeout": 3})
         with engine.connect() as conn:
-            zoning = conn.execute(
+            regional_centre_polygons = conn.execute(
                 sa.text(
                     "SELECT COUNT(*) FROM external_dataset_feature f "
                     "JOIN external_dataset d ON d.id = f.external_dataset_id "
-                    "WHERE d.name ILIKE '%zoning%'"
-                )
+                    "WHERE d.name ILIKE '%zoning%' "
+                    "AND f.canonical_attributes_json->>'bylaw_area_id' = "
+                    ":area"
+                ),
+                {"area": REGIONAL_CENTRE_BYLAW_AREA_ID},
             ).scalar()
     except sa.exc.SQLAlchemyError as exc:
         # Narrow on purpose: a bare `except Exception` would turn a typo in
         # this fixture into a permanent silent skip, which is the same
         # always-green failure this module exists to remove.
         pytest.skip(f"no zoning corpus reachable at {db_url}: {type(exc).__name__}: {exc}")
-    if not zoning:
-        pytest.skip(f"no zoning dataset ingested at {db_url}")
+    if not regional_centre_polygons:
+        pytest.skip(f"no Regional Centre zoning schedule ingested at {db_url}")
 
     from sqlalchemy.orm import Session
 
