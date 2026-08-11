@@ -1454,7 +1454,7 @@
       {
         "turn": 2,
         "role": "user",
-        "message": "Okay so assuming it is legally non-conforming, I'm looking at adding a rear addition \u2014 probably around 30 square metres \u2014 to expand the lower unit. Does the bylaw allow me to expand a non-conforming duplex like this, or does doing any construction basically mean I lose my non-conforming status and have to comply with current ER-2 use permissions?"
+        "message": "Okay so assuming it is legally non-conforming, I'm looking at adding a rear addition \u2014 probably around 90 square metres \u2014 to expand the lower unit. Does the bylaw allow me to expand a non-conforming duplex like this, or does doing any construction basically mean I lose my non-conforming status and have to comply with current ER-2 use permissions?"
       },
       {
         "turn": 3,
@@ -1464,7 +1464,7 @@
       {
         "turn": 4,
         "role": "user",
-        "message": "So if my existing building is already sitting at about 33% lot coverage and the addition would push me to maybe 40%, does that create a separate non-conformity issue on top of the use issue? Like, am I dealing with two different non-conformity problems here \u2014 one for the duplex use and one potentially for lot coverage \u2014 and would those be treated differently under the bylaw? Do I need a development permit for this addition, or could it fall under any of the exemptions?"
+        "message": "So if my existing building is already sitting at about 33% lot coverage and the addition would push me to roughly 55%, does that create a separate non-conformity issue on top of the use issue? Like, am I dealing with two different non-conformity problems here \u2014 one for the duplex use and one potentially for lot coverage \u2014 and would those be treated differently under the bylaw? Do I need a development permit for this addition, or could it fall under any of the exemptions?"
       }
     ],
     "expected_bylaw_references": [
@@ -1479,14 +1479,13 @@
     "expected_answer_keywords": [
       "ER-2",
       "permitted",
-      "Schedule 15",
       "Schedule 18",
       "non-conforming",
       "lawful non-conforming",
       "Section 229",
       "Section 230",
       "6.0 m",
-      "40%",
+      "50%",
       "Section 231"
     ],
     "expected_topics": [
@@ -1496,7 +1495,7 @@
       "lot_coverage",
       "development_permit"
     ],
-    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here. ZONE RETARGETED ER-1 -> ER-2 (ABS-467): the Regional Centre zoning schedule maps no ER-1 polygon at all \u2014 0 of 11,069 features in halifax_zoning_boundaries carry ZONE=ER-1 \u2014 so no address can ever confirm this case's zone and the eval would grade every answer against a zone the map does not place anywhere. ER-2 carries the same use permissions the premise depends on (single-unit dwelling P, secondary suite P, multi-unit N), so the non-conforming-duplex question is unchanged. It also reconciles the expected keywords, which already carried ER-2's 40% lot coverage rather than ER-1's 35%.",
+    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here. ZONE RETARGETED ER-1 -> ER-2 (ABS-467): the Regional Centre zoning schedule maps no ER-1 polygon at all \u2014 0 of 11,069 features in halifax_zoning_boundaries carry ZONE=ER-1 \u2014 so no address could ever confirm this case's zone, and the eval would grade every answer against a zone the map does not place anywhere. ER-2 carries the same use permissions the premise depends on (single-unit dwelling P, secondary suite P, multi-unit N), so the non-conforming-duplex question is unchanged. The lot-coverage arithmetic in turns 2 and 4 was rescaled to keep the second, separate non-conformity the case was designed to probe: Section 231 caps a non-single-unit use on a lot over 325 m\u00b2 at 50%, so the old 140 m\u00b2 + 30 m\u00b2 on 420 m\u00b2 (40%) stayed comfortably inside it.",
     "address_resolution": {
       "resolved_zone": "ER-2",
       "resolution_quality": "rooftop",
