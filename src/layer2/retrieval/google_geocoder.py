@@ -10,10 +10,11 @@ from layer2.retrieval.resolution_quality import CONFIDENCE_BY_LOCATION_TYPE
 from layer2.retrieval.spatial import ResolvedLocation
 
 
-# Confidence is mapped from Google's location_type enum. ROOFTOP means the
-# response is a precise rooftop match; RANGE_INTERPOLATED is interpolated
-# along a street; GEOMETRIC_CENTER and APPROXIMATE are progressively coarser.
-_CONFIDENCE_BY_TYPE = CONFIDENCE_BY_LOCATION_TYPE
+# Confidence is mapped from Google's location_type enum (the mapping lives in
+# ``resolution_quality`` because the classifier has to invert it for rows that
+# carry a confidence but no type). ROOFTOP means the response is a precise
+# rooftop match; RANGE_INTERPOLATED is interpolated along a street;
+# GEOMETRIC_CENTER and APPROXIMATE are progressively coarser.
 #
 # ABS-466 — which location_types we accept, decided by NAME rather than by a
 # float comparison. The previous rule was ``confidence < 0.6`` against a
@@ -147,7 +148,6 @@ class GoogleGeocoder:
 
         best = payload["results"][0]
         location_type = ((best.get("geometry") or {}).get("location_type") or "").upper()
-        confidence = _CONFIDENCE_BY_TYPE.get(location_type, 0.5)
         accepted = accepted_location_types(ref.kind)
         if location_type not in accepted:
             self._record_failure(
@@ -156,6 +156,8 @@ class GoogleGeocoder:
                 f"kind={ref.kind!r} (accepted: {', '.join(sorted(accepted))})",
             )
             return None
+        # Every accepted type is in the mapping, so this can't miss.
+        confidence = CONFIDENCE_BY_LOCATION_TYPE[location_type]
         loc = (best.get("geometry") or {}).get("location") or {}
         if "lat" not in loc or "lng" not in loc:
             self._record_failure("MISSING_GEOMETRY")
