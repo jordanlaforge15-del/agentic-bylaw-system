@@ -131,10 +131,12 @@ CITATION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 CLAUSE_CITATION_RE = re.compile(r"\b(\d{1,3}[A-Z]?)((?:\([0-9a-zA-Z]{1,3}\)){1,3})")
 CLAUSE_GROUP_RE = re.compile(r"\(([0-9a-zA-Z]{1,3})\)")
 
-# Zone codes as they appear in the by-law and in prose. Matched
-# case-sensitively: lowercase "cor"/"dd" are ordinary words, uppercase are zones.
+# Zone codes as they appear in the by-law and in prose — the set enumerated by
+# Tables 1A/1B/1C. Matched case-sensitively: lowercase "cor" / "dd" / "li" are
+# ordinary words, uppercase are zones. The single-letter "H" zone is left out
+# deliberately: it collides with too much ordinary text to be a usable token.
 ZONE_TOKEN_RE = re.compile(
-    r"\b(?:ER-\d|HR-\d|CH-\d|CEN-\d|COR|DD|DH|PCF|RPK|INS|IND|PA|WA)\b"
+    r"\b(?:ER-\d|HR-\d|CH-\d|CEN-\d|UC-\d|COR|DD|DH|PCF|RPK|INS|DND|HRI|CLI|LI|WA)\b"
 )
 
 # A conditional antecedent: the clause only bites in a stated circumstance.
