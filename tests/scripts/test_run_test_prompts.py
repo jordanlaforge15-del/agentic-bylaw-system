@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.run_test_prompts import extract_turn_artifacts
+from scripts.run_test_prompts import extract_turn_artifacts, summarise_case_result
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -170,6 +170,71 @@ def test_malformed_metric_entries_are_skipped(junk):
     result = extract_turn_artifacts(events)
 
     assert [c["name"] for c in result["tool_calls"]] == ["search_bylaw_evidence"]
+
+
+# ---------------------------------------------------------------------------
+# SUMMARY.json row arithmetic (DoD 1.4)
+# ---------------------------------------------------------------------------
+
+
+def _case(n_turns: int = 2) -> dict:
+    return {
+        "id": "TC-001",
+        "title": "Homeowner rear deck addition in ER-1",
+        "complexity": "simple",
+        "turns": [{"turn": i + 1, "message": "q"} for i in range(n_turns)],
+    }
+
+
+def test_summary_tool_calls_equals_sum_across_turns():
+    """The number a human reads must equal what the transcript carries.
+
+    Exercised with NON-ZERO counts on purpose: every committed transcript
+    predates the fix and carries zero on both sides, so the Playwright
+    invariant passes vacuously against them. This is the only place the
+    arithmetic is checked with real values.
+    """
+    result = {
+        "turns": [
+            {"turn": 1, "tool_calls": [{"name": "a"}, {"name": "b"}, {"name": "c"}]},
+            {"turn": 2, "tool_calls": [{"name": "d"}]},
+        ]
+    }
+
+    row = summarise_case_result(_case(), result, wall=12.5)
+
+    assert row["tool_calls"] == 4
+    assert row["tool_calls"] == sum(
+        len(t["tool_calls"]) for t in result["turns"]
+    )
+    assert row["turns_completed"] == 2
+    assert row["turns_expected"] == 2
+    assert row["wall_s"] == 12.5
+    assert row["error"] is None
+
+
+def test_summary_counts_zero_when_no_tools_were_dispatched():
+    result = {"turns": [{"turn": 1, "tool_calls": []}]}
+    row = summarise_case_result(_case(n_turns=1), result, wall=1.0)
+    assert row["tool_calls"] == 0
+
+
+def test_summary_tolerates_turns_missing_the_tool_calls_key():
+    """A transport-failed turn may lack the key entirely — must not raise."""
+    result = {"turns": [{"turn": 1}, {"turn": 2, "tool_calls": [{"name": "a"}]}]}
+    assert summarise_case_result(_case(), result, wall=1.0)["tool_calls"] == 1
+
+
+def test_summary_reports_error_only_when_no_turns_completed():
+    aborted = {"turns": [], "error": "transport: ConnectError"}
+    row = summarise_case_result(_case(), aborted, wall=0.4)
+    assert row["turns_completed"] == 0
+    assert row["error"] == "transport: ConnectError"
+
+    # A case that failed partway still has usable data — the per-turn error
+    # carries the detail, so the summary row must not mask it as a total loss.
+    partial = {"turns": [{"turn": 1, "tool_calls": [{"name": "a"}]}], "error": "boom"}
+    assert summarise_case_result(_case(), partial, wall=9.0)["error"] is None
 
 
 # ---------------------------------------------------------------------------

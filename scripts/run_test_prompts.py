@@ -277,6 +277,38 @@ def run_turn(
     return artifacts
 
 
+def summarise_case_result(
+    case: dict[str, Any],
+    result: dict[str, Any],
+    wall: float,
+) -> dict[str, Any]:
+    """Build one SUMMARY.json row from a finished case transcript.
+
+    Split out of ``main`` so the counting is testable without a running
+    advisor (ABS-459). ``tool_calls`` is the total across the case's turns
+    and must equal the number of entries the transcript itself carries —
+    that equality is the contract the ABS-459 Playwright invariant checks
+    against committed artifacts.
+
+    ``error`` is reported only when the case produced no turns at all; a
+    case that failed partway still has usable transcript data, and the
+    per-turn ``error`` field carries the detail.
+    """
+    turns = result.get("turns") or []
+    n_turns = len(turns)
+    n_tool = sum(len(t.get("tool_calls") or []) for t in turns)
+    return {
+        "id": case["id"],
+        "title": case["title"],
+        "complexity": case.get("complexity"),
+        "turns_completed": n_turns,
+        "turns_expected": len(case["turns"]),
+        "tool_calls": n_tool,
+        "wall_s": wall,
+        "error": result.get("error") if not n_turns else None,
+    }
+
+
 def run_case(
     client: httpx.Client,
     base_url: str,
@@ -430,19 +462,13 @@ def main() -> None:
             out_path = out_dir / f"{case['id']}.json"
             with out_path.open("w") as f:
                 json.dump(result, f, indent=2)
-            n_turns = len(result.get("turns", []) or [])
-            n_tool = sum(len(t.get("tool_calls") or []) for t in (result.get("turns") or []))
-            summary.append({
-                "id": case["id"],
-                "title": case["title"],
-                "complexity": case.get("complexity"),
-                "turns_completed": n_turns,
-                "turns_expected": len(case["turns"]),
-                "tool_calls": n_tool,
-                "wall_s": wall,
-                "error": result.get("error") if not n_turns else None,
-            })
-            print(f"    {n_turns}/{len(case['turns'])} turns, {n_tool} tool calls, {wall}s", file=sys.stderr)
+            row = summarise_case_result(case, result, wall)
+            summary.append(row)
+            print(
+                f"    {row['turns_completed']}/{row['turns_expected']} turns, "
+                f"{row['tool_calls']} tool calls, {wall}s",
+                file=sys.stderr,
+            )
 
     summary_path = out_dir / "SUMMARY.json"
     with summary_path.open("w") as f:
