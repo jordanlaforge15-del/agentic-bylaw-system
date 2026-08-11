@@ -51,8 +51,9 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable, Protocol
+from typing import Any, Protocol
 
 import httpx
 from sqlalchemy import create_engine, select, text
@@ -63,11 +64,12 @@ for _path in (os.path.join(REPO_ROOT, "src"), os.path.join(REPO_ROOT, "mcp")):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from bylaw_retrieval.retrieval.service import (  # noqa: E402
+from bylaw_retrieval.retrieval.service import (
     RetrievalService,
     overlay_role_for_name,
 )
-from layer1.db.base import ExternalDataset  # noqa: E402
+
+from layer1.db.base import ExternalDataset
 
 DEFAULT_DB_URL = "postgresql+psycopg://layer1:layer1@localhost:5432/layer1"
 

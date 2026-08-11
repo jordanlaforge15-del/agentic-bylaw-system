@@ -197,7 +197,7 @@ def retrieval_session():
     if not zoning:
         pytest.skip(f"no zoning dataset ingested at {db_url}")
 
-    from sqlalchemy.orm import Session  # noqa: PLC0415
+    from sqlalchemy.orm import Session
 
     with Session(engine) as session:
         yield session

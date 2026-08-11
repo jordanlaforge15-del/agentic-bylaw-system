@@ -68,7 +68,7 @@ from sqlalchemy.orm import Session
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from zone_address_picker import (  # noqa: E402
+from zone_address_picker import (
     DEFAULT_DB_URL,
     REGIONAL_CENTRE_BYLAW_AREA_ID,
     ZoneAddress,
@@ -162,10 +162,10 @@ def derive_address(session: Session, spec: dict, **kwargs: Any) -> ZoneAddress:
     if picked is None:
         raise RuntimeError(
             f"No address in zone {spec['zone']!r} could be verified through "
-            "the production path. "
-            "get_address_profile. Widen --candidates, drop --on-street, or "
-            "check that the zoning and parcel datasets are ingested. Zones "
-            "the schedule does not map (ER-1) can never succeed here."
+            "the production path (get_address_profile). Widen --candidates, "
+            "drop --on-street, or check that the zoning and parcel datasets "
+            "are ingested. Zones the schedule does not map (ER-1) can never "
+            "succeed here."
         )
     return picked
 

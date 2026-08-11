@@ -46,8 +46,8 @@ for _path in (REPO_ROOT / "src", REPO_ROOT / "mcp", REPO_ROOT / "scripts"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from bylaw_retrieval.retrieval.service import RetrievalService  # noqa: E402
-from zone_address_picker import (  # noqa: E402
+from bylaw_retrieval.retrieval.service import RetrievalService
+from zone_address_picker import (
     DEFAULT_DB_URL,
     REGIONAL_CENTRE_BYLAW_AREA_ID,
     _build_reverse_geocoder,
