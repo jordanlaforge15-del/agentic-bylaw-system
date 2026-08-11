@@ -6,16 +6,111 @@
   "liability": "low",
   "model": "claude-opus-4-5",
   "grade": {
-    "verdict": "PARTIAL",
+    "verdict": "FAIL_APPLICABILITY",
     "reasons": [
-      "keyword rate 67% below 80% bar for simple cases"
+      "inapplicable citation: 198(1)(d) applies only where a lot line abuts CEN-1, CEN-2, COR, DD, DH land; the answer never establishes any of those zones"
     ],
     "citation_total": 7,
     "citation_found": 7,
     "citation_hallucinated": 0,
-    "keyword_expected": 12,
-    "keyword_hit": 8,
-    "keyword_rate": 0.6666666666666666,
+    "keyword_expected": 6,
+    "keyword_hit": 6,
+    "keyword_rate": 1.0,
+    "keyword_misses": [],
+    "reference_expected": 3,
+    "reference_hit": 3,
+    "reference_rate": 1.0,
+    "references": {
+      "expected": 3,
+      "hit": 3,
+      "rate": 1.0,
+      "entries": [
+        {
+          "reference": "Section 9(1)(c)",
+          "kind": "section_clause",
+          "resolved_in_corpus": true,
+          "cited": true,
+          "exact_clause_match": true,
+          "corpus_matches": [
+            {
+              "citation_path": "Part I > 9 > [Development Permit Exemptions] > (c)",
+              "page": 10,
+              "text_excerpt": "(c) excluding foundations, piles, and footings, uncovered structures less than 0.6 metre in height, such as balconies and patios;"
+            }
+          ]
+        },
+        {
+          "reference": "Section 198",
+          "kind": "section",
+          "resolved_in_corpus": true,
+          "cited": true,
+          "exact_clause_match": null,
+          "corpus_matches": [
+            {
+              "citation_path": "Part V > 198",
+              "page": 171,
+              "text_excerpt": "198 (1) Subject to Subsections 198(2) and 198(3), the minimum required side setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "reference": "Section 199",
+          "kind": "section",
+          "resolved_in_corpus": true,
+          "cited": true,
+          "exact_clause_match": null,
+          "corpus_matches": [
+            {
+              "citation_path": "Part V > 199",
+              "page": 173,
+              "text_excerpt": "199 (1) Subject to Subsections 199(2), 199(3), and 199(4), the minimum required rear setback for any main building shall be:"
+            }
+          ]
+        }
+      ],
+      "misses": [],
+      "unexpected": [
+        {
+          "kind": "section",
+          "value": "340"
+        }
+      ],
+      "unresolved": []
+    },
+    "topic_expected": 3,
+    "topic_hit": 3,
+    "topic_rate": 1.0,
+    "topic_misses": [],
+    "applicability_findings": [
+      {
+        "citation": "198(1)(d)",
+        "section": "198",
+        "clause": "d",
+        "citation_path": "Part V > 198 > [Side Setback Requirements] > (d)",
+        "page": 172,
+        "clause_text": "(d) where a lot line abuts a lot, any portion of which, is zoned DD, DH, CEN-2, CEN-1, or COR zone, 0.0 metre, except as provided in Clause 198(1)(a); (RCCC-Sep 4/24;E-Apr 17/25)",
+        "trigger_phrase": "where a lot line abuts a lot, any portion of which, is zoned DD, DH, CEN-2, CEN-1, or COR zone, 0",
+        "trigger_zones": [
+          "CEN-1",
+          "CEN-2",
+          "COR",
+          "DD",
+          "DH"
+        ],
+        "zones_in_answer": [
+          "CH-1",
+          "CH-2",
+          "ER-1",
+          "ER-2",
+          "ER-3",
+          "HR-1",
+          "HR-2",
+          "PCF",
+          "RPK"
+        ],
+        "reason": "198(1)(d) applies only where a lot line abuts CEN-1, CEN-2, COR, DD, DH land; the answer never establishes any of those zones"
+      }
+    ],
     "hedging_failed": false
   },
   "turns": [
@@ -105,14 +200,43 @@
           ]
         }
       ],
-      "keyword_hits": {
-        "expected": 6,
-        "hit": 5,
-        "rate": 0.833,
-        "misses": [
-          "side setback"
-        ]
-      },
+      "clause_citations": [
+        {
+          "section": "9",
+          "groups": [
+            "1",
+            "c"
+          ],
+          "clause": "c",
+          "raw": "9(1)(c)"
+        },
+        {
+          "section": "199",
+          "groups": [
+            "1"
+          ],
+          "clause": "1",
+          "raw": "199(1)"
+        },
+        {
+          "section": "199",
+          "groups": [
+            "1",
+            "b"
+          ],
+          "clause": "b",
+          "raw": "199(1)(b)"
+        },
+        {
+          "section": "199",
+          "groups": [
+            "1",
+            "a"
+          ],
+          "clause": "a",
+          "raw": "199(1)(a)"
+        }
+      ],
       "hedging": {
         "hedged": true,
         "markers": [
@@ -185,16 +309,25 @@
           ]
         }
       ],
-      "keyword_hits": {
-        "expected": 6,
-        "hit": 3,
-        "rate": 0.5,
-        "misses": [
-          "6.0 m",
-          "0.6 m",
-          "rear setback"
-        ]
-      },
+      "clause_citations": [
+        {
+          "section": "198",
+          "groups": [
+            "1",
+            "d"
+          ],
+          "clause": "d",
+          "raw": "198(1)(d)"
+        },
+        {
+          "section": "340",
+          "groups": [
+            "b"
+          ],
+          "clause": "b",
+          "raw": "340(b)"
+        }
+      ],
       "hedging": {
         "hedged": true,
         "markers": [
@@ -206,5 +339,6 @@
       "hedging_required": false,
       "hedging_ok": true
     }
-  ]
+  ],
+  "spec_source": "prompts"
 }

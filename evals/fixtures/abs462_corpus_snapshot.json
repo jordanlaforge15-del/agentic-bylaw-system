@@ -1,0 +1,259 @@
+{
+  "_comment": "ABS-462 fixture corpus: verbatim source_fragment rows from the Regional Centre ingest (document_id=4), trimmed to the provisions the grader's tests exercise (Sections 9, 198, 199, 200, 340). Regenerate from the live ingest after a re-ingest. Consumed via `verify_test_prompts.py --corpus-json`, which is how the grader runs where the 4,341-fragment Halifax ingest does not exist (CI, worktrees, Playwright).",
+  "bylaw_name": "Regional Centre Land Use By-Law",
+  "document_id": 4,
+  "fragments": [
+    {
+      "citation_label": "9",
+      "citation_path": "Part I > 9",
+      "page": 10,
+      "text": "9 (1) Subject to Subsections 9(2) and 9(3), the following developments are exempt from the requirement to obtain a development permit:"
+    },
+    {
+      "citation_label": "(c)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (c)",
+      "page": 10,
+      "text": "(c) excluding foundations, piles, and footings, uncovered structures less than 0.6 metre in height, such as balconies and patios;"
+    },
+    {
+      "citation_label": "(d)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (d)",
+      "page": 10,
+      "text": "(d) home office uses;"
+    },
+    {
+      "citation_label": "(e)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (e)",
+      "page": 10,
+      "text": "(e) temporary uses;"
+    },
+    {
+      "citation_label": "(f)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (f)",
+      "page": 10,
+      "text": "(f) fences;"
+    },
+    {
+      "citation_label": "(g)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (g)",
+      "page": 10,
+      "text": "(g) the construction, replacement, or repair of infrastructure by utilities or municipal, provincial, or federal governments;"
+    },
+    {
+      "citation_label": "(h)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (h)",
+      "page": 10,
+      "text": "(h) public transit shelters;"
+    },
+    {
+      "citation_label": "(i)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (i)",
+      "page": 10,
+      "text": "(i) any sign exempted under Section 458;"
+    },
+    {
+      "citation_label": "(j)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (j)",
+      "page": 10,
+      "text": "(j) monument uses on municipally, provincially, or federally owned land;"
+    },
+    {
+      "citation_label": "(k)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (k)",
+      "page": 11,
+      "text": "(k) excluding main buildings on registered heritage properties, the painting of buildings;"
+    },
+    {
+      "citation_label": "(l)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (l)",
+      "page": 11,
+      "text": "(l) the replacement of windows and doors within existing openings;"
+    },
+    {
+      "citation_label": "(m)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (m)",
+      "page": 11,
+      "text": "(m) urban farm uses;"
+    },
+    {
+      "citation_label": "(n)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (n)",
+      "page": 11,
+      "text": "(n) the keeping of egg-laying hens as an accessory use; and"
+    },
+    {
+      "citation_label": "(o)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (o)",
+      "page": 11,
+      "text": "(o) the keeping of bees as an accessory use."
+    },
+    {
+      "citation_label": "(p)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (p)",
+      "page": 11,
+      "text": "(p) A short-term rental of an entire dwelling unit in an operator's primary residence is exempt from the requirement to obtain a development permit; (RC-Feb 21/23;E-Sep 1/23)"
+    },
+    {
+      "citation_label": "(q)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (q)",
+      "page": 11,
+      "text": "(q) Provided the rental is not a short-term bedroom rental, a rental of 3 or fewer bedrooms in a dwelling unit shall not require a development permit; (RC-Feb 21/23;E-Sep 1/23)"
+    },
+    {
+      "citation_label": "(r)",
+      "citation_path": "Part I > 9 > [Development Permit Exemptions] > (r)",
+      "page": 11,
+      "text": "(r) an internal conversion of a building with a commercial use in a DD or DH zone that existed before November 27, 2019 to a multi-unit dwelling use. (RC-May23/24;E-Jun 13/24)"
+    },
+    {
+      "citation_label": "198",
+      "citation_path": "Part V > 198",
+      "page": 171,
+      "text": "198 (1) Subject to Subsections 198(2) and 198(3), the minimum required side setback for any main building shall be:"
+    },
+    {
+      "citation_label": "(a)",
+      "citation_path": "Part V > 198 > [Side Setback Requirements] > (a)",
+      "page": 171,
+      "text": "(a) subject to Clauses 198(1)(b) and 198(1)(c), where a lot line abuts a lot, any portion of which, is zoned ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK zone: (RCCC-Sep 4/24;E-Apr 17/25)"
+    },
+    {
+      "citation_label": "(b)",
+      "citation_path": "Part V > 198 > [Side Setback Requirements] > (b)",
+      "page": 172,
+      "text": "(b) for a townhouse dwelling use:"
+    },
+    {
+      "citation_label": "(i)",
+      "citation_path": "Part V > 198 > [Side Setback Requirements] > (b) > [Side Setback Requirements] > (i)",
+      "page": 172,
+      "text": "(i) 0.0 metre along a common wall between each unit, or"
+    },
+    {
+      "citation_label": "(ii)",
+      "citation_path": "Part V > 198 > [Side Setback Requirements] > (b) > [Side Setback Requirements] > (ii)",
+      "page": 172,
+      "text": "(ii) 3.0 metres elsewhere;"
+    },
+    {
+      "citation_label": "(c)",
+      "citation_path": "Part V > 198 > [Side Setback Requirements] > (c)",
+      "page": 172,
+      "text": "(c) for a semi-detached dwelling use or duplex apartment use: (RCCC-Sep 4/24;E-Apr 17/25)"
+    },
+    {
+      "citation_label": "(d)",
+      "citation_path": "Part V > 198 > [Side Setback Requirements] > (d)",
+      "page": 172,
+      "text": "(d) where a lot line abuts a lot, any portion of which, is zoned DD, DH, CEN-2, CEN-1, or COR zone, 0.0 metre, except as provided in Clause 198(1)(a); (RCCC-Sep 4/24;E-Apr 17/25)"
+    },
+    {
+      "citation_label": "(e)",
+      "citation_path": "Part V > 198 > [Side Setback Requirements] > (e)",
+      "page": 172,
+      "text": "(e) where a lot line abuts lands governed by the Downtown Halifax Secondary Municipal Planning Strategy and the Downtown Halifax Land Use By-law, 0.0 metre; or"
+    },
+    {
+      "citation_label": "(f)",
+      "citation_path": "Part V > 198 > [Side Setback Requirements] > (f)",
+      "page": 172,
+      "text": "(f) 2.5 metres elsewhere."
+    },
+    {
+      "citation_label": "199",
+      "citation_path": "Part V > 199",
+      "page": 173,
+      "text": "199 (1) Subject to Subsections 199(2), 199(3), and 199(4), the minimum required rear setback for any main building shall be:"
+    },
+    {
+      "citation_label": "(a)",
+      "citation_path": "Part V > 199 > [Rear Setback Requirements] > (a)",
+      "page": 173,
+      "text": "(a) where a lot line abuts a lot, any portion of which, is zoned ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK zone, 6.0 metres from the rear lot line abutting the lot; or (RCCCSep 4/24;E-Apr 17/25)"
+    },
+    {
+      "citation_label": "(b)",
+      "citation_path": "Part V > 199 > [Rear Setback Requirements] > (b)",
+      "page": 173,
+      "text": "(b) 3.0 metres elsewhere."
+    },
+    {
+      "citation_label": "200",
+      "citation_path": "Part V > 200",
+      "page": 173,
+      "text": "200 (1) Any main building's maximum required streetwall height shall be: (RC- May 23/24;E-June 13/24)"
+    },
+    {
+      "citation_label": "(a)",
+      "citation_path": "Part V > 200 > [Maximum Streetwall Heights] > (a)",
+      "page": 173,
+      "text": "(a) on a registered heritage property, the streetwall height of the registered heritage building on the coming into force date of this By-law;"
+    },
+    {
+      "citation_label": "(b)",
+      "citation_path": "Part V > 200 > [Maximum Streetwall Heights] > (b)",
+      "page": 174,
+      "text": "(b) for a main building other than clause 200(1)(a) that is constructed using wood-frame construction or encapsulated mass timber construction, and"
+    },
+    {
+      "citation_label": "(i)",
+      "citation_path": "Part V > 200 > [Maximum Streetwall Heights] > (i)",
+      "page": 174,
+      "text": "(i) if the main building is no taller than 6 storeys, the building height, or"
+    },
+    {
+      "citation_label": "(ii)",
+      "citation_path": "Part V > 200 > [Maximum Streetwall Heights] > (i) > [Maximum Streetwall Heights] > (ii)",
+      "page": 174,
+      "text": "(ii) if the main building is taller than 6 storeys, 6 storeys; or"
+    },
+    {
+      "citation_label": "(c)",
+      "citation_path": "Part V > 200 > [Maximum Streetwall Heights] > (c)",
+      "page": 174,
+      "text": "(c) for a main building other than Clauses 200(1)(a) or 200(1)(b)"
+    },
+    {
+      "citation_label": "(i)",
+      "citation_path": "Part V > 200 > [Maximum Streetwall Heights] > (c) > [Maximum Streetwall Heights] > (i)",
+      "page": 174,
+      "text": "(i) that is no taller than 5 storeys, the building height, or"
+    },
+    {
+      "citation_label": "(ii)",
+      "citation_path": "Part V > 200 > [Maximum Streetwall Heights] > (c) > [Maximum Streetwall Heights] > (ii)",
+      "page": 174,
+      "text": "(ii) that is taller than 5 storeys, 3 storeys."
+    },
+    {
+      "citation_label": "340",
+      "citation_path": "Part V > 340",
+      "page": 242,
+      "text": "340 Any setback, stepback, or separation distance required in this Part for any main building shall be open and unobstructed except for the following:"
+    },
+    {
+      "citation_label": "(a)",
+      "citation_path": "Part V > 340 > [Permitted Encroachments into Setbacks, Stepbacks, and Separation Distances] > (a)",
+      "page": 242,
+      "text": "(a) patios that are less than 0.6 metre in height and access ramps are permitted in any required setback, stepback, or separation distance;"
+    },
+    {
+      "citation_label": "(b)",
+      "citation_path": "Part V > 340 > [Permitted Encroachments into Setbacks, Stepbacks, and Separation Distances] > (b)",
+      "page": 243,
+      "text": "(b) walkways, lifting devices, uncovered steps, and staircases are permitted in any required setback, stepback, or separation distance;"
+    },
+    {
+      "citation_label": "(c)",
+      "citation_path": "Part V > 340 > [Permitted Encroachments into Setbacks, Stepbacks, and Separation Distances] > (c)",
+      "page": 243,
+      "text": "(c) sills, eaves, gutters, downspouts, cornices, chimneys, fireplace and stove bump outs, and other similar features may project into any required setback, stepback, or separation distance by no more than 0.6 metre; and"
+    },
+    {
+      "citation_label": "(d)",
+      "citation_path": "Part V > 340 > [Permitted Encroachments into Setbacks, Stepbacks, and Separation Distances] > (d)",
+      "page": 243,
+      "text": "(d) window bays and solar collectors may project into any required setback, stepback, or separation distance by no more than 1.0 metre."
+    }
+  ]
+}
