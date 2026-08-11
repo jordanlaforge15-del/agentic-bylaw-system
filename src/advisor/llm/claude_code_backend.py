@@ -199,12 +199,7 @@ class ClaudeCodeGateway:
         flight doesn't hold the event loop hostage.
         """
         self._warn_dropped_fields(request)
-        schema = build_envelope_schema(request.tools)
-        # The system prompt rides on ``--append-system-prompt`` (the
-        # CLI's own system slot) instead of the rendered body, so it
-        # isn't sent twice — advisor system prompts are large enough
-        # that duplicating them would be a measurable per-turn cost.
-        prompt = render_prompt(request.model_copy(update={"system": None}))
+        prompt, schema = _render(request)
 
         last_error: str | None = None
         for attempt in range(1, self._max_retries + 1):
@@ -254,6 +249,18 @@ class ClaudeCodeGateway:
             yield event
 
     # -- transport -----------------------------------------------------------
+
+    def build_argv(self, request: CompletionRequest) -> list[str]:
+        """The exact command line a first attempt would run.
+
+        Public because the flags are the contract: ``--disallowedTools``
+        and ``--autocompact`` are what keep the loop (and the meter) on
+        our side, and auditing them shouldn't require spawning a CLI or
+        reaching into a private method. Retries re-render only the
+        prompt; every other element is what you see here.
+        """
+        prompt, schema = _render(request)
+        return self._build_argv(prompt, schema, request)
 
     def _build_argv(
         self, prompt: str, schema: dict[str, Any], request: CompletionRequest
@@ -373,6 +380,18 @@ class ClaudeCodeGateway:
 
 
 # -- helpers -----------------------------------------------------------------
+
+
+def _render(request: CompletionRequest) -> tuple[str, dict[str, Any]]:
+    """Prompt text + envelope schema for a request.
+
+    The system prompt rides on ``--append-system-prompt`` (the CLI's own
+    system slot) and is stripped from the rendered body so it isn't sent
+    twice — advisor personas are large enough that duplicating one is a
+    measurable per-turn cost.
+    """
+    prompt = render_prompt(request.model_copy(update={"system": None}))
+    return prompt, build_envelope_schema(request.tools)
 
 
 def _request_field_default(field: str) -> Any:
