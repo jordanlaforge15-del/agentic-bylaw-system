@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -49,9 +48,6 @@ from scripts.build_bylaw_reference_index import (
     main,
     provenance_drift,
 )
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
 
 # ---------------------------------------------------------------------------
 # Offline: the drift rule itself
@@ -197,9 +193,14 @@ def test_check_fails_when_the_committed_fragment_count_is_wrong(
     `--check` exits non-zero naming both numbers. Without this, DoD #1 could be
     satisfied by code that never executes.
     """
+    # Take the live count from the corpus, not from the committed file. If the
+    # two have drifted, `test_check_passes_against_the_live_corpus` is already
+    # failing and says so; this test must not add a second, confusing failure
+    # about a number it only assumed.
+    live_count = index_script.build_index(live_db_url)["source_fragment_count"]
+
     committed = json.loads(INDEX_FILE.read_text())
-    real_count = committed["source_fragment_count"]
-    wrong_count = real_count + 4  # the size of the actual ABS-461 drift
+    wrong_count = live_count + 4  # the size of the actual ABS-461 drift
     committed["source_fragment_count"] = wrong_count
 
     mutated = tmp_path / INDEX_FILE.name
@@ -211,7 +212,7 @@ def test_check_fails_when_the_committed_fragment_count_is_wrong(
 
     assert exit_code == 1, "a snapshot describing the wrong corpus must not pass --check"
     assert str(wrong_count) in captured.err, "the stale count must be named"
-    assert str(real_count) in captured.err, "the live count must be named"
+    assert str(live_count) in captured.err, "the live count must be named"
     assert "snapshot is current" not in captured.out, (
         "DoD #2: a mode that failed verification must not claim the snapshot is current"
     )
