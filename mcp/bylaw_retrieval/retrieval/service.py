@@ -1927,7 +1927,7 @@ class RetrievalService:
             role = self._overlay_role(dataset)
             if role == "zone":
                 zone_available = True
-            if role == "heritage":
+            elif role == "heritage":
                 heritage_available = True
             elif role == "bonus_zoning":
                 bonus_available = True
