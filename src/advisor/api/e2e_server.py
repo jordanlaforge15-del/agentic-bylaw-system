@@ -2180,6 +2180,162 @@ def _mount_claude_code_transport_endpoint(app: FastAPI) -> None:
         }
 
 
+# ---------------------------------------------------------------------------
+# ABS-456: provider selection + the API-key billing guard, probed in a real
+# process.
+#
+# ``build_gateway()`` runs exactly once per deployment — at boot, against the
+# process environment the service actually inherits. The unit suite reaches it
+# with a hand-built ``AdvisorLLMSettings`` and a monkeypatched ``os.environ``,
+# which is the right shape for pinning the branch logic but cannot see the two
+# things that decide whether a deployment boots:
+#
+#   * whether ``ADVISOR_*`` env vars are read at all (an alias typo, a settings
+#     field renamed out from under its alias, a stray ``.env`` shadowing the
+#     process env — all invisible to ``monkeypatch.setenv`` + a constructed
+#     settings object);
+#   * whether the guard fires on the *real* ``os.environ`` of a freshly-started
+#     interpreter, before anything is constructed.
+#
+# So the probe below spawns one. The child gets an env assembled from scratch —
+# never a copy of this server's — runs ``build_gateway()``, and reports what it
+# got or how it died. Its cwd is a temp dir so no repo ``.env`` can leak into
+# the answer.
+# ---------------------------------------------------------------------------
+
+# Env vars the probe will forward. An allowlist, not a passthrough: this
+# endpoint hands attacker-controllable strings to a subprocess environment, and
+# the e2e server is deliberately unauthenticated. These four are the only ones
+# ABS-456 gives meaning to.
+_REGISTRY_PROBE_ENV_ALLOWLIST = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "ADVISOR_CLAUDE_CODE_CLI_PATH",
+        "ADVISOR_CLAUDE_CODE_TIMEOUT_S",
+        "ADVISOR_CLAUDE_CODE_MAX_RETRIES",
+    }
+)
+
+# Fixed program — never assembled from request data. Reads the private
+# ``_cli_path`` / ``_timeout_s`` / ``_max_retries`` attributes deliberately:
+# the assertion is that configuration reached the *constructed* gateway, and a
+# public mirror of them would exist only to be asserted on.
+_REGISTRY_PROBE_SOURCE = """
+import json, sys
+
+_CLI = "advisor.llm.claude_code_backend"
+out = {}
+try:
+    from advisor.llm.registry import build_gateway
+    out["cli_backend_imported_on_registry_import"] = _CLI in sys.modules
+    gateway = build_gateway()
+except BaseException as exc:
+    out["ok"] = False
+    out["error_type"] = type(exc).__name__
+    out["error"] = str(exc)
+else:
+    out["ok"] = True
+    out["gateway_name"] = getattr(gateway, "name", None)
+    out["gateway_class"] = type(gateway).__name__
+    out["cli_path"] = getattr(gateway, "_cli_path", None)
+    out["timeout_s"] = getattr(gateway, "_timeout_s", None)
+    out["max_retries"] = getattr(gateway, "_max_retries", None)
+out["cli_backend_imported_after_build"] = _CLI in sys.modules
+print(json.dumps(out))
+"""
+
+
+class _LlmRegistryProbeBody(BaseModel):
+    """Body for ``POST /v1/_test/llm-registry-probe`` (ABS-456)."""
+
+    provider: str = Field(min_length=1, max_length=64)
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Extra environment for the probe process. Keys must be in "
+            "_REGISTRY_PROBE_ENV_ALLOWLIST; anything else is a 400."
+        ),
+    )
+
+
+def _mount_llm_registry_probe_endpoint(app: FastAPI) -> None:
+    """ABS-456: run ``build_gateway()`` in a fresh process and report back."""
+
+    @app.post("/v1/_test/llm-registry-probe")
+    async def llm_registry_probe(body: _LlmRegistryProbeBody) -> dict[str, object]:
+        import asyncio  # noqa: PLC0415
+        import json  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+
+        unknown = sorted(set(body.env) - _REGISTRY_PROBE_ENV_ALLOWLIST)
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"env keys not allowed for the registry probe: {unknown}. "
+                    f"Allowed: {sorted(_REGISTRY_PROBE_ENV_ALLOWLIST)}"
+                ),
+            )
+
+        # Built from scratch, not os.environ.copy(): this server may well be
+        # holding an ANTHROPIC_API_KEY, and inheriting it would make the
+        # no-key cases silently untestable. PYTHONPATH carries this process's
+        # import path so the child finds ``advisor`` however it was installed.
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
+            "ADVISOR_LLM_PROVIDER": body.provider,
+            **body.env,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="abs456-probe-") as cwd:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                _REGISTRY_PROBE_SOURCE,
+                env=env,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=120
+                )
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+                raise HTTPException(
+                    status_code=504,
+                    detail="registry probe did not finish within 120s",
+                ) from None
+
+        text = stdout.decode(errors="replace").strip()
+        # The probe prints exactly one JSON line, but an import-time warning
+        # from a dependency would land on stdout ahead of it.
+        payload: dict[str, object] | None = None
+        for line in reversed(text.splitlines()):
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                continue
+            break
+        if payload is None:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"registry probe produced no JSON (rc={process.returncode}). "
+                    f"stdout={text[-2000:]!r} stderr="
+                    f"{stderr.decode(errors='replace')[-2000:]!r}"
+                ),
+            )
+        return {
+            "returncode": process.returncode,
+            "stderr_tail": stderr.decode(errors="replace")[-2000:],
+            **payload,
+        }
+
+
 class _BuyAnswerCheckoutBody(BaseModel):
     user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
     question_slug: str = Field(min_length=1, max_length=64)
@@ -2753,6 +2909,7 @@ _mount_spatial_candidate_text_endpoint(app)
 _mount_advisor_search_include_flags_endpoint(app)
 _mount_claude_code_translation_endpoints(app)
 _mount_claude_code_transport_endpoint(app)
+_mount_llm_registry_probe_endpoint(app)
 _mount_buy_answer_test_router(app)
 
 
