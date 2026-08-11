@@ -319,9 +319,9 @@ def main(argv: list[str] | None = None) -> int:
         drift = provenance_drift(committed, index)
         if drift:
             print(
-                f"{INDEX_FILE.name} describes a corpus that no longer exists. "
-                "Every reference still resolves, but the snapshot's provenance "
-                "does not match the live database:",
+                f"{INDEX_FILE.name} no longer describes the corpus it is being "
+                "checked against. Every reference still resolves, but the "
+                "snapshot's provenance has drifted:",
                 file=sys.stderr,
             )
             for line in drift:
