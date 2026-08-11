@@ -84,6 +84,10 @@ CENTERLINES_ROLE = "road_centerlines"
 # Wide enough to clear the road allowance and a deep front yard, narrow
 # enough that the parcel behind the one on the corner does not qualify.
 STREET_FRONTAGE_DISTANCE_M = 40.0
+# The same distance in degrees, generously rounded up, for the index-friendly
+# bounding-box prefilter that runs before the exact geography test. At 44.6°N
+# one degree of longitude is ~79 km, so 0.0006° comfortably covers 40 m.
+STREET_FRONTAGE_DISTANCE_DEG = 0.0006
 
 # Parcel area window, in m². Below the floor are slivers and rights-of-way
 # whose interior point is effectively on the street; above the ceiling are
@@ -315,26 +319,52 @@ def candidate_parcels(
     rows = session.execute(
         text(
             """
-            WITH target AS (
+            -- Collapsed to a single geometry up front. Left as a correlated
+            -- EXISTS over the 18k-row centreline table, the planner joins it
+            -- against every candidate parcel and the query blows past the
+            -- 2-minute statement timeout. ST_Union over an empty match yields
+            -- NULL, which the predicate below reads as "no such street".
+            WITH street AS (
                 SELECT ST_Union(geometry) AS geom
                 FROM external_dataset_feature
-                WHERE external_dataset_id = :zoning_id
-                  AND canonical_attributes_json->>'zone_code' = :zone
-                  AND (
-                        CAST(:area AS text) IS NULL
-                        OR canonical_attributes_json->>'bylaw_area_id' = :area
-                      )
+                WHERE external_dataset_id = :centerlines_id
+                  AND CAST(:street AS text) IS NOT NULL
+                  AND UPPER(attributes_json->>'FULL_NAME')
+                        LIKE UPPER(:street) || '%'
             )
             SELECT p.canonical_attributes_json->>'parcel_id' AS pid,
                    ST_Y(ST_PointOnSurface(p.geometry)) AS lat,
                    ST_X(ST_PointOnSurface(p.geometry)) AS lon,
                    ST_Area(p.geometry::geography) AS area_m2
-            FROM external_dataset_feature p, target t
+            FROM external_dataset_feature p, street s
             WHERE p.external_dataset_id = :parcels_id
-              AND t.geom IS NOT NULL
-              AND ST_Within(p.geometry, t.geom)
-              AND ST_Area(p.geometry::geography)
-                    BETWEEN :min_area AND :max_area
+              AND (
+                    CAST(:street AS text) IS NULL
+                    OR (
+                        s.geom IS NOT NULL
+                        -- Bounding-box prefilter first so the GiST index does
+                        -- the work; the geography test then makes the metre
+                        -- distance exact.
+                        AND p.geometry && ST_Expand(s.geom, :street_distance_deg)
+                        AND ST_DWithin(
+                              p.geometry::geography,
+                              s.geom::geography,
+                              :street_distance_m
+                        )
+                    )
+              )
+              AND EXISTS (
+                    SELECT 1
+                    FROM external_dataset_feature z
+                    WHERE z.external_dataset_id = :zoning_id
+                      AND z.canonical_attributes_json->>'zone_code' = :zone
+                      AND (
+                            CAST(:area AS text) IS NULL
+                            OR z.canonical_attributes_json->>'bylaw_area_id'
+                                 = :area
+                          )
+                      AND ST_Contains(z.geometry, p.geometry)
+              )
               AND NOT EXISTS (
                     SELECT 1
                     FROM external_dataset_feature o
@@ -342,21 +372,8 @@ def candidate_parcels(
                       AND o.canonical_attributes_json->>'zone_code' <> :zone
                       AND ST_Intersects(o.geometry, p.geometry)
               )
-              AND (
-                    CAST(:street AS text) IS NULL
-                    OR EXISTS (
-                        SELECT 1
-                        FROM external_dataset_feature c
-                        WHERE c.external_dataset_id = :centerlines_id
-                          AND UPPER(c.attributes_json->>'FULL_NAME')
-                                LIKE UPPER(:street) || '%'
-                          AND ST_DWithin(
-                                c.geometry::geography,
-                                p.geometry::geography,
-                                :street_distance_m
-                          )
-                    )
-              )
+              AND ST_Area(p.geometry::geography)
+                    BETWEEN :min_area AND :max_area
             ORDER BY area_m2 DESC, pid
             LIMIT :limit
             """
@@ -369,6 +386,7 @@ def candidate_parcels(
             "area": bylaw_area_id,
             "street": on_street,
             "street_distance_m": STREET_FRONTAGE_DISTANCE_M,
+            "street_distance_deg": STREET_FRONTAGE_DISTANCE_DEG,
             "min_area": MIN_PARCEL_AREA_M2,
             "max_area": MAX_PARCEL_AREA_M2,
             "limit": limit,

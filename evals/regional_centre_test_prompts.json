@@ -7,7 +7,7 @@
       "subtype": null,
       "description": "Retired homeowner planning a modest backyard deck"
     },
-    "address": "1234 Oxford Street, Halifax, NS",
+    "address": "1222 Robie Street, Halifax, NS",
     "zone": "HR-1",
     "complexity": "simple",
     "liability": "low",
@@ -52,7 +52,15 @@
       "side_setback",
       "development_permit_exemption"
     ],
-    "notes": "Tests basic dimensional lookups (rear + side setback) plus permit exemption. Single-parameter complexity. Low construction cost. ADVERSARIAL ZONE PREMISE: the turn-1 message asserts ER-1, but 1234 Oxford Street geocodes into the HR-1 zone polygon (halifax_zoning_boundaries GlobalID 5f05d7eb-5062-473c-b463-465c7443cd8d, ZONE=HR-1, PID 00078147). The `zone` field records the real zone; the advisor is expected to correct the user's premise and apply the HR-1 setback sections (198/199), not the ER-1 ones. Do not \"fix\" the turn text to say HR-1 -- the misstatement is the test. (ABS-463)"
+    "notes": "Tests basic dimensional lookups (rear + side setback) plus permit exemption. Single-parameter complexity. Low construction cost. ADVERSARIAL ZONE PREMISE: the turn-1 message asserts ER-1, but 1234 Oxford Street geocodes into the HR-1 zone polygon (halifax_zoning_boundaries GlobalID 5f05d7eb-5062-473c-b463-465c7443cd8d, ZONE=HR-1, PID 00078147). The `zone` field records the real zone; the advisor is expected to correct the user's premise and apply the HR-1 setback sections (198/199), not the ER-1 ones. Do not \"fix\" the turn text to say HR-1 -- the misstatement is the test. (ABS-463)",
+    "address_resolution": {
+      "resolved_zone": "HR-1",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00055764"
+    }
   },
   {
     "id": "TC-002",
@@ -62,7 +70,7 @@
       "subtype": null,
       "description": "Young couple exploring income suite to offset mortgage"
     },
-    "address": "567 Windsor Street, Halifax, NS",
+    "address": "65 Wentworth Street, Dartmouth, NS",
     "zone": "ER-2",
     "complexity": "simple",
     "liability": "low",
@@ -112,7 +120,15 @@
       "combination_of_uses",
       "setbacks"
     ],
-    "notes": "Tests use permission lookup, combination-of-uses provision, and baseline setback standards. Three turns escalating breadth."
+    "notes": "Tests use permission lookup, combination-of-uses provision, and baseline setback standards. Three turns escalating breadth.",
+    "address_resolution": {
+      "resolved_zone": "ER-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00109439"
+    }
   },
   {
     "id": "TC-003",
@@ -122,7 +138,7 @@
       "subtype": null,
       "description": "Property owner looking to convert a larger home into a duplex or triplex"
     },
-    "address": "89 Jubilee Road, Halifax, NS",
+    "address": "6457 Jubilee Road, Halifax, NS",
     "zone": "ER-3",
     "complexity": "medium",
     "liability": "medium",
@@ -184,7 +200,15 @@
       "height",
       "development_permit"
     ],
-    "notes": "Medium complexity: four distinct parameters across four turns. Construction risk is moderate (structural conversion + dormer)."
+    "notes": "Medium complexity: four distinct parameters across four turns. Construction risk is moderate (structural conversion + dormer).",
+    "address_resolution": {
+      "resolved_zone": "ER-3",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00023176"
+    }
   },
   {
     "id": "TC-004",
@@ -194,7 +218,7 @@
       "subtype": "architect",
       "description": "Registered architect in schematic design for a mid-rise residential client"
     },
-    "address": "200 Bayers Road, Halifax, NS",
+    "address": "251 Stairs Street, Dartmouth, NS",
     "zone": "HR-1",
     "complexity": "complex",
     "liability": "high",
@@ -269,7 +293,15 @@
       "lot_coverage",
       "parking"
     ],
-    "notes": "High complexity: five parameters, five turns, synthesis confirmation in final turn. High construction cost and public occupancy (daycare)."
+    "notes": "High complexity: five parameters, five turns, synthesis confirmation in final turn. High construction cost and public occupancy (daycare).",
+    "address_resolution": {
+      "resolved_zone": "HR-1",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "40811085"
+    }
   },
   {
     "id": "TC-005",
@@ -279,7 +311,7 @@
       "subtype": null,
       "description": "Mid-size developer running a quick feasibility pass before purchasing a site"
     },
-    "address": "100 Robie Street, Halifax, NS",
+    "address": "10 Joseph Young Street, Dartmouth, NS",
     "zone": "HR-2",
     "complexity": "complex",
     "liability": "high",
@@ -358,7 +390,15 @@
       "use_permission",
       "parking"
     ],
-    "notes": "Six-turn developer feasibility session. Tests that agent correctly identifies home occupation is NOT permitted in HR-2 (Table 1A). High liability: 60-80 unit building."
+    "notes": "Six-turn developer feasibility session. Tests that agent correctly identifies home occupation is NOT permitted in HR-2 (Table 1A). High liability: 60-80 unit building.",
+    "address_resolution": {
+      "resolved_zone": "HR-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "40542839"
+    }
   },
   {
     "id": "TC-006",
@@ -368,7 +408,7 @@
       "subtype": null,
       "description": "Large-scale developer working with a consultant team on a downtown Halifax mixed-use tower"
     },
-    "address": "1505 Barrington Street, Halifax, NS",
+    "address": "5531 Nora Bernard Street, Halifax, NS",
     "zone": "CEN-1",
     "complexity": "complex",
     "liability": "high",
@@ -460,7 +500,15 @@
       "heritage_overlay",
       "parking"
     ],
-    "notes": "Six-turn complex downtown scenario. Tests three overlay interactions (height, FAR, heritage) plus base zone standards. Highest liability: 100+ unit high-rise in heritage area."
+    "notes": "Six-turn complex downtown scenario. Tests three overlay interactions (height, FAR, heritage) plus base zone standards. Highest liability: 100+ unit high-rise in heritage area.",
+    "address_resolution": {
+      "resolved_zone": "CEN-1",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00155622"
+    }
   },
   {
     "id": "TC-007",
@@ -470,7 +518,7 @@
       "subtype": null,
       "description": "Commercial realtor advising a buyer on development potential before making an offer"
     },
-    "address": "5236 Sackville Street, Halifax, NS",
+    "address": "118 Wyse Road, Dartmouth, NS",
     "zone": "CEN-2",
     "complexity": "medium",
     "liability": "medium",
@@ -530,7 +578,15 @@
       "lot_coverage",
       "height_overlay"
     ],
-    "notes": "Three-turn realtor due diligence. Tests height overlay awareness (Schedule 15 reference vs fixed number). Medium liability: advisory role, pre-offer stage."
+    "notes": "Three-turn realtor due diligence. Tests height overlay awareness (Schedule 15 reference vs fixed number). Medium liability: advisory role, pre-offer stage.",
+    "address_resolution": {
+      "resolved_zone": "CEN-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "41546813"
+    }
   },
   {
     "id": "TC-008",
@@ -623,7 +679,15 @@
       "parking",
       "FAR_overlay"
     ],
-    "notes": "Complex five-turn city planner workflow. Tests heritage demolition gate (HAC approval required), overlay hierarchy, and downtown parking exemption. High public liability: heritage demolition in downtown core."
+    "notes": "Complex five-turn city planner workflow. Tests heritage demolition gate (HAC approval required), overlay hierarchy, and downtown parking exemption. High public liability: heritage demolition in downtown core.",
+    "address_resolution": {
+      "resolved_zone": "DH",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": null
+    }
   },
   {
     "id": "TC-009",
@@ -633,7 +697,7 @@
       "subtype": null,
       "description": "Real estate lawyer conducting zoning due diligence for a client acquiring a downtown Dartmouth commercial property"
     },
-    "address": "100 Wyse Road, Dartmouth, NS",
+    "address": "16 Kings Wharf Place, Dartmouth, NS",
     "zone": "DD",
     "complexity": "medium",
     "liability": "medium",
@@ -699,7 +763,15 @@
       "setbacks",
       "lot_coverage"
     ],
-    "notes": "Four-turn legal due diligence. Tests no-parking exemption scope (Section 120(b) lists DD explicitly). Daycare permitted in DD via Table 1B. Medium liability: advisory professional role."
+    "notes": "Four-turn legal due diligence. Tests no-parking exemption scope (Section 120(b) lists DD explicitly). Daycare permitted in DD via Table 1B. Medium liability: advisory professional role.",
+    "address_resolution": {
+      "resolved_zone": "DD",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "41488750"
+    }
   },
   {
     "id": "TC-010",
@@ -709,7 +781,7 @@
       "subtype": "planner",
       "description": "Urban planner consulting on a medium-density mixed-use development along a corridor"
     },
-    "address": "1959 Gottingen Street, Halifax, NS",
+    "address": "2368 Gottingen Street, Halifax, NS",
     "zone": "COR",
     "complexity": "complex",
     "liability": "high",
@@ -789,7 +861,15 @@
       "lot_coverage",
       "parking"
     ],
-    "notes": "Five-turn planner scenario. Tests COR front setback (3 m, unlike CEN-1/CEN-2 at 0 m) and that COR does NOT get the no-parking exemption (Section 120(b) lists only CEN-1, CEN-2, DH, DD). High liability: full mixed-use building program."
+    "notes": "Five-turn planner scenario. Tests COR front setback (3 m, unlike CEN-1/CEN-2 at 0 m) and that COR does NOT get the no-parking exemption (Section 120(b) lists only CEN-1, CEN-2, DH, DD). High liability: full mixed-use building program.",
+    "address_resolution": {
+      "resolved_zone": "COR",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00148858"
+    }
   },
   {
     "id": "TC-011",
@@ -799,7 +879,7 @@
       "subtype": "planner",
       "description": "Senior planner triaging a proposed lab/research building addition on an institutional campus"
     },
-    "address": "5980 University Avenue, Halifax, NS",
+    "address": "1273 Edward Street, Halifax, NS",
     "zone": "INS",
     "complexity": "medium",
     "liability": "medium",
@@ -863,7 +943,15 @@
       "height",
       "lot_coverage"
     ],
-    "notes": "Tests INS use permissions for research/laboratory uses, dimensional standards in an institutional zone, and how the bylaw handles campus-style master sites. Underrepresented zone."
+    "notes": "Tests INS use permissions for research/laboratory uses, dimensional standards in an institutional zone, and how the bylaw handles campus-style master sites. Underrepresented zone.",
+    "address_resolution": {
+      "resolved_zone": "INS",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "40069247"
+    }
   },
   {
     "id": "TC-012",
@@ -873,7 +961,7 @@
       "subtype": null,
       "description": "Real-estate lawyer fielding a question about a deck that may overhang into an RPK-zoned park parcel"
     },
-    "address": "Halifax Common, North Park Street side, Halifax, NS",
+    "address": "65 Georges Island Road, Halifax, NS",
     "zone": "RPK",
     "complexity": "medium",
     "liability": "medium",
@@ -930,7 +1018,15 @@
       "accessory_uses",
       "development_permit_exemption"
     ],
-    "notes": "Tests RPK permitted/accessory uses and what the bylaw says (or doesn't say) about private encroachments into park-zoned land. Underrepresented zone."
+    "notes": "Tests RPK permitted/accessory uses and what the bylaw says (or doesn't say) about private encroachments into park-zoned land. Underrepresented zone.",
+    "address_resolution": {
+      "resolved_zone": "RPK",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "41336363"
+    }
   },
   {
     "id": "TC-013",
@@ -940,7 +1036,7 @@
       "subtype": "architect",
       "description": "Architect doing a feasibility study on a 6\u20138 storey residential infill"
     },
-    "address": "5455 Spring Garden Road, Halifax, NS",
+    "address": "30 Joseph Young Street, Dartmouth, NS",
     "zone": "HR-2",
     "complexity": "complex",
     "liability": "high",
@@ -1029,7 +1125,15 @@
       "parking",
       "site_plan_approval"
     ],
-    "notes": "Tests HR-2 FAR, height overlay map (precincts), streetwall + stepback requirements, and parking minimums. Spring Garden corridor is heavily overlaid."
+    "notes": "Tests HR-2 FAR, height overlay map (precincts), streetwall + stepback requirements, and parking minimums. Spring Garden corridor is heavily overlaid.",
+    "address_resolution": {
+      "resolved_zone": "HR-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "40542813"
+    }
   },
   {
     "id": "TC-014",
@@ -1039,7 +1143,7 @@
       "subtype": null,
       "description": "Developer exploring bonus zoning provisions to push height and FAR above as-of-right"
     },
-    "address": "1657 Barrington Street, Halifax, NS",
+    "address": "3123 Kempt Road, Halifax, NS",
     "zone": "CEN-2",
     "complexity": "complex",
     "liability": "high",
@@ -1131,7 +1235,15 @@
       "streetwall",
       "site_plan_approval"
     ],
-    "notes": "Tests CEN-2 base FAR/height, bonus-zoning trigger menu, ground-floor active-use requirement, and streetwall standards. Adversarial \u2014 user pushes for max possible scenario and assumes bonuses are stackable."
+    "notes": "Tests CEN-2 base FAR/height, bonus-zoning trigger menu, ground-floor active-use requirement, and streetwall standards. Adversarial \u2014 user pushes for max possible scenario and assumes bonuses are stackable.",
+    "address_resolution": {
+      "resolved_zone": "CEN-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00152777"
+    }
   },
   {
     "id": "TC-015",
@@ -1141,7 +1253,7 @@
       "subtype": null,
       "description": "Developer pricing the cost of building behind a retained facade in DH"
     },
-    "address": "1547 Birmingham Street, Halifax, NS",
+    "address": "5512 Spring Garden Road, Halifax, NS",
     "zone": "DH",
     "complexity": "complex",
     "liability": "high",
@@ -1219,7 +1331,15 @@
       "setbacks",
       "site_plan_approval"
     ],
-    "notes": "Tests Downtown Halifax heritage demolition/retention rules, viewplanes, height precincts, and what triggers heritage review. Adversarial \u2014 user asks if they can demolish if facade is structurally unsound."
+    "notes": "Tests Downtown Halifax heritage demolition/retention rules, viewplanes, height precincts, and what triggers heritage review. Adversarial \u2014 user asks if they can demolish if facade is structurally unsound.",
+    "address_resolution": {
+      "resolved_zone": "DH",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00077909"
+    }
   },
   {
     "id": "TC-016",
@@ -1229,7 +1349,7 @@
       "subtype": null,
       "description": "Realtor preparing a marketing package for a downtown Dartmouth property"
     },
-    "address": "100 Wyse Road, Dartmouth, NS",
+    "address": "15 Kings Wharf Place, Dartmouth, NS",
     "zone": "DD",
     "complexity": "medium",
     "liability": "medium",
@@ -1293,18 +1413,26 @@
       "streetwall",
       "development_permit_exemption"
     ],
-    "notes": "Tests Downtown Dartmouth use permissions, ground-floor active-use requirements, and base height standards. Underrepresented use case."
+    "notes": "Tests Downtown Dartmouth use permissions, ground-floor active-use requirements, and base height standards. Underrepresented use case.",
+    "address_resolution": {
+      "resolved_zone": "DD",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "41488750"
+    }
   },
   {
     "id": "TC-017",
-    "title": "Homeowner expanding a legally non-conforming duplex in ER-1",
+    "title": "Homeowner expanding a legally non-conforming duplex in ER-2",
     "persona": {
       "type": "homeowner",
       "subtype": null,
-      "description": "Owner of a duplex predating current ER-1 zoning that only permits single-unit dwellings"
+      "description": "Owner of a duplex predating current ER-2 zoning that only permits single-unit dwellings"
     },
-    "address": "2147 Maynard Street, Halifax, NS",
-    "zone": "ER-1",
+    "address": "5562 Nora Bernard Street, Halifax, NS",
+    "zone": "ER-2",
     "complexity": "complex",
     "liability": "medium",
     "tags": [
@@ -1321,17 +1449,17 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I own a duplex at 2147 Maynard Street in Halifax \u2014 it's in the ER-1 zone. The duplex was already there when I bought it, and I know ER-1 only permits single-unit dwellings plus a secondary suite. So I'm guessing it's considered a legally non-conforming use? Just want to make sure I understand what that actually means for me before I start planning anything."
+        "message": "Hey, I own a duplex at 2147 Maynard Street in Halifax \u2014 it's in the ER-2 zone. The duplex was already there when I bought it, and I know ER-2 only permits single-unit dwellings plus a secondary suite. So I'm guessing it's considered a legally non-conforming use? Just want to make sure I understand what that actually means for me before I start planning anything."
       },
       {
         "turn": 2,
         "role": "user",
-        "message": "Okay so assuming it is legally non-conforming, I'm looking at adding a rear addition \u2014 probably around 30 square metres \u2014 to expand the lower unit. Does the bylaw allow me to expand a non-conforming duplex like this, or does doing any construction basically mean I lose my non-conforming status and have to comply with current ER-1 use permissions?"
+        "message": "Okay so assuming it is legally non-conforming, I'm looking at adding a rear addition \u2014 probably around 30 square metres \u2014 to expand the lower unit. Does the bylaw allow me to expand a non-conforming duplex like this, or does doing any construction basically mean I lose my non-conforming status and have to comply with current ER-2 use permissions?"
       },
       {
         "turn": 3,
         "role": "user",
-        "message": "Good to know. Now let's say I can proceed with the addition \u2014 what are the actual setback numbers I need to hit in ER-1? I'm most concerned about the rear setback since that's where the addition would go, and the side setback on the east side where the lot is pretty narrow. Also, what's the lot coverage limit I'd need to stay under? The lot is roughly 420 square metres and the existing building footprint is already around 140 square metres."
+        "message": "Good to know. Now let's say I can proceed with the addition \u2014 what are the actual setback numbers I need to hit in ER-2? I'm most concerned about the rear setback since that's where the addition would go, and the side setback on the east side where the lot is pretty narrow. Also, what's the lot coverage limit I'd need to stay under? The lot is roughly 420 square metres and the existing building footprint is already around 140 square metres."
       },
       {
         "turn": 4,
@@ -1349,7 +1477,7 @@
       "Section 231"
     ],
     "expected_answer_keywords": [
-      "ER-1",
+      "ER-2",
       "permitted",
       "Schedule 15",
       "Schedule 18",
@@ -1368,7 +1496,15 @@
       "lot_coverage",
       "development_permit"
     ],
-    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here."
+    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here. ZONE RETARGETED ER-1 -> ER-2 (ABS-467): the Regional Centre zoning schedule maps no ER-1 polygon at all \u2014 0 of 11,069 features in halifax_zoning_boundaries carry ZONE=ER-1 \u2014 so no address can ever confirm this case's zone and the eval would grade every answer against a zone the map does not place anywhere. ER-2 carries the same use permissions the premise depends on (single-unit dwelling P, secondary suite P, multi-unit N), so the non-conforming-duplex question is unchanged. It also reconciles the expected keywords, which already carried ER-2's 40% lot coverage rather than ER-1's 35%.",
+    "address_resolution": {
+      "resolved_zone": "ER-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00158865"
+    }
   },
   {
     "id": "TC-018",
@@ -1378,7 +1514,7 @@
       "subtype": null,
       "description": "Developer evaluating a 5\u20137 storey mixed-use building near a major bus terminal"
     },
-    "address": "6960 Mumford Road, Halifax, NS",
+    "address": "5249 Smith Street, Halifax, NS",
     "zone": "COR",
     "complexity": "complex",
     "liability": "high",
@@ -1467,7 +1603,15 @@
       "parking",
       "site_plan_approval"
     ],
-    "notes": "Tests COR corridor standards: height precincts along corridors, ground-floor use, parking reductions near transit. Adversarial \u2014 user asks about reducing parking based on transit proximity."
+    "notes": "Tests COR corridor standards: height precincts along corridors, ground-floor use, parking reductions near transit. Adversarial \u2014 user asks about reducing parking based on transit proximity.",
+    "address_resolution": {
+      "resolved_zone": "COR",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00103762"
+    }
   },
   {
     "id": "TC-019",
@@ -1477,7 +1621,7 @@
       "subtype": null,
       "description": "Owner of a single-unit lot adding a detached backyard suite over a garage"
     },
-    "address": "2563 Maitland Street, Halifax, NS",
+    "address": "1462 Birchdale Avenue, Halifax, NS",
     "zone": "ER-3",
     "complexity": "medium",
     "liability": "low",
@@ -1542,7 +1686,15 @@
       "lot_coverage",
       "height"
     ],
-    "notes": "Tests backyard suite provisions specifically \u2014 separate from secondary suite rules. Often confused. Confirms model distinguishes between the two."
+    "notes": "Tests backyard suite provisions specifically \u2014 separate from secondary suite rules. Often confused. Confirms model distinguishes between the two.",
+    "address_resolution": {
+      "resolved_zone": "ER-3",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00078352"
+    }
   },
   {
     "id": "TC-020",
@@ -1552,7 +1704,7 @@
       "subtype": "planner",
       "description": "Senior planner triaging an application that may impinge on a protected viewplane"
     },
-    "address": "1577 Brunswick Street, Halifax, NS",
+    "address": "2162 Brunswick Street, Halifax, NS",
     "zone": "HR-1",
     "complexity": "complex",
     "liability": "high",
@@ -1632,6 +1784,14 @@
       "streetwall",
       "shadow_impact"
     ],
-    "notes": "Tests viewplane mapping, height limits derived from viewplanes (not just zone), site-plan-approval triggers, shadow impact. High liability \u2014 easy to miss the viewplane constraint."
+    "notes": "Tests viewplane mapping, height limits derived from viewplanes (not just zone), site-plan-approval triggers, shadow impact. High liability \u2014 easy to miss the viewplane constraint.",
+    "address_resolution": {
+      "resolved_zone": "HR-1",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "41263179"
+    }
   }
 ]

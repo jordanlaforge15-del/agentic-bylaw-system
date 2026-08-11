@@ -58,15 +58,21 @@ PROMPTS_FILE = REPO_ROOT / "evals" / "regional_centre_test_prompts.json"
 
 # The per-case block ABS-467 adds. ``resolution_quality`` is ABS-466's
 # vocabulary, recorded so a case that depends on an *estimated* point says so
-# rather than reading like a rooftop match.
+# rather than reading like a rooftop match. Every field here is re-derivable
+# from ``get_address_profile``, which is what makes the block checkable.
 RESOLUTION_FIELDS = (
     "resolved_zone",
     "resolution_quality",
     "location_type",
     "location_confidence",
     "location_resolver",
-    "parcel_pid",
 )
+
+# Provenance, not a live-comparable field: the parcel the address was derived
+# from. ``get_address_profile`` does not report a parcel for a civic address
+# (``AddressProfile.pid`` is only populated when the question named a PID), so
+# it is recorded but excluded from drift comparison.
+PROVENANCE_FIELDS = ("parcel_pid",)
 
 
 @dataclass(frozen=True)
@@ -114,7 +120,6 @@ def live_resolution(service: RetrievalService, address: str) -> dict[str, Any]:
         "location_type": profile.location_type,
         "location_confidence": profile.location_confidence,
         "location_resolver": profile.location_resolver,
-        "parcel_pid": profile.pid,
         "_unresolvable": profile.unresolvable,
         "_outside_mapped_area": profile.outside_mapped_area,
     }
@@ -286,7 +291,11 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             if result.zone_ok and not upgradeable:
                 live = live_resolution(service, case["address"])
-                case["address_resolution"] = {f: live[f] for f in RESOLUTION_FIELDS}
+                recorded = case.get("address_resolution") or {}
+                case["address_resolution"] = {
+                    **{f: live[f] for f in RESOLUTION_FIELDS},
+                    **{f: recorded.get(f) for f in PROVENANCE_FIELDS},
+                }
                 print(f"{case['id']}: zone already correct, refreshed address_resolution")
                 continue
             print(
@@ -300,7 +309,10 @@ def main(argv: list[str] | None = None) -> int:
                     exclude=exclude,
                 )
             )
-        session.commit()
+            # Per case, not once at the end: a repair run spends most of its
+            # wall time in reverse-geocode HTTP calls, and the database sets
+            # idle_in_transaction_session_timeout to a minute.
+            session.commit()
 
     # ASCII-escaped and 2-space indented to match how the generator writes the
     # file, so a repair diff shows only the lines it actually changed.
