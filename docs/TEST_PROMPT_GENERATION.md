@@ -29,8 +29,9 @@ Each record in the JSON array has the following fields:
 | `persona.type` | string | Persona type (see valid values below) |
 | `persona.subtype` | string \| null | Sub-role (e.g. `architect`, `planner`) |
 | `persona.description` | string | One-line description of the individual |
-| `address` | string | Full civic address within the Regional Centre Plan Area |
-| `zone` | string | Zone code from the bylaw (e.g. `ER-1`, `CEN-1`) |
+| `address` | string | Full civic address, **derived from `zone`** and verified to resolve to it (ABS-467) |
+| `address_resolution` | object | Evidence the address was verified against: `resolved_zone`, `resolution_quality`, `location_type`, `location_confidence`, `location_resolver`, `parcel_pid` |
+| `zone` | string | Zone code the schedule actually maps (e.g. `ER-2`, `CEN-1`). Not `ER-1` — the by-law defines it but no polygon carries it |
 | `complexity` | `simple` \| `medium` \| `complex` | Complexity of the scenario |
 | `liability` | `low` \| `medium` \| `high` | Liability level driven by project scale and risk |
 | `tags` | string[] | Queryable scenario tags |
@@ -132,9 +133,17 @@ Tags are freeform strings used for thematic grouping. Established tags:
 
 All addresses must be within the **Regional Centre Plan Area**: the Halifax Peninsula and Dartmouth inside the Circumferential Highway (bylaw Section 2).
 
-**Halifax Peninsula examples**: Oxford Street, Windsor Street, Robie Street, Barrington Street, Hollis Street, Gottingen Street, Quinpool Road, Sackville Street, Jubilee Road, Bayers Road.
+Do not pick a street from a list and hope. The plan area is not the constraint
+that bit — being in the *zone* is, and a plausible peninsula address is exactly
+how 17 of the first 20 cases ended up in the wrong zone or in no zone at all.
+The generator derives the address from the zone and verifies it through the
+production `get_address_profile` path; see
+[ABS-467-EVAL-ADDRESS-DERIVATION.md](ABS-467-EVAL-ADDRESS-DERIVATION.md).
 
-**Dartmouth examples**: Wyse Road, King Street, Portland Street, Alderney Drive (inside the Circumferential Highway).
+Use `--on-street` when the scenario leans on a particular street (an arterial,
+a transit corridor, a viewplane). It biases which real address is chosen; it
+cannot override the verification, and the search falls back to the whole zone
+when that street carries no parcel in it.
 
 ---
 
@@ -215,17 +224,25 @@ python scripts/generate_regional_centre_test_prompts.py \
   --liability medium \
   --tags institutional setbacks development_permit \
   --bylaw-features setbacks development_permit \
-  --address "1741 Brunswick Street, Halifax, NS" \
   --title "Building official reviewing institutional setbacks in INS" \
   --turns 3 \
   --append
 ```
 
-Set `ANTHROPIC_API_KEY` to use the Claude API for generating realistic messages. Without it, the script produces stub messages that can be filled in manually.
+There is no `--address`. The zone picks a real parcel, the parcel yields a real
+civic address, and that address is resolved back through `get_address_profile`
+before the case is written — so a new case cannot reintroduce the zone/address
+mismatch ABS-467 fixed. This needs `DATABASE_URL` pointing at a database with
+the HRM zoning and parcel datasets, and `GOOGLE_MAPS_API_KEY`.
+
+Messages come from `claude -p` (billed to the Claude Code subscription). If the
+`claude` binary is missing, the script produces stub messages to fill in
+manually.
 
 ### Batch mode
 
-Create a spec file `scripts/test_prompt_specs_new.json` as a JSON array of spec objects (see the script docstring for the schema), then:
+Create a spec file `scripts/test_prompt_specs_new.json` as a JSON array of spec
+objects (see the script docstring for the schema), then:
 
 ```bash
 python scripts/generate_regional_centre_test_prompts.py \
@@ -243,7 +260,9 @@ For large-scale expansion (covering many new zones or personas at once), use the
 
 Before committing new test cases:
 
-- [ ] All required fields present (`id`, `title`, `persona`, `address`, `zone`, `complexity`, `liability`, `tags`, `bylaw_features`, `turns`, `expected_bylaw_references`, `expected_answer_keywords`, `expected_topics`, `notes`)
+- [ ] All required fields present (`id`, `title`, `persona`, `address`, `address_resolution`, `zone`, `complexity`, `liability`, `tags`, `bylaw_features`, `turns`, `expected_bylaw_references`, `expected_answer_keywords`, `expected_topics`, `notes`)
+- [ ] `python scripts/verify_eval_address_zones.py --check` passes — every address resolves to its case's zone
+- [ ] `address_resolution.resolution_quality` is `rooftop`, or the notes say why it is not
 - [ ] No `[STUB]` placeholder messages remain in `turns`
 - [ ] `expected_bylaw_references` match real section/table labels in the bylaw fixture
 - [ ] `id` values are unique and sequential
