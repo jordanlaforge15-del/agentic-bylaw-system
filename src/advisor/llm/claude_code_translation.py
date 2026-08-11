@@ -59,6 +59,7 @@ __all__ = [
     "build_envelope_schema",
     "envelope_to_response",
     "render_prompt",
+    "usage_from_payload",
 ]
 
 ACTION_TOOL_CALLS = "tool_calls"
@@ -280,9 +281,15 @@ def envelope_to_response(
 
     action = structured_output.get("action")
     if action == ACTION_FINAL_ANSWER:
-        content: list[ContentBlock] = [
-            TextBlock(text=_coerce_text(structured_output.get("text")))
-        ]
+        text = _coerce_text(structured_output.get("text"))
+        if not text.strip():
+            # Same failure mode as an empty tool_calls list: the loop
+            # would terminate on it and hand the user a blank answer.
+            # Better to let the transport retry the turn.
+            raise EnvelopeValidationError(
+                "envelope action is 'final_answer' but 'text' is missing or empty"
+            )
+        content: list[ContentBlock] = [TextBlock(text=text)]
         stop_reason = "end_turn"
     elif action == ACTION_TOOL_CALLS:
         content = list(

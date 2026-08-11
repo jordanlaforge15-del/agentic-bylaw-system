@@ -379,6 +379,18 @@ def test_tool_calls_action_with_empty_list_raises_typed_error():
         )
 
 
+def test_final_answer_with_empty_text_raises_typed_error():
+    """Mirror of the empty-tool_calls guard: a final answer with no text
+    would end the loop and hand the user a blank response, so it is a
+    malformed envelope the transport should retry."""
+    with pytest.raises(EnvelopeValidationError):
+        envelope_to_response(
+            {"action": "final_answer", "text": "   "}, _payload(), MODEL, tools=_tools()
+        )
+    with pytest.raises(EnvelopeValidationError):
+        envelope_to_response({"action": "final_answer"}, _payload(), MODEL, tools=_tools())
+
+
 def test_text_alongside_tool_calls_is_preserved_before_the_calls():
     """The Messages API allows a text preamble on a tool-use turn; keep
     it, in order, so transcripts of a CLI-backed run read the same as an
@@ -439,7 +451,8 @@ def test_envelope_schema_without_tools_leaves_name_unconstrained():
 def test_envelope_schema_validates_a_real_envelope():
     """Round-trip guard: the schema we ship must actually accept the
     envelopes this module is built to translate."""
-    jsonschema = pytest.importorskip("jsonschema")
+    import jsonschema
+
     schema = build_envelope_schema(_tools())
     jsonschema.validate(
         {
