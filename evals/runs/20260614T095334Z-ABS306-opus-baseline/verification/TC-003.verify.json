@@ -1,0 +1,433 @@
+{
+  "id": "TC-003",
+  "title": "Homeowner converting single-unit to multi-unit in ER-3",
+  "zone": "ER-3",
+  "complexity": "medium",
+  "liability": "medium",
+  "model": "claude-opus-4-5-20251101",
+  "grade": {
+    "verdict": "PASS",
+    "reasons": [],
+    "citation_total": 17,
+    "citation_found": 17,
+    "citation_hallucinated": 0,
+    "keyword_expected": 16,
+    "keyword_hit": 10,
+    "keyword_rate": 0.625,
+    "hedging_failed": false
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "wall_time_s": 13.19,
+      "stop_reason": "end_turn",
+      "citation_total": 2,
+      "citation_found": 2,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "3F",
+          "raw": "Schedule 3F",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "497",
+          "raw": "Section 497",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part X > 497",
+              "page": 376,
+              "text_excerpt": "497 (1) Within the Halifax Grain Elevator (HGE) Special Area, as shown on Schedule 3F, new or expanded residential uses shall only be permitted by development agreement, in accordance with Policy ED-6"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 4,
+        "hit": 3,
+        "rate": 0.75,
+        "misses": [
+          "Section 63"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "planner",
+          "hrm",
+          "before proceeding",
+          "not legal advice",
+          "this is general",
+          "site-specific"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 2,
+      "wall_time_s": 52.91,
+      "stop_reason": "end_turn",
+      "citation_total": 7,
+      "citation_found": 7,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "18",
+          "raw": "Schedule 18",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "3C",
+          "raw": "Schedule 3C",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "V",
+          "raw": "Part V",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > [Table 8]",
+              "page": 109,
+              "text_excerpt": "Table 8: Main building rooftop features"
+            },
+            {
+              "citation_path": "Part V > [Table 9]",
+              "page": 190,
+              "text_excerpt": "Table 9: Minimum required side setbacks for Established Residential Special Areas"
+            },
+            {
+              "citation_path": "Part V > [Table 10]",
+              "page": 191,
+              "text_excerpt": "Table 10: Maximum required lot coverage for Established Residential Special Areas"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "231",
+          "raw": "Section 231",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 231",
+              "page": 191,
+              "text_excerpt": "231 (1) Subject to Subsections 231(2) and 231(3), and Section 234, the maximum required lot coverage shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "228",
+          "raw": "Section 228",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 228",
+              "page": 189,
+              "text_excerpt": "228 (1) Subject to Subsection 228(2), any portion of a main building, either above or below grade, shall have a minimum required front or flanking setback as specified on Schedule 18."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "229",
+          "raw": "Section 229",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 229",
+              "page": 189,
+              "text_excerpt": "229 (1) Subject to Subsection 229(2) and Section 234, the minimum required side setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "230",
+          "raw": "Section 230",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 230",
+              "page": 190,
+              "text_excerpt": "230 The minimum required rear setback shall be 6.0 metres."
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 4,
+        "hit": 2,
+        "rate": 0.5,
+        "misses": [
+          "permitted",
+          "Section 63"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 3,
+      "wall_time_s": 46.82,
+      "stop_reason": "end_turn",
+      "citation_total": 6,
+      "citation_found": 6,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "schedule",
+          "value": "15",
+          "raw": "Schedule 15",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "schedule",
+          "value": "18",
+          "raw": "Schedule 18",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "Regional Centre Land Use By-law"
+            },
+            {
+              "citation_path": null,
+              "page": 21,
+              "text_excerpt": "Advisory Committee"
+            },
+            {
+              "citation_path": null,
+              "page": 2,
+              "text_excerpt": "THIS IS TO CERTIFY that this is a true copy of the Regional Centre Land Use By-Law which was passed by a majority vote of the Council of the Halifax Regional Municipality at a duly called meeting held"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "V",
+          "raw": "Part V",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > [Table 8]",
+              "page": 109,
+              "text_excerpt": "Table 8: Main building rooftop features"
+            },
+            {
+              "citation_path": "Part V > [Table 9]",
+              "page": 190,
+              "text_excerpt": "Table 9: Minimum required side setbacks for Established Residential Special Areas"
+            },
+            {
+              "citation_path": "Part V > [Table 10]",
+              "page": 191,
+              "text_excerpt": "Table 10: Maximum required lot coverage for Established Residential Special Areas"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "227",
+          "raw": "Section 227",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 227",
+              "page": 189,
+              "text_excerpt": "227 Subject to Section 103 and Part X, any main building shall not exceed the maximum required building height specified on Schedule 15."
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "104",
+          "raw": "Section 104",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 104",
+              "page": 111,
+              "text_excerpt": "104 (1) Within any DD, DH, CEN-2, CEN-1, COR, HR-2, HR-1, INS, UC-2, or UC-1 zone, the uninhabitable portion of any main building within a sloped roof may exceed the maximum required height, as shown "
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "345",
+          "raw": "Section 345",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 345",
+              "page": 245,
+              "text_excerpt": "345 (1) The following building rooftop features may protrude by no more than 3.0 metres above the main building rooftop on which they are located:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 4,
+        "hit": 3,
+        "rate": 0.75,
+        "misses": [
+          "Section 63"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 4,
+      "wall_time_s": 40.51,
+      "stop_reason": "end_turn",
+      "citation_total": 2,
+      "citation_found": 2,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "section",
+          "value": "9",
+          "raw": "Section 9",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 9",
+              "page": 10,
+              "text_excerpt": "9 (1) Subject to Subsections 9(2) and 9(3), the following developments are exempt from the requirement to obtain a development permit:"
+            },
+            {
+              "citation_path": "Appendix 2 > 9",
+              "page": 445,
+              "text_excerpt": "9 Shadow diagrams shall:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "10",
+          "raw": "Section 10",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 10",
+              "page": 12,
+              "text_excerpt": "10 A development permit application shall include documents and plans, drawn to scale, that include the following, where applicable:"
+            },
+            {
+              "citation_path": "Appendix 2 > 10",
+              "page": 447,
+              "text_excerpt": "10 The written analysis shall:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 4,
+        "hit": 2,
+        "rate": 0.5,
+        "misses": [
+          "permitted",
+          "Section 63"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    }
+  ]
+}

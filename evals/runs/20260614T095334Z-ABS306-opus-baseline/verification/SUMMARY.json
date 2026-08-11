@@ -1,0 +1,296 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "zone": "ER-1",
+    "complexity": "simple",
+    "liability": "low",
+    "verdict": "PASS",
+    "kw_rate": 0.8333333333333334,
+    "citation_found": 5,
+    "citation_total": 5,
+    "hallucinated": 0,
+    "reasons": []
+  },
+  {
+    "id": "TC-002",
+    "title": "Homeowner secondary suite legality in ER-2",
+    "zone": "ER-2",
+    "complexity": "simple",
+    "liability": "low",
+    "verdict": "PASS",
+    "kw_rate": 0.8333333333333334,
+    "citation_found": 11,
+    "citation_total": 11,
+    "hallucinated": 0,
+    "reasons": []
+  },
+  {
+    "id": "TC-003",
+    "title": "Homeowner converting single-unit to multi-unit in ER-3",
+    "zone": "ER-3",
+    "complexity": "medium",
+    "liability": "medium",
+    "verdict": "PASS",
+    "kw_rate": 0.625,
+    "citation_found": 17,
+    "citation_total": 17,
+    "hallucinated": 0,
+    "reasons": []
+  },
+  {
+    "id": "TC-004",
+    "title": "Architect scoping a mid-rise residential building in HR-1",
+    "zone": "HR-1",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "PARTIAL",
+    "kw_rate": 0.5,
+    "citation_found": 21,
+    "citation_total": 21,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate 50% below 60% bar for complex"
+    ]
+  },
+  {
+    "id": "TC-005",
+    "title": "Developer feasibility for residential tower in HR-2",
+    "zone": "HR-2",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-006",
+    "title": "Developer mixed-use tower in CEN-1 with height overlay",
+    "zone": "CEN-1",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-007",
+    "title": "Realtor due diligence on CEN-2 redevelopment potential",
+    "zone": "CEN-2",
+    "complexity": "medium",
+    "liability": "medium",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-008",
+    "title": "City planner reviewing heritage demolition application in DH",
+    "zone": "DH",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-009",
+    "title": "Real estate lawyer vetting a DD site for a mixed-use purchase",
+    "zone": "DD",
+    "complexity": "medium",
+    "liability": "medium",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-010",
+    "title": "Planner scoping a corridor mixed-use development in COR",
+    "zone": "COR",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-011",
+    "title": "City planner reviewing university lab expansion in INS",
+    "zone": "INS",
+    "complexity": "medium",
+    "liability": "medium",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-012",
+    "title": "Lawyer advising adjoining owner on RPK encroachment risk",
+    "zone": "RPK",
+    "complexity": "medium",
+    "liability": "medium",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-013",
+    "title": "Architect scoping a mid-rise residential infill in HR-2",
+    "zone": "HR-2",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-014",
+    "title": "Developer chasing bonus density in CEN-2",
+    "zone": "CEN-2",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-015",
+    "title": "Developer pricing a DH heritage retention infill",
+    "zone": "DH",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-016",
+    "title": "Realtor due-diligence on a DD listing",
+    "zone": "DD",
+    "complexity": "medium",
+    "liability": "medium",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-017",
+    "title": "Homeowner expanding a legally non-conforming duplex in ER-1",
+    "zone": "ER-1",
+    "complexity": "complex",
+    "liability": "medium",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-018",
+    "title": "Developer scoping a transit-oriented infill on a COR corridor site",
+    "zone": "COR",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-019",
+    "title": "Homeowner planning a backyard suite in ER-3",
+    "zone": "ER-3",
+    "complexity": "medium",
+    "liability": "low",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  },
+  {
+    "id": "TC-020",
+    "title": "Planner reviewing site plan approval for HR-1 mid-rise near a viewplane",
+    "zone": "HR-1",
+    "complexity": "complex",
+    "liability": "high",
+    "verdict": "FAIL",
+    "kw_rate": null,
+    "citation_found": 0,
+    "citation_total": 0,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate None"
+    ]
+  }
+]
