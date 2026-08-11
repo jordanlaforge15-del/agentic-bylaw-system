@@ -156,7 +156,12 @@ def live_db_url() -> str:
                 sa.text("SELECT id FROM document WHERE bylaw_name = :name ORDER BY id LIMIT 1"),
                 {"name": BYLAW_NAME},
             ).scalar()
-    except Exception as exc:  # noqa: BLE001 — any connection failure is a skip
+    except sa.exc.SQLAlchemyError as exc:
+        # Narrow on purpose. A bare `except Exception` would turn a typo in this
+        # fixture into a permanent silent skip — the same class of always-green
+        # guard ABS-464 exists to remove. Both real-world shapes are covered:
+        # OperationalError (no Postgres listening) and ProgrammingError (a
+        # database with no `document` table), each a SQLAlchemyError.
         pytest.skip(f"Regional Centre corpus not reachable at {db_url}: {type(exc).__name__}")
 
     if document_id is None:
