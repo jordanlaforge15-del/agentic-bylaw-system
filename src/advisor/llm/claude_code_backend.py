@@ -85,6 +85,7 @@ from advisor.llm.claude_code_translation import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ARGV_PROMPT_LIMIT_BYTES",
     "AUTOCOMPACT_THRESHOLD",
     "CLAUDE_CLI",
     "DEFAULT_MAX_RETRIES",
@@ -103,6 +104,13 @@ DEFAULT_MAX_RETRIES = 3
 # fires first and the CLI never compacts a conversation out from under
 # a turn we are mid-way through billing.
 AUTOCOMPACT_THRESHOLD = 1_000_000
+
+# Linux caps a single argv entry at 128 KiB (MAX_ARG_STRLEN, 32 pages)
+# and fails the whole exec with E2BIG past it — roughly 32k tokens,
+# well under the 165k the advisor is allowed to accumulate, so a real
+# research conversation reaches it. Stay clear of the cliff and hand
+# anything larger to the CLI on stdin instead.
+ARGV_PROMPT_LIMIT_BYTES = 100_000
 
 # Every built-in tool the CLI ships with. Disallowing the lot is what
 # demotes ``claude -p`` from an agent to a completion engine; the
@@ -168,7 +176,10 @@ class ClaudeCodeGateway:
 
     ``cli_path`` defaults to whatever ``claude`` resolves to on PATH.
     ``max_retries`` counts total attempts, not retries-after-the-first:
-    ``max_retries=3`` means at most three subprocess invocations.
+    ``max_retries=3`` means at most three subprocess invocations — so
+    the worst-case latency of one ``complete()`` is
+    ``max_retries * timeout_s``, which is what the defaults are sized
+    around.
     """
 
     name = "claude_code"
@@ -260,15 +271,32 @@ class ClaudeCodeGateway:
         prompt; every other element is what you see here.
         """
         prompt, schema = _render(request)
-        return self._build_argv(prompt, schema, request)
+        argv, _stdin = self._build_invocation(prompt, schema, request)
+        return argv
 
-    def _build_argv(
+    def _build_invocation(
         self, prompt: str, schema: dict[str, Any], request: CompletionRequest
-    ) -> list[str]:
+    ) -> tuple[list[str], bytes | None]:
+        """argv plus whatever should be written to the CLI's stdin.
+
+        The prompt normally travels as the ``-p`` operand. Past
+        :data:`ARGV_PROMPT_LIMIT_BYTES` it moves to stdin instead,
+        because Linux caps a *single* argv entry at 128 KiB
+        (``MAX_ARG_STRLEN``) and rejects the whole exec with ``E2BIG``
+        past it. That ceiling is roughly 32k tokens — far below the
+        advisor's own 165k cumulative cap, so a normal research
+        conversation would hit it, and it would surface as an
+        unexplained OSError rather than as anything about prompts.
+
+        Under the limit the command line is exactly the specced one, so
+        the common path stays the path live validation exercises.
+        """
+        encoded = prompt.encode("utf-8")
+        oversized = len(encoded) > ARGV_PROMPT_LIMIT_BYTES
         argv = [
             self._cli_path,
             "-p",
-            prompt,
+            *([] if oversized else [prompt]),
             "--model",
             request.model,
             "--output-format",
@@ -284,7 +312,14 @@ class ClaudeCodeGateway:
             "--autocompact",
             str(AUTOCOMPACT_THRESHOLD),
         ]
-        return argv
+        if oversized:
+            logger.info(
+                "ClaudeCodeGateway: prompt is %d bytes, over the %d-byte argv "
+                "ceiling — sending it on stdin instead of as the -p operand.",
+                len(encoded),
+                ARGV_PROMPT_LIMIT_BYTES,
+            )
+        return argv, encoded if oversized else None
 
     async def _invoke_once(
         self,
@@ -295,7 +330,7 @@ class ClaudeCodeGateway:
         attempt: int,
     ) -> dict[str, Any]:
         """One subprocess invocation. Returns the CLI's parsed payload."""
-        argv = self._build_argv(prompt, schema, request)
+        argv, stdin_bytes = self._build_invocation(prompt, schema, request)
         logger.debug(
             "ClaudeCodeGateway: spawning %s (model=%s, attempt=%d, %d prompt chars)",
             self._cli_path,
@@ -306,6 +341,7 @@ class ClaudeCodeGateway:
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
+                stdin=asyncio.subprocess.PIPE if stdin_bytes else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -317,7 +353,7 @@ class ClaudeCodeGateway:
 
         try:
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=self._timeout_s
+                process.communicate(input=stdin_bytes), timeout=self._timeout_s
             )
         except TimeoutError as exc:  # asyncio.TimeoutError aliases this on 3.11+
             await _terminate(process)

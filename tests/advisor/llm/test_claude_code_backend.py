@@ -30,6 +30,7 @@ from advisor.llm.base import (
     ToolUseBlock,
 )
 from advisor.llm.claude_code_backend import (
+    ARGV_PROMPT_LIMIT_BYTES,
     AUTOCOMPACT_THRESHOLD,
     DISALLOWED_TOOLS,
     ClaudeCodeGateway,
@@ -94,8 +95,10 @@ class _FakeProcess:
         self.returncode = returncode
         self._delay = delay
         self.killed = False
+        self.stdin_written: bytes | None = None
 
-    async def communicate(self) -> tuple[bytes, bytes]:
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
+        self.stdin_written = input
         if self._delay:
             await asyncio.sleep(self._delay)
         return self._stdout, self._stderr
@@ -118,9 +121,11 @@ class _Spawner:
     def __init__(self, results: list[_FakeProcess]) -> None:
         self._results = results
         self.calls: list[list[str]] = []
+        self.kwargs: list[dict] = []
 
-    async def __call__(self, *argv, **_kwargs) -> _FakeProcess:
+    async def __call__(self, *argv, **kwargs) -> _FakeProcess:
         self.calls.append(list(argv))
+        self.kwargs.append(kwargs)
         index = min(len(self.calls) - 1, len(self._results) - 1)
         return self._results[index]
 
@@ -231,6 +236,43 @@ async def test_tool_less_request_omits_the_system_flag(spawn):
         _request(system=None, tools=[])
     )
     assert "--append-system-prompt" not in spawner.argv()
+
+
+async def test_a_normal_prompt_rides_on_the_p_operand(spawn):
+    """The specced command line, and the one live validation will
+    exercise first: prompt in argv, nothing on stdin."""
+    process = _ok(_final_answer())
+    spawner = spawn(process)
+    await ClaudeCodeGateway(cli_path="claude").complete(_request())
+
+    assert spawner.prompt() != ""
+    assert spawner.kwargs[0]["stdin"] is None
+    assert process.stdin_written is None
+
+
+async def test_an_oversized_prompt_moves_to_stdin(spawn):
+    """Linux caps a single argv entry at 128 KiB and fails the exec with
+    E2BIG past it — about 32k tokens, well inside what the advisor's
+    165k cumulative cap permits. Left in argv, a normal research
+    conversation would die with an OSError that says nothing about
+    prompts."""
+    process = _ok(_final_answer())
+    spawner = spawn(process)
+    huge = "The lot line is disputed. " * 6_000  # ~150 KB
+    await ClaudeCodeGateway(cli_path="claude").complete(
+        _request(messages=[Message(role=LLMRole.USER, content=huge)])
+    )
+
+    argv = spawner.argv()
+    assert "-p" in argv
+    # The operand is gone — every remaining entry is a flag or a small
+    # value, so no single one can trip the ceiling.
+    assert argv[argv.index("-p") + 1] == "--model"
+    assert max(len(a.encode()) for a in argv) < ARGV_PROMPT_LIMIT_BYTES
+
+    assert spawner.kwargs[0]["stdin"] is not None
+    assert process.stdin_written is not None
+    assert huge[:200] in process.stdin_written.decode("utf-8")
 
 
 # -- success paths ------------------------------------------------------------
