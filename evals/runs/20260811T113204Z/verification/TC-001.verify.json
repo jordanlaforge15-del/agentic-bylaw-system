@@ -129,19 +129,19 @@
           "found": true,
           "examples": [
             {
-              "citation_path": "Part I > 9",
-              "page": 10,
-              "text_excerpt": "9 (1) Subject to Subsections 9(2) and 9(3), the following developments are exempt from the requirement to obtain a development permit:"
+              "citation_path": "Part I > [Table 1A]",
+              "page": 45,
+              "text_excerpt": "Table 1A: Permitted uses by zone (DD, DH, CEN-2, CEN-1, COR, HR-2, and HR-1)"
             },
             {
-              "citation_path": "Part I > 9 > [Development Permit Exemptions] > (c)",
-              "page": 10,
-              "text_excerpt": "(c) excluding foundations, piles, and footings, uncovered structures less than 0.6 metre in height, such as balconies and patios;"
+              "citation_path": "Part I > [Table 1B]",
+              "page": 48,
+              "text_excerpt": "Table 1B: Permitted uses by zone (ER-3, ER-2, ER-1, CH-2, and CH-1)"
             },
             {
-              "citation_path": "Part I > 9 > [Development Permit Exemptions] > (d)",
-              "page": 10,
-              "text_excerpt": "(d) home office uses;"
+              "citation_path": "Part I > [Table 1C]",
+              "page": 51,
+              "text_excerpt": "Table 1C: Permitted uses by zone (CLI, LI, HRI, INS, UC-2, UC-1, DND, H, PCF, RPK, and WA)"
             }
           ]
         },
@@ -152,19 +152,19 @@
           "found": true,
           "examples": [
             {
-              "citation_path": "Part V > 198",
-              "page": 171,
-              "text_excerpt": "198 (1) Subject to Subsections 198(2) and 198(3), the minimum required side setback for any main building shall be:"
+              "citation_path": "Part V > [Table 8]",
+              "page": 109,
+              "text_excerpt": "Table 8: Main building rooftop features"
             },
             {
-              "citation_path": "Part V > 198 > [Side Setback Requirements] > (a)",
-              "page": 171,
-              "text_excerpt": "(a) subject to Clauses 198(1)(b) and 198(1)(c), where a lot line abuts a lot, any portion of which, is zoned ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK zone: (RCCC-Sep 4/24;E-Apr 17/25)"
+              "citation_path": "Part V > [Table 9]",
+              "page": 190,
+              "text_excerpt": "Table 9: Minimum required side setbacks for Established Residential Special Areas"
             },
             {
-              "citation_path": "Part V > 198 > [Side Setback Requirements] > (b)",
-              "page": 172,
-              "text_excerpt": "(b) for a townhouse dwelling use:"
+              "citation_path": "Part V > [Table 10]",
+              "page": 191,
+              "text_excerpt": "Table 10: Maximum required lot coverage for Established Residential Special Areas"
             }
           ]
         },
@@ -178,6 +178,11 @@
               "citation_path": "Part I > 9",
               "page": 10,
               "text_excerpt": "9 (1) Subject to Subsections 9(2) and 9(3), the following developments are exempt from the requirement to obtain a development permit:"
+            },
+            {
+              "citation_path": "Appendix 2 > 9",
+              "page": 445,
+              "text_excerpt": "9 Shadow diagrams shall:"
             }
           ]
         },
@@ -261,19 +266,19 @@
           "found": true,
           "examples": [
             {
-              "citation_path": "Part V > 198",
-              "page": 171,
-              "text_excerpt": "198 (1) Subject to Subsections 198(2) and 198(3), the minimum required side setback for any main building shall be:"
+              "citation_path": "Part V > [Table 8]",
+              "page": 109,
+              "text_excerpt": "Table 8: Main building rooftop features"
             },
             {
-              "citation_path": "Part V > 198 > [Side Setback Requirements] > (a)",
-              "page": 171,
-              "text_excerpt": "(a) subject to Clauses 198(1)(b) and 198(1)(c), where a lot line abuts a lot, any portion of which, is zoned ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK zone: (RCCC-Sep 4/24;E-Apr 17/25)"
+              "citation_path": "Part V > [Table 9]",
+              "page": 190,
+              "text_excerpt": "Table 9: Minimum required side setbacks for Established Residential Special Areas"
             },
             {
-              "citation_path": "Part V > 198 > [Side Setback Requirements] > (b)",
-              "page": 172,
-              "text_excerpt": "(b) for a townhouse dwelling use:"
+              "citation_path": "Part V > [Table 10]",
+              "page": 191,
+              "text_excerpt": "Table 10: Maximum required lot coverage for Established Residential Special Areas"
             }
           ]
         },
