@@ -2115,6 +2115,71 @@ def _mount_claude_code_translation_endpoints(app: FastAPI) -> None:
         }
 
 
+def _mount_claude_code_transport_endpoint(app: FastAPI) -> None:
+    """ABS-455: expose the command line the ``claude -p`` gateway builds.
+
+    Nothing here spawns the CLI — the endpoint asks the gateway what it
+    *would* run for a canned request against the real advisor tool menu.
+    Two failure modes survive the unit suite and land here:
+
+    * the transport module has to import inside a deployed advisor image
+      (it pulls in the translation layer and therefore ``jsonschema``,
+      an extra that moved out of ``[dev]`` only in ABS-454) — mounting
+      this endpoint at startup is itself the assertion;
+    * ``--disallowedTools`` and ``--autocompact`` are the two flags that
+      keep the agentic loop, and with it the per-turn charge and the
+      cost breakers, on our side. A refactor that drops one still passes
+      a unit test built from fixtures if the fixture drifts too; this
+      reads the flags off the live gateway.
+
+    ``GET`` only, no body: the gateway is constructed with an explicit
+    ``cli_path`` so the answer doesn't depend on whether a ``claude``
+    binary happens to exist in the e2e container.
+    """
+    from advisor.chat.tools import build_bylaw_tools  # noqa: PLC0415
+    from advisor.llm.base import (  # noqa: PLC0415
+        CompletionRequest,
+        LLMGateway,
+        LLMRole,
+        Message,
+    )
+    from advisor.llm.claude_code_backend import (  # noqa: PLC0415
+        AUTOCOMPACT_THRESHOLD,
+        DISALLOWED_TOOLS,
+        ClaudeCodeGateway,
+    )
+
+    def _no_service() -> RetrievalService:  # pragma: no cover — never invoked
+        # Same contract as the ABS-454 endpoints above: definitions only,
+        # never a dispatched handler.
+        raise RuntimeError("ABS-455 transport endpoint never runs tool handlers")
+
+    _SYSTEM = "ABS-455 system persona under test."
+
+    @app.get("/v1/_test/claude-code-transport")
+    async def claude_code_transport() -> dict[str, object]:
+        tools, _handlers = build_bylaw_tools(_no_service)
+        gateway = ClaudeCodeGateway(cli_path="/nonexistent/claude")
+        request = CompletionRequest(
+            model="claude-code-e2e",
+            system=_SYSTEM,
+            messages=[
+                Message(role=LLMRole.USER, content="What is the max height in R-1?")
+            ],
+            tools=tools,
+        )
+        argv = gateway.build_argv(request)
+        return {
+            "name": gateway.name,
+            "is_llm_gateway": isinstance(gateway, LLMGateway),
+            "argv": argv,
+            "system": _SYSTEM,
+            "tool_names": [tool.name for tool in tools],
+            "disallowed_tools": list(DISALLOWED_TOOLS),
+            "autocompact_threshold": AUTOCOMPACT_THRESHOLD,
+        }
+
+
 class _BuyAnswerCheckoutBody(BaseModel):
     user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
     question_slug: str = Field(min_length=1, max_length=64)
@@ -2687,6 +2752,7 @@ _mount_bylaw_query_endpoint(app)
 _mount_spatial_candidate_text_endpoint(app)
 _mount_advisor_search_include_flags_endpoint(app)
 _mount_claude_code_translation_endpoints(app)
+_mount_claude_code_transport_endpoint(app)
 _mount_buy_answer_test_router(app)
 
 
