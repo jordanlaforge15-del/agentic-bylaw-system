@@ -10,10 +10,16 @@ These tests are what stops the file rotting again after the next re-ingest. They
 check the references against
 `evals/regional_centre_bylaw_reference_index.json`, the snapshot written by
 `scripts/build_bylaw_reference_index.py` from document_id=4. The snapshot exists
-because the full 4,341-fragment Halifax ingest is not present in CI or in a
+because the full ~4,300-fragment Halifax ingest is not present in CI or in a
 worktree's e2e database — only on a box that has run the real ingest. Whoever
 re-ingests re-runs the script; these tests then fail loudly if the eval file and
-the corpus have drifted apart.
+the snapshot have drifted apart.
+
+These tests validate **index-vs-prompts** only; they never open a database, so
+they cannot see the snapshot going stale against the corpus itself. That axis —
+the one that moves on re-ingest — belongs to
+`tests/test_bylaw_reference_index_check.py` (ABS-464), which runs the builder's
+`--check` mode wherever the real ingest is reachable.
 
 Semantic correctness — "is this the provision that actually *governs* the
 question this case asks?" — cannot be asserted mechanically. That judgement, and
