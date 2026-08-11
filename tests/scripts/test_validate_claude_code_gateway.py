@@ -9,8 +9,10 @@ validation, so a canned payload for each verdict — the real one it
 returned on 2026-08-11 and the failure it is meant to catch — is worth
 more than a live re-run nobody will pay for in CI.
 """
+
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +25,7 @@ from advisor.llm.base import (
     TextBlock,
     ToolUseBlock,
 )
+from advisor.llm.claude_code_backend import ClaudeCodeGateway
 from scripts.validate_claude_code_gateway import (
     API_KEY_REFUSAL,
     ASSUMPTION_TITLES,
@@ -180,6 +183,21 @@ def test_autocompact_fails_when_the_reported_input_is_a_fraction():
     assert "silent compaction" in detail
 
 
+def test_autocompact_catches_a_partial_compaction():
+    """A summarise-to-half compaction must not read as "not compacted".
+
+    This is the check's whole point, and a loose floor would miss it:
+    25,000 tokens for a 200,000-character conversation is half the input
+    gone, which clears a 40%-of-estimate bar but not the 80% one the
+    threshold is actually set to.
+    """
+    payload = _usage(input_tokens=10, cache_creation=25_000)
+    passed, detail, evidence = verdict_autocompact(payload, 200_000)
+    assert not passed
+    assert evidence["reported_input_threshold"] == 40_000
+    assert "silent compaction" in detail
+
+
 def test_autocompact_fails_on_a_compaction_notice_in_the_payload():
     payload = _usage(input_tokens=10, cache_creation=51021, cache_read=11691)
     payload["result"] = "Context low — conversation was compacted to continue."
@@ -258,12 +276,8 @@ def test_round_trip_fails_when_turn_one_never_asks_for_a_tool():
 
 def test_round_trip_fails_when_turn_one_asks_for_the_wrong_tool():
     first = _tool_use_response()
-    first.content = [
-        ToolUseBlock(id="toolu_cc_abc_0", name="some_other_tool", input={})
-    ]
-    passed, detail, _ = verdict_round_trip(
-        first, _final_answer_response(), "lookup_zone_standard"
-    )
+    first.content = [ToolUseBlock(id="toolu_cc_abc_0", name="some_other_tool", input={})]
+    passed, detail, _ = verdict_round_trip(first, _final_answer_response(), "lookup_zone_standard")
     assert not passed
     assert "some_other_tool" in detail
 
@@ -287,9 +301,7 @@ def test_round_trip_fails_on_an_empty_final_answer():
 
 
 def test_round_trip_fails_when_the_second_turn_never_happened():
-    passed, detail, _ = verdict_round_trip(
-        _tool_use_response(), None, "lookup_zone_standard"
-    )
+    passed, detail, _ = verdict_round_trip(_tool_use_response(), None, "lookup_zone_standard")
     assert not passed
     assert "did not produce a response" in detail
 
@@ -346,9 +358,7 @@ def test_only_the_literal_1_opts_in(monkeypatch, capsys, tmp_path, value):
 def test_main_exits_2_when_the_cli_is_missing(monkeypatch, capsys, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv(OPT_IN_ENV_VAR, "1")
-    monkeypatch.setattr(
-        "scripts.validate_claude_code_gateway.shutil.which", lambda _: None
-    )
+    monkeypatch.setattr("scripts.validate_claude_code_gateway.shutil.which", lambda _: None)
     assert main(["--report-root", str(tmp_path)]) == 2
     assert "not on PATH" in capsys.readouterr().err
 
@@ -356,6 +366,29 @@ def test_main_exits_2_when_the_cli_is_missing(monkeypatch, capsys, tmp_path):
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
+
+
+def test_the_private_transport_hook_the_script_leans_on_still_exists():
+    """Pin the one private-API dependency the live half has.
+
+    ``_invoke`` calls ``ClaudeCodeGateway._invoke_once`` to get the raw
+    payload, because ``complete()`` returns a translated response and
+    three of the four assumptions are about fields the translation drops.
+    That is a deliberate trade, but it means a transport refactor could
+    break this script silently — the breakage would only surface on the
+    next live run, months later, to whoever is depending on the result.
+    Pinning the signature here turns that into a unit-test failure.
+    """
+    signature = inspect.signature(ClaudeCodeGateway._invoke_once)
+    assert list(signature.parameters) == [
+        "self",
+        "prompt",
+        "schema",
+        "request",
+        "attempt",
+    ]
+    assert signature.parameters["attempt"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert inspect.iscoroutinefunction(ClaudeCodeGateway._invoke_once)
 
 
 def test_report_dir_is_a_utc_timestamp():
@@ -390,9 +423,7 @@ def test_build_report_all_passed_is_false_when_any_assumption_failed():
         _result("model_alias_resolution", True),
         _result("token_attribution", False),
     ]
-    assert build_report(results, "claude-opus-4-5", "/nonexistent/claude")[
-        "all_passed"
-    ] is False
+    assert build_report(results, "claude-opus-4-5", "/nonexistent/claude")["all_passed"] is False
 
 
 def test_build_report_survives_an_unrunnable_cli_path():

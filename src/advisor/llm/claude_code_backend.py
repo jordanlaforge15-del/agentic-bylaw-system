@@ -47,7 +47,7 @@ Known limitations
 Established by live-CLI validation (ABS-457,
 ``scripts/validate_claude_code_gateway.py``, run 2026-08-11 against
 Claude Code 2.1.226 / ``claude-opus-4-5``; report under
-``evals/runs/claude-code-gateway-validation/20260811T010915Z/``). Three
+``evals/runs/claude-code-gateway-validation/20260811T011803Z/``). Three
 of the four runtime assumptions hold: the ``claude-opus-4-5`` alias
 resolves (``modelUsage[].canonicalModel``), ``--autocompact 1000000``
 carries a 200k-character conversation through uncompacted, and the
@@ -60,11 +60,11 @@ real CLI. One does not:
 chat wallet does not bill for them on the API path. The CLI does not
 report input the same way. Measured across all six validation turns,
 ``usage.input_tokens`` was **10 on every single one** — including the
-turn carrying a 200,971-character conversation, which reported 51,055
+turn carrying a 200,971-character conversation, which reported 51,071
 tokens in ``cache_creation_input_tokens`` and still 10 in
 ``input_tokens``. Adding a 5,023-character system prompt moved
 ``input_tokens`` by exactly 0 and ``cache_creation_input_tokens`` by
-+13,751.
++13,548.
 
 So ``input_tokens`` is not a function of prompt size here; it is a
 near-constant. Consequences while ``ADVISOR_LLM_PROVIDER=claude_code``:

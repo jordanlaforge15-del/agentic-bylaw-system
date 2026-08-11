@@ -70,6 +70,7 @@ Output
 — per assumption: pass/fail, the payload excerpt the verdict was
 derived from, and the model used.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -144,11 +145,21 @@ _CHARS_PER_TOKEN = 4
 _ATTRIBUTION_TOLERANCE = 0.4
 
 # Assumption 3 sizing. Same chars/token estimate over a >= 200,000
-# character conversation, and the same 40% floor — but here the floor
-# is applied to *total* reported input (input + cache creation + cache
-# read), because assumption 3 asks whether the CLI silently dropped
-# input, not which bucket it landed in. That is assumption 2's job.
+# character conversation, applied to *total* reported input (input +
+# cache creation + cache read) — assumption 3 asks whether the CLI
+# silently dropped input, not which bucket it landed in. That is
+# assumption 2's job.
+#
+# The floor is much tighter than assumption 2's for a reason. 40% of a
+# 200k-character conversation is ~20k tokens, and a compaction that
+# summarised the history down to 25k would clear that bar and be
+# reported as "not compacted" — precisely the outcome this check exists
+# to detect. Compaction's whole purpose is a large reduction, so
+# requiring the reported input to stay within 20% of the estimate keeps
+# the check sensitive to it. Measured headroom on the 2026-08-11 run:
+# 62,772 reported against a 40,194 floor.
 CONVERSATION_MIN_CHARS = 200_000
+_COMPACTION_TOLERANCE = 0.8
 _COMPACTION_MARKERS = ("compact", "summariz", "summaris", "truncat")
 
 
@@ -212,8 +223,7 @@ def verdict_model_alias(
     if not isinstance(model_usage, dict) or not model_usage:
         return (
             False,
-            ("payload carried no 'modelUsage' object, so the resolved model "
-            "cannot be read at all"),
+            ("payload carried no 'modelUsage' object, so the resolved model cannot be read at all"),
             {"modelUsage": model_usage},
         )
 
@@ -231,8 +241,10 @@ def verdict_model_alias(
         )
     return (
         False,
-        (f"no modelUsage entry reports canonicalModel == {expected_model!r}; "
-        f"saw {sorted({v for v in canonicals.values() if v})}"),
+        (
+            f"no modelUsage entry reports canonicalModel == {expected_model!r}; "
+            f"saw {sorted({v for v in canonicals.values() if v})}"
+        ),
         {"modelUsage_canonicalModel": canonicals},
     )
 
@@ -255,8 +267,7 @@ def verdict_token_attribution(
     if not baseline or not probe:
         return (
             False,
-            ("one or both probes reported no usage object, so attribution "
-            "cannot be determined"),
+            ("one or both probes reported no usage object, so attribution cannot be determined"),
             {"baseline_usage": baseline, "probe_usage": probe},
         )
 
@@ -275,9 +286,11 @@ def verdict_token_attribution(
     if observed >= threshold:
         return (
             True,
-            (f"a {system_prompt_chars}-char system prompt moved input_tokens by "
-            f"+{observed} (>= {threshold}), so our prompt is visible to the "
-            "wallet_cap_trip breaker"),
+            (
+                f"a {system_prompt_chars}-char system prompt moved input_tokens by "
+                f"+{observed} (>= {threshold}), so our prompt is visible to the "
+                "wallet_cap_trip breaker"
+            ),
             evidence,
         )
     cache_delta = delta.get("cache_creation_input_tokens", 0) + delta.get(
@@ -296,9 +309,11 @@ def verdict_token_attribution(
     )
     return (
         False,
-        (f"a {system_prompt_chars}-char system prompt moved input_tokens by only "
-        f"+{observed} (< {threshold}); cache fields moved by +{cache_delta}. "
-        f"{severity} — wallet_cap_trip will fire late or never."),
+        (
+            f"a {system_prompt_chars}-char system prompt moved input_tokens by only "
+            f"+{observed} (< {threshold}); cache fields moved by +{cache_delta}. "
+            f"{severity} — wallet_cap_trip will fire late or never."
+        ),
         evidence,
     )
 
@@ -331,7 +346,7 @@ def verdict_autocompact(
         + usage.get("cache_creation_input_tokens", 0)
         + usage.get("cache_read_input_tokens", 0)
     )
-    threshold = int(conversation_chars / _CHARS_PER_TOKEN * _ATTRIBUTION_TOLERANCE)
+    threshold = int(conversation_chars / _CHARS_PER_TOKEN * _COMPACTION_TOLERANCE)
     markers = _compaction_markers_in(payload)
     evidence = {
         "usage": usage,
@@ -344,8 +359,10 @@ def verdict_autocompact(
     if reported < threshold:
         return (
             False,
-            (f"a {conversation_chars}-char conversation reported only {reported} "
-            f"input tokens (< {threshold}) — consistent with silent compaction"),
+            (
+                f"a {conversation_chars}-char conversation reported only {reported} "
+                f"input tokens (< {threshold}) — consistent with silent compaction"
+            ),
             evidence,
         )
     if markers:
@@ -356,8 +373,10 @@ def verdict_autocompact(
         )
     return (
         True,
-        (f"a {conversation_chars}-char conversation reported {reported} input "
-        f"tokens (>= {threshold}) with no compaction notice in the payload"),
+        (
+            f"a {conversation_chars}-char conversation reported {reported} input "
+            f"tokens (>= {threshold}) with no compaction notice in the payload"
+        ),
         evidence,
     )
 
@@ -411,14 +430,14 @@ def verdict_round_trip(
         return False, "one of the two turns did not produce a response", evidence
 
     tool_uses = [b for b in first.content if isinstance(b, ToolUseBlock)]
-    evidence["first_tool_calls"] = [
-        {"name": b.name, "input": b.input} for b in tool_uses
-    ]
+    evidence["first_tool_calls"] = [{"name": b.name, "input": b.input} for b in tool_uses]
     if first.stop_reason != "tool_use" or not tool_uses:
         return (
             False,
-            (f"turn 1 did not request a tool call (stop_reason="
-            f"{first.stop_reason!r}, blocks={evidence['first_content_types']})"),
+            (
+                f"turn 1 did not request a tool call (stop_reason="
+                f"{first.stop_reason!r}, blocks={evidence['first_content_types']})"
+            ),
             evidence,
         )
     if not any(b.name == tool_name for b in tool_uses):
@@ -433,14 +452,18 @@ def verdict_round_trip(
     if second.stop_reason != "end_turn" or not any(t.strip() for t in texts):
         return (
             False,
-            (f"turn 2 did not return a final answer (stop_reason="
-            f"{second.stop_reason!r}, blocks={evidence['second_content_types']})"),
+            (
+                f"turn 2 did not return a final answer (stop_reason="
+                f"{second.stop_reason!r}, blocks={evidence['second_content_types']})"
+            ),
             evidence,
         )
     return (
         True,
-        (f"turn 1 returned action='tool_calls' for {tool_name!r}; turn 2, fed the "
-        "tool result, returned action='final_answer' with text"),
+        (
+            f"turn 1 returned action='tool_calls' for {tool_name!r}; turn 2, fed the "
+            "tool result, returned action='final_answer' with text"
+        ),
         evidence,
     )
 
@@ -450,9 +473,7 @@ def verdict_round_trip(
 # ---------------------------------------------------------------------------
 
 
-async def _invoke(
-    gateway: ClaudeCodeGateway, request: CompletionRequest
-) -> dict[str, Any]:
+async def _invoke(gateway: ClaudeCodeGateway, request: CompletionRequest) -> dict[str, Any]:
     """One CLI round trip, returning the raw payload.
 
     Deliberately reaches for the gateway's own render + invoke path
@@ -472,10 +493,7 @@ def _tiny_request(model: str, system: str) -> CompletionRequest:
         messages=[
             Message(
                 role=LLMRole.USER,
-                content=(
-                    "Reply with the single word 'ok' as your final answer. "
-                    "Do not elaborate."
-                ),
+                content=("Reply with the single word 'ok' as your final answer. Do not elaborate."),
             )
         ],
     )
@@ -506,9 +524,7 @@ def _filler(chars: int, label: str) -> str:
     return "".join(parts)[:chars]
 
 
-async def check_model_alias(
-    gateway: ClaudeCodeGateway, model: str
-) -> AssumptionResult:
+async def check_model_alias(gateway: ClaudeCodeGateway, model: str) -> AssumptionResult:
     payload = await _invoke(gateway, _tiny_request(model, "You are a test probe."))
     passed, detail, evidence = verdict_model_alias(payload, model)
     evidence["usage"] = usage_excerpt(payload)
@@ -522,15 +538,9 @@ async def check_model_alias(
     )
 
 
-async def check_token_attribution(
-    gateway: ClaudeCodeGateway, model: str
-) -> AssumptionResult:
-    big_system = "You are a test probe.\n\n" + _filler(
-        SYSTEM_PROMPT_MIN_CHARS, "SYS"
-    )
-    baseline_payload = await _invoke(
-        gateway, _tiny_request(model, "You are a test probe.")
-    )
+async def check_token_attribution(gateway: ClaudeCodeGateway, model: str) -> AssumptionResult:
+    big_system = "You are a test probe.\n\n" + _filler(SYSTEM_PROMPT_MIN_CHARS, "SYS")
+    baseline_payload = await _invoke(gateway, _tiny_request(model, "You are a test probe."))
     probe_payload = await _invoke(gateway, _tiny_request(model, big_system))
     passed, detail, evidence = verdict_token_attribution(
         baseline_payload, probe_payload, len(big_system)
@@ -545,9 +555,7 @@ async def check_token_attribution(
     )
 
 
-async def check_autocompact(
-    gateway: ClaudeCodeGateway, model: str
-) -> AssumptionResult:
+async def check_autocompact(gateway: ClaudeCodeGateway, model: str) -> AssumptionResult:
     body = _filler(CONVERSATION_MIN_CHARS, "CONV")
     request = CompletionRequest(
         model=model,
@@ -599,9 +607,7 @@ _ROUND_TRIP_TOOL = ToolDefinition(
 )
 
 
-async def check_round_trip(
-    gateway: ClaudeCodeGateway, model: str
-) -> AssumptionResult:
+async def check_round_trip(gateway: ClaudeCodeGateway, model: str) -> AssumptionResult:
     system = (
         "You are a bylaw research assistant. You have no knowledge of any "
         "municipality's numeric zoning standards and must obtain them with "
@@ -631,10 +637,7 @@ async def check_round_trip(
                     content=[
                         ToolResultBlock(
                             tool_use_id=call.id,
-                            content=(
-                                "max_height: 25 metres (HR-2, synthetic test "
-                                "value)"
-                            ),
+                            content=("max_height: 25 metres (HR-2, synthetic test value)"),
                         )
                     ],
                 ),
@@ -643,9 +646,7 @@ async def check_round_trip(
         )
         second = await gateway.complete(second_request)
 
-    passed, detail, evidence = verdict_round_trip(
-        first, second, _ROUND_TRIP_TOOL.name
-    )
+    passed, detail, evidence = verdict_round_trip(first, second, _ROUND_TRIP_TOOL.name)
     return AssumptionResult(
         key="multi_iteration_round_trip",
         title=ASSUMPTION_TITLES["multi_iteration_round_trip"],
@@ -703,9 +704,7 @@ def report_dir(root: Path, now: datetime | None = None) -> Path:
     return root / stamp
 
 
-def build_report(
-    results: list[AssumptionResult], model: str, cli_path: str
-) -> dict[str, Any]:
+def build_report(results: list[AssumptionResult], model: str, cli_path: str) -> dict[str, Any]:
     return {
         "issue": "ABS-457",
         "generated_at_utc": datetime.now(UTC).isoformat(),
@@ -764,9 +763,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_MODEL,
         help=f"Model alias to validate (default: {DEFAULT_MODEL})",
     )
-    parser.add_argument(
-        "--cli-path", default=None, help="Path to the `claude` binary."
-    )
+    parser.add_argument("--cli-path", default=None, help="Path to the `claude` binary.")
     parser.add_argument(
         "--report-root",
         default=None,
