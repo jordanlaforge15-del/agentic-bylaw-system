@@ -79,6 +79,23 @@ the four here. That stage is deliberately not implemented — it costs API spend
 per grade and needs its own calibration set — but its absence is a known gap,
 not an assumption that the rule-based score is sufficient.
 
+What a pass here does and does not mean (ABS-468)
+-------------------------------------------------
+Every expectation this script grades against — the question, the persona, the
+expected keywords, the expected references, the expected topics — was authored
+by ``claude -p`` in ``scripts/generate_regional_centre_test_prompts.py``. The
+system under test is a Claude model. So a passing case establishes that the
+advisor agrees with what a model guessed the answer was. It does not establish
+that the answer is correct under the by-law.
+
+Results from this script are therefore **advisory** and every row it writes is
+stamped ``evidence_tier: "generated"``. The human-validated tier lives in
+``evals/golden/golden_cases.json``, is graded by
+``scripts/verify_golden_cases.py``, and writes ``GOLDEN_SUMMARY.json`` beside
+this script's ``SUMMARY.json``. The two are never summed, averaged, or reported
+as one pass rate; the verdict vocabularies are disjoint so they cannot be
+merged by accident.
+
 Writes:
   evals/runs/<ts>/verification/TC-NNN.verify.json
   evals/runs/<ts>/verification/SUMMARY.json
@@ -1161,6 +1178,11 @@ def main() -> None:
             )
             summary.append({
                 "id": transcript["id"],
+                # ABS-468: the expectations behind this verdict were authored by
+                # a model of the family under test. Stamped on every row so a
+                # downstream reader cannot mistake it for a correctness measure
+                # or add it to the golden tier.
+                "evidence_tier": "generated",
                 "title": transcript.get("title"),
                 "zone": transcript.get("zone"),
                 "complexity": out["complexity"],

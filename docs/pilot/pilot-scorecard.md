@@ -18,6 +18,16 @@ is more iteration, not a softer bar.
 | Evaluator verdict accuracy | ≥ 75% of (attribute × clause) pairs match the customer's professional assessment | Customer marks each matrix row "agree / disagree / unsure" in the weekly review | Captured in the per-project write-up (qualitative table) |
 | Customer NPS-style verdict | "I would pay for this" or equivalent at end of pilot | Direct quote captured in the write-up | `docs/pilots/phase2_pilot_<customer>.md` |
 
+The "evaluator verdict accuracy" row is the same idea as the golden eval
+subset — a professional's own assessment, not a model's — measured from the
+other end. The scorecard samples a professional's judgement over live pilot
+output; [`evals/golden/golden_cases.json`](../../evals/golden/golden_cases.json)
+freezes a professional's judgement into six regression cases that block a
+production deploy. If the pilot's architect/developer is already marking rows
+"agree / disagree / unsure" in the weekly review, that is the session in which
+to also fill in the six golden attestations — see
+[ABS-468-EVAL-GROUND-TRUTH.md](../ABS-468-EVAL-GROUND-TRUTH.md).
+
 ## Per-project scorecard template
 
 Use this Markdown table once per project, append to the customer's

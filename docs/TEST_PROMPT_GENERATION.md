@@ -18,6 +18,44 @@ The test prompt database simulates real end-user conversation turns with the byl
 
 ---
 
+## Provenance limitation — read this before quoting a pass rate
+
+**These cases are not ground truth.** `generate_regional_centre_test_prompts.py`
+authors every field of a case via `claude -p`: the question, the persona, the
+`expected_answer_keywords`, the `expected_bylaw_references`, the
+`expected_topics`. The system under test is a Claude model.
+
+So a case that passes establishes that the advisor **agrees with what a Claude
+model guessed the answer was**. It does not establish that the answer is
+correct under the by-law. "18/20 passing" is a consistency measure, not an
+accuracy measure, and it must never be reported as one.
+
+Later work grounded parts of a case without changing that: the references
+resolve against the real corpus (ABS-463), the keywords were recalibrated
+against the real ingest (ABS-265), cited clauses are checked for applicability
+against the by-law's own trigger conditions (ABS-462), and the address now
+derives from the zoning schedule and is verified against it (ABS-467). None of
+those touch the question a model chose to ask or the answer a model decided was
+correct.
+
+The independent tier is the golden subset at
+[`evals/golden/golden_cases.json`](../evals/golden/golden_cases.json): six cases
+whose correct answers and governing provisions a qualified human records, graded
+by `scripts/verify_golden_cases.py` into `verification/GOLDEN_SUMMARY.json`. It
+is the only evidence in the project that does not originate from a model, it is
+what blocks a production deploy, and its results are **never** summed with the
+generated ones. Rationale and the gating decision:
+[ABS-468-EVAL-GROUND-TRUTH.md](ABS-468-EVAL-GROUND-TRUTH.md).
+
+What the generated suite is genuinely good for: regression detection (did an
+answer that used to cite Section 198 stop doing so?), hallucination and
+applicability checks (both graded against the corpus, not against the
+generator), retrieval and cost measurement, and breadth of coverage no
+professional has time to hand-author. That is worth having. It is just not a
+correctness measure.
+
+---
+
 ## Test Case Schema
 
 Each record in the JSON array has the following fields:
