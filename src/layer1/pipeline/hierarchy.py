@@ -544,14 +544,36 @@ def _merge_continuation_block(head: HierarchyBlock, tail: PageBlockData, tail_in
     )
 
 
+def _is_skipped_by_hierarchy(block: PageBlockData) -> bool:
+    """Blocks ``reconstruct_hierarchy`` never turns into a fragment."""
+    return (
+        block.is_boilerplate
+        or block.block_type in {BlockType.HEADER, BlockType.FOOTER}
+        or not block.raw_text.strip()
+    )
+
+
 def _join_hyphen_broken_blocks(blocks: list[PageBlockData]) -> list[HierarchyBlock]:
-    """Rejoin blocks the parser split mid-token on a trailing hyphen (ABS-461)."""
+    """Rejoin blocks the parser split mid-token on a trailing hyphen (ABS-461).
+
+    Running page furniture is stepped over rather than treated as an
+    interruption: a page break puts the footer of one page and the header of
+    the next *between* the two halves of the broken token, which is the normal
+    case for a paginated PDF even though document 4's docling output happens
+    not to emit one there. Those blocks are passed through untouched — the
+    hierarchy discards them anyway.
+    """
     joined: list[HierarchyBlock] = []
+    open_head: int | None = None
     for block_index, block in enumerate(blocks):
-        if joined and _is_hyphen_break_continuation(joined[-1].block, block):
-            joined[-1] = _merge_continuation_block(joined[-1], block, block_index)
+        if _is_skipped_by_hierarchy(block):
+            joined.append(HierarchyBlock([block_index], block))
+            continue
+        if open_head is not None and _is_hyphen_break_continuation(joined[open_head].block, block):
+            joined[open_head] = _merge_continuation_block(joined[open_head], block, block_index)
             continue
         joined.append(HierarchyBlock([block_index], block))
+        open_head = len(joined) - 1
     return joined
 
 

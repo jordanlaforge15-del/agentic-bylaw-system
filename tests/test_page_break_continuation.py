@@ -192,6 +192,33 @@ def test_numbered_heading_after_a_hyphen_ending_block_still_parses():
     assert [f.citation_label for f in fragments] == ["Part V", "10", "11"]
 
 
+def test_page_furniture_between_the_halves_does_not_defeat_the_join():
+    """The normal paginated case: a footer and a header sit in the break.
+
+    Document 4's docling output happens not to emit page furniture between
+    blocks 8460 and 8461, but most paginated PDFs do, and the halves still
+    belong together.
+    """
+    blocks = _blocks(
+        [
+            (1, BlockType.HEADING, "Part V Land Use"),
+            (1, BlockType.LIST_ITEM, "(a) where a lot line abuts a lot zoned ER-3, ER-"),
+            (1, BlockType.FOOTER, "Regional Centre Land Use By-law | 171"),
+            (2, BlockType.HEADER, "Part V: Land Use"),
+            (2, BlockType.LIST_ITEM, "2, ER-1, CH-2, or RPK zone;"),
+            (2, BlockType.LIST_ITEM, "(b) 2.5 metres elsewhere."),
+        ]
+    )
+    blocks[2].is_boilerplate = True
+    blocks[3].is_boilerplate = True
+
+    fragments = reconstruct_hierarchy(blocks)
+    assert [f.citation_label for f in fragments] == ["Part V", "(a)", "(b)"]
+    (clause_a,) = _by_label(fragments, "(a)")
+    assert clause_a.text.endswith("ER-3, ER-2, ER-1, CH-2, or RPK zone;")
+    assert (clause_a.page_start, clause_a.page_end) == (1, 2)
+
+
 def test_wrapped_line_inside_one_block_is_not_a_section_start():
     """The same defect, but with the break landing inside a single block.
 
