@@ -1986,6 +1986,135 @@ def _mount_advisor_search_include_flags_endpoint(app: FastAPI) -> None:
         }
 
 
+class _ClaudeCodeEnvelopeBody(BaseModel):
+    """ABS-454: an envelope (+ optional CLI payload) to translate."""
+
+    structured_output: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] | None = None
+    model: str = Field(default="claude-code-e2e", min_length=1, max_length=128)
+
+
+def _mount_claude_code_translation_endpoints(app: FastAPI) -> None:
+    """ABS-454: drive the ``claude -p`` translation layer through the stack.
+
+    The unit suite
+    (``tests/advisor/llm/test_claude_code_translation.py``) pins the
+    contract at the function boundary. These endpoints pin it against
+    the *real advisor tool menu* inside the running FastAPI process, so
+    the Playwright spec catches two things unit tests structurally
+    cannot:
+
+    * the module is importable in a deployed advisor image — it now
+      needs ``jsonschema``, which was a ``[dev]``-only dependency before
+      this issue and would ``ImportError`` at request time in prod;
+    * the envelope schema and the tool-name enum are built from the
+      tools ``advisor.chat.tools.build_bylaw_tools`` actually ships, so
+      renaming or adding a bylaw tool without re-deriving the envelope
+      shows up here rather than at runtime.
+
+    ``GET  …/schema``  → envelope schema + rendered prompt for a canned
+    request (called twice by the spec to prove determinism).
+    ``POST …``         → translation result, or the typed error name for
+    a rejected envelope. Rejections come back ``200`` with
+    ``ok: false``: the error *type* is the contract the transport in
+    ABS-455 dispatches on, so the spec has to read it, not an HTTP code.
+    """
+    from advisor.chat.tools import build_bylaw_tools  # noqa: PLC0415
+    from advisor.llm.base import (  # noqa: PLC0415
+        CompletionRequest,
+        LLMRole,
+        Message,
+        TextBlock,
+        ToolResultBlock,
+        ToolUseBlock,
+    )
+    from advisor.llm.claude_code_translation import (  # noqa: PLC0415
+        ClaudeCodeTranslationError,
+        build_envelope_schema,
+        envelope_to_response,
+        render_prompt,
+    )
+
+    def _no_service() -> RetrievalService:  # pragma: no cover — never invoked
+        # Only the tool *definitions* are under test here; no handler is
+        # ever dispatched, so the factory must never resolve. Raising
+        # (rather than returning a stub) makes an accidental handler
+        # call loud instead of silently exercising a fake.
+        raise RuntimeError("ABS-454 translation endpoints never run tool handlers")
+
+    def _tools() -> list[Any]:
+        tools, _handlers = build_bylaw_tools(_no_service)
+        return tools
+
+    def _canned_request(tools: list[Any]) -> CompletionRequest:
+        # Exercises every branch of the conversation renderer: a plain
+        # user turn, an assistant tool_use turn, and the user-role
+        # tool_result that answers it.
+        return CompletionRequest(
+            model="claude-code-e2e",
+            system="ABS-454 system persona under test.",
+            messages=[
+                Message(role=LLMRole.USER, content="What is the max height in R-1?"),
+                Message(
+                    role=LLMRole.ASSISTANT,
+                    content=[
+                        TextBlock(text="Checking the bylaw."),
+                        ToolUseBlock(
+                            id="toolu_abs454",
+                            name="search_bylaw_evidence",
+                            input={"query": "R-1 maximum height"},
+                        ),
+                    ],
+                ),
+                Message(
+                    role=LLMRole.USER,
+                    content=[
+                        ToolResultBlock(
+                            tool_use_id="toolu_abs454",
+                            content="Section 4.2: 10 m.",
+                        )
+                    ],
+                ),
+            ],
+            tools=tools,
+        )
+
+    @app.get("/v1/_test/claude-code-translation/schema")
+    async def claude_code_translation_schema() -> dict[str, object]:
+        tools = _tools()
+        return {
+            "tool_names": [tool.name for tool in tools],
+            "schema": build_envelope_schema(tools),
+            "prompt": render_prompt(_canned_request(tools)),
+        }
+
+    @app.post("/v1/_test/claude-code-translation")
+    async def claude_code_translation(
+        body: _ClaudeCodeEnvelopeBody,
+    ) -> dict[str, object]:
+        try:
+            response = envelope_to_response(
+                body.structured_output,
+                body.payload,
+                body.model,
+                tools=_tools(),
+            )
+        except ClaudeCodeTranslationError as exc:
+            return {
+                "ok": False,
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
+        return {
+            "ok": True,
+            "id": response.id,
+            "model": response.model,
+            "stop_reason": response.stop_reason,
+            "content": [block.model_dump(mode="json") for block in response.content],
+            "usage": response.usage.model_dump(mode="json") if response.usage else None,
+        }
+
+
 class _BuyAnswerCheckoutBody(BaseModel):
     user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
     question_slug: str = Field(min_length=1, max_length=64)
@@ -2557,6 +2686,7 @@ _mount_zone_profile_endpoint(app)
 _mount_bylaw_query_endpoint(app)
 _mount_spatial_candidate_text_endpoint(app)
 _mount_advisor_search_include_flags_endpoint(app)
+_mount_claude_code_translation_endpoints(app)
 _mount_buy_answer_test_router(app)
 
 
