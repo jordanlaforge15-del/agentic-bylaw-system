@@ -108,6 +108,9 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
     payload (block.text) plus incremental ``content_block_delta``s.
     We prefer the full text from content_block_start and only fall back
     to concatenating deltas if that's missing.
+
+    ``tool_calls`` comes from ``tool_loop_metrics`` in practice, not from
+    the content stream — see the ABS-459 note below the event loop.
     """
     text_chunks: dict[int, str] = {}
     text_full: dict[int, str] = {}
@@ -185,6 +188,38 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
         else:
             parts.append(text_chunks.get(idx, ""))
     assistant_text = "\n".join(p for p in parts if p)
+
+    # ABS-459: the harvest above is empty on EVERY backend, always.
+    #
+    # ``advisor.chat.session`` synthesises the SSE content stream from the
+    # tool loop's *final* response (session.py:415). By construction that
+    # response holds no ``tool_use`` blocks — the loop has already run to
+    # ``end_turn`` before the first SSE byte is emitted. So watching
+    # ``content_block_start`` for ``tool_use`` can never see the calls the
+    # loop actually dispatched.
+    #
+    # ABS-266 added ``tool_loop_metrics`` for precisely this blind spot; it
+    # is the only record of the loop's internals. Fall back to it.
+    #
+    # The content-stream harvest still wins whenever it has entries: those
+    # carry each call's ``input``, which ``ToolCallMetric`` does not. A
+    # backend that someday streams real ``tool_use`` blocks therefore keeps
+    # the richer data without changing this code.
+    if not tool_calls and tool_loop_metrics:
+        for metric in tool_loop_metrics.get("tool_calls") or []:
+            if not isinstance(metric, dict):
+                continue
+            tool_calls.append({
+                "name": metric.get("name", ""),
+                "id": None,
+                # ToolCallMetric carries no arguments — only name, error
+                # state and latency. Null rather than {} so consumers can
+                # distinguish "no input recorded" from "called with {}".
+                "input": None,
+                "is_error": bool(metric.get("is_error", False)),
+                "latency_ms": metric.get("latency_ms"),
+                "source": "tool_loop_metrics",
+            })
 
     return {
         "assistant_text": assistant_text,
