@@ -423,23 +423,11 @@ class RetrievalService:
         ``document_id`` AND-ed with the service's ``default_ids``, so
         suggestions can never escape the scope the caller asked for.
 
-        Two rankers, in order:
-
-        1. **Structural** — when the request looks like a compact legal
-           citation ("198(1)(f)"), match its ordered tokens against each
-           candidate's structural path segments. See
-           :func:`_structural_citation_rank`.
-        2. **rapidfuzz ``WRatio``** (handles partial / token-set /
-           token-sort equivalence in one scorer) for everything else —
-           well-suited to the asymmetric query case where a short
-           human-style label like ``"Table 1A"`` needs to find a longer
-           canonical form like ``"Part II > [Table 1A]"``.
-
-        The structural pass exists because WRatio is the wrong tool for a
-        compact citation: it scores the whole string, so the heading segment
-        an ingest interposes ("Part V > 198 > [Side Setback Requirements] >
-        (f)") drowns out the two tokens that actually identify the clause,
-        and short unrelated paths ending in "(f)" outrank it (ABS-461).
+        Uses rapidfuzz ``WRatio`` (handles partial / token-set / token-sort
+        equivalence in one scorer) — well-suited to the asymmetric query
+        case we hit in practice, where a short human-style label like
+        ``"Table 1A"`` needs to find a longer canonical form like
+        ``"Part II > [Table 1A]"``.
         """
         stmt = (
             select(SourceFragment.citation_path)
@@ -453,8 +441,6 @@ class RetrievalService:
         candidates = [row for row in self.session.execute(stmt).scalars().all() if row]
         if not candidates:
             return []
-
-        structural = _structural_citation_rank(requested, candidates)
         ranked = process.extract(
             requested,
             candidates,
@@ -466,13 +452,7 @@ class RetrievalService:
         # by descending score. We only need the path strings — the score
         # is internal ranking signal, not something the agent should see
         # (it can't meaningfully act on a fuzz score).
-        fuzzy = [choice for choice, _score, _idx in ranked]
-
-        suggestions: list[str] = []
-        for path in structural + fuzzy:
-            if path not in suggestions:
-                suggestions.append(path)
-        return suggestions[: self._LOOKUP_SUGGESTION_LIMIT]
+        return [choice for choice, _score, _idx in ranked]
 
     def _lookup_via_structured(
         self, request: CitationLookupRequest
@@ -2588,89 +2568,6 @@ def _attribute_tag_filter_clause(attribute_tags: list[str], *, dialect_name: str
 
 def _tokenize(text: str) -> list[str]:
     return [token.lower() for token in TOKEN_RE.findall(text)]
-
-
-# "198(1)(f)" -> ["198", "(1)", "(f)"]. Also splits the stored form,
-# "Part V > 198 > [Side Setback Requirements] > (f)" -> ["198", "(f)"].
-CITATION_TOKEN_RE = re.compile(r"\([0-9a-z]{1,6}\)|\d+(?:\.\d+)*[A-Z]*", re.IGNORECASE)
-# Segments that describe where a clause sits rather than how it is cited.
-_NON_STRUCTURAL_SEGMENT_RE = re.compile(r"^\[.*\]$|^(?:part|schedule|appendix)\b", re.IGNORECASE)
-
-
-def _citation_tokens(value: str) -> list[str]:
-    """The ordered structural tokens of a citation string."""
-    return [token.lower() for token in CITATION_TOKEN_RE.findall(value)]
-
-
-def _path_citation_tokens(path: str) -> list[str]:
-    """The structural tokens of a stored citation_path.
-
-    Heading segments (``[Side Setback Requirements]``) and Part/Schedule/
-    Appendix prefixes are dropped: they are context the ingest interposes,
-    never something a legal citation names.
-    """
-    tokens: list[str] = []
-    for segment in path.split(" > "):
-        segment = segment.strip()
-        if not segment or _NON_STRUCTURAL_SEGMENT_RE.match(segment):
-            continue
-        tokens.extend(_citation_tokens(segment))
-    return tokens
-
-
-def _ordered_match_count(query: list[str], candidate: list[str]) -> int:
-    """How many query tokens appear in ``candidate``, in order.
-
-    A query token the candidate lacks is skipped without consuming any of the
-    candidate — "198(1)(f)" has to keep matching "(f)" after the stored path
-    turns out to carry no "(1)".
-    """
-    matched = 0
-    position = 0
-    for token in query:
-        for index in range(position, len(candidate)):
-            if candidate[index] == token:
-                matched += 1
-                position = index + 1
-                break
-    return matched
-
-
-def _structural_citation_rank(requested: str, candidates: list[str]) -> list[str]:
-    """Rank candidate paths against a compact legal citation (ABS-461).
-
-    A model that has read "Clause 198(1)(f)" in the corpus asks for exactly
-    that, but the stored path is ``Part V > 198 > [Side Setback Requirements]
-    > (f)``: an interposed heading segment and, where the ingest folded the
-    subsection into its section fragment, no ``(1)`` at all. Fuzzy string
-    distance handles neither — it ranks short unrelated paths ending in
-    "(f)" above the right one.
-
-    So compare structure instead. A candidate qualifies only if its leaf
-    token equals the request's leaf (the clause letter has to be the clause
-    asked for) and it shares the request's leading number (the anchor).
-    Ranking is then by how many of the request's tokens appear in order,
-    with the least amount of extra depth breaking ties.
-
-    Returns ``[]`` for anything that isn't a numbered citation, leaving the
-    rapidfuzz ranker in sole charge of free-text lookups like "Table 1A".
-    """
-    query = _citation_tokens(requested)
-    # The anchor has to be a bare section number ("198", "94.5") — a request
-    # that opens with a parenthesised token names no section to anchor to.
-    if len(query) < 2 or query[0].startswith("("):
-        return []
-
-    scored: list[tuple[int, int, str]] = []
-    for path in candidates:
-        tokens = _path_citation_tokens(path)
-        if not tokens or tokens[-1] != query[-1] or query[0] not in tokens:
-            continue
-        matched = _ordered_match_count(query, tokens)
-        if matched < 2:
-            continue
-        scored.append((-matched, len(tokens), path))
-    return [path for _matched, _depth, path in sorted(scored)]
 
 
 def _first_str(mapping: dict[str, object], *keys: str) -> str | None:

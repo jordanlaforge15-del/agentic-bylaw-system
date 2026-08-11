@@ -44,10 +44,6 @@ SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     # slugged, so races are impossible by construction; the lock keeps it
     # within the fleet-wide pattern anyway).
     "seed_e2e_name_collision.py",
-    # ABS-461: rebuilds its fragments from the real parser on every run, so
-    # the lock also keeps one worker's delete-and-rebuild from overlapping
-    # another's.
-    "seed_e2e_page_break_split.py",
     "seed_e2e_parcels.py",
     "seed_e2e_permitted_use.py",
     # ABS-433: the unified RC-LUB corpus seed — replaces the retired
