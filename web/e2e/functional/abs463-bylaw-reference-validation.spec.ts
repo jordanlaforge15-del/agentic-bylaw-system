@@ -21,9 +21,16 @@
 //      provisions and were being cited for CEN-1, CEN-2, DH and COR).
 //   6. Table 1A/1B/1C are matched to the zones they actually cover.
 //   7. TC-001's zone field matches the geocoded zone (HR-1, not ER-1).
-//   8. The Python guard (tests/test_eval_bylaw_references.py) passes.
+//
+// The equivalent Python guard is tests/test_eval_bylaw_references.py, which
+// runs under `make test`. This spec deliberately does NOT shell out to pytest:
+// a pytest session costs 13-50s of blocking CPU/IO and would pin one of the
+// four Playwright workers for a meaningful slice of a ~6.5min suite. The
+// WebKit projects (tablet-ipad, mobile-iphone) are the documented casualty of
+// that kind of congestion — see the ABS-6 note in playwright.config.ts — and
+// starving them timed out six unrelated smoke/a11y tests when this spec first
+// landed. Asserting "the pytest passed" from here adds no coverage anyway.
 
-import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { expect, test } from "@playwright/test";
@@ -35,7 +42,6 @@ const INDEX_FILE = path.join(
   "evals",
   "regional_centre_bylaw_reference_index.json",
 );
-const VENV_PYTHON = path.join(REPO_ROOT, ".venv", "bin", "python");
 
 type TestCase = {
   id: string;
@@ -234,14 +240,5 @@ test.describe("ABS-463: bylaw reference validation", () => {
     expect(tc001!.expected_answer_keywords).toContain("HR-1");
     // The turn text still misstates the zone on purpose — that is the test.
     expect(tc001!.turns[0].message).toContain("ER-1");
-  });
-
-  test("the Python reference guard passes", () => {
-    const result = spawnSync(
-      VENV_PYTHON,
-      ["-m", "pytest", "tests/test_eval_bylaw_references.py", "-q"],
-      { cwd: REPO_ROOT, encoding: "utf-8" },
-    );
-    expect(result.status, `${result.stdout ?? ""}\n${result.stderr ?? ""}`).toBe(0);
   });
 });

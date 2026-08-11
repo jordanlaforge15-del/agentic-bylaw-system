@@ -20,6 +20,12 @@ By-law** ingest, `document_id = 4`, 4,341 fragments, in the dev database
 Guards: `tests/test_eval_bylaw_references.py` (pytest) and
 `web/e2e/functional/abs463-bylaw-reference-validation.spec.ts` (Playwright).
 
+These two run **independently** — the Playwright spec re-implements the
+assertions against the same JSON rather than shelling out to pytest. Keep it
+that way: an earlier revision invoked `pytest` via `spawnSync`, which blocked a
+Playwright worker for 13-50s and starved the WebKit projects (`tablet-ipad`,
+`mobile-iphone`) into timing out six unrelated smoke/a11y tests.
+
 **After any re-ingest of the Regional Centre by-law, run:**
 
 ```bash
