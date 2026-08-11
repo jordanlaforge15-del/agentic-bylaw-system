@@ -42,6 +42,48 @@ misconfigured" into a surprise metered bill, which is the exact failure
 this whole backend exists to avoid — so the transport is deliberately
 unable to construct any other gateway.
 
+Known limitations
+-----------------
+Established by live-CLI validation (ABS-457,
+``scripts/validate_claude_code_gateway.py``, run 2026-08-11 against
+Claude Code 2.1.226 / ``claude-opus-4-5``; report under
+``evals/runs/claude-code-gateway-validation/20260811T011803Z/``). Three
+of the four runtime assumptions hold: the ``claude-opus-4-5`` alias
+resolves (``modelUsage[].canonicalModel``), ``--autocompact 1000000``
+carries a 200k-character conversation through uncompacted, and the
+tool-call → tool-result → final-answer round trip closes through the
+real CLI. One does not:
+
+**The wallet breaker cannot see input tokens on this backend.**
+``tool_loop._measured_wallet_tokens`` charges
+``input_tokens + output_tokens`` and excludes cache tokens, because the
+chat wallet does not bill for them on the API path. The CLI does not
+report input the same way. Measured across all six validation turns,
+``usage.input_tokens`` was **10 on every single one** — including the
+turn carrying a 200,971-character conversation, which reported 51,071
+tokens in ``cache_creation_input_tokens`` and still 10 in
+``input_tokens``. Adding a 5,023-character system prompt moved
+``input_tokens`` by exactly 0 and ``cache_creation_input_tokens`` by
++13,548.
+
+So ``input_tokens`` is not a function of prompt size here; it is a
+near-constant. Consequences while ``ADVISOR_LLM_PROVIDER=claude_code``:
+
+* the ``wallet_cap_trip`` breaker is effectively output-only. It will
+  fire late, or on a retrieval-heavy turn never;
+* the estimator-based breakers (per-request and cumulative cost) are
+  unaffected — they price the prompt themselves rather than reading
+  provider usage — and remain the real ceiling on this path;
+* any cost or token figure attributed to a ``claude_code`` turn must be
+  read as output-side only. Eval numbers comparing this backend's
+  reported input tokens against the API backend's are not comparable.
+
+This is a reporting difference, not a spend difference: the turns are
+billed to the operator's Claude Code subscription either way, which is
+why it is documented rather than fixed here. A fix would mean summing
+all three input buckets for this backend specifically, which would
+change what the *chat wallet* charges and belongs to its own issue.
+
 Why the layer-1 helper is mirrored rather than imported
 -------------------------------------------------------
 ``src/layer1/_claude_code_client.py`` is synchronous
