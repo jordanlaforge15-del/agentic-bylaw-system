@@ -1,0 +1,17 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "zone": "ER-1",
+    "complexity": "simple",
+    "liability": "low",
+    "verdict": "PARTIAL",
+    "kw_rate": 0.6666666666666666,
+    "citation_found": 7,
+    "citation_total": 7,
+    "hallucinated": 0,
+    "reasons": [
+      "keyword rate 67% below 80% bar for simple cases"
+    ]
+  }
+]

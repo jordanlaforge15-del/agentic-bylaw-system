@@ -1,0 +1,210 @@
+{
+  "id": "TC-001",
+  "title": "Homeowner rear deck addition in ER-1",
+  "zone": "ER-1",
+  "complexity": "simple",
+  "liability": "low",
+  "model": "claude-opus-4-5",
+  "grade": {
+    "verdict": "PARTIAL",
+    "reasons": [
+      "keyword rate 67% below 80% bar for simple cases"
+    ],
+    "citation_total": 7,
+    "citation_found": 7,
+    "citation_hallucinated": 0,
+    "keyword_expected": 12,
+    "keyword_hit": 8,
+    "keyword_rate": 0.6666666666666666,
+    "hedging_failed": false
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "wall_time_s": 130.39,
+      "stop_reason": "end_turn",
+      "citation_total": 4,
+      "citation_found": 4,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "part",
+          "value": "I",
+          "raw": "Part I",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > [Table 1A]",
+              "page": 45,
+              "text_excerpt": "Table 1A: Permitted uses by zone (DD, DH, CEN-2, CEN-1, COR, HR-2, and HR-1)"
+            },
+            {
+              "citation_path": "Part I > [Table 1B]",
+              "page": 48,
+              "text_excerpt": "Table 1B: Permitted uses by zone (ER-3, ER-2, ER-1, CH-2, and CH-1)"
+            },
+            {
+              "citation_path": "Part I > [Table 1C]",
+              "page": 51,
+              "text_excerpt": "Table 1C: Permitted uses by zone (CLI, LI, HRI, INS, UC-2, UC-1, DND, H, PCF, RPK, and WA)"
+            }
+          ]
+        },
+        {
+          "kind": "part",
+          "value": "V",
+          "raw": "Part V",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > [Table 8]",
+              "page": 109,
+              "text_excerpt": "Table 8: Main building rooftop features"
+            },
+            {
+              "citation_path": "Part V > [Table 9]",
+              "page": 190,
+              "text_excerpt": "Table 9: Minimum required side setbacks for Established Residential Special Areas"
+            },
+            {
+              "citation_path": "Part V > [Table 10]",
+              "page": 191,
+              "text_excerpt": "Table 10: Maximum required lot coverage for Established Residential Special Areas"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "9",
+          "raw": "Section 9",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 9",
+              "page": 10,
+              "text_excerpt": "9 (1) Subject to Subsections 9(2) and 9(3), the following developments are exempt from the requirement to obtain a development permit:"
+            },
+            {
+              "citation_path": "Appendix 2 > 9",
+              "page": 445,
+              "text_excerpt": "9 Shadow diagrams shall:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "199",
+          "raw": "Section 199",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 199",
+              "page": 173,
+              "text_excerpt": "199 (1) Subject to Subsections 199(2), 199(3), and 199(4), the minimum required rear setback for any main building shall be:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 6,
+        "hit": 5,
+        "rate": 0.833,
+        "misses": [
+          "side setback"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm",
+          "i recommend",
+          "verify",
+          "before proceeding",
+          "this is general",
+          "site-specific"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 2,
+      "wall_time_s": 80.36,
+      "stop_reason": "end_turn",
+      "citation_total": 3,
+      "citation_found": 3,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "part",
+          "value": "V",
+          "raw": "Part V",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > [Table 8]",
+              "page": 109,
+              "text_excerpt": "Table 8: Main building rooftop features"
+            },
+            {
+              "citation_path": "Part V > [Table 9]",
+              "page": 190,
+              "text_excerpt": "Table 9: Minimum required side setbacks for Established Residential Special Areas"
+            },
+            {
+              "citation_path": "Part V > [Table 10]",
+              "page": 191,
+              "text_excerpt": "Table 10: Maximum required lot coverage for Established Residential Special Areas"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "198",
+          "raw": "Section 198",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 198",
+              "page": 171,
+              "text_excerpt": "198 (1) Subject to Subsections 198(2) and 198(3), the minimum required side setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "340",
+          "raw": "Section 340",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 340",
+              "page": 242,
+              "text_excerpt": "340 Any setback, stepback, or separation distance required in this Part for any main building shall be open and unobstructed except for the following:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 6,
+        "hit": 3,
+        "rate": 0.5,
+        "misses": [
+          "6.0 m",
+          "0.6 m",
+          "rear setback"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm",
+          "before proceeding",
+          "this is general"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    }
+  ]
+}

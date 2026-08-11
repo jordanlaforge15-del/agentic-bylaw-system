@@ -55,6 +55,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_FILE = REPO_ROOT / "evals" / "regional_centre_test_prompts.json"
 RUNS_ROOT = REPO_ROOT / "evals" / "runs"
 
+# ABS-459. Bump when a transcript field changes meaning. See the field note
+# in ``run_case`` for what each version guarantees about ``tool_calls``.
+TRANSCRIPT_PARSER_VERSION = 2
+
 
 def load_prompts() -> list[dict[str, Any]]:
     with PROMPTS_FILE.open() as f:
@@ -108,6 +112,9 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
     payload (block.text) plus incremental ``content_block_delta``s.
     We prefer the full text from content_block_start and only fall back
     to concatenating deltas if that's missing.
+
+    ``tool_calls`` comes from ``tool_loop_metrics`` in practice, not from
+    the content stream — see the ABS-459 note below the event loop.
     """
     text_chunks: dict[int, str] = {}
     text_full: dict[int, str] = {}
@@ -186,6 +193,38 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
             parts.append(text_chunks.get(idx, ""))
     assistant_text = "\n".join(p for p in parts if p)
 
+    # ABS-459: the harvest above is empty on EVERY backend, always.
+    #
+    # ``advisor.chat.session`` synthesises the SSE content stream from the
+    # tool loop's *final* response (session.py:415). By construction that
+    # response holds no ``tool_use`` blocks — the loop has already run to
+    # ``end_turn`` before the first SSE byte is emitted. So watching
+    # ``content_block_start`` for ``tool_use`` can never see the calls the
+    # loop actually dispatched.
+    #
+    # ABS-266 added ``tool_loop_metrics`` for precisely this blind spot; it
+    # is the only record of the loop's internals. Fall back to it.
+    #
+    # The content-stream harvest still wins whenever it has entries: those
+    # carry each call's ``input``, which ``ToolCallMetric`` does not. A
+    # backend that someday streams real ``tool_use`` blocks therefore keeps
+    # the richer data without changing this code.
+    if not tool_calls and tool_loop_metrics:
+        for metric in tool_loop_metrics.get("tool_calls") or []:
+            if not isinstance(metric, dict):
+                continue
+            tool_calls.append({
+                "name": metric.get("name", ""),
+                "id": None,
+                # ToolCallMetric carries no arguments — only name, error
+                # state and latency. Null rather than {} so consumers can
+                # distinguish "no input recorded" from "called with {}".
+                "input": None,
+                "is_error": bool(metric.get("is_error", False)),
+                "latency_ms": metric.get("latency_ms"),
+                "source": "tool_loop_metrics",
+            })
+
     return {
         "assistant_text": assistant_text,
         "tool_calls": tool_calls,
@@ -238,6 +277,38 @@ def run_turn(
     return artifacts
 
 
+def summarise_case_result(
+    case: dict[str, Any],
+    result: dict[str, Any],
+    wall: float,
+) -> dict[str, Any]:
+    """Build one SUMMARY.json row from a finished case transcript.
+
+    Split out of ``main`` so the counting is testable without a running
+    advisor (ABS-459). ``tool_calls`` is the total across the case's turns
+    and must equal the number of entries the transcript itself carries —
+    that equality is the contract the ABS-459 Playwright invariant checks
+    against committed artifacts.
+
+    ``error`` is reported only when the case produced no turns at all; a
+    case that failed partway still has usable transcript data, and the
+    per-turn ``error`` field carries the detail.
+    """
+    turns = result.get("turns") or []
+    n_turns = len(turns)
+    n_tool = sum(len(t.get("tool_calls") or []) for t in turns)
+    return {
+        "id": case["id"],
+        "title": case["title"],
+        "complexity": case.get("complexity"),
+        "turns_completed": n_turns,
+        "turns_expected": len(case["turns"]),
+        "tool_calls": n_tool,
+        "wall_s": wall,
+        "error": result.get("error") if not n_turns else None,
+    }
+
+
 def run_case(
     client: httpx.Client,
     base_url: str,
@@ -284,6 +355,19 @@ def run_case(
             break
     return {
         "id": case["id"],
+        # ABS-459: transcript schema version.
+        #
+        #   (absent) — written before ABS-459. ``tool_calls`` on every turn
+        #              is unreliable: it was harvested from the synthetic SSE
+        #              content stream, which structurally cannot carry
+        #              tool_use blocks, so it reads [] no matter what the
+        #              loop dispatched. Read ``tool_loop_metrics`` instead.
+        #   2        — ``tool_calls`` falls back to ``tool_loop_metrics`` and
+        #              can be trusted.
+        #
+        # Consumers that assert on tool_calls must gate on this rather than
+        # allowlisting run directories, which would go stale on every run.
+        "parser_version": TRANSCRIPT_PARSER_VERSION,
         "title": case["title"],
         "zone": case.get("zone"),
         "persona": case.get("persona"),
@@ -378,19 +462,13 @@ def main() -> None:
             out_path = out_dir / f"{case['id']}.json"
             with out_path.open("w") as f:
                 json.dump(result, f, indent=2)
-            n_turns = len(result.get("turns", []) or [])
-            n_tool = sum(len(t.get("tool_calls") or []) for t in (result.get("turns") or []))
-            summary.append({
-                "id": case["id"],
-                "title": case["title"],
-                "complexity": case.get("complexity"),
-                "turns_completed": n_turns,
-                "turns_expected": len(case["turns"]),
-                "tool_calls": n_tool,
-                "wall_s": wall,
-                "error": result.get("error") if not n_turns else None,
-            })
-            print(f"    {n_turns}/{len(case['turns'])} turns, {n_tool} tool calls, {wall}s", file=sys.stderr)
+            row = summarise_case_result(case, result, wall)
+            summary.append(row)
+            print(
+                f"    {row['turns_completed']}/{row['turns_expected']} turns, "
+                f"{row['tool_calls']} tool calls, {wall}s",
+                file=sys.stderr,
+            )
 
     summary_path = out_dir / "SUMMARY.json"
     with summary_path.open("w") as f:
