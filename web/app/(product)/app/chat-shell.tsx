@@ -78,6 +78,40 @@ const OPENING: Message = {
     "Ask about a specific HRM address or about the bylaw text directly.",
 };
 
+// The mutable slice of the wallet that rides on the per-turn
+// ``token_balance`` SSE event. Everything else on ``WalletResponse``
+// (``floor_tokens``, ``payments_enabled``, ``tokens_per_turn``) is static for
+// the session and only ever comes from the seed fetch.
+type BalancePatch = {
+  balance_tokens?: number;
+  approx_turns_remaining?: number;
+  low_balance?: boolean;
+};
+
+/** Fold a per-turn ``token_balance`` patch onto a wallet snapshot.
+ *
+ * ``chat_enabled`` is recomputed from the patched balance against the
+ * snapshot's floor because the SSE payload carries neither the floor nor
+ * ``payments_enabled`` — that's what flips the workspace into (and out of)
+ * the out-of-turns state without a reload. */
+function applyBalancePatch(
+  wallet: WalletResponse,
+  patch: BalancePatch,
+): WalletResponse {
+  const next = { ...wallet };
+  if (typeof patch.balance_tokens === "number") {
+    next.balance_tokens = patch.balance_tokens;
+    next.chat_enabled = patch.balance_tokens > wallet.floor_tokens;
+  }
+  if (typeof patch.approx_turns_remaining === "number") {
+    next.approx_turns_remaining = patch.approx_turns_remaining;
+  }
+  if (typeof patch.low_balance === "boolean") {
+    next.low_balance = patch.low_balance;
+  }
+  return next;
+}
+
 // Top-level page wraps the inner component in Suspense because
 // ``useSearchParams`` opts the tree into client-side rendering for
 // the params hook. Without the boundary, ``next build`` refuses to
@@ -230,6 +264,17 @@ function ProductAppPageInner() {
   // decremented live off the per-turn ``token_balance`` SSE event. Null while
   // the seed is in flight.
   const [wallet, setWallet] = useState<WalletResponse | null>(null);
+  // ABS-460: the seed fetch and the first turn's ``token_balance`` event race.
+  // The composer is live as soon as the shell paints, so a turn can settle
+  // while the seed is still in flight — and then the seed lands carrying a
+  // balance from *before* the burn. Two ways that used to lose the decrement:
+  // the SSE patch arrived with ``wallet`` still null and was dropped on the
+  // floor, or the seed's ``setWallet`` overwrote the patched snapshot. Either
+  // way the strip painted the pre-burn turn count and the out-of-turns prompt
+  // never appeared until a reload. Keep the last patch (and a counter of how
+  // many have landed) in refs so a seed that resolves late can re-apply it.
+  const lastBalancePatchRef = useRef<BalancePatch | null>(null);
+  const balancePatchSeqRef = useRef(0);
   // Set when a send is refused for lack of tokens — either the client
   // pre-flight (wallet at/below floor) or a backend 402 ``insufficient_tokens``
   // that raced the client state. Reset on each accepted send and on a fresh
@@ -268,10 +313,21 @@ function ProductAppPageInner() {
   // the initial paint + the source of truth for ``payments_enabled`` and the
   // pre-flight floor, neither of which rides on the SSE payload.
   const refreshWallet = async () => {
+    const patchSeqAtStart = balancePatchSeqRef.current;
     try {
       const res = await fetch("/api/billing/wallet", { cache: "no-store" });
       if (!res.ok) return;
-      const w = (await res.json()) as WalletResponse;
+      const seeded = (await res.json()) as WalletResponse;
+      // A turn settled while this fetch was in flight, so its ``token_balance``
+      // is newer than the body we just received — re-apply it rather than
+      // painting a stale pre-burn balance over it (ABS-460). When no patch
+      // landed during the fetch the seed is authoritative and goes in as-is,
+      // which is what makes a post-top-up refresh still raise the balance.
+      const racedPatch =
+        balancePatchSeqRef.current !== patchSeqAtStart
+          ? lastBalancePatchRef.current
+          : null;
+      const w = racedPatch ? applyBalancePatch(seeded, racedPatch) : seeded;
       setWallet(w);
       // A fresh, chat-enabled wallet clears any prior refusal (e.g. the user
       // topped up and came back).
@@ -638,26 +694,16 @@ function ProductAppPageInner() {
             // balance vs. the seed floor to flip into/out of the out-of-turns
             // state.
             try {
-              const data = JSON.parse(ev.data) as {
-                balance_tokens?: number;
-                approx_turns_remaining?: number;
-                low_balance?: boolean;
-              };
-              setWallet((prev) => {
-                if (!prev) return prev;
-                const next = { ...prev };
-                if (typeof data.balance_tokens === "number") {
-                  next.balance_tokens = data.balance_tokens;
-                  next.chat_enabled = data.balance_tokens > prev.floor_tokens;
-                }
-                if (typeof data.approx_turns_remaining === "number") {
-                  next.approx_turns_remaining = data.approx_turns_remaining;
-                }
-                if (typeof data.low_balance === "boolean") {
-                  next.low_balance = data.low_balance;
-                }
-                return next;
-              });
+              const data = JSON.parse(ev.data) as BalancePatch;
+              // Record the patch before applying it: if the seed is still in
+              // flight there is no snapshot to fold it into yet, and this ref
+              // is how ``refreshWallet`` learns it must re-apply the burn when
+              // its (older) body finally lands (ABS-460).
+              lastBalancePatchRef.current = data;
+              balancePatchSeqRef.current += 1;
+              setWallet((prev) =>
+                prev ? applyBalancePatch(prev, data) : prev,
+              );
             } catch {
               // ignore malformed token_balance event
             }

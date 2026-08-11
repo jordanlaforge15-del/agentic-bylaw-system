@@ -5,7 +5,12 @@
 // on the originally-loaded case_id. Reloads and shared links then
 // re-opened the wrong case.
 
-import { expect, openCaseViaApi, test } from "../fixtures/test-env";
+import {
+  expect,
+  expectCaseIdInUrl,
+  openCaseViaApi,
+  test,
+} from "../fixtures/test-env";
 
 test("sidebar case click updates URL case_id", async ({ page }) => {
   const ts = Date.now();
@@ -46,9 +51,7 @@ test("sidebar case click updates URL case_id", async ({ page }) => {
   await caseBButton.click();
 
   // URL must update to case B's id without a full page reload.
-  await expect(page).toHaveURL(new RegExp(`case_id=${caseB}`), {
-    timeout: 5_000,
-  });
+  await expectCaseIdInUrl(page, caseB);
 
   // URL must NOT still contain case A's id.
   expect(page.url()).not.toMatch(new RegExp(`case_id=${caseA}($|&)`));
