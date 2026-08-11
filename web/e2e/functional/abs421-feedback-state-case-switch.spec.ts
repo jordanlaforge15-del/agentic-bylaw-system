@@ -9,7 +9,12 @@
 // advisor_chat_message_feedback had no rows for B. A fresh page load of
 // B was clean, which is what made this look like a hydration bug.
 
-import { expect, openCaseViaApi, test } from "../fixtures/test-env";
+import {
+  expect,
+  expectCaseIdInUrl,
+  openCaseViaApi,
+  test,
+} from "../fixtures/test-env";
 
 const ANSWER = /Based on the bylaw evidence/i;
 
@@ -75,9 +80,7 @@ test("switching cases via the sidebar clears the previous case's feedback state"
   await expect(caseBButton).toBeVisible({ timeout: 8_000 });
   await caseBButton.click();
 
-  await expect(page).toHaveURL(new RegExp(`case_id=${caseB}`), {
-    timeout: 5_000,
-  });
+  await expectCaseIdInUrl(page, caseB);
   await expect(page.getByTestId("chat-thread")).toContainText(ANSWER, {
     timeout: 15_000,
   });
@@ -114,9 +117,7 @@ test("switching cases via the sidebar clears the previous case's feedback state"
   await expect(caseAButton).toBeVisible({ timeout: 8_000 });
   await caseAButton.click();
 
-  await expect(page).toHaveURL(new RegExp(`case_id=${caseA}`), {
-    timeout: 5_000,
-  });
+  await expectCaseIdInUrl(page, caseA);
   await expect(page.getByTestId("message-feedback").first()).toBeVisible({
     timeout: 10_000,
   });

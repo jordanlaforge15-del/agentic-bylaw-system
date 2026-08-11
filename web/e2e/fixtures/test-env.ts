@@ -63,6 +63,115 @@ export async function openCaseViaApi(opts: {
 }
 
 /**
+ * Wait until React has hydrated the element matching ``selector``.
+ *
+ * ``page.goto`` resolves on the load event, which on a Next dev build is well
+ * before the client bundle has attached handlers. Filling a *controlled* input
+ * in that window is silently lost: ``fill`` writes the DOM value, no React
+ * onChange fires, and hydration then resets the node to the server-rendered
+ * empty string. The form's state stays empty, so a CTA gated on "all fields
+ * present" never enables and the click times out 30s later — the flake
+ * signature the ticket recorded for smoke/03-open-case (ABS-460).
+ *
+ * Probing for a ``__reactProps*`` key is how the shell's own specs already
+ * detect this (abs218), lifted here so every form-driving spec can share it.
+ */
+export async function waitForHydration(
+  page: Page,
+  selector: string,
+): Promise<void> {
+  await page.waitForFunction((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    return Object.keys(el).some((k) => k.startsWith("__reactProps"));
+  }, selector);
+}
+
+/**
+ * Fill the /cases/new open-case form and start the conversation.
+ *
+ * Waits for hydration before typing and for the CTA to actually enable before
+ * clicking, so a slow dev-server hydration surfaces as "the CTA never enabled"
+ * rather than an unattributable 30s click timeout.
+ */
+export async function startConversationViaForm(
+  page: Page,
+  opts: { anchor: string; question: string },
+): Promise<void> {
+  await waitForHydration(page, 'input[placeholder^="e.g. 1234 Main St"]');
+  await page.getByPlaceholder(/1234 Main St, Halifax/).fill(opts.anchor);
+  await page.getByPlaceholder(/Ask your question/).fill(opts.question);
+  const cta = page.getByTestId("start-conversation-btn");
+  await expect(cta).toBeEnabled();
+  await cta.click();
+}
+
+/**
+ * Wait until GET /api/chat/sessions lists a session for ``anchorFragment``.
+ *
+ * The sidebar is not a live view: it refetches only when the shell bumps its
+ * refresh trigger, which for a chat turn happens once, in ``send``'s finally.
+ * A spec that starts a turn and immediately switches conversations therefore
+ * gets exactly one refetch, and it races the backend's commit of the new
+ * session row. Lose that race and the conversation is simply absent from the
+ * sidebar with nothing scheduled to fetch it again — which is how
+ * abs218 failed intermittently (ABS-460).
+ *
+ * Waiting on the API first makes the subsequent refetch deterministic. It
+ * does not wait for the answer: the session row is committed when the turn
+ * opens, long before the stream finishes, so a mid-stream spec stays
+ * mid-stream.
+ */
+export async function waitForSessionListed(
+  page: Page,
+  anchorFragment: string,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get("/api/chat/sessions");
+        if (!res.ok()) return false;
+        const data = (await res.json()) as {
+          sessions?: Array<{ anchor_label?: string | null }>;
+        };
+        return (data.sessions ?? []).some((s) =>
+          (s.anchor_label ?? "").includes(anchorFragment),
+        );
+      },
+      {
+        timeout: 10_000,
+        message: `no session listed for anchor containing "${anchorFragment}"`,
+      },
+    )
+    .toBe(true);
+}
+
+/**
+ * Wait for a sidebar case switch to land in the URL.
+ *
+ * ``selectSession`` in the chat shell fetches the target session's messages
+ * AND its feedback map before it rewrites ``?case_id=``, so the URL flip is
+ * gated on two API round trips rather than on the click. Idle that is ~150ms,
+ * which is why the specs that drive this used to hand-roll a 5s wait.
+ *
+ * Under the suite's four parallel workers those same two requests have been
+ * measured at 4.5s against the single-process e2e FastAPI (ABS-460: an
+ * abs421 run where the click registered at t+13.6s and the URL flipped at
+ * t+18.3s, 0.3s past a 5s deadline). The switch was working; the wait was
+ * just tuned to an unloaded stack. 15s keeps a real "the click did nothing"
+ * regression failing well inside the 30s per-test cap while leaving three
+ * times the measured worst case as headroom.
+ */
+export async function expectCaseIdInUrl(
+  page: Page,
+  caseId: number,
+): Promise<void> {
+  await expect(page).toHaveURL(new RegExp(`case_id=${caseId}`), {
+    timeout: 15_000,
+  });
+}
+
+/**
  * Wait for the chat thread to render an assistant message containing
  * the expected substring. Polls until the timeout — the SSE stream
  * appends text chunks incrementally so a naive equality check would
