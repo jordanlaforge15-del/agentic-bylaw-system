@@ -55,6 +55,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_FILE = REPO_ROOT / "evals" / "regional_centre_test_prompts.json"
 RUNS_ROOT = REPO_ROOT / "evals" / "runs"
 
+# ABS-459. Bump when a transcript field changes meaning. See the field note
+# in ``run_case`` for what each version guarantees about ``tool_calls``.
+TRANSCRIPT_PARSER_VERSION = 2
+
 
 def load_prompts() -> list[dict[str, Any]]:
     with PROMPTS_FILE.open() as f:
@@ -319,6 +323,19 @@ def run_case(
             break
     return {
         "id": case["id"],
+        # ABS-459: transcript schema version.
+        #
+        #   (absent) — written before ABS-459. ``tool_calls`` on every turn
+        #              is unreliable: it was harvested from the synthetic SSE
+        #              content stream, which structurally cannot carry
+        #              tool_use blocks, so it reads [] no matter what the
+        #              loop dispatched. Read ``tool_loop_metrics`` instead.
+        #   2        — ``tool_calls`` falls back to ``tool_loop_metrics`` and
+        #              can be trusted.
+        #
+        # Consumers that assert on tool_calls must gate on this rather than
+        # allowlisting run directories, which would go stale on every run.
+        "parser_version": TRANSCRIPT_PARSER_VERSION,
         "title": case["title"],
         "zone": case.get("zone"),
         "persona": case.get("persona"),

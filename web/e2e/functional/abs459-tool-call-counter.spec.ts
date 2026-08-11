@@ -57,8 +57,19 @@ interface Turn {
 
 interface Transcript {
   id: string;
+  /**
+   * ABS-459 transcript schema version. Absent on every run captured before
+   * the fix, where `tool_calls` is unreliable by construction. Version 2+
+   * means `tool_calls` falls back to tool_loop_metrics and can be asserted
+   * on. Gating on this rather than allowlisting run directories keeps the
+   * contract from going stale as new runs land.
+   */
+  parser_version?: number;
   turns: Turn[];
 }
+
+/** Transcripts written by the fixed parser, whose tool_calls we can trust. */
+const TRUSTWORTHY_PARSER_VERSION = 2;
 
 interface SummaryRow {
   id: string;
@@ -128,17 +139,27 @@ test.describe("ABS-459 — tool_calls reflects what the loop dispatched", () => 
     }
   });
 
-  test("no transcript claims zero tool calls while its metrics report some", () => {
+  test("no post-fix transcript claims zero tool calls while its metrics report some", () => {
     const runDirs = allRunDirs();
     expect(runDirs.length).toBeGreaterThan(0);
 
     const violations: string[] = [];
+    let checked = 0;
+    const legacy: string[] = [];
 
     for (const dir of runDirs) {
-      // The ABS-459 evidence run is the captured bug itself — exempt.
-      if (path.resolve(dir) === path.resolve(EVIDENCE_DIR)) continue;
-
       for (const { file, doc } of transcriptsIn(dir)) {
+        // Pre-ABS-459 transcripts carry no parser_version and were captured
+        // under the bug — asserting on them would fail permanently, and
+        // backfilling them is out of scope for this issue. Skipped, but
+        // counted and reported so the exemption stays visible rather than
+        // quietly swallowing whole run directories.
+        if ((doc.parser_version ?? 0) < TRUSTWORTHY_PARSER_VERSION) {
+          legacy.push(path.relative(REPO_ROOT, file));
+          continue;
+        }
+
+        checked += 1;
         for (const turn of doc.turns ?? []) {
           const dispatched = dispatchedCalls(turn.tool_loop_metrics);
           const recorded = (turn.tool_calls ?? []).length;
@@ -152,10 +173,40 @@ test.describe("ABS-459 — tool_calls reflects what the loop dispatched", () => 
       }
     }
 
+    console.log(
+      `ABS-459 invariant: ${checked} post-fix transcript(s) checked, ` +
+        `${legacy.length} pre-fix transcript(s) skipped.`,
+    );
+
     expect(
       violations,
       `Transcripts under-report dispatched tool calls:\n  ${violations.join("\n  ")}`,
     ).toEqual([]);
+  });
+
+  test("the runner still stamps the version the invariant gates on", () => {
+    // The invariant above only inspects transcripts at
+    // TRUSTWORTHY_PARSER_VERSION or higher. Until the first post-fix run
+    // lands it checks nothing, so if the stamp were dropped from the runner
+    // the invariant would go quietly dead forever. This asserts the stamp
+    // exists and has not regressed below the version the gate expects.
+    const runner = path.join(REPO_ROOT, "scripts", "run_test_prompts.py");
+    const src = fs.readFileSync(runner, "utf-8");
+
+    const match = src.match(/^TRANSCRIPT_PARSER_VERSION\s*=\s*(\d+)/m);
+    expect(
+      match,
+      "scripts/run_test_prompts.py must declare TRANSCRIPT_PARSER_VERSION — " +
+        "the ABS-459 invariant gates on the transcript stamp it produces",
+    ).not.toBeNull();
+
+    expect(Number(match![1])).toBeGreaterThanOrEqual(TRUSTWORTHY_PARSER_VERSION);
+
+    // And the stamp must actually reach the transcript, not just exist.
+    expect(
+      /"parser_version":\s*TRANSCRIPT_PARSER_VERSION/.test(src),
+      "TRANSCRIPT_PARSER_VERSION must be written onto each transcript as parser_version",
+    ).toBe(true);
   });
 
   test("SUMMARY.json tool_calls equals the sum across that case's turns", () => {
