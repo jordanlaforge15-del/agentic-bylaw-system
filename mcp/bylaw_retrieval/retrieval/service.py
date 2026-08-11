@@ -90,6 +90,11 @@ from layer1.semantic.permission_markers import (
 from layer2.retrieval.datasets import _summarize_dataset
 from layer2.retrieval.geocode import resolve_location_with_detail
 from layer2.retrieval.location import LocationReference, RegexLocationExtractor
+from layer2.retrieval.resolution_quality import (
+    OUTSIDE_MAPPED_AREA_CAVEAT,
+    classify_resolution,
+    resolution_caveat,
+)
 from layer2.retrieval.spatial import (
     DEFAULT_ABUT_DISTANCE_M,
     PARCEL_ABUT_DISTANCE_M,
@@ -131,6 +136,14 @@ OVERLAY_ROLE_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("height", "height_precinct"),
     ("zoning", "zone"),
     ("zone", "zone"),
+)
+
+# ABS-466: the caveat an unresolvable address carries, so every "we don't
+# know" state on an AddressProfile speaks through the same ``caveats`` list.
+_UNRESOLVABLE_CAVEAT = (
+    "This address could not be resolved to a point, so no zone or overlay "
+    "was looked up. Do not state a zone for it — ask the user to confirm "
+    "the address, or fall back to text retrieval with the location slot."
 )
 
 
@@ -1469,7 +1482,9 @@ class RetrievalService:
         """
         refs = RegexLocationExtractor().extract(address)
         if not refs:
-            return AddressProfile(address=address, unresolvable=True)
+            return AddressProfile(
+                address=address, unresolvable=True, caveats=[_UNRESOLVABLE_CAVEAT]
+            )
 
         ref = refs[0]
         resolved, _detail = resolve_location_with_detail(self.session, ref)
@@ -1481,6 +1496,7 @@ class RetrievalService:
                 street=ref.street,
                 pid=ref.parcel_id,
                 unresolvable=True,
+                caveats=[_UNRESOLVABLE_CAVEAT],
             )
         return self._build_address_profile(canonical_address, ref, resolved)
 
@@ -1882,12 +1898,21 @@ class RetrievalService:
         ref: LocationReference,
         resolved: ResolvedLocation,
     ) -> AddressProfile:
+        # ABS-466: the zone below is only as good as the point that selected
+        # it, so the profile reports how that point was arrived at. Google's
+        # location_type wins when the resolution came through it; otherwise
+        # the classifier falls back to the confidence float.
+        quality = classify_resolution(resolved.location_type, resolved.confidence)
         profile = AddressProfile(
             address=address,
             civic_number=ref.civic_number,
             street=ref.street,
             pid=ref.parcel_id,
             unresolvable=False,
+            resolution_quality=quality,
+            location_confidence=resolved.confidence,
+            location_type=resolved.location_type,
+            location_resolver=resolved.source,
         )
         overlays: list[OverlayRef] = []
         citations: list[CitationRef] = []
@@ -1896,10 +1921,13 @@ class RetrievalService:
         heritage_available = False
         bonus_available = False
         pedestrian_available = False
+        zone_available = False
 
         for dataset in self._scoped_linked_datasets():
             role = self._overlay_role(dataset)
-            if role == "heritage":
+            if role == "zone":
+                zone_available = True
+            elif role == "heritage":
                 heritage_available = True
             elif role == "bonus_zoning":
                 bonus_available = True
@@ -1961,6 +1989,28 @@ class RetrievalService:
 
         profile.overlays = overlays
         profile.citations = citations
+
+        # ABS-466: state the resolution's limits instead of letting a zone
+        # picked by an estimated point read as fact.
+        caveats: list[str] = []
+        quality_caveat = resolution_caveat(quality)
+        if quality_caveat is not None:
+            caveats.append(quality_caveat)
+        if profile.zone is None:
+            if zone_available:
+                # A zoning dataset WAS in scope and the point missed every
+                # polygon. That is a coverage fact about the location — a
+                # distinct, actionable state — not "this parcel has no zone",
+                # and not the same as an address we couldn't find at all.
+                profile.outside_mapped_area = True
+                caveats.append(OUTSIDE_MAPPED_AREA_CAVEAT)
+            else:
+                caveats.append(
+                    "No zoning boundary dataset is in scope for this "
+                    "address, so the zone could not be checked at all. The "
+                    "absence of a zone here says nothing about the property."
+                )
+        profile.caveats = caveats
         return profile
 
     @staticmethod

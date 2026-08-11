@@ -358,7 +358,19 @@ _DESC_GET_ADDRESS_PROFILE = (
     "bonus zoning) into one AddressProfile.\n\n"
     "If the address can't be resolved, the response carries "
     "'unresolvable': true with empty citations rather than an error — fall "
-    "back to search_bylaw_evidence with the location slot in that case."
+    "back to search_bylaw_evidence with the location slot in that case.\n\n"
+    "READ THE RESOLUTION QUALITY BEFORE YOU STATE THE ZONE. The response's "
+    "'resolution_quality' says how the address became a point: 'rooftop' "
+    "matched the building; 'interpolated' means the civic number was NOT "
+    "found and the position was estimated along the street; 'centroid' and "
+    "'approximate' are coarser still. Anything other than 'rooftop' means "
+    "the point may sit on a neighbouring parcel, so the zone — and every "
+    "setback, height and floor-area figure derived from it — may be the "
+    "wrong property's. In that case the response carries 'caveats' and an "
+    "'instruction': surface the uncertainty to the user instead of stating "
+    "the zone as fact. 'outside_mapped_area': true means the address "
+    "resolved but fell outside every mapped boundary — say so; do not "
+    "report a zone."
 )
 
 _SCHEMA_GET_ADDRESS_PROFILE: dict[str, Any] = {

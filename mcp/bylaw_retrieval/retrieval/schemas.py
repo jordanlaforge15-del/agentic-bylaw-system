@@ -699,6 +699,16 @@ class AddressProfile(BaseModel):
 
     When the address cannot be geocoded/matched, ``unresolvable`` is True
     and the spatial fields stay null — the method never raises (FR-3.4).
+
+    Three outcomes are distinct and must stay distinct (ABS-466):
+
+      * ``unresolvable=True`` — no point at all; nothing was looked up.
+      * ``outside_mapped_area=True`` — a point was found, but it falls
+        outside every mapped boundary, so ``zone`` is null because the
+        corpus does not cover the location, not because the property is
+        unzoned.
+      * neither — the point was matched against the corpus, and
+        ``resolution_quality`` says how much the resulting zone is worth.
     """
 
     address: str = Field(
@@ -762,6 +772,72 @@ class AddressProfile(BaseModel):
     unresolvable: bool = Field(
         default=False,
         description="True when the address could not be geocoded/matched; spatial fields stay null.",
+    )
+    # -- ABS-466: resolution quality -------------------------------------
+    #
+    # The zone above is only as good as the point that selected it. These
+    # fields say how that point was arrived at, so an answer built on an
+    # estimate can be qualified instead of stated flat.
+    resolution_quality: (
+        Literal["rooftop", "interpolated", "centroid", "approximate", "unknown"] | None
+    ) = Field(
+        default=None,
+        description=(
+            "How precisely the address resolved to a point: 'rooftop' (matched "
+            "the building), 'interpolated' (estimated along the street from "
+            "surrounding civic numbers — the civic number was NOT found), "
+            "'centroid' (centre of a block/route), 'approximate' (locality "
+            "only), 'unknown'. Anything other than 'rooftop' means the point "
+            "may sit on a neighbouring parcel, so the zone and every setback, "
+            "height and floor-area figure derived from it may belong to the "
+            "wrong property. QUALIFY any answer built on a non-rooftop match; "
+            "do not state the zone as fact. Null when unresolvable."
+        ),
+    )
+    location_confidence: float | None = Field(
+        default=None,
+        description=(
+            "Confidence (0..1) of the geocoded point: 0.95 rooftop, 0.85 "
+            "interpolated, 0.6 block centroid. Same scale as "
+            "LinkedDataset.location_confidence."
+        ),
+    )
+    location_type: str | None = Field(
+        default=None,
+        description=(
+            "The external geocoder's raw quality enum (ROOFTOP, "
+            "RANGE_INTERPOLATED, GEOMETRIC_CENTER, APPROXIMATE) when the point "
+            "came from it; null for in-database civic-address resolutions."
+        ),
+    )
+    location_resolver: str | None = Field(
+        default=None,
+        description=(
+            "Which resolver produced the point — a civic-address dataset name, "
+            "'google_maps', or a cache row's resolver."
+        ),
+    )
+    outside_mapped_area: bool = Field(
+        default=False,
+        description=(
+            "True when the address DID resolve to a point but that point falls "
+            "outside every mapped zoning/overlay boundary in scope, so no zone "
+            "could be assigned. Distinct from 'unresolvable' (address not "
+            "found at all) and from a genuine no-overlay answer: it means the "
+            "corpus does not cover this location. Do NOT state a zone — say "
+            "the address is outside the mapped plan area and needs "
+            "confirmation."
+        ),
+    )
+    caveats: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ready-to-quote qualifications the answer MUST carry, one per "
+            "quality problem with this resolution (non-rooftop match, point "
+            "outside the mapped area). Empty means the resolution is precise "
+            "and fully covered. When non-empty, surface the substance of these "
+            "to the user rather than answering as if the zone were certain."
+        ),
     )
 
 

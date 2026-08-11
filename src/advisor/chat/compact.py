@@ -565,6 +565,28 @@ def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
             }
             for c in profile.citations
         ]
+    # ABS-466: the resolution's quality rides along with the zone it produced.
+    # Dropping it here is what let an interpolated point present to the model
+    # as indistinguishable from a rooftop match.
+    if profile.resolution_quality is not None:
+        out["resolution_quality"] = profile.resolution_quality
+    if profile.location_confidence is not None:
+        out["location_confidence"] = profile.location_confidence
+    if profile.outside_mapped_area:
+        out["outside_mapped_area"] = True
+    if profile.caveats:
+        out["caveats"] = profile.caveats
+        out["instruction"] = (
+            "No zone could be assigned: the resolved point falls outside "
+            "every mapped boundary. Do not state a zone — tell the user the "
+            "address is outside the mapped plan area and must be confirmed "
+            "with HRM."
+            if profile.outside_mapped_area
+            else "This address did not resolve precisely to the property, so "
+            "the zone above may belong to a neighbouring parcel. State the "
+            "uncertainty in your answer — do not present the zone or any "
+            "figure derived from it as settled fact."
+        )
     return out
 
 

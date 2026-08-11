@@ -442,3 +442,144 @@ def test_resolve_location_without_geocoder_still_refuses_gracefully(tmp_path: Pa
     with session_scope(db_url) as session:
         resolved = resolve_location(session, _civic())
     assert resolved is None
+
+
+# ---------------------------------------------------------------------------
+# ABS-466 — the location_type acceptance matrix, pinned.
+#
+# The old rule was ``confidence < 0.6`` against a GEOMETRIC_CENTER worth
+# exactly 0.6, so the "somewhere in this neighbourhood" case the module
+# comment claimed to exclude sailed through on equality. The decision is now
+# by NAME, and it is kind-aware: a civic address must land on a building
+# (ROOFTOP / RANGE_INTERPOLATED), while an intersection or named place has no
+# rooftop to match and GEOMETRIC_CENTER is the best answer that exists for it.
+#
+# These tests pin all four location_types for both branches, so the boundary
+# cannot drift silently again.
+# ---------------------------------------------------------------------------
+
+
+def _named(name: str = "Halifax Central Library") -> LocationReference:
+    return LocationReference(raw_text=name, kind="named_place", name=name)
+
+
+def _intersection() -> LocationReference:
+    return LocationReference(
+        raw_text="Barrington and Spring Garden",
+        kind="intersection",
+        streets=["Barrington Street", "Spring Garden Road"],
+    )
+
+
+def _resolve_with_type(ref: LocationReference, location_type: str):
+    payload = {
+        "status": "OK",
+        "results": [
+            {
+                "geometry": {
+                    "location": {"lat": 44.6488, "lng": -63.5752},
+                    "location_type": location_type,
+                }
+            }
+        ],
+    }
+    geocoder = GoogleGeocoder(_config(), http_client=_MockHttp(_MockResponse(payload)))
+    return geocoder, geocoder.resolve(ref)
+
+
+@pytest.mark.parametrize(
+    "location_type,accepted,expected_confidence",
+    [
+        ("ROOFTOP", True, 0.95),
+        ("RANGE_INTERPOLATED", True, 0.85),
+        # The bug: exactly 0.6, admitted by a strict ``<`` guard.
+        ("GEOMETRIC_CENTER", False, None),
+        ("APPROXIMATE", False, None),
+    ],
+)
+def test_civic_address_acceptance_matrix(location_type, accepted, expected_confidence):
+    """A civic address names a building. Google falling back to the centre of
+    a block means it never found the civic number, and that point cannot be
+    trusted to select the parcel's zoning polygon."""
+    geocoder, resolved = _resolve_with_type(_civic(), location_type)
+    if accepted:
+        assert resolved is not None
+        assert resolved.confidence == expected_confidence
+        assert resolved.location_type == location_type
+        assert geocoder.last_failure_reason is None
+    else:
+        assert resolved is None
+        assert geocoder.last_failure_reason == "LOW_CONFIDENCE"
+        assert location_type in (geocoder.last_failure_detail or "")
+
+
+@pytest.mark.parametrize(
+    "location_type,accepted",
+    [
+        ("ROOFTOP", True),
+        ("RANGE_INTERPOLATED", True),
+        # Deliberately accepted here: an intersection HAS no rooftop, so
+        # GEOMETRIC_CENTER is the best available answer rather than a
+        # degraded one. It still reports as 0.6 so callers qualify it.
+        ("GEOMETRIC_CENTER", True),
+        ("APPROXIMATE", False),
+    ],
+)
+@pytest.mark.parametrize("ref_factory", [_named, _intersection])
+def test_named_place_and_intersection_accept_geometric_center(
+    location_type, accepted, ref_factory
+):
+    geocoder, resolved = _resolve_with_type(ref_factory(), location_type)
+    if accepted:
+        assert resolved is not None
+        assert resolved.location_type == location_type
+    else:
+        assert resolved is None
+        assert geocoder.last_failure_reason == "LOW_CONFIDENCE"
+
+
+def test_unrecognised_location_type_is_rejected():
+    """An enum value we don't know about must not resolve. The old code gave
+    it 0.5 and rejected it by float; the named-set rule keeps that outcome
+    without depending on where an arbitrary default lands."""
+    geocoder, resolved = _resolve_with_type(_civic(), "SOMETHING_NEW")
+    assert resolved is None
+    assert geocoder.last_failure_reason == "LOW_CONFIDENCE"
+
+
+def test_location_type_survives_the_geocode_cache_round_trip(tmp_path: Path):
+    """A cache hit must be able to tell an interpolated point from a rooftop
+    one. Persisting only the float loses the word that says WHY it's 0.85."""
+    db_url = f"sqlite:///{tmp_path / 'layer.db'}"
+    create_layer1(db_url)
+    create_layer2(db_url)
+
+    payload = {
+        "status": "OK",
+        "results": [
+            {
+                "geometry": {
+                    "location": {"lat": 44.6488, "lng": -63.5752},
+                    "location_type": "RANGE_INTERPOLATED",
+                }
+            }
+        ],
+    }
+    geocoder = GoogleGeocoder(_config(), http_client=_MockHttp(_MockResponse(payload)))
+    ref = _civic("1234", "Oxford Street")
+
+    with session_scope(db_url) as session:
+        first = resolve_location(session, ref, google_geocoder=geocoder)
+        assert first is not None
+        assert first.location_type == "RANGE_INTERPOLATED"
+
+    with session_scope(db_url) as session:
+        row = session.query(GeocodeCache).filter_by(
+            normalized_text=normalize_reference(ref)
+        ).one()
+        assert row.metadata_json["location_type"] == "RANGE_INTERPOLATED"
+        # Second call serves from cache (no geocoder passed) and keeps the type.
+        cached = resolve_location(session, ref)
+        assert cached is not None
+        assert cached.location_type == "RANGE_INTERPOLATED"
+        assert cached.confidence == 0.85

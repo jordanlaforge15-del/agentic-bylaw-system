@@ -394,6 +394,10 @@ def _resolved_from_cache_row(row: GeocodeCache) -> ResolvedLocation | None:
         confidence=row.confidence or 0.0,
         source=row.resolver,
         reference_text=row.raw_text,
+        # ABS-466: rows written before the type was persisted (and rows from
+        # in-database resolvers, which have no Google type) carry None here;
+        # ``classify_resolution`` falls back to the confidence for those.
+        location_type=(row.metadata_json or {}).get("location_type"),
     )
 
 
@@ -420,7 +424,17 @@ def _cache_put(
         "geometry_geojson": resolved.geometry if resolved else None,
         "confidence": resolved.confidence if resolved else None,
         "detail": detail or None,
-        "metadata_json": {"reference": ref.model_dump()},
+        "metadata_json": {
+            "reference": ref.model_dump(),
+            # ABS-466: persist Google's location_type so a cache hit can still
+            # tell an interpolated point from a rooftop one. Absent for
+            # in-database resolutions, which have no such enum.
+            **(
+                {"location_type": resolved.location_type}
+                if resolved is not None and resolved.location_type
+                else {}
+            ),
+        },
     }
     if existing is None:
         try:

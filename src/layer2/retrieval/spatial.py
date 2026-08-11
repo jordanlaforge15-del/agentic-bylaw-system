@@ -66,6 +66,14 @@ class ResolvedLocation:
     datasets currently store, asserted at ingest). ``confidence`` is the
     geocoder's reported confidence; ``source`` names the resolver so
     citations can attribute the lookup.
+
+    ``location_type`` is Google's own enum (ROOFTOP, RANGE_INTERPOLATED,
+    GEOMETRIC_CENTER, APPROXIMATE) when the point came from the external
+    geocoder, ``None`` for in-database resolutions. It is carried alongside
+    the float because only the word says *how* the point was arrived at —
+    an interpolated 0.85 is a guess along the street, and callers must be
+    able to tell that from a rooftop match (ABS-466). See
+    ``layer2.retrieval.resolution_quality``.
     """
 
     kind: ResolvedLocationKind
@@ -73,6 +81,7 @@ class ResolvedLocation:
     confidence: float = 1.0
     source: str = "direct"
     reference_text: str | None = None
+    location_type: str | None = None
 
 
 @dataclass(frozen=True)

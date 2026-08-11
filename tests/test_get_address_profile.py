@@ -283,3 +283,141 @@ def test_get_address_profile_overlays_populated(seeded_db: str) -> None:
     heritage_overlay = next(o for o in profile.overlays if o.kind == "heritage")
     assert heritage_overlay.label == "Schmidtville"
     assert heritage_overlay.citation == "Schedule 22"
+
+
+# ---------------------------------------------------------------------------
+# ABS-466 — resolution quality on the profile.
+#
+# The zone above is only as good as the point that selected it. Before this
+# issue, ``AddressProfile`` carried no confidence, no resolver, and no
+# location type, so an interpolated point (Google guessed the position from
+# the surrounding civic numbering) presented to the model exactly like a
+# rooftop match — and the recommended FIRST call on every case-bound
+# conversation is this one.
+# ---------------------------------------------------------------------------
+
+
+def _add_geocode_row(
+    db_url: str,
+    *,
+    normalized: str,
+    raw: str,
+    point: dict,
+    confidence: float,
+    location_type: str | None = None,
+    resolver: str = "google_maps",
+) -> None:
+    with session_scope(db_url) as session:
+        session.add(
+            GeocodeCache(
+                normalized_text=normalized,
+                raw_text=raw,
+                kind="civic_address",
+                status="linked",
+                resolver=resolver,
+                geometry_geojson=point,
+                confidence=confidence,
+                detail=None,
+                metadata_json=(
+                    {"location_type": location_type} if location_type else {}
+                ),
+            )
+        )
+
+
+def test_rooftop_resolution_carries_quality_and_no_caveats(seeded_db: str) -> None:
+    """The seeded 1.0-confidence civic point is a precise match: the profile
+    reports it as such and asks for no qualification."""
+    with session_scope(seeded_db) as session:
+        profile = RetrievalService(session).get_address_profile("100 Robie Street")
+
+    assert profile.resolution_quality == "rooftop"
+    assert profile.location_confidence == 1.0
+    assert profile.location_resolver == "test_seed"
+    assert profile.outside_mapped_area is False
+    assert profile.caveats == []
+
+
+def test_interpolated_resolution_is_flagged_not_stated_flat(seeded_db: str) -> None:
+    """RANGE_INTERPOLATED means Google never found the civic number — it
+    estimated a position along the street. The zone still resolves (the point
+    is inside the polygon), but the profile must say the point was estimated
+    so the answer can be qualified instead of stated as fact."""
+    _add_geocode_row(
+        seeded_db,
+        normalized="civic:1234 oxford st",
+        raw="1234 Oxford Street",
+        point=TEST_POINT,
+        confidence=0.85,
+        location_type="RANGE_INTERPOLATED",
+    )
+    with session_scope(seeded_db) as session:
+        profile = RetrievalService(session).get_address_profile("1234 Oxford Street")
+
+    assert profile.unresolvable is False
+    assert profile.zone == "HR-2"  # a zone WAS found...
+    assert profile.resolution_quality == "interpolated"  # ...on an estimated point
+    assert profile.location_type == "RANGE_INTERPOLATED"
+    assert profile.location_confidence == 0.85
+    assert profile.caveats, "an interpolated match must carry a caveat"
+    caveat = " ".join(profile.caveats).lower()
+    assert "estimated" in caveat
+    assert "neighbouring parcel" in caveat
+
+
+def test_confidence_alone_classifies_rows_without_a_location_type(
+    seeded_db: str,
+) -> None:
+    """Cache rows written before the type was persisted carry only the float.
+    They must still classify — 0.6 is a block centroid, not a rooftop."""
+    _add_geocode_row(
+        seeded_db,
+        normalized="civic:567 windsor st",
+        raw="567 Windsor Street",
+        point=TEST_POINT,
+        confidence=0.6,
+    )
+    with session_scope(seeded_db) as session:
+        profile = RetrievalService(session).get_address_profile("567 Windsor Street")
+
+    assert profile.resolution_quality == "centroid"
+    assert profile.location_type is None
+    assert profile.caveats
+
+
+def test_point_outside_every_overlay_is_a_distinct_state(seeded_db: str) -> None:
+    """ABS-466 DoD-4. ``100 Robie Street`` in production returned
+    ``unresolvable: false`` with ``zone: null`` and zero overlays — a state
+    the model could only read as "this property has no zone". It is really
+    "the corpus does not cover this point", and it now says so."""
+    _add_geocode_row(
+        seeded_db,
+        normalized="civic:1 nowhere rd",
+        raw="1 Nowhere Road",
+        point={"type": "Point", "coordinates": [-70.0, 40.0]},  # far outside the box
+        confidence=0.95,
+        location_type="ROOFTOP",
+    )
+    with session_scope(seeded_db) as session:
+        profile = RetrievalService(session).get_address_profile("1 Nowhere Road")
+
+    # It resolved — this is NOT the unresolvable case.
+    assert profile.unresolvable is False
+    assert profile.resolution_quality == "rooftop"
+    # But nothing matched, and that is now an explicit, actionable state.
+    assert profile.zone is None
+    assert profile.overlays == []
+    assert profile.outside_mapped_area is True
+    assert any("outside every mapped" in c for c in profile.caveats)
+
+
+def test_unresolvable_address_carries_a_caveat_too(seeded_db: str) -> None:
+    """Every "we don't know" state speaks through the same ``caveats`` list,
+    so a consumer never has to special-case which flag to read."""
+    with session_scope(seeded_db) as session:
+        profile = RetrievalService(session).get_address_profile("asdf qwerty")
+
+    assert profile.unresolvable is True
+    assert profile.outside_mapped_area is False
+    assert profile.caveats
+    assert "do not state a zone" in " ".join(profile.caveats).lower()
