@@ -1,0 +1,53 @@
+{
+  "id": "TC-006",
+  "title": "Developer mixed-use tower in CEN-1 with height overlay",
+  "zone": "CEN-1",
+  "complexity": "complex",
+  "liability": "high",
+  "model": null,
+  "grade": {
+    "verdict": "FAIL",
+    "reasons": [
+      "keyword rate None"
+    ],
+    "citation_total": 0,
+    "citation_found": 0,
+    "citation_hallucinated": 0,
+    "keyword_expected": 0,
+    "keyword_hit": 0,
+    "keyword_rate": null,
+    "hedging_failed": false
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "skipped": "empty assistant text",
+      "error": null
+    },
+    {
+      "turn": 2,
+      "skipped": "empty assistant text",
+      "error": null
+    },
+    {
+      "turn": 3,
+      "skipped": "empty assistant text",
+      "error": null
+    },
+    {
+      "turn": 4,
+      "skipped": "empty assistant text",
+      "error": null
+    },
+    {
+      "turn": 5,
+      "skipped": "empty assistant text",
+      "error": null
+    },
+    {
+      "turn": 6,
+      "skipped": "empty assistant text",
+      "error": null
+    }
+  ]
+}

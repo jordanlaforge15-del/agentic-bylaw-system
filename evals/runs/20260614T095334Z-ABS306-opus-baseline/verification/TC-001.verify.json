@@ -1,0 +1,146 @@
+{
+  "id": "TC-001",
+  "title": "Homeowner rear deck addition in ER-1",
+  "zone": "ER-1",
+  "complexity": "simple",
+  "liability": "low",
+  "model": "claude-opus-4-5-20251101",
+  "grade": {
+    "verdict": "PASS",
+    "reasons": [],
+    "citation_total": 5,
+    "citation_found": 5,
+    "citation_hallucinated": 0,
+    "keyword_expected": 12,
+    "keyword_hit": 10,
+    "keyword_rate": 0.8333333333333334,
+    "hedging_failed": false
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "wall_time_s": 43.36,
+      "stop_reason": "end_turn",
+      "citation_total": 3,
+      "citation_found": 3,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "section",
+          "value": "199",
+          "raw": "Section 199",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 199",
+              "page": 173,
+              "text_excerpt": "199 (1) Subject to Subsections 199(2), 199(3), and 199(4), the minimum required rear setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "340",
+          "raw": "Section 340",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 340",
+              "page": 242,
+              "text_excerpt": "340 Any setback, stepback, or separation distance required in this Part for any main building shall be open and unobstructed except for the following:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "9",
+          "raw": "Section 9",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part I > 9",
+              "page": 10,
+              "text_excerpt": "9 (1) Subject to Subsections 9(2) and 9(3), the following developments are exempt from the requirement to obtain a development permit:"
+            },
+            {
+              "citation_path": "Appendix 2 > 9",
+              "page": 445,
+              "text_excerpt": "9 Shadow diagrams shall:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 6,
+        "hit": 5,
+        "rate": 0.833,
+        "misses": [
+          "side setback"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm",
+          "i'd recommend",
+          "verify",
+          "before proceeding"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    },
+    {
+      "turn": 2,
+      "wall_time_s": 41.28,
+      "stop_reason": "end_turn",
+      "citation_total": 2,
+      "citation_found": 2,
+      "citation_hallucinated": 0,
+      "citations": [
+        {
+          "kind": "section",
+          "value": "198",
+          "raw": "Section 198",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 198",
+              "page": 171,
+              "text_excerpt": "198 (1) Subject to Subsections 198(2) and 198(3), the minimum required side setback for any main building shall be:"
+            }
+          ]
+        },
+        {
+          "kind": "section",
+          "value": "340",
+          "raw": "Section 340",
+          "found": true,
+          "examples": [
+            {
+              "citation_path": "Part V > 340",
+              "page": 242,
+              "text_excerpt": "340 Any setback, stepback, or separation distance required in this Part for any main building shall be open and unobstructed except for the following:"
+            }
+          ]
+        }
+      ],
+      "keyword_hits": {
+        "expected": 6,
+        "hit": 5,
+        "rate": 0.833,
+        "misses": [
+          "rear setback"
+        ]
+      },
+      "hedging": {
+        "hedged": true,
+        "markers": [
+          "hrm"
+        ]
+      },
+      "hedging_required": false,
+      "hedging_ok": true
+    }
+  ]
+}
