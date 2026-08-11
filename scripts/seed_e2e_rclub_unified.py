@@ -263,6 +263,14 @@ _PARKING_TEXT = (
 TEST_ADDRESS_RAW = "100 Robie Street"
 TEST_ADDRESS_NORMALIZED = "civic:100 robie st"
 
+# ABS-466: an address the geocoder could NOT match to a building — it
+# estimated the position along the street from the surrounding civic
+# numbering (Google's RANGE_INTERPOLATED). Deliberately parked on the same
+# point as TEST_ADDRESS so the zone still resolves: the behaviour under test
+# is that the profile says the point was estimated, not that it fails.
+INTERPOLATED_ADDRESS_RAW = "1234 Oxford Street"
+INTERPOLATED_ADDRESS_NORMALIZED = "civic:1234 oxford st"
+
 # A point inside every seeded polygon overlay, and the box that contains it.
 TEST_POINT: dict[str, Any] = {"type": "Point", "coordinates": [-63.59, 44.65]}
 _BOX = [
@@ -569,14 +577,28 @@ def _dataset_specs() -> list[tuple[str, str]]:
     return specs
 
 
-# Geocode rows: (normalized, raw, point, confidence, detail).
-_GEOCODE_ROWS: tuple[tuple[str, str, dict[str, Any], float, str], ...] = (
+# Geocode rows: (normalized, raw, point, confidence, detail, location_type).
+# ``location_type`` is Google's own quality enum, persisted in the cache row's
+# metadata (ABS-466) so a cache hit can still tell an interpolated point from
+# a rooftop one; None for rows standing in for in-database resolutions.
+_GEOCODE_ROWS: tuple[
+    tuple[str, str, dict[str, Any], float, str, str | None], ...
+] = (
     (
         TEST_ADDRESS_NORMALIZED,
         TEST_ADDRESS_RAW,
         TEST_POINT,
         1.0,
         "seeded for the unified RC-LUB e2e corpus (address profile)",
+        None,
+    ),
+    (
+        INTERPOLATED_ADDRESS_NORMALIZED,
+        INTERPOLATED_ADDRESS_RAW,
+        TEST_POINT,
+        0.85,
+        "seeded for ABS-466 (interpolated match — position estimated along the street)",
+        "RANGE_INTERPOLATED",
     ),
     (
         QUINPOOL_ADDRESS_NORMALIZED,
@@ -584,6 +606,7 @@ _GEOCODE_ROWS: tuple[tuple[str, str, dict[str, Any], float, str], ...] = (
         _QUINPOOL_POINT,
         0.95,
         "seeded for the unified RC-LUB e2e corpus (Schedule 7 POCS)",
+        None,
     ),
     (
         CONTROL_ADDRESS_NORMALIZED,
@@ -591,6 +614,7 @@ _GEOCODE_ROWS: tuple[tuple[str, str, dict[str, Any], float, str], ...] = (
         _CONTROL_POINT,
         0.95,
         "seeded for the unified RC-LUB e2e corpus (negative control)",
+        None,
     ),
     (
         DEEP_LOT_ADDRESS_NORMALIZED,
@@ -598,6 +622,7 @@ _GEOCODE_ROWS: tuple[tuple[str, str, dict[str, Any], float, str], ...] = (
         _DEEP_LOT_POINT,
         0.95,
         "seeded for the unified RC-LUB e2e corpus (ABS-435 deep lot on corridor)",
+        None,
     ),
     (
         BACK_LOT_ADDRESS_NORMALIZED,
@@ -605,6 +630,7 @@ _GEOCODE_ROWS: tuple[tuple[str, str, dict[str, Any], float, str], ...] = (
         _BACK_LOT_POINT,
         0.95,
         "seeded for the unified RC-LUB e2e corpus (ABS-435 back lot control)",
+        None,
     ),
 )
 
@@ -956,8 +982,9 @@ def role_dataset_converged(session, *, name: str, geojson_text: str) -> bool:
 
 def _ensure_geocode_cache(
     session, *, normalized: str, raw: str, point: dict[str, Any],
-    confidence: float, detail: str,
+    confidence: float, detail: str, location_type: str | None = None,
 ) -> None:
+    metadata = {"location_type": location_type} if location_type else {}
     existing = (
         session.execute(
             select(GeocodeCache).where(GeocodeCache.normalized_text == normalized)
@@ -971,6 +998,9 @@ def _ensure_geocode_cache(
         existing.status = "linked"
         existing.geometry_geojson = point
         existing.confidence = confidence
+        # ABS-466: a row seeded before the type was carried must not keep
+        # reading as a typeless (confidence-only) resolution.
+        existing.metadata_json = metadata
         session.flush()
         return
     session.add(
@@ -983,14 +1013,14 @@ def _ensure_geocode_cache(
             geometry_geojson=point,
             confidence=confidence,
             detail=detail,
-            metadata_json={},
+            metadata_json=metadata,
         )
     )
     session.flush()
 
 
 def _geocode_converged(session) -> bool:
-    for normalized, _raw, point, confidence, _detail in _GEOCODE_ROWS:
+    for normalized, _raw, point, confidence, _detail, location_type in _GEOCODE_ROWS:
         geocode = session.scalar(
             select(GeocodeCache).where(GeocodeCache.normalized_text == normalized)
         )
@@ -999,6 +1029,9 @@ def _geocode_converged(session) -> bool:
             or geocode.status != "linked"
             or geocode.geometry_geojson != point
             or geocode.confidence != confidence
+            # ABS-466: a row carrying the wrong (or no) location_type resolves
+            # at the wrong quality, so it has NOT converged.
+            or (geocode.metadata_json or {}).get("location_type") != location_type
         ):
             return False
     return True
@@ -1158,7 +1191,14 @@ def main() -> int:
                 )
                 ingest_geo_dataset(session, cfg_path)
 
-            for normalized, raw, point, confidence, detail in _GEOCODE_ROWS:
+            for (
+                normalized,
+                raw,
+                point,
+                confidence,
+                detail,
+                location_type,
+            ) in _GEOCODE_ROWS:
                 _ensure_geocode_cache(
                     session,
                     normalized=normalized,
@@ -1166,6 +1206,7 @@ def main() -> int:
                     point=point,
                     confidence=confidence,
                     detail=detail,
+                    location_type=location_type,
                 )
 
             summary = {
