@@ -26,7 +26,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hi, I own a home at 1234 Oxford Street in Halifax \u2014 it\u2019s in the ER-1 zone. I want to build an attached wooden deck off the back of my house. My plan puts the deck edge about 4 metres from my rear property line. Do I need a development permit for this, and is 4 metres enough clearance from the rear lot line?"
+        "message": "Hi, I own a home at 1222 Robie Street in Halifax \u2014 it\u2019s in the ER-1 zone. I want to build an attached wooden deck off the back of my house. My plan puts the deck edge about 4 metres from my rear property line. Do I need a development permit for this, and is 4 metres enough clearance from the rear lot line?"
       },
       {
         "turn": 2,
@@ -52,7 +52,7 @@
       "side_setback",
       "development_permit_exemption"
     ],
-    "notes": "Tests basic dimensional lookups (rear + side setback) plus permit exemption. Single-parameter complexity. Low construction cost. ADVERSARIAL ZONE PREMISE: the turn-1 message asserts ER-1, but 1234 Oxford Street geocodes into the HR-1 zone polygon (halifax_zoning_boundaries GlobalID 5f05d7eb-5062-473c-b463-465c7443cd8d, ZONE=HR-1, PID 00078147). The `zone` field records the real zone; the advisor is expected to correct the user's premise and apply the HR-1 setback sections (198/199), not the ER-1 ones. Do not \"fix\" the turn text to say HR-1 -- the misstatement is the test. (ABS-463)",
+    "notes": "Tests basic dimensional lookups (rear + side setback) plus permit exemption. Single-parameter complexity. Low construction cost. ADVERSARIAL ZONE PREMISE: the turn-1 message asserts ER-1, but 1222 Robie Street resolves at ROOFTOP into the HR-1 zone polygon (PID 00055764). The `zone` field records the real zone; the advisor is expected to correct the user's premise and apply the HR-1 setback sections (198/199), not the ER-1 ones. Do not \"fix\" the turn text to say HR-1 -- the misstatement is the test. (ABS-463; address re-derived from the zone under ABS-467, which also sharpens the premise: ER-1 is not mapped anywhere in the Regional Centre schedule, so the zone the user names does not exist on the ground.)",
     "address_resolution": {
       "resolved_zone": "HR-1",
       "resolution_quality": "rooftop",
@@ -89,7 +89,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "We\u2019re on Windsor Street in Halifax in the ER-2 zone. We\u2019re thinking of converting our basement into a secondary suite to rent out. Is a secondary suite a permitted use in ER-2?"
+        "message": "We\u2019re at 65 Wentworth Street in Dartmouth, in the ER-2 zone. We\u2019re thinking of converting our basement into a secondary suite to rent out. Is a secondary suite a permitted use in ER-2?"
       },
       {
         "turn": 2,
@@ -160,7 +160,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I have a large older home on Jubilee Road in the ER-3 zone in Halifax. I\u2019m thinking of converting it into a three-unit building \u2014 two upper units and a ground floor unit. Is a multi-unit dwelling permitted in ER-3?"
+        "message": "I have a large older home at 6457 Jubilee Road in the ER-3 zone in Halifax. I\u2019m thinking of converting it into a three-unit building \u2014 two upper units and a ground floor unit. Is a multi-unit dwelling permitted in ER-3?"
       },
       {
         "turn": 2,
@@ -242,7 +242,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I\u2019m an architect working on a new mid-rise residential building at 200 Bayers Road in Halifax \u2014 the site is zoned HR-1. We\u2019re targeting a multi-unit dwelling. First pass: what are the permitted uses and key dimensional standards \u2014 height, setbacks, and lot coverage \u2014 for HR-1?"
+        "message": "I\u2019m an architect working on a new mid-rise residential building at 251 Stairs Street in Dartmouth \u2014 the site is zoned HR-1. We\u2019re targeting a multi-unit dwelling. First pass: what are the permitted uses and key dimensional standards \u2014 height, setbacks, and lot coverage \u2014 for HR-1?"
       },
       {
         "turn": 2,
@@ -335,7 +335,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "We\u2019re looking at a site on Robie Street zoned HR-2 for a high-rise residential development \u2014 likely 60\u201380 units. What are the base zoning standards: height, lot coverage, setbacks?"
+        "message": "We\u2019re looking at a site at 10 Joseph Young Street in Dartmouth zoned HR-2 for a high-rise residential development \u2014 likely 60\u201380 units. What are the base zoning standards: height, lot coverage, setbacks?"
       },
       {
         "turn": 2,
@@ -435,7 +435,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "We\u2019re proposing a mixed-use tower at 1505 Barrington Street in downtown Halifax \u2014 CEN-1 zone. The program is residential units on the upper floors with retail at grade. Is multi-unit dwelling a permitted use in CEN-1, and is commercial/retail included?"
+        "message": "We\u2019re proposing a mixed-use tower at 5531 Nora Bernard Street in Halifax \u2014 CEN-1 zone. The program is residential units on the upper floors with retail at grade. Is multi-unit dwelling a permitted use in CEN-1, and is commercial/retail included?"
       },
       {
         "turn": 2,
@@ -455,7 +455,7 @@
       {
         "turn": 5,
         "role": "user",
-        "message": "Our site is near some older heritage buildings on Barrington Street. Is there a heritage overlay we need to worry about, and how does it interact with our development permit?"
+        "message": "Our site is near some older heritage buildings on Nora Bernard Street. Is there a heritage overlay we need to worry about, and how does it interact with our development permit?"
       },
       {
         "turn": 6,
@@ -540,7 +540,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I\u2019m a realtor advising a client who\u2019s considering buying a property on Sackville Street in the CEN-2 zone. Before they make an offer, I want to understand the redevelopment potential. Is multi-unit residential a permitted use in CEN-2?"
+        "message": "I\u2019m a realtor advising a client who\u2019s considering buying a property at 118 Wyse Road in Dartmouth, in the CEN-2 zone. Before they make an offer, I want to understand the redevelopment potential. Is multi-unit residential a permitted use in CEN-2?"
       },
       {
         "turn": 2,
@@ -720,7 +720,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I\u2019m a real estate lawyer conducting zoning due diligence on a property at 100 Wyse Road in Dartmouth \u2014 it\u2019s in the DD zone. My client is acquiring it to redevelop as a mixed-use building with ground-floor retail and apartments above. Confirm: is multi-unit residential permitted in the DD zone?"
+        "message": "I\u2019m a real estate lawyer conducting zoning due diligence on a property at 16 Kings Wharf Place in Dartmouth \u2014 it\u2019s in the DD zone. My client is acquiring it to redevelop as a mixed-use building with ground-floor retail and apartments above. Confirm: is multi-unit residential permitted in the DD zone?"
       },
       {
         "turn": 2,
@@ -807,7 +807,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I\u2019m an urban planner working on a mixed-use development on Gottingen Street in the COR zone. The client wants a building with ground-floor commercial and multi-unit residential above. What are the use permissions in COR \u2014 is multi-unit dwelling permitted, and what about commercial/retail uses?"
+        "message": "I\u2019m an urban planner working on a mixed-use development at 2368 Gottingen Street in the COR zone. The client wants a building with ground-floor commercial and multi-unit residential above. What are the use permissions in COR \u2014 is multi-unit dwelling permitted, and what about commercial/retail uses?"
       },
       {
         "turn": 2,
@@ -900,7 +900,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm reviewing a development application for 5980 University Avenue \u2014 that's in the INS zone. The applicant is proposing to expand an existing university research lab. Before I get into the standards, can you confirm that a university laboratory use is a permitted use as-of-right in the INS zone under the Regional Centre Land Use By-Law?"
+        "message": "I'm reviewing a development application for 1273 Edward Street \u2014 that's in the INS zone. The applicant is proposing to expand an existing university research lab. Before I get into the standards, can you confirm that a university laboratory use is a permitted use as-of-right in the INS zone under the Regional Centre Land Use By-Law?"
       },
       {
         "turn": 2,
@@ -955,7 +955,7 @@
   },
   {
     "id": "TC-012",
-    "title": "Lawyer advising adjoining owner on RPK encroachment risk",
+    "title": "Lawyer advising abutting owner on RPK encroachment risk",
     "persona": {
       "type": "real_estate_law_professional",
       "subtype": null,
@@ -980,7 +980,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm acting for an adjoining property owner on the North Park Street side of Halifax Common. The land there falls under the RPK \u2014 Regional Park Zone. I need to confirm what uses are actually permitted as-of-right in that zone, because a neighbouring party appears to be operating some kind of accessory structure right up against the common boundary. Can you tell me what Table 1A or 1B says about permitted uses in RPK, and whether any residential or commercial use can be established there as-of-right?"
+        "message": "I'm acting for a client whose interest abuts the RPK \u2014 Regional Park Zone \u2014 land at 65 Georges Island Road in Halifax. I need to confirm what uses are actually permitted as-of-right in that zone, because a neighbouring party appears to be operating some kind of accessory structure right up against the park boundary. Can you tell me what Table 1A or 1B says about permitted uses in RPK, and whether any residential or commercial use can be established there as-of-right?"
       },
       {
         "turn": 2,
@@ -1018,7 +1018,7 @@
       "accessory_uses",
       "development_permit_exemption"
     ],
-    "notes": "Tests RPK permitted/accessory uses and what the bylaw says (or doesn't say) about private encroachments into park-zoned land. Underrepresented zone.",
+    "notes": "Tests RPK permitted/accessory uses and what the bylaw says (or doesn't say) about private encroachments into park-zoned land. Underrepresented zone. ADDRESS RE-DERIVED (ABS-467): the case previously placed itself on the North Park Street side of Halifax Common and asserted that land is RPK. It is not \u2014 the Common resolves to PCF, INS and H depending on where you stand, and the Regional Centre's entire RPK extent is Georges Island. The address now names a parcel that actually carries the zone.",
     "address_resolution": {
       "resolved_zone": "RPK",
       "resolution_quality": "rooftop",
@@ -1060,17 +1060,17 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm scoping a mid-rise residential infill project at 5455 Spring Garden Road \u2014 it's in HR-2 under the Regional Centre Land Use By-law. Can you confirm that multi-unit dwelling is a permitted as-of-right use in HR-2, and are there any use conditions I should be aware of before I start massing?"
+        "message": "I'm scoping a mid-rise residential infill project at 30 Joseph Young Street in Dartmouth \u2014 it's in HR-2 under the Regional Centre Land Use By-law. Can you confirm that multi-unit dwelling is a permitted as-of-right use in HR-2, and are there any use conditions I should be aware of before I start massing?"
       },
       {
         "turn": 2,
         "role": "user",
-        "message": "Good. Now let's get into the envelope. What's the base FAR allowance for HR-2, and is there any height overlay that applies along Spring Garden Road specifically? I want to know if I'm working with a hard height cap or if there's a bonus or overlay that could push it higher."
+        "message": "Good. Now let's get into the envelope. What's the base FAR allowance for HR-2, and is there any height overlay that applies along Joseph Young Street specifically? I want to know if I'm working with a hard height cap or if there's a bonus or overlay that could push it higher."
       },
       {
         "turn": 3,
         "role": "user",
-        "message": "Understood on the height. What are the streetwall requirements for HR-2 along an arterial like Spring Garden? I need to know the minimum and maximum streetwall height, and whether there's a mandatory build-to line or a range for the front setback \u2014 I'm trying to lock in the podium before I model the stepback."
+        "message": "Understood on the height. What are the streetwall requirements for HR-2 along a street like Joseph Young? I need to know the minimum and maximum streetwall height, and whether there's a mandatory build-to line or a range for the front setback \u2014 I'm trying to lock in the podium before I model the stepback."
       },
       {
         "turn": 4,
@@ -1165,7 +1165,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "We're looking at 1657 Barrington Street in Halifax \u2014 it's zoned CEN-2. We want to develop a mixed-use building and we've heard there are bonus density provisions available in that zone. Can you give me a rundown of what the base FAR and height allowances are for CEN-2, and what the ceiling looks like if we can trigger the bonusing?"
+        "message": "We're looking at 3123 Kempt Road in Halifax \u2014 it's zoned CEN-2. We want to develop a mixed-use building and we've heard there are bonus density provisions available in that zone. Can you give me a rundown of what the base FAR and height allowances are for CEN-2, and what the ceiling looks like if we can trigger the bonusing?"
       },
       {
         "turn": 2,
@@ -1175,12 +1175,12 @@
       {
         "turn": 3,
         "role": "user",
-        "message": "Let's talk about ground floor use requirements on Barrington Street specifically. I know CEN-2 typically has active-use mandates at grade \u2014 what uses are required, what's the minimum depth or frontage that has to be commercial or active, and are there any restrictions on things like parking garage entrances breaking up the streetwall?"
+        "message": "Let's talk about ground floor use requirements on Kempt Road specifically. I know CEN-2 typically has active-use mandates at grade \u2014 what uses are required, what's the minimum depth or frontage that has to be commercial or active, and are there any restrictions on things like parking garage entrances breaking up the streetwall?"
       },
       {
         "turn": 4,
         "role": "user",
-        "message": "On the streetwall piece \u2014 what's the required streetwall height and percentage of frontage coverage on a primary street like Barrington? If we're going for bonus height, does the bylaw impose any additional stepback requirements above the streetwall level, and at what floor does that kick in?"
+        "message": "On the streetwall piece \u2014 what's the required streetwall height and percentage of frontage coverage on a primary street like Kempt Road? If we're going for bonus height, does the bylaw impose any additional stepback requirements above the streetwall level, and at what floor does that kick in?"
       },
       {
         "turn": 5,
@@ -1275,12 +1275,12 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm pricing out a heritage retention infill project at 1547 Birmingham Street in Halifax. The property is in the DH zone and I understand there's a heritage overlay in play. Before I go too deep on numbers, can you confirm whether this site falls within a heritage conservation district and what that means for demolition control \u2014 specifically, can I demolish the existing structure outright or am I looking at mandatory facade retention?"
+        "message": "I'm pricing out a heritage retention infill project at 5512 Spring Garden Road in Halifax. The property is in the DH zone and I understand there's a heritage overlay in play. Before I go too deep on numbers, can you confirm whether this site falls within a heritage conservation district and what that means for demolition control \u2014 specifically, can I demolish the existing structure outright or am I looking at mandatory facade retention?"
       },
       {
         "turn": 2,
         "role": "user",
-        "message": "Okay, so assuming facade retention is required, what are the streetwall height and continuity rules I'd be working with on Birmingham Street in the DH zone? I need to understand how much of the existing building envelope I have to preserve versus where I have flexibility to go taller with a new infill addition behind or above the retained facade."
+        "message": "Okay, so assuming facade retention is required, what are the streetwall height and continuity rules I'd be working with on Spring Garden Road in the DH zone? I need to understand how much of the existing building envelope I have to preserve versus where I have flexibility to go taller with a new infill addition behind or above the retained facade."
       },
       {
         "turn": 3,
@@ -1290,7 +1290,7 @@
       {
         "turn": 4,
         "role": "user",
-        "message": "Let's talk setbacks. The lot runs pretty deep off Birmingham Street. What are the front, side, and rear setback requirements for new construction in the DH zone, and does the heritage overlay modify any of those \u2014 particularly the front setback given that the retained facade essentially sets my build-to line? Also, does site plan approval under section 15 get triggered here for building design in a heritage conservation district, and if so, what does that process look like in terms of timeline and discretionary risk?"
+        "message": "Let's talk setbacks. The lot runs pretty deep off Spring Garden Road. What are the front, side, and rear setback requirements for new construction in the DH zone, and does the heritage overlay modify any of those \u2014 particularly the front setback given that the retained facade essentially sets my build-to line? Also, does site plan approval under section 15 get triggered here for building design in a heritage conservation district, and if so, what does that process look like in terms of timeline and discretionary risk?"
       },
       {
         "turn": 5,
@@ -1369,7 +1369,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I'm doing due diligence on a listing at 100 Wyse Road in Dartmouth \u2014 it's in the DD zone. The current building has ground-floor retail with residential above. Can you confirm that mixed-use setup is actually permitted as-of-right in DD, and are there any restrictions on what types of commercial uses are allowed on the ground floor specifically?"
+        "message": "Hey, I'm doing due diligence on a listing at 15 Kings Wharf Place in Dartmouth \u2014 it's in the DD zone. The current building has ground-floor retail with residential above. Can you confirm that mixed-use setup is actually permitted as-of-right in DD, and are there any restrictions on what types of commercial uses are allowed on the ground floor specifically?"
       },
       {
         "turn": 2,
@@ -1449,7 +1449,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I own a duplex at 2147 Maynard Street in Halifax \u2014 it's in the ER-2 zone. The duplex was already there when I bought it, and I know ER-2 only permits single-unit dwellings plus a secondary suite. So I'm guessing it's considered a legally non-conforming use? Just want to make sure I understand what that actually means for me before I start planning anything."
+        "message": "Hey, I own a duplex at 5562 Nora Bernard Street in Halifax \u2014 it's in the ER-2 zone. The duplex was already there when I bought it, and I know ER-2 only permits single-unit dwellings plus a secondary suite. So I'm guessing it's considered a legally non-conforming use? Just want to make sure I understand what that actually means for me before I start planning anything."
       },
       {
         "turn": 2,
@@ -1538,17 +1538,17 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I'm scoping a mixed-use infill project at 6960 Mumford Road in Halifax \u2014 it's zoned COR under the Regional Centre Land Use By-Law. Before I go too deep into design, can you confirm what the maximum FAR and building height limits are for this site? I need to understand the envelope before I talk to my architect."
+        "message": "Hey, I'm scoping a mixed-use infill project at 5249 Smith Street in Halifax \u2014 it's zoned COR under the Regional Centre Land Use By-Law. Before I go too deep into design, can you confirm what the maximum FAR and building height limits are for this site? I need to understand the envelope before I talk to my architect."
       },
       {
         "turn": 2,
         "role": "user",
-        "message": "Got it on the envelope. Now, Mumford Road is a major transit corridor so I'm planning ground-floor retail or service commercial with residential above. What are the ground floor use requirements in the COR zone \u2014 is active commercial frontage mandatory, or just permitted? I want to know if I'm locked into it or if I have flexibility."
+        "message": "Got it on the envelope. Now, Smith Street sits on a busy inner-city transit corridor so I'm planning ground-floor retail or service commercial with residential above. What are the ground floor use requirements in the COR zone \u2014 is active commercial frontage mandatory, or just permitted? I want to know if I'm locked into it or if I have flexibility."
       },
       {
         "turn": 3,
         "role": "user",
-        "message": "Good to know. What about the streetwall requirements along the Mumford Road frontage? I'm thinking of a podium-and-tower form \u2014 is there a minimum streetwall height or a build-to-line that would affect how close I need to push the building face to the street? And what are the front and side setback standards for COR specifically?"
+        "message": "Good to know. What about the streetwall requirements along the Smith Street frontage? I'm thinking of a podium-and-tower form \u2014 is there a minimum streetwall height or a build-to-line that would affect how close I need to push the building face to the street? And what are the front and side setback standards for COR specifically?"
       },
       {
         "turn": 4,
@@ -1641,7 +1641,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I own a house at 2563 Maitland Street in Halifax \u2014 I believe it's zoned ER-3. I'm thinking about building a backyard suite, like a small standalone unit in my rear yard for a family member. Is that even allowed in ER-3, or do I need some kind of special approval?"
+        "message": "Hey, I own a house at 1462 Birchdale Avenue in Halifax \u2014 I believe it's zoned ER-3. I'm thinking about building a backyard suite, like a small standalone unit in my rear yard for a family member. Is that even allowed in ER-3, or do I need some kind of special approval?"
       },
       {
         "turn": 2,
@@ -1726,7 +1726,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm reviewing a site plan approval application for 1577 Brunswick Street \u2014 it's zoned HR-1. The proposal is for a new mid-rise multi-unit residential building. Can you confirm what matters are subject to site plan approval under the Regional Centre Land Use By-Law, and whether this type of development would trigger the full SPA process?"
+        "message": "I'm reviewing a site plan approval application for 2162 Brunswick Street \u2014 it's zoned HR-1. The proposal is for a new mid-rise multi-unit residential building. Can you confirm what matters are subject to site plan approval under the Regional Centre Land Use By-Law, and whether this type of development would trigger the full SPA process?"
       },
       {
         "turn": 2,
