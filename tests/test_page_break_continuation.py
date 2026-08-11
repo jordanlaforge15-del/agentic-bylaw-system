@@ -24,27 +24,35 @@ SIDE_SETBACK_BLOCKS: list[tuple[int, BlockType, str]] = [
     (
         171,
         BlockType.LIST_ITEM,
-        "198 (1) Subject to Subsections 198(2) and 198(3), the minimum required "
-        "side setback for any main building shall be:",
+        (
+            "198 (1) Subject to Subsections 198(2) and 198(3), the minimum required "
+            "side setback for any main building shall be:"
+        ),
     ),
     (
         171,
         BlockType.LIST_ITEM,
-        "(a) subject to Clauses 198(1)(b) and 198(1)(c), where a lot line abuts a "
-        "lot, any portion of which, is zoned ER-3, ER-",
+        (
+            "(a) subject to Clauses 198(1)(b) and 198(1)(c), where a lot line abuts a "
+            "lot, any portion of which, is zoned ER-3, ER-"
+        ),
     ),
     (172, BlockType.LIST_ITEM, "2, ER-1, CH-2, CH-1, PCF, or RPK zone: (RCCC-Sep 4/24;E-Apr 17/25)"),
     (
         172,
         BlockType.LIST_ITEM,
-        "(i) 3.0 metres from the side lot line abutting the lot for any low-rise "
-        "building, or (RCCC-Sep 4/24;E-Apr 17/25)",
+        (
+            "(i) 3.0 metres from the side lot line abutting the lot for any low-rise "
+            "building, or (RCCC-Sep 4/24;E-Apr 17/25)"
+        ),
     ),
     (
         172,
         BlockType.LIST_ITEM,
-        "(ii) 6.0 metres from the side lot line abutting the lot for any mid-rise, "
-        "tall mid-rise, or high-rise building; (RCCC-Sep 4/24;E-Apr 17/25)",
+        (
+            "(ii) 6.0 metres from the side lot line abutting the lot for any mid-rise, "
+            "tall mid-rise, or high-rise building; (RCCC-Sep 4/24;E-Apr 17/25)"
+        ),
     ),
     (172, BlockType.LIST_ITEM, "(b) for a townhouse dwelling use:"),
     (172, BlockType.LIST_ITEM, "(i) 0.0 metre along a common wall between each unit, or"),
@@ -59,16 +67,20 @@ SIDE_SETBACK_BLOCKS: list[tuple[int, BlockType, str]] = [
     (
         172,
         BlockType.LIST_ITEM,
-        "(d) where a lot line abuts a lot, any portion of which, is zoned DD, DH, "
-        "CEN-2, CEN-1, or COR zone, 0.0 metre, except as provided in Clause "
-        "198(1)(a); (RCCC-Sep 4/24;E-Apr 17/25)",
+        (
+            "(d) where a lot line abuts a lot, any portion of which, is zoned DD, DH, "
+            "CEN-2, CEN-1, or COR zone, 0.0 metre, except as provided in Clause "
+            "198(1)(a); (RCCC-Sep 4/24;E-Apr 17/25)"
+        ),
     ),
     (
         172,
         BlockType.LIST_ITEM,
-        "(e) where a lot line abuts lands governed by the Downtown Halifax "
-        "Secondary Municipal Planning Strategy and the Downtown Halifax Land Use "
-        "By-law, 0.0 metre; or",
+        (
+            "(e) where a lot line abuts lands governed by the Downtown Halifax "
+            "Secondary Municipal Planning Strategy and the Downtown Halifax Land Use "
+            "By-law, 0.0 metre; or"
+        ),
     ),
     (172, BlockType.LIST_ITEM, "(f) 2.5 metres elsewhere."),
 ]
@@ -193,8 +205,10 @@ def test_wrapped_line_inside_one_block_is_not_a_section_start():
                 (
                     1,
                     BlockType.LIST_ITEM,
-                    "(a) where a lot line abuts a lot, any portion of which, is zoned ER-3, ER-\n"
-                    "2, ER-1, CH-2, CH-1, PCF, or RPK zone;",
+                    (
+                        "(a) where a lot line abuts a lot, any portion of which, is "
+                        "zoned ER-3, ER-\n2, ER-1, CH-2, CH-1, PCF, or RPK zone;"
+                    ),
                 ),
                 (1, BlockType.LIST_ITEM, "(b) 2.5 metres elsewhere."),
             ]
