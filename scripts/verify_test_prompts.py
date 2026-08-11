@@ -96,9 +96,10 @@ import json
 import os
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import Any, Protocol
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -369,7 +370,7 @@ class JsonCorpus:
         ]
 
     @classmethod
-    def from_file(cls, path: Path) -> "JsonCorpus":
+    def from_file(cls, path: Path) -> JsonCorpus:
         payload = json.loads(Path(path).read_text())
         if isinstance(payload, list):
             return cls(payload)
@@ -396,9 +397,10 @@ class JsonCorpus:
         for frag in self.fragments:
             if frag.citation_label != label:
                 continue
-            if plan["kind"] == "section_clause":
-                if f"> {plan['section']} >" not in (frag.citation_path or ""):
-                    continue
+            if plan["kind"] == "section_clause" and (
+                f"> {plan['section']} >" not in (frag.citation_path or "")
+            ):
+                continue
             if (frag.citation_path or "").startswith("Appendix ") and plan["kind"] != "appendix":
                 continue
             frags.append(frag)
@@ -600,10 +602,13 @@ def topic_hit_rate(
             term: (verbatim if cased else stemmed).get(term, [])
             for term, cased in required
         }
-        if required and all(found[term] for term, _ in required):
-            if _co_occurs_within(set(found), found, window):
-                hit.append(topic)
-                continue
+        if (
+            required
+            and all(found[term] for term, _ in required)
+            and _co_occurs_within(set(found), found, window)
+        ):
+            hit.append(topic)
+            continue
         miss.append(topic)
     return {
         "expected": len(topics),
@@ -782,7 +787,7 @@ def grade_references(
     for ref in expected:
         try:
             plan = _reference_plan(ref)
-        except Exception as exc:  # unparseable reference in the eval file
+        except ValueError as exc:  # unparseable reference in the eval file
             entries.append({"reference": ref, "error": str(exc), "cited": False})
             misses.append(ref)
             continue

@@ -216,7 +216,9 @@ TS_SONNET=$(date -u +%Y%m%dT%H%M%SZ)
 
 ### 4. (Optional) Run quality verification on both
 
-Requires the dev DB to be up:
+Requires the dev DB to be up — or pass `--corpus-json <snapshot>` to grade
+against a committed corpus slice instead (ABS-462), which is how the graded
+provisions are checked in CI and in worktrees without the Halifax ingest:
 
 ```bash
 .venv/bin/python scripts/verify_test_prompts.py \
@@ -241,6 +243,13 @@ Requires the dev DB to be up:
 - **Quality comparison** — PASS/PARTIAL/FAIL verdicts + hallucination
   count per case (if verification data present)
 - **Verdict recommendation** — SWITCH TO SONNET / KEEP OPUS / REVIEW
+
+Verdicts from the verifier are `PASS`, `PARTIAL`, `FAIL`,
+`FAIL_HALLUCINATION` (a citation with no matching fragment in the
+corpus) and `FAIL_APPLICABILITY` (a *real* provision applied where its
+stated condition is not met — ABS-462). Treat `FAIL_APPLICABILITY` as
+at least as serious as a hallucination: the answer is wrong and every
+existence check passes it.
 
 Decision rule: switch to Sonnet **only** if hallucination count ≤
 Opus count AND PASS rate ≥ Opus PASS rate. A regression in either
