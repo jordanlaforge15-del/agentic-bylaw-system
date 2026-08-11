@@ -82,7 +82,11 @@ def create_mcp_server(db_url: str | None = None, *, all_documents: bool = False)
             "several search_bylaw_evidence round-trips into one. Spend the "
             "rest of the tool budget on the actual question. If the profile "
             "comes back with unresolvable=true, fall back to "
-            "search_bylaw_evidence with the location slot.\n\n"
+            "search_bylaw_evidence with the location slot. If it comes back "
+            "with resolution_quality other than 'rooftop', or with "
+            "outside_mapped_area=true, the zone may be a neighbouring "
+            "parcel's — qualify the answer with the profile's caveats "
+            "instead of stating the zone as fact.\n\n"
             "WHEN TO USE evaluate_submission_against_bylaws.\n"
             "Use this fifth tool ONLY when the user has stated specific "
             "proposed attribute values (height, setbacks, use class, "
@@ -286,6 +290,19 @@ def create_mcp_server(db_url: str | None = None, *, all_documents: bool = False)
         If the address can't be resolved, the response carries
         ``unresolvable: true`` with empty citations rather than an error —
         fall back to the thin tools (``search_bylaw_evidence``) in that case.
+
+        READ THE RESOLUTION QUALITY BEFORE STATING THE ZONE (ABS-466).
+        ``resolution_quality`` says how the address became a point:
+        ``rooftop`` matched the building; ``interpolated`` means the civic
+        number was NOT found and the position was estimated along the street
+        from surrounding numbering; ``centroid`` / ``approximate`` are coarser
+        still. Anything below ``rooftop`` means the point may sit on a
+        neighbouring parcel, so the zone — and every setback, height and
+        floor-area figure derived from it — may belong to the wrong property.
+        The response then carries ``caveats``: surface their substance to the
+        user rather than stating the zone as fact. ``outside_mapped_area:
+        true`` means a point WAS found but falls outside every mapped
+        boundary — report that, do not report a zone.
         """
         with session_scope(db_url) as session:
             service = _service(session)

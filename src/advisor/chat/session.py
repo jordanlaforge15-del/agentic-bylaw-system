@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 
 from advisor.billing.packs import TIERS as _BILLING_TIERS
 from advisor.chat.hedging import apply_hedge
+from advisor.chat.resolution_qualifier import apply_resolution_qualifier
 from advisor.chat.history_compaction import (
     compact_history_for_submission,
     resolve_keep_recent,
@@ -306,7 +307,18 @@ class ChatSession:
         # questions stay lean. We patch BOTH the response we stream back and
         # the assistant turn we persist so the user sees, and we store, the
         # same text. See ``advisor.chat.hedging``.
-        hedged_content = apply_hedge(result.final_response.content)
+        # ABS-466: second deterministic safety net, on a different axis. The
+        # hedge above qualifies the NUMBERS; this one qualifies the LOCATION
+        # they were derived for. If the turn's address lookup resolved below
+        # rooftop quality (interpolated / centroid) or landed outside every
+        # mapped boundary, and the answer doesn't already say so, append the
+        # precision qualifier. Applied first so the two suffixes read in
+        # that order and ``apply_hedge`` sees the combined text.
+        hedged_content = apply_hedge(
+            apply_resolution_qualifier(
+                result.final_response.content, result.tool_calls
+            )
+        )
         if hedged_content is not result.final_response.content:
             result.final_response = result.final_response.model_copy(
                 update={"content": hedged_content}
