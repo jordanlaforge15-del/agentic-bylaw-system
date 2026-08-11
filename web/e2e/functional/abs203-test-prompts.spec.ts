@@ -5,7 +5,7 @@
 //   2. All 10 base test cases are present with required fields.
 //   3. The Python query tool returns correctly filtered results for
 //      zone, persona, complexity, liability, tag, and bylaw-feature filters.
-//   4. A simple single-turn test case (TC-001, ER-1 homeowner) can be
+//   4. A simple single-turn test case (TC-001, HR-1 homeowner) can be
 //      submitted to the live advisor chat and returns a response
 //      mentioning the expected bylaw keyword ("setback").
 
@@ -192,8 +192,17 @@ test.describe("Test prompt database — schema validation", () => {
 // ─── Query tool validation (Python CLI) ──────────────────────────────────────
 
 test.describe("Query tool — filter dimensions", () => {
-  test("--zone ER-1 returns TC-001", () => {
+  test("--zone ER-1 returns TC-017", () => {
     const { stdout, status } = runQuery("--zone", "ER-1", "--output", "ids");
+    expect(status).toBe(0);
+    expect(stdout.trim().split("\n")).toContain("TC-017");
+  });
+
+  // ABS-463: TC-001's zone field said ER-1 while 1234 Oxford Street geocodes
+  // into the HR-1 polygon. The field now records the geocoded zone; the turn
+  // text still misstates ER-1 on purpose.
+  test("--zone HR-1 returns TC-001", () => {
+    const { stdout, status } = runQuery("--zone", "HR-1", "--output", "ids");
     expect(status).toBe(0);
     expect(stdout.trim().split("\n")).toContain("TC-001");
   });
