@@ -10,8 +10,9 @@
 //   2. Known fixture-derived wrong values are gone (7.5 m, 1.2 m, 45%,
 //      11.0 m, 20.0 m, 25.0 m, "no off-street parking", "1 parking space",
 //      "Heritage Advisory Committee").
-//   3. TC-001 uses HR-1 keywords (not ER-1) — advisor correctly geocoded
-//      1234 Oxford Street to HR-1 in the recorded transcript.
+//   3. TC-001 uses HR-1 keywords (not ER-1) — the advisor correctly geocoded
+//      the case address to HR-1 in the recorded transcript. ABS-467 later
+//      re-derived that address from the zone; the keywords are unaffected.
 //   4. Every simple-complexity case whose expected keywords were verified against
 //      recorded transcripts (TC-001, TC-002) contains at least 4 keywords.
 //   5. The recalibrate_keywords.py script is present and runs with --dry-run
@@ -83,7 +84,7 @@ test.describe("ABS-265: Keyword corpus calibration", () => {
       .toEqual([]);
   });
 
-  test("TC-001 uses HR-1 keywords (advisor correctly geocoded Oxford St to HR-1)", () => {
+  test("TC-001 uses HR-1 keywords (advisor correctly geocoded the address to HR-1)", () => {
     const tc001 = prompts.find((tc) => tc.id === "TC-001");
     expect(tc001, "TC-001 must exist").toBeDefined();
     const kw = tc001!.expected_answer_keywords;

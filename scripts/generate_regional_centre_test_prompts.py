@@ -9,6 +9,16 @@ conversation prompts given a spec (zone, persona, complexity, etc.). This
 bills generation against the operator's Claude Max plan instead of paid
 Anthropic API tokens.
 
+The address is DERIVED FROM THE ZONE, never supplied (ABS-467). The operator
+used to pass `--zone` and `--address` as two independent inputs and the model
+wrote a conversation around both; nothing checked that the address was in the
+zone, and 17 of the first 20 cases were wrong. `--address` is gone. The zone
+now picks a real parcel, the parcel yields a real civic address, and that
+address is pushed back through the production `get_address_profile` path
+before the case is written — so a new case cannot reintroduce the mismatch.
+`--on-street` biases *which* real address is chosen when the scenario leans on
+a particular street; it cannot override the verification.
+
 Usage:
   # Generate a single test case interactively
   python scripts/generate_regional_centre_test_prompts.py \
@@ -18,7 +28,6 @@ Usage:
     --liability high \
     --tags new_construction mixed_use \
     --bylaw-features FAR height_overlay setbacks parking \
-    --address "1500 Argyle Street, Halifax, NS" \
     --title "Developer tower feasibility in CEN-1"
 
   # Generate a batch from a spec file and append to the prompts database
@@ -36,6 +45,9 @@ Requirements:
   `claude -p`). If the binary is missing, the script falls back to a
   template-only stub mode that produces a skeleton with placeholder messages.
 
+  A Postgres database carrying the HRM zoning + parcels datasets, and
+  GOOGLE_MAPS_API_KEY, because address derivation resolves against both.
+
 Output:
   By default, prints the generated JSON test case to stdout.
   With --append, merges into evals/regional_centre_test_prompts.json and
@@ -44,16 +56,43 @@ Output:
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from zone_address_picker import (
+    DEFAULT_DB_URL,
+    REGIONAL_CENTRE_BYLAW_AREA_ID,
+    ZoneAddress,
+    _build_reverse_geocoder,
+    pick_address_for_zone,
+)
+
 PROMPTS_FILE = Path(__file__).parent.parent / "evals" / "regional_centre_test_prompts.json"
 BYLAW_FIXTURE = Path(__file__).parent.parent / "tests" / "fixtures" / "halifax_regional_centre_lub.txt"
 
-ZONES = ["CEN-1", "CEN-2", "COR", "DD", "DH", "ER-1", "ER-2", "ER-3", "HR-1", "HR-2", "INS", "RPK"]
+# Every zone code the Regional Centre zoning schedule actually maps — all 25
+# of them, from `zone_address_picker.zone_codes()` against bylaw_area_id 23.
+# The eval suite exercises 11; the rest are listed because a case can only be
+# written for a zone that exists on the map, and this is that list.
+#
+# ER-1 is deliberately absent. The by-law defines it (Part I s.30) but the
+# schedule maps no ER-1 polygon anywhere, so an ER-1 case could never have its
+# address confirmed — which is exactly how TC-017 came to be anchored on an
+# address in no zone at all.
+ZONES = [
+    "CDD-1", "CDD-2", "CEN-1", "CEN-2", "CH-1", "CH-2", "CLI", "COR", "DD",
+    "DH", "DND", "ER-2", "ER-3", "H", "HCD-SV", "HR-1", "HR-2", "HRI", "INS",
+    "LI", "PCF", "RPK", "UC-1", "UC-2", "WA",
+]
 PERSONA_TYPES = [
     "homeowner",
     "real_estate_developer",
@@ -110,6 +149,27 @@ def next_id(existing: list[dict]) -> str:
     return f"TC-{max(nums) + 1:03d}"
 
 
+def derive_address(session: Session, spec: dict, **kwargs: Any) -> ZoneAddress:
+    """Pick a real address in ``spec["zone"]`` and prove it resolves back to it.
+
+    The generator's one hard rule (ABS-467): a spec names a zone, and the
+    address comes out of the zoning data. Raises rather than falling back to
+    an unverified string — a case with an unconfirmed address grades the
+    advisor against a zone the address is not in, which is worse than no case
+    at all.
+    """
+    picked = pick_address_for_zone(session, spec["zone"], **kwargs)
+    if picked is None:
+        raise RuntimeError(
+            f"No address in zone {spec['zone']!r} could be verified through "
+            "the production path (get_address_profile). Widen --candidates, "
+            "drop --on-street, or check that the zoning and parcel datasets "
+            "are ingested. Zones the schedule does not map (ER-1) can never "
+            "succeed here."
+        )
+    return picked
+
+
 def build_generation_prompt(spec: dict) -> str:
     bylaw_ctx = load_bylaw_context()
     turns_count = spec.get("turns", 3)
@@ -119,7 +179,8 @@ Generate {turns_count} user conversation turns for a bylaw AI assistant test cas
 **Scenario spec:**
 - Title: {spec.get("title", "Untitled")}
 - Zone: {spec["zone"]}
-- Address: {spec.get("address", f"[address in {spec['zone']} zone, Halifax/Dartmouth Regional Centre]")}
+- Address: {spec["address"]} (verified to resolve to the {spec["zone"]} zone —
+  use it verbatim in turn 1 and do not invent a different one)
 - Persona: {spec["persona"]} {("(" + spec["subtype"] + ")") if spec.get("subtype") else ""}
 - Complexity: {spec.get("complexity", "medium")}
 - Liability: {spec.get("liability", "medium")}
@@ -223,8 +284,11 @@ def generate_turns_stub(spec: dict) -> list[dict]:
     """Template stub when API is unavailable — produces placeholder messages."""
     turns_count = spec.get("turns", 3)
     zone = spec["zone"]
-    address = spec.get("address", f"[address], in the {zone} zone")
-    bylaw_features = spec.get("bylaw_features", ["setbacks"])
+    address = spec["address"]
+    # `or`, not a dict default: --bylaw-features defaults to an empty list, so
+    # the key is present and the default never fired. Every --dry-run without
+    # explicit features died on an IndexError below.
+    bylaw_features = spec.get("bylaw_features") or ["setbacks"]
 
     turns = []
     for i in range(1, turns_count + 1):
@@ -244,7 +308,15 @@ def generate_turns_stub(spec: dict) -> list[dict]:
     return turns
 
 
-def build_test_case(spec: dict, turns: list[dict], case_id: str) -> dict:
+def build_test_case(
+    spec: dict, turns: list[dict], case_id: str, zone_address: ZoneAddress
+) -> dict:
+    """Assemble the case, recording the evidence its address rests on.
+
+    ``address_resolution`` is not decoration: it is what lets a reader (and
+    ``tests/test_eval_address_zones.py``) tell a case grounded on a matched
+    building from one grounded on a point the geocoder estimated.
+    """
     return {
         "id": case_id,
         "title": spec.get("title", f"Test case for {spec['zone']}"),
@@ -253,7 +325,15 @@ def build_test_case(spec: dict, turns: list[dict], case_id: str) -> dict:
             "subtype": spec.get("subtype"),
             "description": spec.get("description", ""),
         },
-        "address": spec.get("address", ""),
+        "address": zone_address.address,
+        "address_resolution": {
+            "resolved_zone": zone_address.resolved_zone,
+            "resolution_quality": zone_address.resolution_quality,
+            "location_type": zone_address.location_type,
+            "location_confidence": zone_address.location_confidence,
+            "location_resolver": zone_address.location_resolver,
+            "parcel_pid": zone_address.parcel_pid,
+        },
         "zone": spec["zone"],
         "complexity": spec.get("complexity", "medium"),
         "liability": spec.get("liability", "medium"),
@@ -282,7 +362,12 @@ def main() -> None:
     parser.add_argument("--liability", choices=["low", "medium", "high"], default="medium")
     parser.add_argument("--tags", nargs="*", default=[])
     parser.add_argument("--bylaw-features", nargs="*", dest="bylaw_features", default=[])
-    parser.add_argument("--address", help="Address string for the scenario")
+    # No --address. The zone picks it; see the module docstring (ABS-467).
+    parser.add_argument(
+        "--on-street",
+        dest="on_street",
+        help="Prefer a derived address on this street (still zone-verified).",
+    )
     parser.add_argument("--title", help="Title for the test case")
     parser.add_argument("--description", help="Persona description")
     parser.add_argument("--turns", type=int, default=3, help="Number of conversation turns to generate")
@@ -293,6 +378,13 @@ def main() -> None:
 
     # Batch mode
     parser.add_argument("--spec-file", help="Path to a JSON file containing an array of spec objects")
+
+    # Address derivation
+    parser.add_argument("--db-url", default=os.environ.get("DATABASE_URL", DEFAULT_DB_URL))
+    parser.add_argument("--candidates", type=int, default=25,
+                        help="Parcels to try per zone before giving up.")
+    parser.add_argument("--allow-interpolated", action="store_true",
+                        help="Accept an interpolated address when no ROOFTOP one exists.")
 
     # Output
     parser.add_argument("--append", action="store_true",
@@ -309,6 +401,13 @@ def main() -> None:
     if args.spec_file:
         with open(args.spec_file) as f:
             specs = json.load(f)
+        supplied = [s.get("zone") for s in specs if s.get("address")]
+        if supplied:
+            parser.error(
+                "Spec files must not carry an 'address' — it is derived from "
+                f"'zone' (ABS-467). Offending zones: {', '.join(map(str, supplied))}. "
+                "Use 'on_street' to bias which real address is chosen."
+            )
     elif args.zone and args.persona:
         specs = [{
             "zone": args.zone,
@@ -318,7 +417,7 @@ def main() -> None:
             "liability": args.liability,
             "tags": args.tags,
             "bylaw_features": args.bylaw_features,
-            "address": args.address or "",
+            "on_street": args.on_street,
             "title": args.title or f"Test case for {args.zone} — {args.persona}",
             "description": args.description or "",
             "turns": args.turns,
@@ -333,18 +432,45 @@ def main() -> None:
     generated: list[dict] = []
     counter = len(existing)
 
-    for spec in specs:
-        counter += 1
-        case_id = f"TC-{counter:03d}"
-        print(f"[{case_id}] Generating turns for zone={spec['zone']} persona={spec['persona']} ...", file=sys.stderr)
+    engine = create_engine(args.db_url)
+    reverse_geocoder = _build_reverse_geocoder()
+    # Addresses already spoken for, so a batch cannot hand the same one to two
+    # cases and so a new case never collides with an existing one.
+    taken = {c.get("address", "").strip().lower() for c in existing}
 
-        if args.dry_run:
-            turns = generate_turns_stub(spec)
-        else:
-            turns = generate_turns_via_api(spec)
+    with Session(engine) as session:
+        for spec in specs:
+            counter += 1
+            case_id = f"TC-{counter:03d}"
+            print(f"[{case_id}] Deriving an address in zone={spec['zone']} ...", file=sys.stderr)
+            zone_address = derive_address(
+                session,
+                spec,
+                reverse_geocoder=reverse_geocoder,
+                bylaw_area_id=REGIONAL_CENTRE_BYLAW_AREA_ID,
+                candidates=args.candidates,
+                allow_interpolated=args.allow_interpolated,
+                exclude=taken,
+                on_street=spec.get("on_street"),
+            )
+            session.commit()
+            taken.add(zone_address.address.strip().lower())
+            # The model writes the conversation around the *derived* address,
+            # which is why this assignment happens before prompt building.
+            spec["address"] = zone_address.address
+            print(
+                f"[{case_id}] {zone_address.address} "
+                f"({zone_address.resolution_quality}); generating turns for "
+                f"persona={spec['persona']} ...",
+                file=sys.stderr,
+            )
 
-        tc = build_test_case(spec, turns, case_id)
-        generated.append(tc)
+            if args.dry_run:
+                turns = generate_turns_stub(spec)
+            else:
+                turns = generate_turns_via_api(spec)
+
+            generated.append(build_test_case(spec, turns, case_id, zone_address))
 
     if args.dry_run or not args.append:
         print(json.dumps(generated if len(generated) > 1 else generated[0], indent=2))
@@ -352,6 +478,7 @@ def main() -> None:
         merged = existing + generated
         with open(PROMPTS_FILE, "w") as f:
             json.dump(merged, f, indent=2)
+            f.write("\n")
         print(f"Appended {len(generated)} test case(s) to {PROMPTS_FILE}.", file=sys.stderr)
         print(json.dumps([tc["id"] for tc in generated]))
 

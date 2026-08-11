@@ -16,12 +16,17 @@ behaviours:
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 
 import pytest
 
 from scripts import generate_regional_centre_test_prompts as gen
 
+# ABS-467: "address" is no longer an operator input — main() derives it from
+# "zone" and writes it onto the spec before the prompt is built. These tests
+# stand downstream of that, so the key is present but stands for a *derived*
+# address, not a supplied one.
 SPEC = {
     "zone": "CEN-1",
     "persona": "real_estate_developer",
@@ -149,3 +154,74 @@ def test_generate_turns_via_api_raises_on_nonzero_exit(monkeypatch: pytest.Monke
 
     with pytest.raises(RuntimeError, match="claude -p failed"):
         gen.generate_turns_via_api(SPEC)
+
+
+# ---------------------------------------------------------------------------
+# ABS-467: the address is derived from the zone, not accepted alongside it
+# ---------------------------------------------------------------------------
+
+
+class _StubZoneAddress:
+    """Shaped like scripts.zone_address_picker.ZoneAddress."""
+
+    address = "5531 Nora Bernard Street, Halifax, NS"
+    resolved_zone = "CEN-1"
+    resolution_quality = "rooftop"
+    location_type = "ROOFTOP"
+    location_confidence = 0.95
+    location_resolver = "google_maps"
+    parcel_pid = "00155622"
+
+
+def test_address_is_not_a_command_line_input() -> None:
+    """The flag that let an operator assert an unchecked address is gone.
+
+    This is the defect itself, not a stylistic preference: `--zone CEN-1
+    --address "1505 Barrington Street"` produced TC-006, whose address is in
+    DH. Removing the flag is what makes the mismatch unreachable.
+    """
+    source = pathlib.Path(gen.__file__).read_text()
+    assert '"--address"' not in source
+    assert '"--on-street"' in source, "the street preference replaces it"
+
+
+def test_derive_address_raises_when_no_address_confirms_the_zone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A zone with no confirmable address must fail loudly, not fall back.
+
+    ER-1 is the live example: the by-law defines it but the schedule maps no
+    polygon, so every candidate fails verification. Emitting a case anyway
+    would grade the advisor against a zone the address is not in.
+    """
+    monkeypatch.setattr(gen, "pick_address_for_zone", lambda *a, **kw: None)
+    with pytest.raises(RuntimeError, match="could be verified through the production path"):
+        gen.derive_address(object(), {"zone": "ER-1"})
+
+
+def test_build_test_case_records_the_resolution_it_was_verified_against() -> None:
+    """The case carries its evidence, so an estimated point cannot pass as exact."""
+    turns = [{"turn": 1, "role": "user", "message": "..."}]
+    case = gen.build_test_case(SPEC, turns, "TC-021", _StubZoneAddress())
+
+    assert case["address"] == _StubZoneAddress.address
+    assert case["zone"] == "CEN-1"
+    resolution = case["address_resolution"]
+    assert resolution["resolved_zone"] == case["zone"]
+    assert resolution["resolution_quality"] == "rooftop"
+    assert resolution["location_type"] == "ROOFTOP"
+    assert resolution["parcel_pid"] == "00155622"
+
+
+def test_generation_prompt_pins_the_derived_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The model is told to use the derived address verbatim, not to invent one."""
+    prompt = gen.build_generation_prompt(SPEC)
+    assert SPEC["address"] in prompt
+    assert "verbatim" in prompt
+
+
+def test_er1_is_absent_from_the_selectable_zones() -> None:
+    """--zone only offers zones the schedule actually maps."""
+    assert "ER-1" not in gen.ZONES
+    assert {"ER-2", "ER-3", "CEN-1", "RPK"} <= set(gen.ZONES)
+    assert len(gen.ZONES) == 25, "the Regional Centre maps 25 zone codes"

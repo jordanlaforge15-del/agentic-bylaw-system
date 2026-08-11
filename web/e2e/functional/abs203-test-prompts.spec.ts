@@ -192,15 +192,19 @@ test.describe("Test prompt database — schema validation", () => {
 // ─── Query tool validation (Python CLI) ──────────────────────────────────────
 
 test.describe("Query tool — filter dimensions", () => {
-  test("--zone ER-1 returns TC-017", () => {
-    const { stdout, status } = runQuery("--zone", "ER-1", "--output", "ids");
+  // ABS-467: TC-017 was ER-1 until the zoning schedule turned out to map no
+  // ER-1 polygon anywhere, so no address could ever confirm that zone. It is
+  // ER-2 now, which carries the same use permissions its premise depends on.
+  test("--zone ER-2 returns TC-017", () => {
+    const { stdout, status } = runQuery("--zone", "ER-2", "--output", "ids");
     expect(status).toBe(0);
     expect(stdout.trim().split("\n")).toContain("TC-017");
   });
 
-  // ABS-463: TC-001's zone field said ER-1 while 1234 Oxford Street geocodes
-  // into the HR-1 polygon. The field now records the geocoded zone; the turn
-  // text still misstates ER-1 on purpose.
+  // ABS-463: TC-001's zone field said ER-1 while its address geocodes into the
+  // HR-1 polygon. The field now records the geocoded zone; the turn text still
+  // misstates ER-1 on purpose. ABS-467 re-derived the address from HR-1, so
+  // the premise now rests on a ROOFTOP match rather than an interpolated one.
   test("--zone HR-1 returns TC-001", () => {
     const { stdout, status } = runQuery("--zone", "HR-1", "--output", "ids");
     expect(status).toBe(0);
@@ -258,10 +262,13 @@ test.describe("Query tool — filter dimensions", () => {
     expect(results[0].id).toBe("TC-001");
   });
 
-  test("--list-zones exits 0 and includes ER-1", () => {
+  test("--list-zones exits 0 and lists only zones the schedule maps", () => {
     const { stdout, status } = runQuery("--list-zones");
     expect(status).toBe(0);
-    expect(stdout).toContain("ER-1");
+    expect(stdout).toContain("ER-2");
+    // ABS-467: the by-law defines ER-1 (Part I s.30) but no polygon carries it,
+    // so a case claiming it could never have its address confirmed.
+    expect(stdout).not.toContain("ER-1");
   });
 
   test("--list-personas exits 0 and includes homeowner", () => {
@@ -298,7 +305,7 @@ test.describe("Live advisor chat — TC-001 smoke", () => {
     expect(turn1!.message.length, "Turn 1 message must not be empty").toBeGreaterThan(10);
 
     // Open a case via the API and navigate to the chat page
-    const { caseId } = await openCaseViaApi({ anchorLabel: "1234 Oxford Street, Halifax NS" });
+    const { caseId } = await openCaseViaApi({ anchorLabel: "1222 Robie Street, Halifax NS" });
     await page.goto(`/app?case_id=${caseId}`);
 
     const textarea = page.getByPlaceholder(/Ask about this parcel/);
