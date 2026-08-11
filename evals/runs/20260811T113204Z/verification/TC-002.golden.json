@@ -1,0 +1,11 @@
+{
+  "case_id": "TC-002",
+  "zone": "ER-2",
+  "liability": "low",
+  "answer_shape": "determinate",
+  "evidence_tier": "human_validated",
+  "verdict": "UNATTESTED",
+  "reasons": [
+    "no qualified human has recorded the correct answer for this case; it cannot pass and it holds the deploy gate closed"
+  ]
+}

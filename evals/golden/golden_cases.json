@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "evidence_tier": "human_validated",
+  "issue": "ABS-468",
+  "derived_from": "evals/regional_centre_test_prompts.json",
+  "bylaw": "Regional Centre Land Use By-Law",
+  "description": "The only expectations in this project that did not originate from a model. Each entry names a case from the generated eval and leaves a slot for a qualified human to record the correct answer and the governing provisions. Until that slot is filled the entry grades UNATTESTED and can never count as a pass.",
+  "gate": {
+    "blocks": "production_deploy",
+    "rule": "A production deploy requires every entry here to be attested and to grade GOLDEN_PASS. UNATTESTED is not a pass; it holds the gate closed.",
+    "advisory": "evals/regional_centre_test_prompts.json — generated cases inform iteration and never gate a deploy.",
+    "never": "Golden and generated results are never summed, averaged, or reported as one pass rate."
+  },
+  "cases": [
+    {
+      "case_id": "TC-001",
+      "zone": "HR-1",
+      "liability": "low",
+      "complexity": "simple",
+      "answer_shape": "determinate",
+      "selection_rationale": "The floor of the liability range and the only case whose premise is adversarial: the user asserts ER-1, a zone the by-law defines but the schedule maps nowhere, while 1222 Robie Street sits in HR-1. A dimensional lookup with one right answer, plus a premise the advisor must refuse to accept — the cheapest case for a professional to adjudicate and the one whose failure mode (answering the question as asked) is hardest for a keyword grader to see.",
+      "question_for_reviewer": "A homeowner at 1222 Robie Street, Halifax asks whether an attached rear deck 4 m from the rear lot line needs a development permit, and whether 4 m clears the rear setback. They state the lot is ER-1. Turn 2 asks the side setback for the same deck. What is the correct answer, and does the advisor have to correct the stated zone before answering?",
+      "attestation": {
+        "status": "unattested",
+        "attested_by": null,
+        "attested_on": null,
+        "method": null,
+        "correct_answer": null,
+        "governing_provisions": [],
+        "must_state": [],
+        "must_not_state": [],
+        "reviewer_notes": null
+      }
+    },
+    {
+      "case_id": "TC-002",
+      "zone": "ER-2",
+      "liability": "low",
+      "complexity": "simple",
+      "answer_shape": "determinate",
+      "selection_rationale": "Second low-liability anchor, and a use-permission question rather than a dimensional one — the other half of what the advisor is asked for. Secondary suite plus a concurrent home-based business exercises the combination-of-uses provision, where a table lookup alone gives the wrong answer.",
+      "question_for_reviewer": "A homeowner at 65 Wentworth Street, Dartmouth (ER-2) asks whether a basement secondary suite is a permitted use, whether they may also run a home-based tutoring business at the same time, and whether adding the suite changes the setback standards. What is the correct answer to each?",
+      "attestation": {
+        "status": "unattested",
+        "attested_by": null,
+        "attested_on": null,
+        "method": null,
+        "correct_answer": null,
+        "governing_provisions": [],
+        "must_state": [],
+        "must_not_state": [],
+        "reviewer_notes": null
+      }
+    },
+    {
+      "case_id": "TC-009",
+      "zone": "DD",
+      "liability": "medium",
+      "complexity": "medium",
+      "answer_shape": "determinate",
+      "selection_rationale": "Mid-liability, and the case where a wrong answer is acted on immediately: a lawyer clearing a site for an acquisition. Turn 2 asks the advisor to confirm a claim the vendor made, which is the shape of question most likely to be answered agreeably rather than correctly.",
+      "question_for_reviewer": "A real estate lawyer doing acquisition due diligence at 16 Kings Wharf Place, Dartmouth (DD) asks: is multi-unit residential permitted; is the vendor right that there is no minimum parking requirement and on what provision; what are the setback and lot coverage standards; and is a ground-floor daycare permitted? What is the correct answer to each?",
+      "attestation": {
+        "status": "unattested",
+        "attested_by": null,
+        "attested_on": null,
+        "method": null,
+        "correct_answer": null,
+        "governing_provisions": [],
+        "must_state": [],
+        "must_not_state": [],
+        "reviewer_notes": null
+      }
+    },
+    {
+      "case_id": "TC-012",
+      "zone": "RPK",
+      "liability": "medium",
+      "complexity": "medium",
+      "answer_shape": "refusal",
+      "selection_rationale": "The refusal case the Definition of Done asks for. RPK appears in neither Table 1A nor Table 1B, and the underlying dispute — a structure encroaching over a boundary — is a title and trespass matter the land use by-law does not resolve. The correct answer is substantially that the by-law does not answer the question asked, which no keyword or citation-coverage metric can reward and a fluent wrong answer will always beat.",
+      "question_for_reviewer": "A lawyer acting for an owner abutting RPK land at 65 Georges Island Road, Halifax asks what uses are permitted as-of-right in RPK, whether the accessory-building permit exemption covers a shed sitting on or over the RPK boundary, and what setback governs it. What is the correct answer, and specifically: what part of this question does the Regional Centre LUB not answer at all?",
+      "attestation": {
+        "status": "unattested",
+        "attested_by": null,
+        "attested_on": null,
+        "method": null,
+        "correct_answer": null,
+        "governing_provisions": [],
+        "must_state": [],
+        "must_not_state": [],
+        "reviewer_notes": null
+      }
+    },
+    {
+      "case_id": "TC-008",
+      "zone": "DH",
+      "liability": "high",
+      "complexity": "complex",
+      "answer_shape": "depends",
+      "selection_rationale": "Top of the liability range, and a municipal reviewer rather than an applicant — a wrong answer here is repeated to a third party as staff advice. Turn 3 asks outright whether 90 m can be evaluated against the by-law text or whether it depends on the height precinct map; the correct answer is conditional, and an unconditional number is a failure the generated grader scores as a pass.",
+      "question_for_reviewer": "A city planner reviewing a demolition-and-rebuild application at 1801 Hollis Street, Halifax (DH) asks: the DH use permissions and base dimensional standards; what the Heritage Conservation District Overlay requires before a demolition permit issues for a registered heritage property; whether a 90 m height is evaluable from the by-law text or depends on the precinct map; whether off-street parking is required for 120 units; and what controls FAR. What is the correct answer to each?",
+      "attestation": {
+        "status": "unattested",
+        "attested_by": null,
+        "attested_on": null,
+        "method": null,
+        "correct_answer": null,
+        "governing_provisions": [],
+        "must_state": [],
+        "must_not_state": [],
+        "reviewer_notes": null
+      }
+    },
+    {
+      "case_id": "TC-014",
+      "zone": "CEN-2",
+      "liability": "high",
+      "complexity": "complex",
+      "answer_shape": "depends",
+      "selection_rationale": "Second high-liability anchor and the adversarial one: the user pushes for a maximum-FAR stack and assumes bonuses are additive. Bonus density is negotiated rather than as-of-right, so the correct answer is conditional and partly a refusal to quantify. A model authoring its own expected answer for this case will tend to produce the confident number the user asked for, which is exactly what makes it worth a human's time.",
+      "question_for_reviewer": "A developer at 3123 Kempt Road, Halifax (CEN-2) asks for base FAR and height, the bonus menu and what each contribution buys, ground-floor active-use and streetwall requirements, whether bonuses stack additively or hit a cap, and whether site plan approval lets the municipality condition or claw back bonus density. What is the correct answer, and which parts cannot be quantified from the by-law alone?",
+      "attestation": {
+        "status": "unattested",
+        "attested_by": null,
+        "attested_on": null,
+        "method": null,
+        "correct_answer": null,
+        "governing_provisions": [],
+        "must_state": [],
+        "must_not_state": [],
+        "reviewer_notes": null
+      }
+    }
+  ]
+}
