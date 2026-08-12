@@ -295,7 +295,9 @@ def main(argv: list[str] | None = None) -> int:
         if not MAP_FILE.exists():
             print(f"{MAP_FILE} is missing; run without --check.", file=sys.stderr)
             return 1
-        drift = map_drift(load_map(), live)
+        # Read through the module global rather than load_map()'s default, which
+        # binds at import time and would ignore a redirected MAP_FILE.
+        drift = map_drift(load_map(MAP_FILE), live)
         if drift:
             print(
                 f"{MAP_FILE.name} no longer describes the corpus. The by-law's "
