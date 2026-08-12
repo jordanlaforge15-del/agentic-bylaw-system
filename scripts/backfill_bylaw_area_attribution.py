@@ -42,13 +42,12 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from layer1.datasets.config import DatasetConfig, load_dataset_config
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature
 from layer1.db.session import session_scope
-
 
 DATASET_CONFIG_DIR = (
     Path(__file__).resolve().parent.parent / "src" / "layer1" / "datasets"

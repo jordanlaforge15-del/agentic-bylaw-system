@@ -25,14 +25,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-
-from advisor.chat.compact import compact_address_profile
-from advisor.chat.resolution_qualifier import governing_bylaw_suffix
 from bylaw_retrieval.retrieval import (
     RetrievalService,
     audit_governing_bylaw_coverage,
     retrieval_enabled_resolver,
 )
+
+from advisor.chat.compact import compact_address_profile
+from advisor.chat.resolution_qualifier import governing_bylaw_suffix
 from layer1.db.base import (
     Document,
     ExternalDataset,
@@ -44,7 +44,6 @@ from layer1.db.init_db import create_all as create_layer1
 from layer1.db.session import session_scope
 from layer1.models.enums import FragmentType, ParseStatus
 from layer2.db.init_db import create_all as create_layer2
-
 
 RC_BYLAW = "Regional Centre Land Use By-Law"
 SHA_BYLAW = "Suburban Housing Accelerator Land Use By-law"

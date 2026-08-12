@@ -19,18 +19,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
-
+from layer1.datasets.config import load_dataset_config
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
-from layer1.datasets.config import load_dataset_config
 from layer1.models.enums import ParseStatus
 from scripts.backfill_bylaw_area_attribution import (
     attributed_configs,
     backfill,
 )
-
 
 HEIGHTS_YAML = Path("src/layer1/datasets/halifax_height_precincts.yaml")
 SHA_BYLAW = "Suburban Housing Accelerator Land Use By-law"
