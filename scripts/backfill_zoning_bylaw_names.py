@@ -1,4 +1,5 @@
-"""Backfill bylaw_area_code + bylaw_area_name onto existing zoning rows.
+"""Backfill bylaw_area_code + bylaw_area_name onto existing zoning rows, and
+refresh the dataset's stored ``links_to`` from the YAML.
 
 ABS-66 added publisher-prefixed code + human-readable name to the
 canonical attributes emitted by ``halifax_zoning.yaml``. Features that
@@ -7,9 +8,18 @@ integer, which lets the chat agent fall back to hallucinating a bylaw
 name. Triggering a fresh ingest fixes new rows; this script fixes the
 existing ones in place without re-pulling the live ArcGIS layer.
 
+ABS-472 added ``links_to.governing_bylaw_from`` to the same YAML, which is
+what makes retrieval cite each zone's own by-law instead of the one the
+whole layer is linked to. Retrieval reads that declaration from the
+dataset's persisted ``metadata_json``, written once at ingest — so an
+already-ingested layer keeps mis-attributing until its metadata is
+refreshed. This script does both in one pass: without the refresh the
+backfilled names sit on the features unused.
+
 Idempotent. Re-running on already-backfilled rows is a no-op. Safe to
 run inside a maintenance window or any time the ingest YAML's lookup
-table changes (a re-run picks up edits without a full re-ingest).
+table or ``links_to`` block changes (a re-run picks up edits without a
+full re-ingest).
 
 Usage::
 
@@ -40,14 +50,26 @@ def main() -> int:
         print("error: halifax_zoning.yaml has no bylaw_area_subtypes lookup", file=sys.stderr)
         return 1
 
+    declared_links_to = cfg.links_to.model_dump() if cfg.links_to else None
+
     updated = 0
     skipped = 0
+    relinked = 0
     unknown_codes: set[int] = set()
     with session_scope() as db:
         datasets = db.scalars(
             select(ExternalDataset).where(ExternalDataset.name == ZONING_DATASET_NAME)
         ).all()
         for dataset in datasets:
+            # Refresh the persisted declaration first: the per-feature names
+            # below are only consulted when the dataset says to consult them.
+            metadata = dict(dataset.metadata_json or {})
+            if declared_links_to is not None and metadata.get("links_to") != declared_links_to:
+                metadata["links_to"] = declared_links_to
+                dataset.metadata_json = metadata
+                flag_modified(dataset, "metadata_json")
+                relinked += 1
+
             features = db.scalars(
                 select(ExternalDatasetFeature).where(
                     ExternalDatasetFeature.external_dataset_id == dataset.id
@@ -79,7 +101,8 @@ def main() -> int:
                 flag_modified(feature, "canonical_attributes_json")
                 updated += 1
         print(
-            f"backfill_zoning_bylaw_names: updated={updated} skipped={skipped}"
+            f"backfill_zoning_bylaw_names: updated={updated} skipped={skipped} "
+            f"links_to_refreshed={relinked}"
             + (
                 f" unknown_bylaw_ids={sorted(unknown_codes)}"
                 if unknown_codes

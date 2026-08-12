@@ -1215,6 +1215,30 @@ def _mount_test_router(app: FastAPI) -> None:
             report = audit_enabled_name_collisions(session)
         return report.model_dump(mode="json")
 
+    @app.post("/v1/_test/governing-bylaw-coverage")
+    async def governing_bylaw_coverage() -> dict[str, object]:
+        """Run the ABS-472 governing-by-law coverage audit, uncached.
+
+        Same reason as the two above: ``/v1/monitoring/corpus-coherence``
+        carries this section but caches for 30s, so a spec whose seed adds
+        features could read a body assembled before its own ``beforeAll``
+        ran. This endpoint answers from the database as it stands.
+
+        Scoped through ``retrieval_enabled_resolver`` so "held" means what it
+        means to a real request — visible in the active retrieval scope, not
+        merely ingested.
+        """
+        from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+            audit_governing_bylaw_coverage,
+            retrieval_enabled_resolver,
+        )
+
+        with session_scope() as session:
+            report = audit_governing_bylaw_coverage(
+                session, default_document_id_resolver=retrieval_enabled_resolver
+            )
+        return report.model_dump(mode="json")
+
     @app.post("/v1/_test/link-table-captions")
     async def link_table_captions_endpoint(
         body: _LinkTableCaptionsBody,

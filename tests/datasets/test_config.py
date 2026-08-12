@@ -106,6 +106,64 @@ def test_rejects_lookup_field_without_lookup(tmp_path: Path):
         load_dataset_config(_write(tmp_path, body))
 
 
+# --- ABS-472: per-feature governing by-law --------------------------------
+
+
+GOVERNING_BLOCK = "  fragment_citation: Schedule 15\n"
+GOVERNING_YAML = VALID_YAML.replace(
+    GOVERNING_BLOCK,
+    GOVERNING_BLOCK
+    + "  governing_bylaw_from:\n"
+    + "    name_attribute: bylaw_area_name\n"
+    + "    code_attribute: bylaw_area_code\n",
+).replace(
+    "    display_label: { synthesize: \"{HEIGHT}m precinct\" }",
+    "    display_label: { synthesize: \"{HEIGHT}m precinct\" }\n"
+    "    bylaw_area_name: { from: BYLAW_ID, type: string }\n"
+    "    bylaw_area_code: { from: BYLAW_ID, type: string }",
+)
+
+
+def test_loads_governing_bylaw_from(tmp_path: Path):
+    cfg = load_dataset_config(_write(tmp_path, GOVERNING_YAML))
+    governing = cfg.links_to.governing_bylaw_from
+    assert governing is not None
+    assert governing.name_attribute == "bylaw_area_name"
+    assert governing.code_attribute == "bylaw_area_code"
+
+
+def test_rejects_governing_bylaw_from_naming_an_unmapped_attribute(tmp_path: Path):
+    """A typo here would degrade silently back to the dataset-level link —
+    the exact mis-attribution ABS-472 exists to stop — so it fails at load."""
+    body = GOVERNING_YAML.replace(
+        "    name_attribute: bylaw_area_name", "    name_attribute: bylaw_area_nmae"
+    )
+    with pytest.raises(Exception):
+        load_dataset_config(_write(tmp_path, body))
+
+
+def test_rejects_governing_bylaw_code_attribute_that_is_not_mapped(tmp_path: Path):
+    body = GOVERNING_YAML.replace(
+        "    bylaw_area_code: { from: BYLAW_ID, type: string }", ""
+    )
+    with pytest.raises(Exception):
+        load_dataset_config(_write(tmp_path, body))
+
+
+def test_real_zoning_config_resolves_its_governing_bylaw_per_feature():
+    """The HRM-wide zoning layer must not rely on its dataset-level link for
+    attribution: 20 of its 22 by-law areas are governed by documents this
+    corpus does not hold (ABS-472)."""
+    cfg = load_dataset_config(Path("src/layer1/datasets/halifax_zoning.yaml"))
+    governing = cfg.links_to.governing_bylaw_from
+    assert governing is not None
+    assert governing.name_attribute == "bylaw_area_name"
+    assert governing.code_attribute == "bylaw_area_code"
+    # Both are resolved from BYLAW_ID through the ABS-66 subtype lookup.
+    assert cfg.attributes.canonical["bylaw_area_name"].lookup == "bylaw_area_subtypes"
+    assert cfg.attributes.canonical["bylaw_area_code"].lookup == "bylaw_area_subtypes"
+
+
 def test_real_halifax_config_loads():
     cfg = load_dataset_config(
         Path("src/layer1/datasets/halifax_height_precincts.yaml")

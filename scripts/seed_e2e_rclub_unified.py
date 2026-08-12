@@ -40,6 +40,15 @@ ABS-431 convention) carrying:
   answer "there is no 567 Windsor Street" instead of geocoding one. Robie
   Street is deliberately absent so the corpus's primary fixture address
   stays ``unverifiable`` and every pre-ABS-469 expectation about it holds.
+* **An ABS-472 by-law-area split on the zoning layer.** The three zone
+  polygons carry a per-feature governing by-law (``bylaw_area_name`` /
+  ``bylaw_area_code``, the same attributes the real HRM layer resolves from
+  ``BYLAW_ID``): HR-2 and CEN-1 name the by-law this document IS, while the
+  DH-1 box out east names the Downtown Halifax LUB, which the corpus does not
+  hold. That last one is the issue's measured case — a real zone whose
+  standards live in a document we never ingested, served with a citation to
+  the by-law the layer happens to be linked to.
+
 * **Geocode-cache rows** for ``100 Robie Street`` (inside every polygon
   overlay), ``6184 Quinpool Road`` (~10 m off the Schedule 7 Quinpool
   centreline, so only the buffered abuts query matches), the
@@ -288,6 +297,22 @@ INTERPOLATED_ADDRESS_NORMALIZED = "civic:1234 oxford st"
 NONEXISTENT_ADDRESS_RAW = "567 Windsor Street"
 NONEXISTENT_ADDRESS_NORMALIZED = "civic:567 windsor st"
 
+# ABS-472: the zoning layer is municipality-wide, so a zone code carries its
+# own by-law area — and 20 of HRM's 22 areas are governed by documents this
+# corpus does not hold. HELD is the by-law the unified fixture document IS
+# (matched by prefix past the ABS-431 "(Unified RC-LUB E2E)" marker, which the
+# publisher's geography would never carry); UNHELD is a real HRM by-law with
+# no document behind it, the shape of the issue's 1657 Barrington Street.
+HELD_BYLAW_AREA = "Regional Centre Land Use By-law"
+UNHELD_BYLAW_AREA = "Downtown Halifax Land Use By-law"
+
+# An address inside the DH-1 box. Rooftop-perfect on purpose: the point is
+# not the problem, the missing by-law is, and every ABS-466/469 signal reads
+# this resolution as clean.
+UNHELD_BYLAW_ADDRESS_RAW = "1657 Barrington Street"
+UNHELD_BYLAW_ADDRESS_NORMALIZED = "civic:1657 barrington st"
+_UNHELD_BYLAW_POINT: dict[str, Any] = {"type": "Point", "coordinates": [-63.55, 44.65]}
+
 # A point inside every seeded polygon overlay, and the box that contains it.
 TEST_POINT: dict[str, Any] = {"type": "Point", "coordinates": [-63.59, 44.65]}
 _BOX = [
@@ -305,6 +330,16 @@ _EAST_BOX = [
     [-63.58, 44.66],
     [-63.58, 44.64],
 ]
+# ABS-472: a third box, governed by a by-law this corpus does NOT hold. Kept
+# ~1.5 km east of the HR-2/CEN-1 line so it cannot perturb the ABS-469
+# zone-boundary and split-parcel fixtures, which measure within ~25 m.
+_DOWNTOWN_BOX = [
+    [-63.56, 44.64],
+    [-63.54, 44.64],
+    [-63.54, 44.66],
+    [-63.56, 44.66],
+    [-63.56, 44.64],
+]
 
 # (dataset_name, fragment citation_label, raw properties, canonical YAML block)
 # dataset_name carries the keyword overlay_role_for_name classifies on: the
@@ -315,25 +350,58 @@ POLYGON_OVERLAYS: list[dict[str, Any]] = [
         "name": "e2e_rclub_zoning",
         "citation": "Zoning Schedule",
         "feature_key_field": "GLOBALID",
-        "properties": {"GLOBALID": "rclub-zone-1", "ZONE": "HR-2", "DESCRIPTION": "High-Rise Residential"},
+        "properties": {
+            "GLOBALID": "rclub-zone-1",
+            "ZONE": "HR-2",
+            "DESCRIPTION": "High-Rise Residential",
+            "BYLAW_AREA": HELD_BYLAW_AREA,
+            "BYLAW_CODE": "hrm:RC",
+        },
         # ABS-469: a second zone sharing the HR-2 box's eastern edge. A zone
         # line is what makes an otherwise perfect resolution unsafe — the
         # point can sit metres from land governed by different standards, or
         # the lot can straddle the line — and neither can be tested against a
         # corpus containing exactly one zone.
+        #
+        # ABS-472: and a third, out east, carrying the shape the real HRM
+        # layer has for 7,950 of its 11,069 features — a real zone whose
+        # governing by-law is NOT in the corpus. The layer is linked to the
+        # unified RC-LUB document, so before ABS-472 this zone was served with
+        # an RC-LUB citation that does not govern it.
         "extra": (
             (
                 {
                     "GLOBALID": "rclub-zone-2",
                     "ZONE": "CEN-1",
                     "DESCRIPTION": "Centre",
+                    "BYLAW_AREA": HELD_BYLAW_AREA,
+                    "BYLAW_CODE": "hrm:RC",
                 },
                 {"type": "Polygon", "coordinates": [_EAST_BOX]},
+            ),
+            (
+                {
+                    "GLOBALID": "rclub-zone-3",
+                    "ZONE": "DH-1",
+                    "DESCRIPTION": "Downtown Halifax 1",
+                    "BYLAW_AREA": UNHELD_BYLAW_AREA,
+                    "BYLAW_CODE": "hrm:DHFX",
+                },
+                {"type": "Polygon", "coordinates": [_DOWNTOWN_BOX]},
             ),
         ),
         "canonical": (
             "    zone_code: { from: ZONE, type: string }\n"
             "    zone_description: { from: DESCRIPTION, type: string, optional: true }\n"
+            "    bylaw_area_name: { from: BYLAW_AREA, type: string, optional: true }\n"
+            "    bylaw_area_code: { from: BYLAW_CODE, type: string, optional: true }\n"
+        ),
+        # ABS-472: what makes the zone cite its own by-law instead of the
+        # layer's. Mirrors src/layer1/datasets/halifax_zoning.yaml.
+        "governing_bylaw_from": (
+            "  governing_bylaw_from:\n"
+            "    name_attribute: bylaw_area_name\n"
+            "    code_attribute: bylaw_area_code\n"
         ),
     },
     {
@@ -722,6 +790,7 @@ def _polygon_config_yaml(overlay: dict[str, Any], geojson_path: Path) -> str:
         f"    municipality: {DOCUMENT_MUNICIPALITY}\n"
         f"    bylaw_name: {DOCUMENT_BYLAW_NAME}\n"
         f"  fragment_citation: {overlay['citation']}\n"
+        f"{overlay.get('governing_bylaw_from', '')}"
         "attributes:\n"
         f"  feature_key: {overlay['feature_key_field']}\n"
         "  canonical:\n"
@@ -820,6 +889,16 @@ _GEOCODE_ROWS: tuple[
         0.95,
         "seeded for the unified RC-LUB e2e corpus (ABS-435 back lot control)",
         None,
+    ),
+    # ABS-472: ROOFTOP on purpose. The resolution is perfect; the by-law
+    # behind the zone it selects is the thing we do not have.
+    (
+        UNHELD_BYLAW_ADDRESS_NORMALIZED,
+        UNHELD_BYLAW_ADDRESS_RAW,
+        _UNHELD_BYLAW_POINT,
+        0.95,
+        "seeded for ABS-472 (zone governed by a by-law outside the corpus)",
+        "ROOFTOP",
     ),
     # ABS-469: parked on the zoned test point deliberately. If the profile
     # ever answers this one with a zone, it is answering a civic number that

@@ -8,11 +8,22 @@ format: geojson
 source_url: https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/ZoningBoundaries/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=geojson
 crs: EPSG:4326
 
+# NOTE (ABS-472): this layer is HRM-WIDE. document_match below is only the
+# document the layer is *published alongside* — it is NOT the by-law that
+# governs every feature. 22 by-law areas appear in this dataset and only two
+# of them (Regional Centre, Halifax Mainland) are ingested, so
+# ``governing_bylaw_from`` is what retrieval cites from: the per-feature
+# by-law resolved from BYLAW_ID, not this dataset-level link. Without it a
+# DH-1 parcel (Downtown Halifax LUB, BYLAW_ID 22) was served with a Regional
+# Centre LUB citation.
 links_to:
   document_match:
     municipality: HRM
     bylaw_name: Regional Centre Land Use By-Law
   fragment_citation: Zoning Schedule
+  governing_bylaw_from:
+    name_attribute: bylaw_area_name
+    code_attribute: bylaw_area_code
 
 attributes:
   feature_key: GLOBALID

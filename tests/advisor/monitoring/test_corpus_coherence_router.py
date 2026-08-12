@@ -24,7 +24,9 @@ from bylaw_retrieval.retrieval import (
     EnabledDocumentRef,
     EnabledNameCollision,
     EnabledNameCollisionReport,
+    GoverningBylawCoverageReport,
     MissingOverlayRole,
+    UnheldGoverningBylaw,
 )
 
 
@@ -53,6 +55,44 @@ def _clean_contamination_by_default(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "bylaw_retrieval.retrieval.audit_enabled_name_collisions",
         lambda *a, **k: _collision_free_report(),
+    )
+    # ABS-472: same lazy-import pattern; default to fully-covered so the
+    # status-code tests below stay about the checks they name.
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_governing_bylaw_coverage",
+        lambda *a, **k: _complete_coverage(),
+    )
+
+
+def _complete_coverage() -> GoverningBylawCoverageReport:
+    return GoverningBylawCoverageReport(
+        complete=True,
+        datasets_checked=1,
+        features_checked=3119,
+        covered_features=3119,
+        unheld_features=0,
+        unheld=[],
+    )
+
+
+def _incomplete_coverage() -> GoverningBylawCoverageReport:
+    """The real HRM shape: 7,950 of 11,069 zoning features are governed by
+    by-laws the corpus does not hold."""
+    return GoverningBylawCoverageReport(
+        complete=False,
+        datasets_checked=1,
+        features_checked=11069,
+        covered_features=3119,
+        unheld_features=7950,
+        unheld=[
+            UnheldGoverningBylaw(
+                dataset_name="halifax_zoning_boundaries",
+                governing_bylaw="Downtown Halifax Land Use By-law",
+                governing_bylaw_code="hrm:DHFX",
+                feature_count=28,
+                detail="28 feature(s) are governed by a by-law not in the corpus",
+            )
+        ],
     )
 
 
@@ -378,3 +418,47 @@ def test_recomputes_after_the_cache_expires(client: TestClient, monkeypatch: pyt
     client.get("/v1/monitoring/corpus-coherence")
 
     assert fake_audit.call_count == 2
+
+
+# --- ABS-472: governing-by-law coverage is informational, never red -------
+
+
+def test_incomplete_governing_bylaw_coverage_does_not_turn_the_endpoint_red(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A municipality publishes far more by-law areas than any corpus
+    ingests, so incomplete coverage is the steady state. Failing on it would
+    leave this endpoint permanently 503 and train operators to ignore it —
+    the answers for that ground are already refused at request time."""
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_corpus_coherence", lambda *a, **k: _coherent_report()
+    )
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_governing_bylaw_coverage",
+        lambda *a, **k: _incomplete_coverage(),
+    )
+
+    response = client.get("/v1/monitoring/corpus-coherence")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    coverage = body["governing_bylaw_coverage"]
+    assert coverage["complete"] is False
+    assert coverage["unheld_features"] == 7950
+    assert coverage["unheld"][0]["governing_bylaw"] == "Downtown Halifax Land Use By-law"
+
+
+def test_full_governing_bylaw_coverage_is_reported_too(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The section is always present, so an operator can tell "covered" from
+    "not measured"."""
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_corpus_coherence", lambda *a, **k: _coherent_report()
+    )
+
+    body = client.get("/v1/monitoring/corpus-coherence").json()
+
+    assert body["governing_bylaw_coverage"]["complete"] is True
+    assert body["governing_bylaw_coverage"]["unheld"] == []

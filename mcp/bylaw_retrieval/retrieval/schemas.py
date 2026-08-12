@@ -476,6 +476,27 @@ class OverlayRef(BaseModel):
             "max_height_m, max_far, district_name, …) verbatim."
         ),
     )
+    # -- ABS-472: which by-law governs THIS feature ------------------------
+    governing_bylaw: str | None = Field(
+        default=None,
+        description=(
+            "The by-law that governs this particular feature, when the layer "
+            "publishes it per feature (municipality-wide layers do). May "
+            "differ from the by-law named in 'citation' — that one is the "
+            "document the layer as a whole is linked to. Null when the layer "
+            "carries no per-feature by-law attribution."
+        ),
+    )
+    governing_bylaw_held: bool | None = Field(
+        default=None,
+        description=(
+            "True when 'governing_bylaw' is a document in the active "
+            "retrieval corpus; False when it is not held, in which case "
+            "'citation' is null because there is no honest citation to give "
+            "— the overlay's value is the publisher's mapping, not something "
+            "this corpus can source. Null when unknown."
+        ),
+    )
 
 
 class CitationRef(BaseModel):
@@ -920,6 +941,44 @@ class AddressProfile(BaseModel):
             "sits in a single zone or no parcel fabric is in scope."
         ),
     )
+    # -- ABS-472: which by-law actually governs this parcel? --------------
+    #
+    # A municipality-wide zoning layer spans many by-law areas, so a zone code
+    # says nothing about which by-law defines it. Answering a Downtown Halifax
+    # DH-1 parcel out of the Regional Centre LUB is not a hedge-worthy
+    # imprecision — it is the wrong by-law, and every standard that follows is
+    # someone else's.
+    governing_bylaw: str | None = Field(
+        default=None,
+        description=(
+            "The by-law that governs the resolved parcel's zone, read from "
+            "the zoning layer's own per-feature by-law attribution (e.g. "
+            "'Downtown Halifax Land Use By-law'). Null when the zoning layer "
+            "in scope does not publish per-feature attribution."
+        ),
+    )
+    governing_bylaw_code: str | None = Field(
+        default=None,
+        description=(
+            "Publisher-namespaced short code for 'governing_bylaw' (e.g. "
+            "'hrm:DHFX'), when the layer carries one."
+        ),
+    )
+    governing_bylaw_status: Literal["held", "not_held", "unknown"] | None = Field(
+        default=None,
+        description=(
+            "Whether the by-law that governs this parcel is in the retrieval "
+            "corpus: 'held' (it is — the zone citation points at it), "
+            "'not_held' (it is NOT — the zone code is the municipality's "
+            "published mapping, but NO standard from the governing by-law is "
+            "available here and the zone carries no citation. Do NOT answer "
+            "with permitted uses, height, setbacks, floor-area or any other "
+            "standard, and do NOT substitute another by-law's: name the "
+            "governing by-law and tell the user it must be consulted "
+            "directly), 'unknown' (the layer publishes no per-feature "
+            "attribution). Null when no zone resolved."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1249,6 +1308,61 @@ class CorpusCoherenceReport(BaseModel):
     checked_roles: int = Field(..., description="Number of overlay-role dataset configs evaluated.")
     bylaws_checked: int = Field(..., description="Number of distinct (municipality, bylaw_name) pairs evaluated.")
     missing: list[MissingOverlayRole] = Field(default_factory=list)
+
+
+class UnheldGoverningBylaw(BaseModel):
+    """One by-law a geo layer attributes features to but the corpus doesn't hold (ABS-472).
+
+    Municipality-wide layers span many by-law areas. Where the governing
+    by-law is missing from the retrieval corpus, every feature in that area is
+    ground we can map but cannot answer standards for — and before ABS-472 we
+    answered it anyway, citing whichever document the layer was linked to.
+    """
+
+    dataset_name: str = Field(..., description="The layer carrying the features.")
+    governing_bylaw: str = Field(
+        ..., description="The by-law the features name as governing, verbatim."
+    )
+    governing_bylaw_code: str | None = Field(
+        default=None, description="Publisher-namespaced short code, when the layer carries one."
+    )
+    feature_count: int = Field(
+        ..., description="How many of the layer's features this by-law governs."
+    )
+    detail: str = Field(..., description="Human-readable line for a CLI table or ops log.")
+
+
+class GoverningBylawCoverageReport(BaseModel):
+    """How much of each municipality-wide geo layer we can actually cite (ABS-472).
+
+    Informational, not a health tripwire: a municipality publishes far more
+    by-law areas than any corpus is likely to ingest, so ``complete=False`` is
+    the expected steady state and does NOT mean anything is broken. What it
+    quantifies is exposure — how much ground a spatial query can land on and
+    come back with a zone whose by-law we do not hold. Answers for that ground
+    are refused/caveated at request time (``AddressProfile.
+    governing_bylaw_status``); this report is what tells an operator how much
+    of it there is and which by-law to ingest next.
+    """
+
+    complete: bool = Field(
+        ...,
+        description="True when every attributed feature's governing by-law is in scope.",
+    )
+    datasets_checked: int = Field(
+        ..., description="Layers declaring per-feature governing-by-law attribution."
+    )
+    features_checked: int = Field(..., description="Attributed features evaluated.")
+    covered_features: int = Field(
+        ..., description="Features whose governing by-law IS in the retrieval corpus."
+    )
+    unheld_features: int = Field(
+        ..., description="Features whose governing by-law is NOT in the corpus."
+    )
+    unheld: list[UnheldGoverningBylaw] = Field(
+        default_factory=list,
+        description="One entry per (layer, governing by-law) gap, largest first.",
+    )
 
 
 class E2eContaminationMarker(BaseModel):
