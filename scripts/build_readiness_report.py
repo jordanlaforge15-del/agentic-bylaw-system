@@ -120,9 +120,11 @@ def golden_section(run_dir: Path) -> list[str]:
     lines = ["## Golden subset — human-validated (gating)", ""]
     if not path.exists():
         lines += [
-            "**Not graded for this run.** The deploy gate is CLOSED: nothing in "
-            "this run was checked against an answer a qualified human recorded. "
-            "Run `python scripts/verify_golden_cases.py <run_dir>`.",
+            (
+                "**Not graded for this run.** The deploy gate is CLOSED: nothing "
+                "in this run was checked against an answer a qualified human "
+                "recorded. Run `python scripts/verify_golden_cases.py <run_dir>`."
+            ),
             "",
         ]
         return lines
