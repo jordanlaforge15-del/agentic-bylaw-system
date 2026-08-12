@@ -162,6 +162,37 @@ the ingest.
 
 ---
 
+## Closed since: G4 — the address is registered on its parcel (ABS-474)
+
+The guards above answer "does this address resolve to the zone the case
+claims?" and "was the point a rooftop match?". Five cases passed both while
+naming a property that does not exist — `"251 Stairs Street"` on a parcel HRM
+registers as 249/251/257 Windmill Road, `"1462 Birchdale Avenue"` on one it
+registers as 1462 Thornvale Avenue.
+
+The addresses were composed by reverse-geocoding a parcel's interior point,
+which returns the *nearest* street address to a point rather than the address
+assigned to that parcel. **No zone check can catch this**, because a string
+composed from a parcel geocodes back onto it: the zone confirms and the
+confidence reads ROOFTOP. Only the municipality's civic-address register can.
+
+`address_resolution.registered_civics` snapshots that register's answer for the
+case's parcel, written by `scripts/verify_eval_address_zones.py
+--backfill-civics`, and G4 asserts the case's `address` is one of them —
+offline, because the register is not ingested (ABS-475). Guarded by
+`tests/test_eval_address_spatial.py` and
+`web/e2e/functional/abs474-eval-address-registration.spec.ts`.
+
+Two of the five (TC-011, TC-016) name addresses that exist *somewhere* in the
+municipality but not on the parcel the case resolved to, so the recorded zone
+belonged to a different property. Asking the register by `PID` rather than by
+street is what separates "this address exists" from "this address is here".
+
+Also closed by ABS-474: `verify_civic_address` now filters street segments by
+community. Dartmouth's Stairs Street (1-30) and Halifax's (5600-6099) were
+merged into one 1-6099 extent, so `251` read as an in-gap number and came back
+`unverifiable` instead of `not_found`.
+
 ## What is NOT guarded
 
 ### 1. Numeric keywords — the open gap
