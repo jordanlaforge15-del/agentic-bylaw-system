@@ -31,6 +31,7 @@ from layer1.datasets.config import (
     BYLAW_AREA_FIELDS,
     DatasetConfig,
     load_dataset_config,
+    read_dataset_config_mapping,
 )
 
 CONFIG_DIR = Path("src/layer1/datasets")
@@ -145,6 +146,39 @@ def test_the_hrm_subtype_table_has_exactly_one_definition():
     resolved = {name: sorted(table.items()) for name, table in tables.items()}
     assert len({str(rows) for rows in resolved.values()}) == 1, (
         f"bylaw_area_subtypes differs between {sorted(resolved)}"
+    )
+
+
+@pytest.mark.parametrize("filename", ["halifax_zoning.yaml", "halifax_height_precincts.yaml"])
+def test_a_config_read_through_the_loader_survives_being_relocated(
+    filename: str, tmp_path: Path
+):
+    """The cost of making the table shared: ``lookups_from`` is a path, and a
+    path only resolves where it was written.
+
+    ``scripts/seed_e2e_zoning.py`` derives its e2e config by reading the
+    production one, swapping ``source_url`` for a local fixture, and re-dumping
+    it into a temp directory — deliberately, so the ingest path under test is
+    production's. A raw ``yaml.safe_load`` copies ``lookups_from`` across as a
+    relative path with no ``lookups/`` sibling to resolve against, and the
+    derived config stops loading. ``read_dataset_config_mapping`` inlines the
+    tables so the copy is self-contained.
+    """
+    raw = read_dataset_config_mapping(CONFIG_DIR / filename)
+    assert "lookups_from" not in raw, "includes must be resolved, not passed through"
+
+    raw["name"] = "relocated_fixture"
+    raw.pop("source_url", None)
+    raw["source_path"] = str(tmp_path / "features.geojson")
+    relocated = tmp_path / filename
+    relocated.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    # Loads away from the shared file, and resolves the same table it would at
+    # its real path — a copy that parses but resolves differently would be the
+    # worse failure.
+    assert (
+        load_dataset_config(relocated).lookups["bylaw_area_subtypes"]
+        == load_dataset_config(CONFIG_DIR / filename).lookups["bylaw_area_subtypes"]
     )
 
 

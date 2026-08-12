@@ -244,19 +244,27 @@ class DatasetConfig(BaseModel):
         return self
 
 
-def load_dataset_config(path: str | Path) -> DatasetConfig:
-    """Load and validate a dataset YAML config from disk.
+def read_dataset_config_mapping(path: str | Path) -> dict[str, Any]:
+    """Read a dataset YAML into a *self-contained* mapping, includes resolved.
 
     A top-level ``lookups_from`` list names YAML files of shared lookup
     tables, resolved relative to the config's own directory and merged into
-    ``lookups`` before validation. It is a loader concern rather than a model
-    field because only the loader knows where the config came from, and
-    because everything downstream — ``metadata_json``, the coherence audit —
-    should see resolved tables, not a path it would have to resolve again.
+    ``lookups``. It is a loader concern rather than a model field because only
+    the loader knows where the config came from, and because everything
+    downstream — ``metadata_json``, the coherence audit — should see resolved
+    tables, not a path it would have to resolve again.
+
+    Resolving here rather than inside :func:`load_dataset_config` is what makes
+    a production config safe to *relocate*. Fixture seeds derive an e2e config
+    by reading a production one, swapping ``source_url`` for a local file, and
+    re-dumping it into a temp directory (``scripts/seed_e2e_zoning.py``). A raw
+    ``yaml.safe_load`` carries ``lookups_from`` across verbatim as a relative
+    path that no longer resolves next to the copy, so the derived config fails
+    to load. Reading through here instead hands the caller the tables inline —
+    which is also a truer copy of production than an unresolvable path is.
     """
     config_path = Path(path)
-    raw = config_path.read_text(encoding="utf-8")
-    data = yaml.safe_load(raw)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"dataset config at {path} must be a YAML mapping at top level")
     includes = data.pop("lookups_from", None)
@@ -264,7 +272,12 @@ def load_dataset_config(path: str | Path) -> DatasetConfig:
         data["lookups"] = _merge_shared_lookups(
             config_path, includes, data.get("lookups") or {}
         )
-    return DatasetConfig.model_validate(data)
+    return data
+
+
+def load_dataset_config(path: str | Path) -> DatasetConfig:
+    """Load and validate a dataset YAML config from disk."""
+    return DatasetConfig.model_validate(read_dataset_config_mapping(path))
 
 
 def _merge_shared_lookups(
