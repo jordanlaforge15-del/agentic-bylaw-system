@@ -60,8 +60,8 @@ for _path in (REPO_ROOT / "src", REPO_ROOT / "mcp", REPO_ROOT / "scripts"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from build_zone_chapter_map import MAP_FILE, load_map  # noqa: E402
-from eval_zone_chapters import all_violations  # noqa: E402
+from build_zone_chapter_map import MAP_FILE, load_map
+from eval_zone_chapters import all_violations
 
 PROMPTS_FILE = REPO_ROOT / "evals" / "regional_centre_test_prompts.json"
 
@@ -170,6 +170,7 @@ def regional_centre_zoning_polygons(session) -> int:
 def check_case_spatially(session, case: dict[str, Any]) -> SpatialCheck:
     """Run G1 against one case. Never raises; every finding is a failure line."""
     import sqlalchemy as sa
+
     from layer2.retrieval.civic_address import format_ranges, verify_civic_address
     from layer2.retrieval.geocode import resolve_location_with_detail
     from layer2.retrieval.location import RegexLocationExtractor

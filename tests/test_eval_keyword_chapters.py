@@ -237,14 +237,16 @@ def live_corpus():
         pytest.skip(f"Regional Centre corpus not reachable at {db_url}: {type(exc).__name__}")
 
 
-# Schedules the eval cites that the ingest does not carry as a fragment.
+# Schedules the eval cites that the corpus does not carry as a fragment.
 #
-# The by-law publishes ~51 schedules; the Regional Centre ingest carries six
-# (7, 15, 17, 22, 50, 51) because the rest are map plates the parser emits as
-# pictures, not text fragments. So an unresolvable *schedule* keyword is a
-# statement about the ingest's coverage, not about the eval — unlike an
-# unresolvable section or table, which the ingest carries comprehensively
-# (511 sections, every numbered table) and which is therefore a real defect.
+# The ingest carries six schedules as fragments of their own (7, 15, 17, 22,
+# 50, 51). Schedules 18, 20, 26 and 28 exist only as clauses of Section 29's
+# list, so they are not citeable under the reference grammar at all — see
+# docs/ABS-463-BYLAW-REFERENCE-VERIFICATION.md. An unresolvable *schedule*
+# keyword is therefore a statement about how the by-law was structured and
+# parsed, not about the eval — unlike an unresolvable section or table, which
+# the corpus carries comprehensively (511 sections, every numbered table) and
+# which is a real defect.
 #
 # The set is explicit so a *new* unresolvable schedule fails and gets a human
 # decision, instead of the whole class being waved through.

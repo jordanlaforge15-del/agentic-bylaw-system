@@ -30,8 +30,9 @@ that. See docs/ABS-471-EVAL-CORPUS-GUARDS.md.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 # The reference grammar of build_bylaw_reference_index.py, relaxed from
 # fullmatch to search so it also finds a citation *inside* a keyword string.

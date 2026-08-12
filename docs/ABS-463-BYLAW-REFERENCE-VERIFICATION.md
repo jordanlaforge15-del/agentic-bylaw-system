@@ -230,6 +230,16 @@ each cost a reference that would otherwise be the precise one:
 
 ## Out of scope, but found while verifying — worth a follow-up ticket
 
+> **Status, 2026-08-12.** Items 1 and 3 below were the tip of a larger problem:
+> an audit found defects in 17 of the 20 cases, all of them in `zone`, `address`
+> and `expected_answer_keywords` — the three fields nothing validated. ABS-470
+> corrected the data; **ABS-471 built the guards**, and they now cover the
+> address/zone mismatch (item 1) and the wrong-provision keywords (item 3).
+> Item 2 — numeric keywords like `"80%"` against a section reading "No maximum
+> required lot coverage applies" — is *still* unguarded and is the known open
+> gap. See [ABS-471-EVAL-CORPUS-GUARDS.md](ABS-471-EVAL-CORPUS-GUARDS.md) for
+> what is checked, what is not, and why.
+
 1. **Two more addresses do not geocode to the zone the case claims.** The issue
    said TC-001 was the only mismatch; it is the only one whose *own keywords*
    disagree, but:
