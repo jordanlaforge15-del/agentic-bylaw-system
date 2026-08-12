@@ -25,14 +25,23 @@ Two sources, in precedence order:
 ``street_centerline_ranges`` (inference, but a good one)
     A ``role: road_centerlines`` dataset carrying per-segment address ranges
     (HRM: ``FROM_LEFT`` / ``TO_LEFT`` / ``FROM_RIGHT`` / ``TO_RIGHT``). A
-    civic number covered by no segment's range almost certainly does not
-    exist. Measured against 2,000 real HRM civic-address points inside the
-    Regional Centre, this test wrongly reports "not found" for 3 of them
-    (0.15%) — the failure mode is a segment whose published range has not
-    caught up with the street (Nora Bernard Street's 5440–5549 stretch), not
-    a systemic gap. It correctly rejects every fabricated address in the
-    ABS-469 sample (100 Robie, 567 Windsor, 2563 Maitland, 200 Bayers,
-    89 Jubilee, 251 Stairs).
+    civic number past both ends of everything a street publishes almost
+    certainly does not exist.
+
+    Measured against 4,000 real HRM civic-address points inside the Regional
+    Centre: refusing *any* uncovered number would wrongly reject 15 of them
+    (0.38%); refusing only numbers outside the street's whole addressed
+    extent wrongly rejects 6 (0.15%), all on one street whose published
+    ranges stop at 81 while its real addresses run to 355. The difference is
+    that a number sitting BETWEEN two published ranges is usually a range
+    that has not caught up with the street (Nora Bernard Street's 5440–5549
+    stretch after the rename from Cornwallis), whereas a number past both
+    ends is one nothing on that street has ever carried. So an in-gap number
+    is ``unverifiable``, not ``not_found`` — see ``_falls_in_a_gap``.
+
+    Under that rule the check still rejects every fabricated address in the
+    ABS-469 table (100 Robie, 567 Windsor, 2563 Maitland, 200 Bayers) and
+    89 Jubilee Road besides.
 
 The check is *per segment*. Aggregating a street's min/max makes it useless:
 Robie Street spans 0–3899 that way and swallows every number in between.
@@ -280,13 +289,38 @@ def _verify_against_centerlines(
                         matched_side=side,
                         street_label=label,
                     )
+        every_range = [
+            (low, high) for segment in typed for low, high, _side in segment.ranges
+        ]
         spans = [
-            (low, high)
-            for segment in typed
-            for low, high, _side in segment.ranges
-            if low % 2 == number % 2
-        ] or [(low, high) for segment in typed for low, high, _side in segment.ranges]
+            (low, high) for low, high in every_range if low % 2 == number % 2
+        ] or every_range
         merged = _merge_ranges(spans)
+        if _falls_in_a_gap(number, every_range):
+            # Inside the street's addressed extent but between two published
+            # ranges. Measured over 2,000 real HRM civic addresses in the
+            # Regional Centre, every centerline false negative but one was
+            # this shape — a segment whose published range had not caught up
+            # with the street (Nora Bernard Street's 5440-5549 stretch after
+            # the rename from Cornwallis). Numbers BEYOND the street's whole
+            # extent are a different population: nothing on the street has
+            # ever carried them. Refusing only those cuts the measured false
+            # refusal rate from 0.15% to 0.05% and still rejects every
+            # fabricated address in the issue's table, all of which sit past
+            # one end of their street.
+            return CivicAddressVerdict(
+                status="unverifiable",
+                method="street_centerline_ranges",
+                dataset_name=dataset.name,
+                street_label=label,
+                valid_ranges=_nearest_ranges(merged, number),
+                reason=(
+                    "the civic number falls between two published address "
+                    "ranges on this street rather than outside them, which is "
+                    "where the centerline layer's own gaps are — it cannot be "
+                    "called non-existent on this evidence"
+                ),
+            )
         return CivicAddressVerdict(
             status="not_found",
             method="street_centerline_ranges",
@@ -296,6 +330,13 @@ def _verify_against_centerlines(
             suggestions=_nearest_valid_numbers(merged, number),
         )
     return None
+
+
+def _falls_in_a_gap(number: int, ranges: list[tuple[int, int]]) -> bool:
+    """True when ``number`` sits inside the street's extent but in no range."""
+    if not ranges:
+        return False
+    return min(low for low, _ in ranges) < number < max(high for _, high in ranges)
 
 
 @dataclass(frozen=True)

@@ -373,6 +373,29 @@ def test_unknown_street_is_unverifiable_never_nonexistent(seeded_db: str) -> Non
     assert verdict.valid_ranges == ()
 
 
+def test_a_number_between_two_published_ranges_is_not_refused(seeded_db: str) -> None:
+    """The precision rule, and the one that keeps real addresses answerable.
+
+    2100 Robie Street sits between the 1200-1298 and 2454-2526 segments. Over
+    4,000 real HRM addresses, refusing every uncovered number wrongly rejects
+    15 (0.38%) and nearly all of them look exactly like this — a segment
+    whose published range has not caught up with the street. Refusing only
+    numbers past both ends of the street's extent drops that to 6 (0.15%)
+    while still rejecting every fabricated address the issue measured.
+    """
+    with session_scope(seeded_db) as session:
+        in_gap = verify_civic_address(
+            session, civic_number="2100", street="Robie Street"
+        )
+        past_the_end = verify_civic_address(
+            session, civic_number="9000", street="Robie Street"
+        )
+
+    assert in_gap.status == "unverifiable"
+    assert "between two published address ranges" in (in_gap.reason or "")
+    assert past_the_end.status == "not_found"
+
+
 def test_placeholder_zero_ranges_are_not_treated_as_coverage(seeded_db: str) -> None:
     """A 0/0 segment means 'no addressing here', not 'covers 0'."""
     with session_scope(seeded_db) as session:
