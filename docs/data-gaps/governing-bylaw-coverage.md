@@ -64,20 +64,38 @@ makes the rest **structural** exposure — real, but not yet demonstrated.
 Ingesting by-law areas in demand order, starting with DHLUB, is the sensible
 sequence; ingesting all 20 up front is not.
 
-## Operational follow-up after deploying ABS-472
+## Operational follow-up after deploying ABS-472 / ABS-473
 
-1. **Refresh the ingested layer's declaration.** Retrieval reads
+1. **Refresh the ingested layers' declarations.** Retrieval reads
    `links_to.governing_bylaw_from` from the dataset's persisted
    `metadata_json`, written once at ingest. An already-ingested layer keeps
    the old declaration until refreshed:
 
    ```sh
-   DATABASE_URL=... .venv/bin/python scripts/backfill_zoning_bylaw_names.py
+   DATABASE_URL=... .venv/bin/python scripts/backfill_bylaw_area_attribution.py
    ```
 
    Idempotent; it refreshes `links_to` and backfills any feature still missing
    `bylaw_area_name` / `bylaw_area_code`. A full re-ingest of the layer does
    the same thing.
+
+   Renamed from `backfill_zoning_bylaw_names.py` in ABS-473 and driven by the
+   dataset configs rather than one hardcoded layer: it now covers every YAML
+   declaring `governing_bylaw_from`, which as of ABS-473 means
+   `halifax_height_precincts` as well as `halifax_zoning_boundaries`. The
+   height-precinct rows are the reason it resolves from the raw source
+   property (`BYLAW_AREA`) rather than from `bylaw_area_id` — the
+   pre-ABS-473 config never mapped an id to resolve from.
+
+   It exits 2 and warns if any feature's area code has no row in the shared
+   lookup table. That is not cosmetic: a feature that resolves to no by-law
+   name falls back to the dataset-level link, which is the mis-attribution
+   itself. Add the code to `src/layer1/datasets/lookups/hrm_bylaw_areas.yaml`
+   and re-run.
+
+   **Also re-run after switching `halifax_height_precincts` to the live
+   `Maximum_Building_Heights` service** (ABS-473), or re-ingest the layer —
+   whichever the maintenance window allows.
 
 2. **Confirm Halifax Mainland reads as covered.** The governing by-law is
    matched to a document by normalized name (case/hyphen-insensitive, with a
