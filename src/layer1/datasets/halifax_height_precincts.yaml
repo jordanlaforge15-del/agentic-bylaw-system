@@ -1,14 +1,38 @@
 name: halifax_height_precincts
 publisher: Halifax Regional Municipality
 format: geojson
-source_path: data/geo-datasets/Maximum_Building_Heights_6478354320888850499.geojson
+# Live ArcGIS REST endpoint (ABS-473). This layer used to be the only one in
+# the set sourced from a checked-in export
+# (data/geo-datasets/Maximum_Building_Heights_*.geojson), which meant it was
+# the only one the ABS-471 freshness check could not compare against upstream
+# — no drift was detectable, ever. The export and the service agreed on 1,822
+# features when the switch was made, so this changes nothing today; it makes
+# tomorrow's divergence visible.
+#
+# Maximum_Building_Heights is the right service, not the two near-misses
+# beside it: Height_Precincts is a legacy Halifax-Peninsula-only layer (62
+# features, a bare HEIGHT field, no by-law area), and
+# RC_Maximum_Streetwall_Heights is streetwall lines, not building-height
+# polygons. Only this one carries the BHTMAX_ID / MAXBLDHGT / MAXBLDSTRY /
+# BYLAW_AREA field set Schedule 15 is mapped from.
+source_url: https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/Maximum_Building_Heights/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=geojson
 crs: EPSG:4326
 
+# NOTE (ABS-473): this layer is NOT wholly Regional Centre. 48 of its 1,822
+# precincts carry BYLAW_AREA 24 — the Suburban Housing Accelerator LUB, a
+# by-law this corpus does not hold — and serving them as Schedule 15 of the
+# Regional Centre LUB attributed a max-height standard to a by-law that does
+# not govern that ground. document_match below is the document the layer is
+# *published alongside*; ``governing_bylaw_from`` is what retrieval cites
+# from, per feature. Same defect and same fix as ABS-472 on the zoning layer.
 links_to:
   document_match:
     municipality: HRM
     bylaw_name: Regional Centre Land Use By-Law
   fragment_citation: Schedule 15
+  governing_bylaw_from:
+    name_attribute: bylaw_area_name
+    code_attribute: bylaw_area_code
 
 attributes:
   feature_key: GlobalID
@@ -25,17 +49,38 @@ attributes:
       type: int
       optional: true
     effective_date:
+      # The live FeatureServer returns SDATE as Unix epoch milliseconds; the
+      # Hub's static GeoJSON export used RFC 2822 strings for the same value.
+      # This matches the source_url above — switching back to a static
+      # source_path means switching this to rfc2822_date.
       from: SDATE
-      type: rfc2822_date
+      type: epoch_ms_date
       optional: true
     source_case:
       from: SOURCE
       type: string
       optional: true
-    bylaw_area:
+    # BYLAW_AREA is the same HRM subtype code the zoning layer publishes as
+    # BYLAW_ID, so it resolves through the same shared table. Before ABS-473
+    # this was mapped as a bare ``bylaw_area`` string ("23"/"24") that nothing
+    # read — the layer knew which by-law governed each precinct and cited them
+    # all to the Regional Centre LUB anyway.
+    bylaw_area_id:
+      from: BYLAW_AREA
+      type: int
+      optional: true
+    bylaw_area_code:
       from: BYLAW_AREA
       type: string
       optional: true
+      lookup: bylaw_area_subtypes
+      lookup_field: code
+    bylaw_area_name:
+      from: BYLAW_AREA
+      type: string
+      optional: true
+      lookup: bylaw_area_subtypes
+      lookup_field: name
   ignore:
     - OBJECTID
     - BHTMAX_ID
@@ -43,3 +88,8 @@ attributes:
     - SACC
     - ADDDATE
     - MODDATE
+    - Shape__Area
+    - Shape__Length
+
+lookups_from:
+  - lookups/hrm_bylaw_areas.yaml

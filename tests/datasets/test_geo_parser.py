@@ -27,7 +27,12 @@ def test_parses_mini_fixture_with_all_canonical_fields():
         "max_height_m": 25.0,
         "effective_date": "2018-11-03",
         "source_case": "Case H00045",
-        "bylaw_area": "23",
+        # ABS-473: BYLAW_AREA used to land as a bare "23" string nothing read.
+        # It now resolves through the shared HRM subtype table into the by-law
+        # that governs this precinct, which is what retrieval cites from.
+        "bylaw_area_id": 23,
+        "bylaw_area_code": "hrm:RC",
+        "bylaw_area_name": "Regional Centre Land Use By-law",
     }
     # Feature 1 is metres-typed; max_height_storeys must NOT be set.
     assert "max_height_storeys" not in first.canonical_attributes
@@ -44,6 +49,16 @@ def test_parses_mini_fixture_with_all_canonical_fields():
     third = result.features[2]
     assert third.canonical_attributes.get("max_height_storeys") == 9
     assert "max_height_m" not in third.canonical_attributes
+    # ...and it sits in a different by-law area than the other two. The
+    # published layer is mixed the same way (48 of 1,822 precincts are
+    # Suburban Housing Accelerator LUB), so the miniature is too — a fixture
+    # that were uniformly Regional Centre could not fail the way ABS-473 did.
+    assert third.canonical_attributes["bylaw_area_id"] == 24
+    assert third.canonical_attributes["bylaw_area_code"] == "hrm:SHA"
+    assert (
+        third.canonical_attributes["bylaw_area_name"]
+        == "Suburban Housing Accelerator Land Use By-law"
+    )
 
 
 def test_optional_field_missing_does_not_warn(tmp_path: Path):
@@ -163,6 +178,22 @@ def test_invalid_geometry_is_repaired_not_dropped(tmp_path: Path):
     assert any("repaired" in w for w in result.warnings)
 
 
+def _real_halifax_config():
+    """The real config, retyped for the checked-in static export.
+
+    ABS-473 pointed the config at the live FeatureServer, which publishes
+    SDATE as epoch milliseconds. The export in ``data/geo-datasets/`` is the
+    Hub's *static* GeoJSON of the same layer and encodes SDATE as RFC 2822,
+    so parsing it with the config verbatim would warn on every feature. The
+    one-field retype keeps this test about the mapping the config declares —
+    field names, mutual exclusion, by-law attribution — rather than about
+    which of the publisher's two encodings the snapshot happens to use.
+    """
+    cfg = load_dataset_config(CONFIG_PATH)
+    cfg.attributes.canonical["effective_date"].type = "rfc2822_date"
+    return cfg
+
+
 def test_parses_real_halifax_dataset_when_present():
     """Sanity-check against the real published Maximum Building Heights
     layer when it's present in the checkout. Bounds are loose because the
@@ -170,7 +201,7 @@ def test_parses_real_halifax_dataset_when_present():
     real = Path("data/geo-datasets/Maximum_Building_Heights_6478354320888850499.geojson")
     if not real.exists():
         pytest.skip("real Halifax dataset not present in this checkout")
-    cfg = load_dataset_config(CONFIG_PATH)
+    cfg = _real_halifax_config()
     result = parse_geojson(real, cfg)
     # Current export profiled at 1822 features; allow drift either way.
     assert result.feature_count > 1000
@@ -185,3 +216,31 @@ def test_parses_real_halifax_dataset_when_present():
     assert both == 0
     assert has_height > 0
     assert has_storeys > 0
+
+
+def test_real_halifax_dataset_spans_two_bylaws_and_resolves_both():
+    """ABS-473, measured on the real layer rather than a miniature.
+
+    The published Maximum Building Heights layer is not wholly Regional
+    Centre: 48 of its 1,822 precincts carry BYLAW_AREA 24, the Suburban
+    Housing Accelerator LUB. Serving those as Schedule 15 of the Regional
+    Centre LUB is the defect. What makes it fixable is that every feature
+    resolves to a named by-law — a precinct whose area code fell outside the
+    subtype table would resolve to nothing, and retrieval would quietly fall
+    back to the dataset-level Regional Centre link for it.
+    """
+    real = Path("data/geo-datasets/Maximum_Building_Heights_6478354320888850499.geojson")
+    if not real.exists():
+        pytest.skip("real Halifax dataset not present in this checkout")
+    result = parse_geojson(real, _real_halifax_config())
+
+    names = [f.canonical_attributes.get("bylaw_area_name") for f in result.features]
+    assert None not in names, "every precinct must resolve to a named by-law"
+    assert set(names) == {
+        "Regional Centre Land Use By-law",
+        "Suburban Housing Accelerator Land Use By-law",
+    }
+    sha = sum(1 for n in names if n.startswith("Suburban"))
+    # Loose bound: HRM amends the layer. The point is that the non-Regional
+    # Centre slice is real and non-empty, not that it is exactly 48.
+    assert 0 < sha < len(names)

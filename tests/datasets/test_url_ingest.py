@@ -225,9 +225,8 @@ def test_ingest_geo_dataset_via_url_end_to_end(tmp_path: Path):
         )
         zones = sorted({f.canonical_attributes_json.get("zone_code") for f in features})
         assert zones == ["DD", "ER-3"]
-        # Each feature carries the bylaw_area_id and an effective_date.
+        # Each feature carries a coerced effective_date.
         sample = features[0]
-        assert sample.canonical_attributes_json.get("bylaw_area_id") == 23
         assert sample.canonical_attributes_json.get("effective_date") == "2026-04-13"
 
 
@@ -412,6 +411,12 @@ def _query_param(url: str, name: str) -> str:
 
 
 def _zoning_yaml() -> str:
+    """A minimal paginating-URL config. Deliberately maps no by-law area.
+
+    ABS-473 makes mapping one an obligation to cite from it, and this fixture
+    is about pagination and canonical coercion, not attribution — see
+    ``_zoning_yaml_with_lookups`` for the attributed shape.
+    """
     return (
         "name: test_url_zoning\n"
         "publisher: Test\n"
@@ -425,7 +430,6 @@ def _zoning_yaml() -> str:
         "  feature_key: GLOBALID\n"
         "  canonical:\n"
         "    zone_code: { from: ZONE, type: string }\n"
-        "    bylaw_area_id: { from: BYLAW_ID, type: int, optional: true }\n"
         "    effective_date: { from: SDATE, type: rfc2822_date, optional: true }\n"
     )
 
@@ -447,6 +451,11 @@ def _zoning_yaml_with_lookups() -> str:
         "links_to:\n"
         "  document_match: { municipality: HRM, bylaw_name: Test }\n"
         "  fragment_citation: Zoning Schedule\n"
+        # ABS-473: a config that resolves a per-feature by-law must say it
+        # cites from it. The loader rejects the mapping without this block.
+        "  governing_bylaw_from:\n"
+        "    name_attribute: bylaw_area_name\n"
+        "    code_attribute: bylaw_area_code\n"
         "attributes:\n"
         "  feature_key: GLOBALID\n"
         "  canonical:\n"

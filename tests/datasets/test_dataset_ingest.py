@@ -26,7 +26,7 @@ attributes:
   canonical:
     max_height_m: { from: MAXBLDHGT, type: float, optional: true }
     max_height_storeys: { from: MAXBLDSTRY, type: int, optional: true }
-    effective_date: { from: SDATE, type: rfc2822_date, optional: true }
+    effective_date: { from: SDATE, type: epoch_ms_date, optional: true }
     source_case: { from: SOURCE, type: string, optional: true }
   ignore: [OBJECTID, BHTMAX_ID, FCODE, BYLAW_AREA, SACC]
 """
