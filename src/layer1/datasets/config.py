@@ -80,6 +80,15 @@ class DocumentMatch(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+# Canonical fields that record which by-law area a single feature sits in.
+# Mapping any of them means the layer knows, per feature, that it may span
+# more than one by-law — see
+# ``DatasetConfig._require_governing_bylaw_when_features_carry_one``.
+BYLAW_AREA_FIELDS = frozenset(
+    {"bylaw_area", "bylaw_area_id", "bylaw_area_code", "bylaw_area_name"}
+)
+
+
 class GoverningBylawFrom(BaseModel):
     """How to read a feature's *own* governing by-law off its attributes (ABS-472).
 
@@ -146,6 +155,13 @@ class DatasetConfig(BaseModel):
     # the field mapping selects via ``lookup_field``. Per-dataset by design
     # so upstream codes from different jurisdictions (HRM's BYLAW_ID 9 vs.
     # Toronto's 9) never collide in a global namespace.
+    #
+    # ABS-473: a table shared by several layers of the SAME publisher is
+    # written once and pulled in with ``lookups_from`` (see
+    # :func:`load_dataset_config`), which merges the named files into this
+    # dict at load time. Opt-in per dataset, so the no-global-namespace
+    # property above survives — a config still says exactly which tables it
+    # reads.
     lookups: dict[str, dict[Any, dict[str, Any]]] = Field(default_factory=dict)
 
     model_config = {"extra": "forbid"}
@@ -184,6 +200,38 @@ class DatasetConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _require_governing_bylaw_when_features_carry_one(self) -> "DatasetConfig":
+        """Knowing a feature's by-law area obliges the config to cite from it (ABS-473).
+
+        This is the audit ABS-473 ran, turned into a load-time guard.
+        ``halifax_height_precincts`` mapped HRM's ``BYLAW_AREA`` into a
+        canonical attribute and then ignored it, so 48 Suburban Housing
+        Accelerator LUB precincts were served as Schedule 15 of the Regional
+        Centre LUB — a by-law that does not govern them. The information
+        needed to catch that was already in the config; nothing required it
+        to be used.
+
+        So: any layer that maps a per-feature by-law-area attribute must also
+        declare ``links_to.governing_bylaw_from``. A layer genuinely scoped to
+        one by-law is unaffected — it does not map these fields at all. Role
+        datasets (civic addresses, parcels) are exempt because they bind to no
+        fragment and so make no citation to misattribute.
+        """
+        if self.links_to is None:
+            return self
+        carried = sorted(set(self.attributes.canonical) & BYLAW_AREA_FIELDS)
+        if not carried or self.links_to.governing_bylaw_from is not None:
+            return self
+        raise ValueError(
+            f"dataset {self.name!r} maps per-feature by-law attribution "
+            f"{carried} but does not declare 'links_to.governing_bylaw_from'. "
+            "Every feature would be cited to the dataset-level by-law even "
+            "where its own attribute names a different one (ABS-473). Resolve "
+            "a 'bylaw_area_name' (see the shared HRM subtype lookup) and point "
+            "'governing_bylaw_from.name_attribute' at it."
+        )
+
+    @model_validator(mode="after")
     def _validate_lookup_references(self) -> "DatasetConfig":
         for canonical_name, mapping in self.attributes.canonical.items():
             if mapping.lookup is None:
@@ -196,10 +244,77 @@ class DatasetConfig(BaseModel):
         return self
 
 
-def load_dataset_config(path: str | Path) -> DatasetConfig:
-    """Load and validate a dataset YAML config from disk."""
-    raw = Path(path).read_text(encoding="utf-8")
-    data = yaml.safe_load(raw)
+def read_dataset_config_mapping(path: str | Path) -> dict[str, Any]:
+    """Read a dataset YAML into a *self-contained* mapping, includes resolved.
+
+    A top-level ``lookups_from`` list names YAML files of shared lookup
+    tables, resolved relative to the config's own directory and merged into
+    ``lookups``. It is a loader concern rather than a model field because only
+    the loader knows where the config came from, and because everything
+    downstream — ``metadata_json``, the coherence audit — should see resolved
+    tables, not a path it would have to resolve again.
+
+    Resolving here rather than inside :func:`load_dataset_config` is what makes
+    a production config safe to *relocate*. Fixture seeds derive an e2e config
+    by reading a production one, swapping ``source_url`` for a local file, and
+    re-dumping it into a temp directory (``scripts/seed_e2e_zoning.py``). A raw
+    ``yaml.safe_load`` carries ``lookups_from`` across verbatim as a relative
+    path that no longer resolves next to the copy, so the derived config fails
+    to load. Reading through here instead hands the caller the tables inline —
+    which is also a truer copy of production than an unresolvable path is.
+    """
+    config_path = Path(path)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"dataset config at {path} must be a YAML mapping at top level")
-    return DatasetConfig.model_validate(data)
+    includes = data.pop("lookups_from", None)
+    if includes is not None:
+        data["lookups"] = _merge_shared_lookups(
+            config_path, includes, data.get("lookups") or {}
+        )
+    return data
+
+
+def load_dataset_config(path: str | Path) -> DatasetConfig:
+    """Load and validate a dataset YAML config from disk."""
+    return DatasetConfig.model_validate(read_dataset_config_mapping(path))
+
+
+def _merge_shared_lookups(
+    config_path: Path, includes: Any, inline: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge the tables named by ``lookups_from`` into a config's inline ones.
+
+    A name collision is an error rather than an override: two definitions of
+    the same table means the reader cannot tell which one a feature resolved
+    through, and a lookup that resolves differently than it reads is how a
+    feature ends up attributed to the wrong by-law.
+    """
+    if isinstance(includes, str):
+        includes = [includes]
+    if not isinstance(includes, list) or not all(isinstance(i, str) for i in includes):
+        raise ValueError(
+            f"'lookups_from' in {config_path} must be a path or list of paths"
+        )
+    merged: dict[str, Any] = dict(inline)
+    for include in includes:
+        include_path = (config_path.parent / include).resolve()
+        if not include_path.is_file():
+            raise ValueError(
+                f"'lookups_from' entry {include!r} in {config_path} does not "
+                f"resolve to a file (looked in {include_path})"
+            )
+        tables = yaml.safe_load(include_path.read_text(encoding="utf-8"))
+        if not isinstance(tables, dict):
+            raise ValueError(
+                f"shared lookup file {include_path} must be a YAML mapping of "
+                "table name -> table"
+            )
+        for table_name, table in tables.items():
+            if table_name in merged:
+                raise ValueError(
+                    f"lookup table {table_name!r} from {include!r} is already "
+                    f"defined in {config_path}; a table must have one definition"
+                )
+            merged[table_name] = table
+    return merged

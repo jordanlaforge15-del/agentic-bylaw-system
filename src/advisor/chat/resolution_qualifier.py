@@ -109,6 +109,22 @@ _GOVERNING_BYLAW_SUFFIX = (
     "figure above."
 )
 
+# ABS-473: the narrower case. The parcel's zone may be held and correctly
+# cited, and only an overlay over it — a height precinct, a FAR precinct —
+# comes from a by-law we do not have. Worth its own wording because the
+# suffix above would overclaim: saying "this parcel is governed by the
+# Suburban Housing Accelerator LUB" is wrong when only its height precinct is.
+_OVERLAY_GOVERNING_BYLAW_SUFFIX = (
+    "\n\n---\n\n"
+    "**About the {overlay} above:** it is mapped under the {bylaw}, which is "
+    "not part of the by-law corpus behind this answer. The mapped value comes "
+    "from HRM's published mapping, but the standard that applies it is not "
+    "available here — and the equivalent schedule in the by-laws that are "
+    "available does not govern this property. Consult the {bylaw} directly, "
+    "or confirm the requirement with HRM Planning & Development, before "
+    "relying on it."
+)
+
 
 def _payload_texts(output: Any) -> Iterable[str]:
     """Yield every string payload in a tool handler's return value."""
@@ -201,12 +217,33 @@ def governing_bylaw_suffix(tool_calls: Iterable[Any]) -> str | None:
     precision qualifiers rather than emitting a vague warning.
     """
     for payload in _address_payloads(tool_calls):
-        if payload.get("governing_bylaw_status") != "not_held":
+        if payload.get("governing_bylaw_status") == "not_held":
+            bylaw = payload.get("governing_bylaw")
+            if isinstance(bylaw, str) and bylaw.strip():
+                return _GOVERNING_BYLAW_SUFFIX.format(bylaw=bylaw)
+        # ABS-473: the zone-level status covers the zoning layer only. A
+        # height precinct from an unheld by-law rides in the overlay list
+        # with the zone still reading "held", and disclosed nothing.
+        overlay_suffix = _unheld_overlay_suffix(payload)
+        if overlay_suffix is not None:
+            return overlay_suffix
+    return None
+
+
+def _unheld_overlay_suffix(payload: dict[str, Any]) -> str | None:
+    """The disclosure owed by an overlay whose own by-law is not held."""
+    overlays = payload.get("overlays")
+    if not isinstance(overlays, list):
+        return None
+    for overlay in overlays:
+        if not isinstance(overlay, dict) or overlay.get("governing_bylaw_held") is not False:
             continue
-        bylaw = payload.get("governing_bylaw")
+        bylaw = overlay.get("governing_bylaw")
         if not isinstance(bylaw, str) or not bylaw.strip():
             continue
-        return _GOVERNING_BYLAW_SUFFIX.format(bylaw=bylaw)
+        kind = overlay.get("kind")
+        noun = kind.replace("_", " ") if isinstance(kind, str) and kind else "overlay"
+        return _OVERLAY_GOVERNING_BYLAW_SUFFIX.format(overlay=noun, bylaw=bylaw)
     return None
 
 

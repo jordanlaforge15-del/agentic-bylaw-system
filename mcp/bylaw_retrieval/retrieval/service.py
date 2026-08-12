@@ -202,6 +202,40 @@ _GOVERNING_BYLAW_NOT_HELD_CAVEAT = (
     "Development."
 )
 
+# ABS-473: the same defect one layer over, and it needs its own wording. The
+# zone caveat above says the parcel's whole rule set is missing. This one is
+# narrower and easier to miss: the zone may be perfectly well held, and only
+# an *overlay* — a height precinct, a FAR precinct — comes from a by-law we
+# don't have. 48 of the 1,822 features in halifax_height_precincts are
+# Suburban Housing Accelerator LUB precincts served as Schedule 15 of the
+# Regional Centre LUB, so a max-height answer read the right number off the
+# wrong by-law. The mapped value itself is the municipality's own and stays.
+_OVERLAY_GOVERNING_BYLAW_NOT_HELD_CAVEAT = (
+    "The {overlay} covering this address ({label}) is mapped under the "
+    "{bylaw}, which is NOT in this corpus — it is not part of {citation}, "
+    "and {citation} does not apply to this ground. The mapped value is the "
+    "municipality's own and can be stated as such, but nothing that "
+    "interprets it — how it is measured, what exempts or bonuses it, how it "
+    "interacts with the zone — is available here. Do not read the {overlay} "
+    "standard out of {citation} or any other by-law held in this corpus: "
+    "name the {bylaw} and tell the user it must be confirmed with HRM "
+    "Planning & Development."
+)
+
+# How each overlay role reads in that caveat. Keyed off the same roles
+# ``overlay_role_for_name`` produces; the generic bucket falls back to the
+# neutral "overlay" so a newly added layer still gets a readable sentence
+# rather than a raw role slug.
+_OVERLAY_ROLE_NOUNS: dict[str, str] = {
+    "height_precinct": "height precinct",
+    "far_precinct": "floor-area-ratio precinct",
+    "heritage": "heritage conservation district",
+    "bonus_zoning": "bonus-zoning district",
+    "shadow_impact": "shadow-impact area",
+    "pedestrian_street": "pedestrian-oriented commercial street designation",
+    "overlay": "overlay",
+}
+
 
 @dataclass(frozen=True)
 class GoverningBylaw:
@@ -2222,6 +2256,12 @@ class RetrievalService:
         zone_dataset_ids: list[int] = []
         overlays: list[OverlayRef] = []
         citations: list[CitationRef] = []
+        # ABS-473: non-zone overlays whose own by-law is outside the corpus.
+        # Kept as (role, label, by-law) rather than folded into the zone's
+        # scalar governing_* fields because they are a different claim: the
+        # zone can be held and correctly cited while a height precinct over
+        # the same point comes from a by-law we do not have.
+        unheld_overlays: list[tuple[str, str | None, str, str | None]] = []
         # "available" = a dataset of this role is in scope, so a non-match is
         # a meaningful False rather than an unknown None.
         heritage_available = False
@@ -2290,6 +2330,11 @@ class RetrievalService:
                     )
                 )
 
+            if role != "zone" and governing is not None and not governing.held:
+                unheld_overlays.append(
+                    (role, label, governing.name, dataset.linked_fragment_citation)
+                )
+
             if role == "zone":
                 profile.zone = canonical.get("zone_code") or label
                 if governing is not None:
@@ -2345,6 +2390,19 @@ class RetrievalService:
             caveats.append(
                 _GOVERNING_BYLAW_NOT_HELD_CAVEAT.format(
                     zone=profile.zone, bylaw=profile.governing_bylaw
+                )
+            )
+        # ABS-473: next, for the same reason — a standard read out of the
+        # wrong by-law is wrong no matter how well the address resolved. The
+        # zone caveat above does not cover it: the zone can be held and
+        # correctly cited while the height precinct over it is not.
+        for role, label, bylaw, citation in unheld_overlays:
+            caveats.append(
+                _OVERLAY_GOVERNING_BYLAW_NOT_HELD_CAVEAT.format(
+                    overlay=_OVERLAY_ROLE_NOUNS.get(role, "overlay"),
+                    label=label or "unlabelled",
+                    bylaw=bylaw,
+                    citation=citation or "the schedule this layer is linked to",
                 )
             )
         quality_caveat = resolution_caveat(quality)

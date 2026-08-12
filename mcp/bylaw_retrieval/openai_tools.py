@@ -210,7 +210,13 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                 "The zone code may be stated but carries no citation, and NO "
                 "standard behind it (uses, height, setbacks, floor area) is "
                 "available: name that by-law and say it must be consulted "
-                "directly, never substitute a figure from another one."
+                "directly, never substitute a figure from another one. Each "
+                "entry in 'overlays' carries the same pair for itself — a "
+                "parcel with a held zone can still sit under a height or FAR "
+                "precinct from a by-law we lack, and "
+                "'governing_bylaw_held': false is the same hard stop for "
+                "that overlay: never read its standard out of the equivalent "
+                "schedule in a by-law we do hold."
             ),
             "parameters": {
                 "type": "object",

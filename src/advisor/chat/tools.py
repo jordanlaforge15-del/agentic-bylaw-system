@@ -400,7 +400,16 @@ _DESC_GET_ADDRESS_PROFILE = (
     "not apply to this parcel. Name the governing by-law, say it must be "
     "consulted directly with HRM, and do not substitute a figure from "
     "another by-law. The zone will carry no citation in that case, because "
-    "there is no honest one to give."
+    "there is no honest one to give.\n\n"
+    "THE SAME QUESTION FOR EACH OVERLAY, SEPARATELY. The height-precinct, "
+    "FAR and other schedule layers are municipality-wide too, so a parcel "
+    "whose 'governing_bylaw_status' is 'held' can still sit under an overlay "
+    "from a by-law we do not hold. Each entry in 'overlays' carries its own "
+    "'governing_bylaw' / 'governing_bylaw_held', and 'governing_bylaw_held': "
+    "false means the same hard stop for THAT overlay: state the mapped "
+    "value, name the by-law it comes from, and do NOT read the standard out "
+    "of the equivalent schedule in a by-law we do hold — that schedule does "
+    "not govern this ground."
 )
 
 _SCHEMA_GET_ADDRESS_PROFILE: dict[str, Any] = {
