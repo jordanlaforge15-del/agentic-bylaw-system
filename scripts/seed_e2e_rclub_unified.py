@@ -48,6 +48,13 @@ ABS-431 convention) carrying:
   hold. That last one is the issue's measured case — a real zone whose
   standards live in a document we never ingested, served with a citation to
   the by-law the layer happens to be linked to.
+* **An ABS-473 by-law-area split on the height-precinct layer**, east again.
+  The zone there (HR-1) is Regional Centre and held; only the Schedule 15
+  precinct over it names the Suburban Housing Accelerator LUB, which the
+  corpus does not hold. A separate fixture from the DH-1 box on purpose:
+  there the zone is already refused, which would mask whether the overlay
+  refusal fires at all. This is the shape of the real layer, where 48 of
+  1,822 precincts belong to a by-law the zone under them does not.
 
 * **Geocode-cache rows** for ``100 Robie Street`` (inside every polygon
   overlay), ``6184 Quinpool Road`` (~10 m off the Schedule 7 Quinpool
@@ -313,6 +320,18 @@ UNHELD_BYLAW_ADDRESS_RAW = "1657 Barrington Street"
 UNHELD_BYLAW_ADDRESS_NORMALIZED = "civic:1657 barrington st"
 _UNHELD_BYLAW_POINT: dict[str, Any] = {"type": "Point", "coordinates": [-63.55, 44.65]}
 
+# ABS-473: the same defect on an OVERLAY rather than the zone, which is a
+# materially different profile and the reason it needs its own fixture. The
+# height-precinct layer is mixed the way the real one is (48 of 1,822
+# precincts are Suburban Housing Accelerator LUB), so here a parcel's ZONE is
+# Regional Centre — held, correctly cited, clean on every ABS-466/469/472
+# signal — while the height precinct over it belongs to a by-law we do not
+# hold. Before ABS-473 that precinct was served as Schedule 15 of the RC-LUB.
+UNHELD_OVERLAY_BYLAW_AREA = "Suburban Housing Accelerator Land Use By-law"
+UNHELD_OVERLAY_ADDRESS_RAW = "15 Accelerator Way"
+UNHELD_OVERLAY_ADDRESS_NORMALIZED = "civic:15 accelerator way"
+_UNHELD_OVERLAY_POINT: dict[str, Any] = {"type": "Point", "coordinates": [-63.52, 44.65]}
+
 # A point inside every seeded polygon overlay, and the box that contains it.
 TEST_POINT: dict[str, Any] = {"type": "Point", "coordinates": [-63.59, 44.65]}
 _BOX = [
@@ -339,6 +358,17 @@ _DOWNTOWN_BOX = [
     [-63.54, 44.66],
     [-63.56, 44.66],
     [-63.56, 44.64],
+]
+# ABS-473: a fourth box, east again. Its ZONE is Regional Centre — the by-law
+# this document IS — and only the height precinct over it is Suburban Housing
+# Accelerator. Deliberately not reusing the DH-1 box: there the zone is
+# already refused, which would mask whether the overlay refusal fires at all.
+_ACCELERATOR_BOX = [
+    [-63.53, 44.64],
+    [-63.51, 44.64],
+    [-63.51, 44.66],
+    [-63.53, 44.66],
+    [-63.53, 44.64],
 ]
 
 # (dataset_name, fragment citation_label, raw properties, canonical YAML block)
@@ -389,6 +419,19 @@ POLYGON_OVERLAYS: list[dict[str, Any]] = [
                 },
                 {"type": "Polygon", "coordinates": [_DOWNTOWN_BOX]},
             ),
+            # ABS-473: a fourth zone, HELD, under the mixed height-precinct
+            # layer below. It exists so the overlay refusal can be observed
+            # on a profile whose zone side is entirely clean.
+            (
+                {
+                    "GLOBALID": "rclub-zone-4",
+                    "ZONE": "HR-1",
+                    "DESCRIPTION": "High-Rise Residential 1",
+                    "BYLAW_AREA": HELD_BYLAW_AREA,
+                    "BYLAW_CODE": "hrm:RC",
+                },
+                {"type": "Polygon", "coordinates": [_ACCELERATOR_BOX]},
+            ),
         ),
         "canonical": (
             "    zone_code: { from: ZONE, type: string }\n"
@@ -408,8 +451,38 @@ POLYGON_OVERLAYS: list[dict[str, Any]] = [
         "name": "e2e_rclub_height_precincts",
         "citation": "Schedule 15",
         "feature_key_field": "GlobalID",
-        "properties": {"GlobalID": "rclub-height-1", "MAXBLDHGT": 25.0},
-        "canonical": ("    max_height_m: { from: MAXBLDHGT, type: float, optional: true }\n"),
+        "properties": {
+            "GlobalID": "rclub-height-1",
+            "MAXBLDHGT": 25.0,
+            "BYLAW_AREA": HELD_BYLAW_AREA,
+            "BYLAW_CODE": "hrm:RC",
+        },
+        # ABS-473: the real Schedule 15 layer spans two by-law areas — 1,774
+        # Regional Centre precincts and 48 Suburban Housing Accelerator ones,
+        # all served as Schedule 15 of the RC-LUB. This second precinct is one
+        # of the 48, sitting over a zone the corpus DOES hold.
+        "extra": (
+            (
+                {
+                    "GlobalID": "rclub-height-2",
+                    "MAXBLDHGT": 20.0,
+                    "BYLAW_AREA": UNHELD_OVERLAY_BYLAW_AREA,
+                    "BYLAW_CODE": "hrm:SHA",
+                },
+                {"type": "Polygon", "coordinates": [_ACCELERATOR_BOX]},
+            ),
+        ),
+        "canonical": (
+            "    max_height_m: { from: MAXBLDHGT, type: float, optional: true }\n"
+            "    bylaw_area_name: { from: BYLAW_AREA, type: string, optional: true }\n"
+            "    bylaw_area_code: { from: BYLAW_CODE, type: string, optional: true }\n"
+        ),
+        # Mirrors src/layer1/datasets/halifax_height_precincts.yaml.
+        "governing_bylaw_from": (
+            "  governing_bylaw_from:\n"
+            "    name_attribute: bylaw_area_name\n"
+            "    code_attribute: bylaw_area_code\n"
+        ),
     },
     {
         "name": "e2e_rclub_far_precincts",
@@ -898,6 +971,16 @@ _GEOCODE_ROWS: tuple[
         _UNHELD_BYLAW_POINT,
         0.95,
         "seeded for ABS-472 (zone governed by a by-law outside the corpus)",
+        "ROOFTOP",
+    ),
+    # ABS-473: ROOFTOP again, and this time the ZONE is held too. Everything
+    # about this profile reads clean except the height precinct over it.
+    (
+        UNHELD_OVERLAY_ADDRESS_NORMALIZED,
+        UNHELD_OVERLAY_ADDRESS_RAW,
+        _UNHELD_OVERLAY_POINT,
+        0.95,
+        "seeded for ABS-473 (height precinct from a by-law outside the corpus)",
         "ROOFTOP",
     ),
     # ABS-469: parked on the zoned test point deliberately. If the profile
