@@ -33,6 +33,7 @@ from bylaw_retrieval.retrieval import (
     audit_corpus_coherence,
     audit_e2e_contamination,
     audit_enabled_name_collisions,
+    audit_governing_bylaw_coverage,
     retrieval_enabled_resolver,
 )
 from bylaw_retrieval.retrieval.coherence_audit import DEFAULT_DATASET_CONFIG_DIR
@@ -71,10 +72,18 @@ def main(argv: list[str] | None = None) -> int:
         # ABS-434: at most one ENABLED document per normalized bylaw identity
         # — the doc-15/38 double-enable ("By-law" vs "By-Law") tripwire.
         name_collisions = audit_enabled_name_collisions(session)
+        # ABS-472: how much mapped ground is governed by a by-law we do not
+        # hold. Informational, never a failure — a municipality publishes far
+        # more by-law areas than any corpus ingests — but it is the number
+        # that says which by-law to ingest next.
+        coverage = audit_governing_bylaw_coverage(
+            session, default_document_id_resolver=resolver
+        )
 
     payload = report.model_dump(mode="json")
     payload["e2e_contamination"] = contamination.model_dump(mode="json")
     payload["enabled_name_collisions"] = name_collisions.model_dump(mode="json")
+    payload["governing_bylaw_coverage"] = coverage.model_dump(mode="json")
     text = json.dumps(payload, indent=2)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +123,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         for collision in name_collisions.collisions:
             print(f"  - {collision.detail}", file=sys.stderr)
+
+    if not coverage.complete:
+        print(
+            f"governing-by-law coverage (ABS-472): {coverage.unheld_features} of "
+            f"{coverage.features_checked} attributed feature(s) are governed by a "
+            "by-law outside the corpus — answers for that ground are refused, not "
+            "cited:",
+            file=sys.stderr,
+        )
+        for gap in coverage.unheld:
+            print(f"  - {gap.detail}", file=sys.stderr)
 
     if failed:
         return 1

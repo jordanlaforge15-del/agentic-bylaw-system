@@ -109,6 +109,7 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
         audit_corpus_coherence,
         audit_e2e_contamination,
         audit_enabled_name_collisions,
+        audit_governing_bylaw_coverage,
         retrieval_enabled_resolver,
     )
     from layer1.db.session import session_scope  # noqa: PLC0415
@@ -120,6 +121,9 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
             )
             contamination = audit_e2e_contamination(session)
             name_collisions = audit_enabled_name_collisions(session)
+            coverage = audit_governing_bylaw_coverage(
+                session, default_document_id_resolver=retrieval_enabled_resolver
+            )
     except Exception:
         logger.exception("corpus-coherence audit (ABS-356) failed to run")
         return {"status": "error"}, 503
@@ -182,6 +186,14 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
             "status": "ok" if name_collisions.collision_free else "collision",
             **name_collisions.model_dump(mode="json"),
         },
+        # ABS-472: informational only, and deliberately excluded from
+        # ``status``. A municipality publishes far more by-law areas than any
+        # corpus ingests, so incomplete coverage is the steady state, not a
+        # regression — turning it red would leave this endpoint permanently
+        # 503 and train operators to ignore it. What it reports is how much
+        # mapped ground answers get refused on, and which by-law to ingest
+        # next.
+        "governing_bylaw_coverage": coverage.model_dump(mode="json"),
     }
     return body, (200 if status == "ok" else 503)
 
