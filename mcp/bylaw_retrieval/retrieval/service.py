@@ -87,6 +87,11 @@ from layer1.semantic.permission_markers import (
     classify_permission_marker,
     ordinal_to_circled,
 )
+from layer2.retrieval.civic_address import (
+    CivicAddressVerdict,
+    format_ranges,
+    verify_civic_address,
+)
 from layer2.retrieval.datasets import _summarize_dataset
 from layer2.retrieval.geocode import resolve_location_with_detail
 from layer2.retrieval.location import LocationReference, RegexLocationExtractor
@@ -98,10 +103,13 @@ from layer2.retrieval.resolution_quality import (
 from layer2.retrieval.spatial import (
     DEFAULT_ABUT_DISTANCE_M,
     PARCEL_ABUT_DISTANCE_M,
+    ZONE_BOUNDARY_PROXIMITY_M,
     ResolvedLocation,
+    features_within,
     find_abutting_features,
     find_containing_feature,
     query_features,
+    square_degrees_to_m2,
 )
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
@@ -144,6 +152,36 @@ _UNRESOLVABLE_CAVEAT = (
     "This address could not be resolved to a point, so no zone or overlay "
     "was looked up. Do not state a zone for it — ask the user to confirm "
     "the address, or fall back to text retrieval with the location slot."
+)
+
+# ABS-469: the address does not exist. A geocoder still answers it — it
+# interpolates a position from the surrounding civic numbering — so this
+# caveat has to be emphatic about what the resulting point is worth, which is
+# nothing. The correct response is a refusal plus the numbers that do exist.
+_NONEXISTENT_ADDRESS_CAVEAT = (
+    "This civic number does not exist. {evidence} No zone, setback, height or "
+    "floor-area figure can be given for it: the geocoder still returns a "
+    "point for an address like this by estimating a position from the "
+    "surrounding civic numbering, and that point sits on some other owner's "
+    "parcel. Tell the user the address could not be found, quote the civic "
+    "numbers that do exist on that street, and ask them to confirm the "
+    "address before anything is answered about the property."
+)
+
+_ZONE_BOUNDARY_CAVEAT = (
+    "The resolved point is {distance:.0f} m from the {other_zone} boundary. "
+    "Zone lines run through and between lots, so a point this close means the "
+    "zone above — and every setback, height and floor-area figure derived "
+    "from it — may belong to the adjoining {other_zone} land instead. State "
+    "the proximity and tell the user to confirm the parcel's zoning with HRM "
+    "before relying on the figures."
+)
+
+_MULTI_ZONE_PARCEL_CAVEAT = (
+    "This parcel is split across more than one zone ({zones}). The standards "
+    "differ across the lot, so which zone governs depends on where on the "
+    "parcel the work is proposed. Do not answer as though one zone applied to "
+    "the whole property — say the lot is split and ask where the work sits."
 )
 
 
@@ -1479,6 +1517,14 @@ class RetrievalService:
         Never raises for an unresolvable address — FR-3.4 — returning an
         ``AddressProfile`` with ``unresolvable=True`` and empty citations so
         the calling agent can fall back to the thin tools cleanly.
+
+        ABS-469: the civic number is checked against the municipality's own
+        data BEFORE the address is geocoded. A number no published address or
+        street-segment range covers does not exist, and the geocoder will
+        happily invent a position for it by interpolating from the
+        surrounding numbering — so the check runs first and the address is
+        refused with the numbers that do exist, rather than answered from a
+        point on somebody else's parcel.
         """
         refs = RegexLocationExtractor().extract(address)
         if not refs:
@@ -1487,10 +1533,20 @@ class RetrievalService:
             )
 
         ref = refs[0]
-        resolved, _detail = resolve_location_with_detail(self.session, ref)
         canonical_address = ref.raw_text or address
+        verdict: CivicAddressVerdict | None = None
+        if ref.kind == "civic_address":
+            verdict = verify_civic_address(
+                self.session, civic_number=ref.civic_number, street=ref.street
+            )
+            if verdict.status == "not_found":
+                return self._nonexistent_address_profile(
+                    canonical_address, ref, verdict
+                )
+
+        resolved, _detail = resolve_location_with_detail(self.session, ref)
         if resolved is None:
-            return AddressProfile(
+            profile = AddressProfile(
                 address=canonical_address,
                 civic_number=ref.civic_number,
                 street=ref.street,
@@ -1498,7 +1554,56 @@ class RetrievalService:
                 unresolvable=True,
                 caveats=[_UNRESOLVABLE_CAVEAT],
             )
-        return self._build_address_profile(canonical_address, ref, resolved)
+            self._apply_civic_verdict(profile, verdict)
+            return profile
+        return self._build_address_profile(
+            canonical_address, ref, resolved, verdict=verdict
+        )
+
+    def _nonexistent_address_profile(
+        self,
+        address: str,
+        ref: LocationReference,
+        verdict: CivicAddressVerdict,
+    ) -> AddressProfile:
+        """The refusal an address that does not exist deserves.
+
+        No geocode is attempted: there is nothing to geocode, and asking the
+        external geocoder would only produce the interpolated point this whole
+        check exists to stop being used. ``unresolvable`` stays False because
+        the failure is not "we could not find it" — it is "it is not there",
+        a different thing to tell the user and the only one that carries a
+        correction.
+        """
+        profile = AddressProfile(
+            address=address,
+            civic_number=ref.civic_number,
+            street=ref.street,
+            pid=ref.parcel_id,
+            unresolvable=False,
+        )
+        self._apply_civic_verdict(profile, verdict)
+        profile.caveats = [
+            _NONEXISTENT_ADDRESS_CAVEAT.format(evidence=_verdict_evidence(verdict))
+        ]
+        return profile
+
+    @staticmethod
+    def _apply_civic_verdict(
+        profile: AddressProfile, verdict: CivicAddressVerdict | None
+    ) -> None:
+        """Copy a civic-address verdict onto the DTO (no-op when absent)."""
+        if verdict is None:
+            return
+        profile.civic_address_status = verdict.status
+        if verdict.method is not None:
+            profile.civic_address_evidence = (
+                f"{verdict.method} ({verdict.dataset_name})"
+                if verdict.dataset_name
+                else verdict.method
+            )
+        profile.valid_civic_number_ranges = format_ranges(verdict.valid_ranges)
+        profile.suggested_civic_numbers = [str(n) for n in verdict.suggestions]
 
     # -- ABS-375: adjacent-parcel zoning lookup ---------------------------
     #
@@ -1897,6 +2002,8 @@ class RetrievalService:
         address: str,
         ref: LocationReference,
         resolved: ResolvedLocation,
+        *,
+        verdict: CivicAddressVerdict | None = None,
     ) -> AddressProfile:
         # ABS-466: the zone below is only as good as the point that selected
         # it, so the profile reports how that point was arrived at. Google's
@@ -1914,6 +2021,8 @@ class RetrievalService:
             location_type=resolved.location_type,
             location_resolver=resolved.source,
         )
+        self._apply_civic_verdict(profile, verdict)
+        zone_dataset_ids: list[int] = []
         overlays: list[OverlayRef] = []
         citations: list[CitationRef] = []
         # "available" = a dataset of this role is in scope, so a non-match is
@@ -1927,6 +2036,7 @@ class RetrievalService:
             role = self._overlay_role(dataset)
             if role == "zone":
                 zone_available = True
+                zone_dataset_ids.append(dataset.id)
             elif role == "heritage":
                 heritage_available = True
             elif role == "bonus_zoning":
@@ -1990,12 +2100,33 @@ class RetrievalService:
         profile.overlays = overlays
         profile.citations = citations
 
+        # ABS-469: a zone code is only safe when the point that selected it is
+        # not sitting on a zone line, and when the parcel it names is not
+        # split between zones. Both are computed from the zoning dataset the
+        # loop above already identified, and both are independent of how good
+        # the geocode was.
+        if profile.zone is not None:
+            self._apply_zone_boundary_context(
+                profile, resolved, zone_dataset_ids=zone_dataset_ids
+            )
+
         # ABS-466: state the resolution's limits instead of letting a zone
         # picked by an estimated point read as fact.
         caveats: list[str] = []
         quality_caveat = resolution_caveat(quality)
         if quality_caveat is not None:
             caveats.append(quality_caveat)
+        if profile.parcel_zones:
+            caveats.append(
+                _MULTI_ZONE_PARCEL_CAVEAT.format(zones=", ".join(profile.parcel_zones))
+            )
+        if profile.zone_boundary_distance_m is not None:
+            caveats.append(
+                _ZONE_BOUNDARY_CAVEAT.format(
+                    distance=profile.zone_boundary_distance_m,
+                    other_zone=profile.nearest_other_zone,
+                )
+            )
         if profile.zone is None:
             if zone_available:
                 # A zoning dataset WAS in scope and the point missed every
@@ -2012,6 +2143,88 @@ class RetrievalService:
                 )
         profile.caveats = caveats
         return profile
+
+    # A zone polygon's edge is shared with its neighbour's, so a parcel that
+    # merely touches the next zone picks up a sliver of it from coordinate
+    # precision alone. Measured on the HRM fabric these slivers run 0.2–5 m²
+    # against parcels of 180–1,100 m², while a genuine split gives each zone
+    # tens of square metres AND a real share of the lot. Requiring both a 5%
+    # share and 10 m² keeps 2563 Maitland's real PCF/HR-1 split (107 m² and
+    # 66 m² of a ~180 m² lot) and drops 2500 Robie's 0.6 m² of ER-2 against
+    # 705 m² of COR.
+    _MULTI_ZONE_MIN_SHARE = 0.05
+    _MULTI_ZONE_MIN_AREA_M2 = 10.0
+
+    def _apply_zone_boundary_context(
+        self,
+        profile: AddressProfile,
+        resolved: ResolvedLocation,
+        *,
+        zone_dataset_ids: list[int],
+    ) -> None:
+        """Populate the zone-boundary proximity and multi-zone parcel fields.
+
+        ABS-469 tier 4, and orthogonal to everything else in this issue: an
+        exact rooftop match is still unsafe when the zone line runs through
+        the lot or along it. "This point is 8 m from the CEN-1 boundary;
+        confirm the zone with HRM" is a correct answer where a bare zone code
+        is not.
+        """
+        if not zone_dataset_ids:
+            return
+        for dataset_id in zone_dataset_ids:
+            nearby = features_within(
+                self.session,
+                dataset_id=dataset_id,
+                location=resolved,
+                distance_m=ZONE_BOUNDARY_PROXIMITY_M,
+            )
+            for feature, distance_m in nearby:
+                code = (feature.canonical_attributes_json or {}).get("zone_code")
+                if not code or str(code) == profile.zone:
+                    continue
+                # features_within sorts nearest-first, so the first differing
+                # zone IS the nearest one.
+                profile.nearest_other_zone = str(code)
+                profile.zone_boundary_distance_m = round(distance_m, 1)
+                break
+            if profile.nearest_other_zone is not None:
+                break
+
+        parcel_geometry = self._containing_parcel_geometry(resolved)
+        if parcel_geometry is None:
+            return
+        parcel_location = ResolvedLocation(
+            kind="parcel",
+            geometry=parcel_geometry,
+            confidence=resolved.confidence,
+            source=resolved.source,
+        )
+        try:
+            latitude = shapely_shape(parcel_geometry).representative_point().y
+        except (TypeError, ValueError, KeyError):
+            return
+        shares: dict[str, float] = {}
+        for dataset_id in zone_dataset_ids:
+            for match in query_features(
+                self.session, dataset_id=dataset_id, location=parcel_location
+            ):
+                code = (match.feature.canonical_attributes_json or {}).get("zone_code")
+                if not code:
+                    continue
+                area_m2 = square_degrees_to_m2(match.overlap_area, latitude)
+                shares[str(code)] = shares.get(str(code), 0.0) + area_m2
+        if len(shares) < 2:
+            return
+        total = sum(shares.values())
+        significant = [
+            code
+            for code, area in sorted(shares.items(), key=lambda kv: -kv[1])
+            if area >= self._MULTI_ZONE_MIN_AREA_M2
+            and (total <= 0 or area / total >= self._MULTI_ZONE_MIN_SHARE)
+        ]
+        if len(significant) > 1:
+            profile.parcel_zones = significant
 
     @staticmethod
     def _overlay_label(
@@ -2721,6 +2934,28 @@ def _structural_citation_rank(requested: str, candidates: list[str]) -> list[str
             continue
         scored.append((-matched, len(tokens), path))
     return [path for _matched, _depth, path in sorted(scored)]
+
+
+def _verdict_evidence(verdict: CivicAddressVerdict) -> str:
+    """One sentence naming what proved the address does not exist.
+
+    Quoted inside the refusal caveat so the answer can say *why* rather than
+    asserting non-existence bare — a user who knows their own address needs to
+    see which municipal record was consulted before they will believe it.
+    """
+    street = verdict.street_label or "that street"
+    if verdict.method == "civic_address_points":
+        return (
+            f"The municipality's civic-address register publishes no such "
+            f"address on {street}."
+        )
+    ranges = format_ranges(verdict.valid_ranges)
+    if ranges:
+        return (
+            f"No street segment on {street} publishes an address range "
+            f"covering it (the ranges that exist are {', '.join(ranges)})."
+        )
+    return f"No street segment on {street} publishes an address range covering it."
 
 
 def _first_str(mapping: dict[str, object], *keys: str) -> str | None:
