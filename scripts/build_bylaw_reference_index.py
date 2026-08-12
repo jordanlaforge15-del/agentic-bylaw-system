@@ -21,10 +21,17 @@ Re-run this script after every re-ingest of the Regional Centre by-law:
 
 ``--check`` exits non-zero if any reference fails to resolve against the live
 corpus, if the committed snapshot's per-reference resolutions have drifted from
-what the corpus now says, or if the snapshot's provenance (``document_id``,
+what the corpus now says, if the snapshot's provenance (``document_id``,
 ``source_fragment_count``, ``reference_count``) no longer describes the corpus it
-was generated from. ``tests/test_bylaw_reference_index_check.py`` runs this mode
+was generated from, or — ABS-471 — if a case cites a provision from a *different
+zone's* chapter. ``tests/test_bylaw_reference_index_check.py`` runs this mode
 automatically wherever the real ingest is reachable, and skips where it is not.
+
+Resolution was never enough on its own. Every reference defect ABS-470 fixed
+resolved perfectly: ``Section 200`` is a real provision, it just governs HR-2
+and HR-1 rather than the CDD-2 case citing it. The zone-appropriateness rule
+lives in ``scripts/eval_zone_chapters.py`` and reads the chapter boundaries
+``scripts/build_zone_chapter_map.py`` derives from this same corpus.
 
 Reference grammar (the only forms allowed in the eval file)
 -----------------------------------------------------------
@@ -253,6 +260,26 @@ PROVENANCE_FIELDS = {
 }
 
 
+def zone_appropriateness_failures(prompts_file: Path = PROMPTS_FILE) -> list[str]:
+    """Cases citing a provision from another zone's chapter (ABS-471, G3).
+
+    Pure and database-free: the chapter boundaries come from the committed
+    ``regional_centre_zone_chapter_map.json`` snapshot, which
+    ``build_zone_chapter_map.py --check`` keeps honest against the corpus. That
+    split is what lets this run inside ``--check`` without a second set of
+    queries, and inside pytest without a database at all.
+    """
+    try:  # importable either as `scripts.x` (pytest) or as `x` (./scripts/foo.py)
+        from scripts.build_zone_chapter_map import load_map
+        from scripts.eval_zone_chapters import all_violations
+    except ImportError:  # pragma: no cover - depends on how the caller set sys.path
+        from build_zone_chapter_map import load_map
+        from eval_zone_chapters import all_violations
+
+    cases = json.loads(prompts_file.read_text())
+    return all_violations(cases, ("expected_bylaw_references",), load_map())
+
+
 def provenance_drift(committed: dict[str, Any], live: dict[str, Any]) -> list[str]:
     """Compare a committed snapshot's provenance against a freshly built one.
 
@@ -304,7 +331,23 @@ def main(argv: list[str] | None = None) -> int:
             + ", ".join(ambiguous)
         )
 
+    # ABS-471 (G3). Reported in both modes because a regeneration that silently
+    # re-snapshots a wrong-zone citation is how the eval file rotted the first
+    # time; only --check treats it as fatal, so the snapshot can still be
+    # rebuilt while the citations are being corrected.
+    misfiled = zone_appropriateness_failures()
+    if misfiled:
+        print(
+            "ZONE-INAPPROPRIATE references (they resolve, but they govern a "
+            "different zone):",
+            file=sys.stderr,
+        )
+        for line in misfiled:
+            print(f"  - {line}", file=sys.stderr)
+
     if args.check:
+        if misfiled:
+            return 1
         if not INDEX_FILE.exists():
             print(f"{INDEX_FILE} is missing; run without --check.", file=sys.stderr)
             return 1
@@ -334,8 +377,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(
             f"OK: {index['reference_count']} references resolve against "
-            f"document_id={index['document_id']}, and the snapshot's provenance "
-            f"matches the live corpus ({index['source_fragment_count']} fragments)."
+            f"document_id={index['document_id']}, each belongs to a chapter "
+            f"governing its case's zone, and the snapshot's provenance matches "
+            f"the live corpus ({index['source_fragment_count']} fragments)."
         )
         return 0
 
