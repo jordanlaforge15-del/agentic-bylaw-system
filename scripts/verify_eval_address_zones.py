@@ -50,6 +50,7 @@ from bylaw_retrieval.retrieval.service import RetrievalService
 from zone_address_picker import (
     DEFAULT_DB_URL,
     REGIONAL_CENTRE_BYLAW_AREA_ID,
+    _build_civic_register,
     _build_reverse_geocoder,
     pick_address_for_zone,
 )
@@ -199,6 +200,7 @@ def repair_case(
         session,
         case["zone"],
         reverse_geocoder=reverse_geocoder,
+        civic_register=civic_register,
         service=service,
         candidates=candidates,
         allow_interpolated=allow_interpolated,
@@ -273,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         reverse_geocoder = _build_reverse_geocoder()
+        civic_register = _build_civic_register()
         exclude = {c["address"].strip().lower() for c in cases}
         for case in selected:
             result = check_case(service, case)

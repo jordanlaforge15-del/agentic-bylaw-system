@@ -72,6 +72,7 @@ from zone_address_picker import (
     DEFAULT_DB_URL,
     REGIONAL_CENTRE_BYLAW_AREA_ID,
     ZoneAddress,
+    _build_civic_register,
     _build_reverse_geocoder,
     pick_address_for_zone,
 )
@@ -434,6 +435,7 @@ def main() -> None:
 
     engine = create_engine(args.db_url)
     reverse_geocoder = _build_reverse_geocoder()
+    civic_register = _build_civic_register()
     # Addresses already spoken for, so a batch cannot hand the same one to two
     # cases and so a new case never collides with an existing one.
     taken = {c.get("address", "").strip().lower() for c in existing}
@@ -447,6 +449,7 @@ def main() -> None:
                 session,
                 spec,
                 reverse_geocoder=reverse_geocoder,
+                civic_register=civic_register,
                 bylaw_area_id=REGIONAL_CENTRE_BYLAW_AREA_ID,
                 candidates=args.candidates,
                 allow_interpolated=args.allow_interpolated,
