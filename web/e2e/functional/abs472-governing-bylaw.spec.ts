@@ -204,8 +204,15 @@ test("the two outcomes are distinguishable from the profile alone", async ({
   expect(zoneCitations(held).length).toBeGreaterThan(0);
   expect(zoneCitations(unheld).length).toBe(0);
 
-  expect(held.caveats.join(" ")).not.toContain("not in this corpus");
-  expect(unheld.caveats.join(" ")).toContain("not in this corpus");
+  // Case-folded on both sides: the caveat shouts "NOT in this corpus" at the
+  // model on purpose, so a case-sensitive match would fail the positive
+  // assertion and pass the negative one for the wrong reason.
+  expect(held.caveats.join(" ").toLowerCase()).not.toContain(
+    "not in this corpus",
+  );
+  expect(unheld.caveats.join(" ").toLowerCase()).toContain(
+    "not in this corpus",
+  );
 });
 
 test("the coverage audit sizes the unheld ground", async ({ request }) => {
