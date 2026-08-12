@@ -171,7 +171,11 @@ def check_case_spatially(session, case: dict[str, Any]) -> SpatialCheck:
     """Run G1 against one case. Never raises; every finding is a failure line."""
     import sqlalchemy as sa
 
-    from layer2.retrieval.civic_address import format_ranges, verify_civic_address
+    from layer2.retrieval.civic_address import (
+        community_from_address,
+        format_ranges,
+        verify_civic_address,
+    )
     from layer2.retrieval.geocode import resolve_location_with_detail
     from layer2.retrieval.location import RegexLocationExtractor
     from layer2.retrieval.resolution_quality import classify_resolution
@@ -193,7 +197,10 @@ def check_case_spatially(session, case: dict[str, Any]) -> SpatialCheck:
     #    address before a geocoder invents a plausible point for it.
     if ref.kind == "civic_address":
         verdict = verify_civic_address(
-            session, civic_number=ref.civic_number, street=ref.street
+            session,
+            civic_number=ref.civic_number,
+            street=ref.street,
+            community=community_from_address(case["address"]),
         )
         result.civic_status, result.civic_reason = verdict.status, verdict.reason
         if verdict.status == "not_found":

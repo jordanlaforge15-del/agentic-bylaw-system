@@ -91,6 +91,7 @@ from layer1.semantic.permission_markers import (
 )
 from layer2.retrieval.civic_address import (
     CivicAddressVerdict,
+    community_from_address,
     format_ranges,
     verify_civic_address,
 )
@@ -1674,7 +1675,15 @@ class RetrievalService:
         verdict: CivicAddressVerdict | None = None
         if ref.kind == "civic_address":
             verdict = verify_civic_address(
-                self.session, civic_number=ref.civic_number, street=ref.street
+                self.session,
+                civic_number=ref.civic_number,
+                street=ref.street,
+                # The community is in the address the caller typed, not in the
+                # LocationReference the extractor produces. Without it,
+                # same-named streets in different communities share one
+                # address extent and a fabricated number lands in the
+                # apparent gap between them (ABS-474).
+                community=community_from_address(canonical_address),
             )
             if verdict.status == "not_found":
                 return self._nonexistent_address_profile(

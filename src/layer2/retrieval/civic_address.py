@@ -87,6 +87,12 @@ ROAD_CENTERLINES_ROLE = "road_centerlines"
 # The canonical names are preferred when present — see ``_segment_ranges``.
 _RAW_STREET_NAME_FIELDS = ("STR_NAME",)
 _RAW_STREET_TYPE_FIELDS = ("STR_TYPE",)
+# The community a segment addresses. HRM records one per side; a segment on a
+# boundary can carry two, so both are read and either may match. Without this,
+# ranges from same-named streets in different communities merge into one
+# extent — see ``_filter_by_community``.
+_RAW_COMMUNITY_FIELDS = ("GSA_LEFT", "GSA_RIGHT")
+_CANONICAL_COMMUNITY_FIELDS = ("community",)
 _RAW_RANGE_FIELDS = (
     ("FROM_LEFT", "TO_LEFT", "left"),
     ("FROM_RIGHT", "TO_RIGHT", "right"),
@@ -114,6 +120,12 @@ _HRM_STREET_TYPES: dict[str, tuple[str, ...]] = {
     "pkwy": ("PKWY",),
     "way": ("WAY",),
 }
+
+# Canadian province and territory codes, so ``community_from_address`` can
+# tell "Halifax, NS" (no community written) from "Dartmouth, NS".
+_PROVINCE_CODES = frozenset(
+    {"NS", "NB", "PE", "NL", "QC", "ON", "MB", "SK", "AB", "BC", "YT", "NT", "NU"}
+)
 
 # Cap on how many ranges we quote back. A long street can publish 40+; the
 # response is replayed on every subsequent turn, and the two or three ranges
@@ -163,12 +175,20 @@ class CivicAddressVerdict:
 
 
 def verify_civic_address(
-    session: Session, *, civic_number: str | None, street: str | None
+    session: Session,
+    *,
+    civic_number: str | None,
+    street: str | None,
+    community: str | None = None,
 ) -> CivicAddressVerdict:
     """Check ``civic_number`` on ``street`` against the municipal datasets.
 
     Never raises and never guesses: anything the ingested data cannot settle
     comes back ``unverifiable`` with the reason.
+
+    ``community`` disambiguates same-named streets across the municipality's
+    communities (``community_from_address`` derives it from a full address
+    string). Omitting it is safe but weaker — see ``_filter_by_community``.
     """
     number = _parse_civic_number(civic_number)
     if number is None:
@@ -191,7 +211,12 @@ def verify_civic_address(
         return points_verdict
 
     centerline_verdict = _verify_against_centerlines(
-        session, number=number, name=name, suffix=suffix, label=label
+        session,
+        number=number,
+        name=name,
+        suffix=suffix,
+        label=label,
+        community=(community or "").strip().upper() or None,
     )
     if centerline_verdict is not None:
         return centerline_verdict
@@ -263,7 +288,13 @@ def _verify_against_civic_points(
 
 
 def _verify_against_centerlines(
-    session: Session, *, number: int, name: str, suffix: str | None, label: str
+    session: Session,
+    *,
+    number: int,
+    name: str,
+    suffix: str | None,
+    label: str,
+    community: str | None = None,
 ) -> CivicAddressVerdict | None:
     for dataset in _datasets_with_role(session, ROAD_CENTERLINES_ROLE):
         segments = [
@@ -276,7 +307,7 @@ def _verify_against_centerlines(
         ]
         if not segments:
             continue
-        typed = _filter_by_type(segments, suffix)
+        typed = _filter_by_community(_filter_by_type(segments, suffix), community)
         for segment in typed:
             for low, high, side in segment.ranges:
                 if low <= number <= high:
@@ -344,6 +375,7 @@ class _Segment:
     key: str
     name: str
     type: str | None
+    communities: frozenset[str]
     ranges: tuple[tuple[int, int, Literal["left", "right"]], ...]
 
 
@@ -379,10 +411,21 @@ def _segment_ranges(feature: ExternalDatasetFeature) -> _Segment | None:
         if ranges:
             break
 
+    communities = {
+        str(value).strip().upper()
+        for source, fields in (
+            (canonical, _CANONICAL_COMMUNITY_FIELDS),
+            (raw, _RAW_COMMUNITY_FIELDS),
+        )
+        for field in fields
+        if (value := source.get(field)) not in (None, "")
+    }
+
     return _Segment(
         key=feature.feature_key,
         name=_split_street(name)[0],
         type=str(street_type).strip().upper() if street_type else None,
+        communities=frozenset(communities),
         ranges=tuple(ranges),
     )
 
@@ -404,6 +447,54 @@ def _filter_by_type(segments: list[_Segment], suffix: str | None) -> list[_Segme
         return segments
     matching = [s for s in segments if s.type in accepted]
     return matching or segments
+
+
+def _filter_by_community(
+    segments: list[_Segment], community: str | None
+) -> list[_Segment]:
+    """Keep only segments in ``community``, when any of them are.
+
+    Same-named streets in different communities are different streets, and
+    ``_falls_in_a_gap`` measures one merged extent. Dartmouth's Stairs Street
+    is addressed 1-30 and Halifax's is 5600-6099; merged, they read as a
+    single 1-6099 extent, and "251 Stairs Street, Dartmouth" lands in the
+    apparent gap between them and comes back ``unverifiable`` instead of
+    ``not_found``. Filtered to Dartmouth it is past the end of everything that
+    street publishes, which is what it is.
+
+    Conservative in the same shape as ``_filter_by_type``: when the address
+    names no community, or none of the segments claim it, every segment is
+    kept. Narrowing only ever happens on a positive match, so this can turn an
+    ``unverifiable`` into a ``not_found`` but never the reverse.
+    """
+    if not community:
+        return segments
+    matching = [s for s in segments if community in s.communities]
+    return matching or segments
+
+
+def community_from_address(address: str | None) -> str | None:
+    """The community token from a full address string, or None.
+
+    ``"251 Stairs Street, Dartmouth, NS"`` -> ``"DARTMOUTH"``. Reads the
+    second-to-last comma-separated part, skipping a trailing province or
+    postal code, because that is the shape every caller here has: the eval
+    corpus writes ``"<civic> <street>, <community>, NS"`` and
+    ``zone_address_picker`` composes the same form from Google's components.
+
+    Returns None for anything else rather than guessing — an unrecognised
+    shape must widen the check, not narrow it onto the wrong community.
+    """
+    if not address:
+        return None
+    parts = [part.strip() for part in address.split(",") if part.strip()]
+    if len(parts) < 3:
+        return None
+    candidate = parts[-2].upper()
+    # A bare province code in the middle slot means no community was written.
+    if candidate in _PROVINCE_CODES or any(ch.isdigit() for ch in candidate):
+        return None
+    return candidate
 
 
 # ---------------------------------------------------------------------------
