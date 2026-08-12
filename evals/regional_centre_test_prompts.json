@@ -41,8 +41,8 @@
     ],
     "expected_answer_keywords": [
       "HR-1",
-      "6.0 m",
       "3.0 m",
+      "2.5 m",
       "0.6 m",
       "rear setback",
       "side setback"
@@ -52,7 +52,7 @@
       "side_setback",
       "development_permit_exemption"
     ],
-    "notes": "Tests basic dimensional lookups (rear + side setback) plus permit exemption. Single-parameter complexity. Low construction cost. ADVERSARIAL ZONE PREMISE: the turn-1 message asserts ER-1, but 1222 Robie Street resolves at ROOFTOP into the HR-1 zone polygon (PID 00055764). The `zone` field records the real zone; the advisor is expected to correct the user's premise and apply the HR-1 setback sections (198/199), not the ER-1 ones. Do not \"fix\" the turn text to say HR-1 -- the misstatement is the test. (ABS-463; address re-derived from the zone under ABS-467, which also sharpens the premise: ER-1 is not mapped anywhere in the Regional Centre schedule, so the zone the user names does not exist on the ground.)",
+    "notes": "Tests basic dimensional lookups (rear + side setback) plus permit exemption. Single-parameter complexity. Low construction cost. ADVERSARIAL ZONE PREMISE: the turn-1 message asserts ER-1, but 1222 Robie Street resolves at ROOFTOP into the HR-1 zone polygon (PID 00055764). The `zone` field records the real zone; the advisor is expected to correct the user's premise and apply the HR-1 setback sections (198/199), not the ER-1 ones. Do not \"fix\" the turn text to say HR-1 -- the misstatement is the test. (ABS-463; address re-derived from the zone under ABS-467, which also sharpens the premise: ER-1 is not mapped anywhere in the Regional Centre schedule, so the zone the user names does not exist on the ground.) SETBACK BRANCH RE-DERIVED (ABS-470): in the HR chapter s.198 is the SIDE setback and s.199 is the REAR setback -- not the reverse. Both are branched on what the lot abuts, and 1222 Robie abuts no ER, CH, PCF or RPK lot (nearest ER-2 polygon 57 m away, nearest PCF 75 m), so the operative clauses are s.199(1)(b) rear = 3.0 m and s.198(1)(f) side = 2.5 m. The keywords previously expected `6.0 m` (s.199(1)(a), the abutting-ER branch, which does not apply here) and `3.0 m` for the side yard (s.198(1)(b)(ii), which applies only to a townhouse dwelling use), so a correct answer to turn 2 graded as a miss. `0.6 m` is s.9(1)(c) -- uncovered structures under 0.6 m are permit-exempt -- and stays.",
     "address_resolution": {
       "resolved_zone": "HR-1",
       "resolution_quality": "rooftop",
@@ -64,7 +64,7 @@
   },
   {
     "id": "TC-002",
-    "title": "Homeowner secondary suite legality in ER-2",
+    "title": "Homeowner two-unit dwelling legality in ER-2",
     "persona": {
       "type": "homeowner",
       "subtype": null,
@@ -77,9 +77,9 @@
     "tags": [
       "renovation",
       "residential",
-      "secondary_suite",
+      "two_unit_dwelling",
       "permitted_use",
-      "accessory_dwelling"
+      "internal_conversion"
     ],
     "bylaw_features": [
       "use_permission",
@@ -89,17 +89,17 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "We\u2019re at 65 Wentworth Street in Dartmouth, in the ER-2 zone. We\u2019re thinking of converting our basement into a secondary suite to rent out. Is a secondary suite a permitted use in ER-2?"
+        "message": "We\u2019re at 65 Wentworth Street in Dartmouth, in the ER-2 zone. We\u2019re thinking of converting our basement into a second self-contained dwelling unit to rent out \u2014 so the house would become a two-unit dwelling. Is that a permitted use in ER-2?"
       },
       {
         "turn": 2,
         "role": "user",
-        "message": "Perfect. Can we also run a small home-based tutoring business from the house at the same time as having the secondary suite, or does that create any issue under the bylaw?"
+        "message": "Perfect. Can we also run a small home-based tutoring business from the house at the same time as having the second unit, or does that create any issue under the bylaw?"
       },
       {
         "turn": 3,
         "role": "user",
-        "message": "One more thing \u2014 would adding the suite change our setback requirements at all, or do the existing ER-2 setback standards still apply?"
+        "message": "One more thing \u2014 would adding the second unit change our setback requirements at all, or do the existing ER-2 setback standards still apply?"
       }
     ],
     "expected_bylaw_references": [
@@ -112,7 +112,7 @@
     "expected_answer_keywords": [
       "ER-2",
       "two-unit dwelling",
-      "secondary suite",
+      "Table 1B",
       "permitted"
     ],
     "expected_topics": [
@@ -120,7 +120,7 @@
       "combination_of_uses",
       "setbacks"
     ],
-    "notes": "Tests use permission lookup, combination-of-uses provision, and baseline setback standards. Three turns escalating breadth.",
+    "notes": "Tests use permission lookup, combination-of-uses provision, and baseline setback standards. Three turns escalating breadth. TERMINOLOGY CORRECTED (ABS-470): the case previously asked about a \"secondary suite\" and graded on that phrase. `secondary suite` is not a use anywhere in the Regional Centre Land Use By-Law -- the string does not occur once in the ingest, `lookup_citation` answers `unknown_use` for it, and Table 1B's residential rows carry `Two-unit dwelling use` and `Backyard suite use` instead. A converted basement unit inside the existing house is a two-unit dwelling use (Table 1B, ER-2 column, footnotes 6, 14, 15); a backyard suite is the detached rear-yard form and is a different row. The turns and keywords now use the by-law's own term so a correct answer is gradeable and the citation lookup resolves.",
     "address_resolution": {
       "resolved_zone": "ER-2",
       "resolution_quality": "rooftop",
@@ -569,8 +569,7 @@
       "Schedule 15",
       "height precinct",
       "0.0 m",
-      "3.0 m",
-      "80%"
+      "3.0 m"
     ],
     "expected_topics": [
       "use_permission",
@@ -578,7 +577,7 @@
       "lot_coverage",
       "height_overlay"
     ],
-    "notes": "Three-turn realtor due diligence. Tests height overlay awareness (Schedule 15 reference vs fixed number). Medium liability: advisory role, pre-offer stage.",
+    "notes": "Three-turn realtor due diligence. Tests height overlay awareness (Schedule 15 reference vs fixed number). Medium liability: advisory role, pre-offer stage. LOT-COVERAGE KEYWORD REMOVED (ABS-470): the case expected `80%` while citing s.168, which reads in full \"No maximum required lot coverage applies.\" The CEN chapter sets no lot coverage cap at all -- nor do the DD (121), DH (142), COR (187), HR (204) or CLI (221) equivalents. `80%` is the LI/HRI figure (s.251). A correct CEN-2 answer was therefore graded as a miss, and an answer that invented a cap was rewarded.",
     "address_resolution": {
       "resolved_zone": "CEN-2",
       "resolution_quality": "rooftop",
@@ -754,7 +753,6 @@
       "not required",
       "0.0 m",
       "3.0 m",
-      "80%",
       "daycare"
     ],
     "expected_topics": [
@@ -763,7 +761,7 @@
       "setbacks",
       "lot_coverage"
     ],
-    "notes": "Four-turn legal due diligence. Tests no-parking exemption scope (Section 120(b) lists DD explicitly). Daycare permitted in DD via Table 1B. Medium liability: advisory professional role.",
+    "notes": "Four-turn legal due diligence. Tests no-parking exemption scope (Section 120(b) lists DD explicitly). Daycare permitted in DD via Table 1B. Medium liability: advisory professional role. LOT-COVERAGE KEYWORD REMOVED (ABS-470): the case expected `80%` while citing s.121, which reads in full \"No maximum required lot coverage applies.\" The DD chapter sets no cap; `80%` is the LI/HRI figure (s.251). See TC-007 and TC-010 for the same defect in the CEN and COR chapters.",
     "address_resolution": {
       "resolved_zone": "DD",
       "resolution_quality": "rooftop",
@@ -850,8 +848,7 @@
       "floor area ratio",
       "3.0 m",
       "front setback",
-      "0.0 m",
-      "70%"
+      "0.0 m"
     ],
     "expected_topics": [
       "use_permission",
@@ -861,7 +858,7 @@
       "lot_coverage",
       "parking"
     ],
-    "notes": "Five-turn planner scenario. Tests COR front setback (3 m, unlike CEN-1/CEN-2 at 0 m) and that COR does NOT get the no-parking exemption (Section 120(b) lists only CEN-1, CEN-2, DH, DD). High liability: full mixed-use building program.",
+    "notes": "Five-turn planner scenario. Tests COR setbacks and that COR does NOT get the no-parking exemption (Section 120(b) lists only CEN-1, CEN-2, DH, DD). High liability: full mixed-use building program. LOT-COVERAGE KEYWORD REMOVED (ABS-470): the case expected `70%` while citing s.187, which reads in full \"No maximum required lot coverage applies.\" `70%` appears nowhere in the by-law as a lot coverage figure -- the only numbered caps are ER 231, CH 243, LI/HRI 251 (80%) and INS 262 (60%). The surviving `0.0 m` and `3.0 m` were re-checked against the corrected address: 2368 Gottingen abuts no ER, CH, PCF or RPK lot (nearest ER-3 polygon 37 m away, behind intervening HR-1 lots), so s.181(1)(d) side = 0.0 m and s.182(1)(b) rear = 3.0 m are the operative branches.",
     "address_resolution": {
       "resolved_zone": "COR",
       "resolution_quality": "rooftop",
@@ -934,7 +931,7 @@
       "Schedule 15",
       "height precinct",
       "setback",
-      "Section 196",
+      "Section 254",
       "lot coverage"
     ],
     "expected_topics": [
@@ -943,7 +940,7 @@
       "height",
       "lot_coverage"
     ],
-    "notes": "Tests INS use permissions for research/laboratory uses, dimensional standards in an institutional zone, and how the bylaw handles campus-style master sites. Underrepresented zone.",
+    "notes": "Tests INS use permissions for research/laboratory uses, dimensional standards in an institutional zone, and how the bylaw handles campus-style master sites. Underrepresented zone. KEYWORD RECHAPTERED (ABS-470): the case expected `Section 196`, which is the HR-2/HR-1 maximum building height section and has no application to an INS site. The INS chapter is ss.253-267, and its height section -- already carried in expected_bylaw_references -- is s.254. Turn 3 asks for the INS height limit, so citing 196 would have been the wrong answer scoring as the right one.",
     "address_resolution": {
       "resolved_zone": "INS",
       "resolution_quality": "rooftop",
@@ -1007,7 +1004,7 @@
     "expected_answer_keywords": [
       "RPK",
       "permitted",
-      "Table 1A",
+      "Table 1C",
       "setback",
       "development permit",
       "Section 9"
@@ -1018,7 +1015,7 @@
       "accessory_uses",
       "development_permit_exemption"
     ],
-    "notes": "Tests RPK permitted/accessory uses and what the bylaw says (or doesn't say) about private encroachments into park-zoned land. Underrepresented zone. ADDRESS RE-DERIVED (ABS-467): the case previously placed itself on the North Park Street side of Halifax Common and asserted that land is RPK. It is not \u2014 the Common resolves to PCF, INS and H depending on where you stand, and the Regional Centre's entire RPK extent is Georges Island. The address now names a parcel that actually carries the zone.",
+    "notes": "Tests RPK permitted/accessory uses and what the bylaw says (or doesn't say) about private encroachments into park-zoned land. Underrepresented zone. ADDRESS RE-DERIVED (ABS-467): the case previously placed itself on the North Park Street side of Halifax Common and asserted that land is RPK. It is not \u2014 the Common resolves to PCF, INS and H depending on where you stand, and the Regional Centre's entire RPK extent is Georges Island. The address now names a parcel that actually carries the zone. KEYWORD RETABLED (ABS-470): the case expected `Table 1A` in the answer. RPK is not in Table 1A -- it is one of the zones in Table 1C (CLI, LI, HRI, INS, UC-2, UC-1, DND, H, PCF, RPK, WA), which is what expected_bylaw_references already cited. Turn 1 deliberately misframes the question as \"what does Table 1A or 1B say about RPK\" and the right answer is that neither governs it, so grading on `Table 1A` rewarded repeating the user's framing rather than correcting it.",
     "address_resolution": {
       "resolved_zone": "RPK",
       "resolution_quality": "rooftop",
@@ -1114,7 +1111,8 @@
       "not required",
       "Section 198",
       "Section 199",
-      "6.0 m"
+      "3.0 m",
+      "2.5 m"
     ],
     "expected_topics": [
       "use_permission",
@@ -1125,7 +1123,7 @@
       "parking",
       "site_plan_approval"
     ],
-    "notes": "Tests HR-2 FAR, height overlay map (precincts), streetwall + stepback requirements, and parking minimums. Spring Garden corridor is heavily overlaid.",
+    "notes": "Tests HR-2 FAR, height overlay map (precincts), streetwall + stepback requirements, and parking minimums. SETBACK BRANCH RE-DERIVED (ABS-470): same defect as TC-001, caught by re-running that analysis across the corpus rather than only on the cases the original audit listed — the audit predates the ABS-467 address re-derivation, so it saw this case at a different address. Turn 4 asks for the HR-2 side and rear setbacks. Both s.198 (side) and s.199 (rear) branch on what the lot abuts, and 30 Joseph Young abuts no ER, CH, PCF or RPK lot (nearest PCF polygon 119 m away), so the operative clauses are s.199(1)(b) rear = 3.0 m and s.198(1)(f) side = 2.5 m. The keyword was `6.0 m`, which is s.199(1)(a) — the abutting-ER branch, which does not apply here.",
     "address_resolution": {
       "resolved_zone": "HR-2",
       "resolution_quality": "rooftop",
@@ -1221,11 +1219,11 @@
       "bonus",
       "floor area ratio",
       "height precinct",
-      "Section 196",
+      "Section 157",
       "ground floor",
       "active use",
       "streetwall",
-      "Section 200"
+      "Section 164"
     ],
     "expected_topics": [
       "FAR_overlay",
@@ -1235,7 +1233,7 @@
       "streetwall",
       "site_plan_approval"
     ],
-    "notes": "Tests CEN-2 base FAR/height, bonus-zoning trigger menu, ground-floor active-use requirement, and streetwall standards. Adversarial \u2014 user pushes for max possible scenario and assumes bonuses are stackable.",
+    "notes": "Tests CEN-2 base FAR/height, bonus-zoning trigger menu, ground-floor active-use requirement, and streetwall standards. Adversarial \u2014 user pushes for max possible scenario and assumes bonuses are stackable. DECISION RECORDED (ABS-470): this case is KEPT AS CEN-2 AND REPOINTED, not dropped. It previously sat at 1657 Barrington Street, which HRM's zoning layer places in DH-1 \u2014 a zone governed by the Downtown Halifax Land Use By-law, which this system has not ingested (ABS-472). Answering it against the Regional Centre by-law would have cited the wrong instrument entirely. The alternative was to park the case until ABS-472 lands, but the case exists to exercise bonus zoning, ground-floor active use and streetwall in a CEN-2 setting, and all of that is testable today, so the address was moved to 3123 Kempt Road \u2014 a genuine CEN-2 parcel confirmed rooftop against the live zoning layer (ABS-467). Re-check this decision when ABS-472 ingests the Downtown Halifax LUB: a DH-1 case is then worth adding, but as a new case, not by moving this one back. KEYWORDS RECHAPTERED (ABS-470): the case expected `Section 196` and `Section 200`, both HR-2/HR-1 sections, in a CEN-2 case. The CEN chapter is ss.156-175; its height section is s.157 and its maximum streetwall height section is s.164, both already carried in expected_bylaw_references.",
     "address_resolution": {
       "resolved_zone": "CEN-2",
       "resolution_quality": "rooftop",
@@ -1320,7 +1318,7 @@
       "heritage conservation district",
       "Schedule 22",
       "demolition",
-      "Section 111",
+      "Section 132",
       "Schedule 15",
       "streetwall"
     ],
@@ -1331,7 +1329,7 @@
       "setbacks",
       "site_plan_approval"
     ],
-    "notes": "Tests Downtown Halifax heritage demolition/retention rules, viewplanes, height precincts, and what triggers heritage review. Adversarial \u2014 user asks if they can demolish if facade is structurally unsound.",
+    "notes": "Tests Downtown Halifax heritage demolition/retention rules, viewplanes, height precincts, and what triggers heritage review. Adversarial \u2014 user asks if they can demolish if facade is structurally unsound. KEYWORD RECHAPTERED (ABS-470): the case expected `Section 111`, which is the DD front/flanking setback section, in a DH case. The DH chapter is ss.129-148 and its front/flanking setback section is s.132, already carried in expected_bylaw_references. Turn 4 asks specifically about the DH front setback and how the heritage overlay modifies it, so the wrong-chapter citation sat directly on the question being graded.",
     "address_resolution": {
       "resolved_zone": "DH",
       "resolution_quality": "rooftop",
@@ -1402,9 +1400,9 @@
       "ground floor",
       "active use",
       "height precinct",
-      "Section 196",
+      "Section 109",
       "streetwall",
-      "Section 200"
+      "Section 117"
     ],
     "expected_topics": [
       "use_permission",
@@ -1413,7 +1411,7 @@
       "streetwall",
       "development_permit_exemption"
     ],
-    "notes": "Tests Downtown Dartmouth use permissions, ground-floor active-use requirements, and base height standards. Underrepresented use case.",
+    "notes": "Tests Downtown Dartmouth use permissions, ground-floor active-use requirements, and base height standards. Underrepresented use case. KEYWORDS RECHAPTERED (ABS-470): the case expected `Section 196` and `Section 200`, both HR-2/HR-1 sections, in a DD case. The DD chapter is ss.107-128; its maximum building height section is s.109 and its maximum streetwall height section is s.117, both already carried in expected_bylaw_references. Turn 2 asks for exactly those two standards.",
     "address_resolution": {
       "resolved_zone": "DD",
       "resolution_quality": "rooftop",
@@ -1495,7 +1493,7 @@
       "lot_coverage",
       "development_permit"
     ],
-    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here. ZONE RETARGETED ER-1 -> ER-2 (ABS-467): the Regional Centre zoning schedule maps no ER-1 polygon at all \u2014 0 of 11,069 features in halifax_zoning_boundaries carry ZONE=ER-1 \u2014 so no address could ever confirm this case's zone, and the eval would grade every answer against a zone the map does not place anywhere. ER-2 carries the same use permissions the premise depends on (single-unit dwelling P, secondary suite P, multi-unit N), so the non-conforming-duplex question is unchanged. The lot-coverage arithmetic in turns 2 and 4 was rescaled to keep the second, separate non-conformity the case was designed to probe: Section 231 caps a non-single-unit use on a lot over 325 m\u00b2 at 50%, so the old 140 m\u00b2 + 30 m\u00b2 on 420 m\u00b2 (40%) stayed comfortably inside it.",
+    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here. ZONE RETARGETED ER-1 -> ER-2 (ABS-467): the Regional Centre zoning schedule maps no ER-1 polygon at all \u2014 0 of 11,069 features in halifax_zoning_boundaries carry ZONE=ER-1 \u2014 so no address could ever confirm this case's zone, and the eval would grade every answer against a zone the map does not place anywhere. ER-2 carries the same use permissions the premise depends on, so the non-conforming-duplex question is unchanged. TERMINOLOGY AND AN OPEN QUESTION (ABS-470): that ABS-467 note originally recorded the ER-2 permissions as \"single-unit dwelling P, secondary suite P, multi-unit N\". `secondary suite` is not a use in this by-law at all — the string does not occur once in the ingest; Table 1B's rows are `Single-unit dwelling use`, `Two-unit dwelling use` and `Backyard suite use` (see TC-002). The turn-1 wording is left as written because it is the user's own framing in an adversarial case and nothing is graded on it. Left unresolved, and NOT rewritten here: Table 1B's ER-2 column marks Two-unit dwelling use with footnotes 6, 14 and 15, and footnote 15 reads \"Use is permitted, except within the Halifax Grain Elevator (HGE) Special Area\" — which would mean a two-unit dwelling is permitted in ER-2 and this case has no non-conformity to test. It cannot be settled from the corpus as ingested: the Table 1 cells carry only footnote glyphs, the P/N letters having been dropped in extraction, so a blank cell is indistinguishable from a permitted-without-footnote cell. That is an ingest-fidelity defect rather than an eval-data one and needs its own ticket before this case's premise is either confirmed or retired. The lot-coverage arithmetic in turns 2 and 4 was rescaled to keep the second, separate non-conformity the case was designed to probe: Section 231 caps a non-single-unit use on a lot over 325 m\u00b2 at 50%, so the old 140 m\u00b2 + 30 m\u00b2 on 420 m\u00b2 (40%) stayed comfortably inside it.",
     "address_resolution": {
       "resolved_zone": "ER-2",
       "resolution_quality": "rooftop",
@@ -1581,14 +1579,14 @@
       "Schedule 17",
       "floor area ratio",
       "height precinct",
-      "Section 196",
+      "Section 177",
       "ground floor",
       "active use",
       "Section 433",
       "Table 15",
       "not required",
       "streetwall",
-      "Section 200",
+      "Section 183",
       "front setback",
       "3.0 m",
       "side setback",
@@ -1602,7 +1600,7 @@
       "parking",
       "site_plan_approval"
     ],
-    "notes": "Tests COR corridor standards: height precincts along corridors, ground-floor use, parking reductions near transit. Adversarial \u2014 user asks about reducing parking based on transit proximity.",
+    "notes": "Tests COR corridor standards: height precincts along corridors, ground-floor use, parking reductions near transit. Adversarial \u2014 user asks about reducing parking based on transit proximity. KEYWORDS RECHAPTERED (ABS-470): the case expected `Section 196` and `Section 200`, both HR-2/HR-1 sections, in a COR case. The COR chapter is ss.176-194; its maximum building height section is s.177 and its maximum streetwall height section is s.183, both already carried in expected_bylaw_references. The surviving `0.0 m` and `3.0 m` were re-checked against the corrected address: 5249 Smith abuts no ER, CH, PCF or RPK lot (nearest ER-3 polygon 40 m away), so s.181(1)(d) side = 0.0 m and s.182(1)(b) rear = 3.0 m are the operative branches.",
     "address_resolution": {
       "resolved_zone": "COR",
       "resolution_quality": "rooftop",
@@ -1666,10 +1664,10 @@
     "expected_answer_keywords": [
       "ER-3",
       "permitted",
-      "Section 63",
+      "Section 56",
       "Schedule 15",
       "backyard suite",
-      "Section 344",
+      "Section 331",
       "Section 229",
       "1.25 m",
       "Section 230",
@@ -1685,7 +1683,7 @@
       "lot_coverage",
       "height"
     ],
-    "notes": "Tests backyard suite provisions specifically \u2014 separate from secondary suite rules. Often confused. Confirms model distinguishes between the two.",
+    "notes": "Tests backyard suite provisions specifically \u2014 the detached rear-yard form, as distinct from an internal conversion to a two-unit dwelling use (TC-002). Often confused. Confirms model distinguishes between the two. KEYWORDS CORRECTED (ABS-470): two citations were pointing away from the rule the case is about. `Section 344` is in Part VI, Chapter 2 \u2014 the Schmidtville Heritage Conservation District, HCD-SV zone \u2014 and has nothing to do with an ER-3 backyard suite; the height cap the case actually asks about in turn 3 is s.331 (accessory structure height, 7.7 m), already carried in expected_bylaw_references. `Section 63` is the ER internal-conversion rule for three-, four- and multi-unit dwellings, which is a different question; the backyard suite permission is s.56, also already in the references. `1.25 m` (s.329), `6.0 m` (s.230) and `50%` (s.231(1)(b)(i), lots over 325 m\u00b2) were re-checked and are correct.",
     "address_resolution": {
       "resolved_zone": "ER-3",
       "resolution_quality": "rooftop",
