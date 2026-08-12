@@ -250,6 +250,25 @@ grounding measurement above: the inputs to those answers are unchanged for
 every golden case, and five fabricated addresses that previously produced a
 confident-looking profile now produce a correction.
 
+## What this issue deliberately did not change
+
+* **`get_adjacent_zoning` does not run the civic-address check.** It resolves
+  a *parcel* and enumerates its neighbours; a fabricated address reaching it
+  produces the same interpolated-point problem, and it should get the same
+  treatment. Left out because it is a second tool's behaviour change with its
+  own expectations, not because it is fine.
+* **`search_bylaw_evidence`'s location slot is unchanged.** The spatial
+  channel still geocodes whatever it is given. `get_address_profile` is the
+  case-open call the agent is told to make first, so that is where the check
+  earns the most; extending it to the search path means deciding what a
+  refusal does to a text-retrieval result, which is a design question this
+  issue did not need to answer.
+* **Nothing renders these fields in the web UI**, because nothing renders
+  `resolution_quality` or `outside_mapped_area` either — the address profile
+  reaches the user only through the agent's prose today. The answer-time
+  qualifier in `src/advisor/chat/resolution_qualifier.py` is what guarantees
+  the correction survives a model that ignores the instruction.
+
 ## ABS-467's zone-vs-address guard, re-run afterwards
 
 ```

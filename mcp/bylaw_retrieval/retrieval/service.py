@@ -297,9 +297,11 @@ class RetrievalService:
         """
         self.session = session
         self._default_document_id_resolver = default_document_id_resolver
-        # Memo for the ABS-435 parcel upgrade, keyed by resolved geometry: one
-        # indexed ST_Contains per distinct location, reused across the datasets
-        # and fragments a single request touches. None = looked up, no parcel.
+        # Memo for the containing-parcel lookup, keyed by resolved geometry:
+        # one indexed ST_Contains per distinct location, reused across the
+        # datasets and fragments a single request touches — the ABS-435 abuts
+        # upgrade and the ABS-469 split-lot check share it. None = looked up,
+        # no parcel.
         self._abut_location_cache: dict[str, dict[str, Any] | None] = {}
 
     def _resolve_default_document_ids(self) -> list[int] | None:
@@ -1445,13 +1447,7 @@ class RetrievalService:
         if resolved.kind == "parcel":
             return resolved, PARCEL_ABUT_DISTANCE_M
 
-        cache_key = json.dumps(resolved.geometry, sort_keys=True)
-        if cache_key in self._abut_location_cache:
-            parcel_geometry = self._abut_location_cache[cache_key]
-        else:
-            parcel_geometry = self._containing_parcel_geometry(resolved)
-            self._abut_location_cache[cache_key] = parcel_geometry
-
+        parcel_geometry = self._containing_parcel_geometry(resolved)
         if parcel_geometry is None:
             return resolved, DEFAULT_ABUT_DISTANCE_M
         # Rebuild the location from THIS caller's resolved location rather than
@@ -1472,7 +1468,23 @@ class RetrievalService:
     def _containing_parcel_geometry(
         self, resolved: ResolvedLocation
     ) -> dict[str, Any] | None:
-        """GeoJSON of the parcel containing ``resolved``, or None."""
+        """GeoJSON of the parcel containing ``resolved``, or None.
+
+        Memoised on the geometry, because one profile now asks this twice —
+        once for the Schedule 7 abuts test (ABS-435) and once for the
+        split-lot check (ABS-469) — and the containing-parcel query is a
+        PostGIS point-in-polygon over the whole 182k-parcel fabric.
+        """
+        cache_key = json.dumps(resolved.geometry, sort_keys=True)
+        if cache_key in self._abut_location_cache:
+            return self._abut_location_cache[cache_key]
+        geometry = self._resolve_containing_parcel_geometry(resolved)
+        self._abut_location_cache[cache_key] = geometry
+        return geometry
+
+    def _resolve_containing_parcel_geometry(
+        self, resolved: ResolvedLocation
+    ) -> dict[str, Any] | None:
         parcels_ids = self._parcels_dataset_ids()
         if not parcels_ids:
             return None
