@@ -1,0 +1,11 @@
+{
+  "case_id": "TC-012",
+  "zone": "RPK",
+  "liability": "medium",
+  "answer_shape": "refusal",
+  "evidence_tier": "human_validated",
+  "verdict": "UNATTESTED",
+  "reasons": [
+    "no qualified human has recorded the correct answer for this case; it cannot pass and it holds the deploy gate closed"
+  ]
+}
