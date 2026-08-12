@@ -388,7 +388,19 @@ _DESC_GET_ADDRESS_PROFILE = (
     "point sits within ~25 m of a different zone, and 'parcel_zones' lists "
     "every zone the parcel intersects when the lot is split between more "
     "than one. A split lot has no single governing zone — say so and ask "
-    "where on the lot the work is proposed."
+    "where on the lot the work is proposed.\n\n"
+    "WHICH BY-LAW GOVERNS THIS PARCEL? The zoning mapping is "
+    "municipality-wide, so a zone code can belong to a by-law that is not in "
+    "this corpus. 'governing_bylaw' names the by-law that governs the "
+    "resolved parcel and 'governing_bylaw_status' says whether we hold it. "
+    "'not_held' is a hard stop, not a hedge: the zone code is the "
+    "municipality's own published mapping and may be stated, but NO standard "
+    "behind it — permitted uses, height, setbacks, floor area, parking — is "
+    "available here, and the standards of the by-laws that ARE available do "
+    "not apply to this parcel. Name the governing by-law, say it must be "
+    "consulted directly with HRM, and do not substitute a figure from "
+    "another by-law. The zone will carry no citation in that case, because "
+    "there is no honest one to give."
 )
 
 _SCHEMA_GET_ADDRESS_PROFILE: dict[str, Any] = {

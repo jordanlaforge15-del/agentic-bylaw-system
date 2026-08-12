@@ -204,7 +204,13 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                 "neighbouring parcel. 'civic_address_status': 'not_found' means the "
                 "civic number does not exist in the municipality's own data: there is "
                 "no zone, do not geocode it, and offer "
-                "'valid_civic_number_ranges' / 'suggested_civic_numbers' instead."
+                "'valid_civic_number_ranges' / 'suggested_civic_numbers' instead. "
+                "'governing_bylaw_status': 'not_held' means the zone belongs to a "
+                "by-law that is NOT in this corpus — 'governing_bylaw' names it. "
+                "The zone code may be stated but carries no citation, and NO "
+                "standard behind it (uses, height, setbacks, floor area) is "
+                "available: name that by-law and say it must be consulted "
+                "directly, never substitute a figure from another one."
             ),
             "parameters": {
                 "type": "object",
