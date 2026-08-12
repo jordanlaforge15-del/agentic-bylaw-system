@@ -20,6 +20,7 @@ from advisor.chat.resolution_qualifier import (
     address_resolution_flags,
     already_qualified,
     apply_resolution_qualifier,
+    nonexistent_address_suffix,
 )
 from advisor.chat.session import ChatSession
 from advisor.llm.base import TextBlock
@@ -272,3 +273,75 @@ async def test_rooftop_address_turn_stays_lean():
         gateway, "What's the zoning at 1234 Oxford Street?"
     )
     assert response.content[-1].text == answer
+
+
+# --- ABS-469: the address does not exist ----------------------------------
+
+
+def _nonexistent_profile() -> AddressProfile:
+    """What the profile returns for a civic number no street segment carries."""
+    return AddressProfile(
+        address="567 Windsor Street",
+        civic_number="567",
+        street="Windsor Street",
+        civic_address_status="not_found",
+        civic_address_evidence="street_centerline_ranges (halifax_street_centerlines)",
+        valid_civic_number_ranges=["2001-3799"],
+        suggested_civic_numbers=["2001"],
+        caveats=["This civic number does not exist. …"],
+    )
+
+
+def test_a_nonexistent_address_carries_no_resolution_quality_to_flag():
+    """Why this state needs its own detector.
+
+    The ABS-466 flags look for a below-rooftop ``resolution_quality`` or an
+    ``outside_mapped_area`` marker. A non-existent address has neither — it
+    was never geocoded — so the precision net reads the turn as clean and the
+    fabricated address would pass through it silently.
+    """
+    invocation = _invocation(_nonexistent_profile())
+    assert address_resolution_flags([invocation]) == (False, False)
+    assert nonexistent_address_suffix([invocation]) is not None
+
+
+def test_the_refusal_is_appended_with_the_numbers_that_do_exist():
+    content = [TextBlock(text="567 Windsor Street is zoned HR-2, with a 2.5 m side yard.")]
+    out = apply_resolution_qualifier(content, [_invocation(_nonexistent_profile())])
+
+    assert out is not content
+    appended = out[-1].text.lower()
+    assert "could not be found" in appended
+    # The correction, not just the rejection.
+    assert "2001-3799" in out[-1].text
+
+
+def test_the_refusal_outranks_the_precision_hedge():
+    """An answer that hedges about precision has still not said the address
+    is not real, so the refusal is appended over the top of it."""
+    profile = _nonexistent_profile()
+    content = [
+        TextBlock(
+            text=(
+                "This address did not resolve precisely to the property, so "
+                "the zone may belong to a neighbouring parcel."
+            )
+        )
+    ]
+    out = apply_resolution_qualifier(content, [_invocation(profile)])
+
+    assert "could not be found in the municipality" in out[-1].text
+
+
+def test_an_answer_that_already_refuses_is_left_alone():
+    content = [
+        TextBlock(
+            text=(
+                "There is no 567 Windsor Street — that civic number does not "
+                "exist. Valid numbers on that street run 2001-3799."
+            )
+        )
+    ]
+    out = apply_resolution_qualifier(content, [_invocation(_nonexistent_profile())])
+
+    assert out is content
