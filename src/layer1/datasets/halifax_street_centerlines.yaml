@@ -21,10 +21,26 @@ attributes:
   # full reloads of the layer; ASSETID survives them, which keeps re-ingest
   # idempotent for downstream consumers that key off feature_key.
   feature_key: ASSETID
-  # No canonical attributes — the centerlines exist purely as geometry
-  # for the frontage intersection. Street name, classification, etc. are
-  # retained in attributes_json (the raw passthrough) for diagnostic use
-  # but aren't surfaced through the canonical retrieval API.
+  # ABS-469: the per-segment address ranges are no longer diagnostic-only.
+  # A civic number covered by no segment's range is an address that does not
+  # exist, which is the difference between refusing "100 Robie Street" and
+  # answering it from an interpolated point on somebody else's parcel. The
+  # four range fields are per side of the segment (left/right), and street
+  # name and type are separate columns upstream — Jubilee Road, Jubilee Court
+  # and Jubilee Lane share a STR_NAME and carry different ranges.
+  #
+  # Optional throughout: HRM publishes 0/0 ranges for segments with no
+  # addressing (ramps, service lanes) and leaves STR_TYPE null on a few.
+  # ``layer2.retrieval.civic_address`` also reads the raw STR_NAME/FROM_LEFT
+  # passthrough, so the 18,468 segments ingested before this mapping existed
+  # keep working without a re-ingest.
+  canonical:
+    street_name: { from: STR_NAME, type: string, optional: true }
+    street_type: { from: STR_TYPE, type: string, optional: true }
+    civic_from_left: { from: FROM_LEFT, type: int, optional: true }
+    civic_to_left: { from: TO_LEFT, type: int, optional: true }
+    civic_from_right: { from: FROM_RIGHT, type: int, optional: true }
+    civic_to_right: { from: TO_RIGHT, type: int, optional: true }
   ignore:
     - OBJECTID
     - Shape__Length

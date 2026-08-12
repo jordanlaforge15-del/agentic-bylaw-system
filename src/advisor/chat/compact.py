@@ -514,6 +514,28 @@ def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
     with empty fields elided.
     """
     out: dict[str, Any] = {"address": profile.address}
+    # ABS-469: an address that does not exist is answered first and alone.
+    # Anything else in the projection (a zone, an overlay, a precinct) would
+    # be read as a property of a property that isn't there — the model is
+    # given the refusal and the correction, and nothing to answer from.
+    if profile.civic_address_status == "not_found":
+        out["civic_address_status"] = "not_found"
+        if profile.civic_address_evidence:
+            out["civic_address_evidence"] = profile.civic_address_evidence
+        if profile.valid_civic_number_ranges:
+            out["valid_civic_number_ranges"] = profile.valid_civic_number_ranges
+        if profile.suggested_civic_numbers:
+            out["suggested_civic_numbers"] = profile.suggested_civic_numbers
+        if profile.caveats:
+            out["caveats"] = profile.caveats
+        out["instruction"] = (
+            "This civic number does not exist in the municipality's own "
+            "address data. Do NOT state a zone or any figure derived from "
+            "one, and do NOT retry with a geocoder — tell the user the "
+            "address could not be found, quote the civic-number ranges that "
+            "do exist on that street, and ask them to confirm the address."
+        )
+        return out
     if profile.unresolvable:
         out["unresolvable"] = True
         out["instruction"] = (
@@ -574,20 +596,54 @@ def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
         out["location_confidence"] = profile.location_confidence
     if profile.outside_mapped_area:
         out["outside_mapped_area"] = True
+    # ABS-469: a zone is only as safe as the parcel it names. These say when
+    # the point sits on a zone line or the lot is split between zones —
+    # unsafe for reasons the resolution quality above cannot express, because
+    # they apply to a perfect rooftop match too.
+    if profile.zone_boundary_distance_m is not None:
+        out["zone_boundary_distance_m"] = profile.zone_boundary_distance_m
+        out["nearest_other_zone"] = profile.nearest_other_zone
+    if profile.parcel_zones:
+        out["parcel_zones"] = profile.parcel_zones
     if profile.caveats:
         out["caveats"] = profile.caveats
-        out["instruction"] = (
+        out["instruction"] = _address_profile_instruction(profile)
+    return out
+
+
+def _address_profile_instruction(profile: AddressProfile) -> str:
+    """The one next-step sentence a caveated profile carries.
+
+    Ordered by how wrong the answer would be if ignored: no zone at all beats
+    a split lot beats a boundary a few metres away beats an imprecise point.
+    """
+    if profile.outside_mapped_area:
+        return (
             "No zone could be assigned: the resolved point falls outside "
             "every mapped boundary. Do not state a zone — tell the user the "
             "address is outside the mapped plan area and must be confirmed "
             "with HRM."
-            if profile.outside_mapped_area
-            else "This address did not resolve precisely to the property, so "
-            "the zone above may belong to a neighbouring parcel. State the "
-            "uncertainty in your answer — do not present the zone or any "
-            "figure derived from it as settled fact."
         )
-    return out
+    if profile.parcel_zones:
+        return (
+            "This lot is split between "
+            f"{' and '.join(profile.parcel_zones)}. Do not answer as though "
+            "one zone governed the whole parcel — say the lot is split and "
+            "ask where on it the work is proposed."
+        )
+    if profile.zone_boundary_distance_m is not None:
+        return (
+            f"The point is {profile.zone_boundary_distance_m:.0f} m from the "
+            f"{profile.nearest_other_zone} boundary, so the zone above may be "
+            "the adjoining parcel's. State the proximity and tell the user to "
+            "confirm the zoning with HRM before relying on any figure."
+        )
+    return (
+        "This address did not resolve precisely to the property, so the zone "
+        "above may belong to a neighbouring parcel. State the uncertainty in "
+        "your answer — do not present the zone or any figure derived from it "
+        "as settled fact."
+    )
 
 
 def compact_adjacent_zoning(profile: AdjacentZoningProfile) -> dict[str, Any]:

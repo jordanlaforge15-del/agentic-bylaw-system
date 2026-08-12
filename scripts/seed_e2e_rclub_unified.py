@@ -29,9 +29,17 @@ ABS-431 convention) carrying:
   (setbacks), Table 1A/1B use rows, Part II zone establishment rows, and the
   Part V §120 parking rule — the corpus ``get_zone_profile`` composes over.
 * **A parcel fabric** (``e2e_rclub_parcels``, ``role: property_parcels``)
-  carrying the two ABS-435 lot-depth fixtures. Base geography, not an
-  overlay — it exists so the abuts predicate can measure from the lot
-  boundary instead of the geocoded rooftop point.
+  carrying the two ABS-435 lot-depth fixtures, plus the ABS-469 pair against
+  the HR-2 / CEN-1 line: a lot that straddles it and a lot that merely
+  touches it. Base geography, not an overlay — it exists so the abuts
+  predicate can measure from the lot boundary instead of the geocoded
+  rooftop point.
+* **A street network** (``e2e_rclub_street_centerlines``, ``role:
+  road_centerlines``, ABS-469) carrying HRM's real published address ranges
+  for Windsor and Oxford Streets. It is what lets the civic-address verifier
+  answer "there is no 567 Windsor Street" instead of geocoding one. Robie
+  Street is deliberately absent so the corpus's primary fixture address
+  stays ``unverifiable`` and every pre-ABS-469 expectation about it holds.
 * **Geocode-cache rows** for ``100 Robie Street`` (inside every polygon
   overlay), ``6184 Quinpool Road`` (~10 m off the Schedule 7 Quinpool
   centreline, so only the buffered abuts query matches), the
@@ -271,6 +279,15 @@ TEST_ADDRESS_NORMALIZED = "civic:100 robie st"
 INTERPOLATED_ADDRESS_RAW = "1234 Oxford Street"
 INTERPOLATED_ADDRESS_NORMALIZED = "civic:1234 oxford st"
 
+# ABS-469: an address the municipality's own street data says does not exist.
+# Windsor Street's ingested centerline segments (below) publish 2000-2089, so
+# 567 is past the low end of everything the street carries. The geocode-cache
+# row parks it on TEST_POINT — squarely inside the HR-2 polygon — on purpose:
+# the profile must refuse it because the CIVIC NUMBER is not real, not because
+# the point happened to land somewhere unhelpful.
+NONEXISTENT_ADDRESS_RAW = "567 Windsor Street"
+NONEXISTENT_ADDRESS_NORMALIZED = "civic:567 windsor st"
+
 # A point inside every seeded polygon overlay, and the box that contains it.
 TEST_POINT: dict[str, Any] = {"type": "Point", "coordinates": [-63.59, 44.65]}
 _BOX = [
@@ -279,6 +296,14 @@ _BOX = [
     [-63.58, 44.66],
     [-63.60, 44.66],
     [-63.60, 44.64],
+]
+# The CEN-1 box east of it, sharing the -63.58 edge.
+_EAST_BOX = [
+    [-63.58, 44.64],
+    [-63.56, 44.64],
+    [-63.56, 44.66],
+    [-63.58, 44.66],
+    [-63.58, 44.64],
 ]
 
 # (dataset_name, fragment citation_label, raw properties, canonical YAML block)
@@ -291,6 +316,21 @@ POLYGON_OVERLAYS: list[dict[str, Any]] = [
         "citation": "Zoning Schedule",
         "feature_key_field": "GLOBALID",
         "properties": {"GLOBALID": "rclub-zone-1", "ZONE": "HR-2", "DESCRIPTION": "High-Rise Residential"},
+        # ABS-469: a second zone sharing the HR-2 box's eastern edge. A zone
+        # line is what makes an otherwise perfect resolution unsafe — the
+        # point can sit metres from land governed by different standards, or
+        # the lot can straddle the line — and neither can be tested against a
+        # corpus containing exactly one zone.
+        "extra": (
+            (
+                {
+                    "GLOBALID": "rclub-zone-2",
+                    "ZONE": "CEN-1",
+                    "DESCRIPTION": "Centre",
+                },
+                {"type": "Polygon", "coordinates": [_EAST_BOX]},
+            ),
+        ),
         "canonical": (
             "    zone_code: { from: ZONE, type: string }\n"
             "    zone_description: { from: DESCRIPTION, type: string, optional: true }\n"
@@ -377,6 +417,66 @@ BACK_LOT_LON = -63.6045
 
 PARCELS_DATASET_NAME = "e2e_rclub_parcels"
 
+# ---------------------------------------------------------------------------
+# ABS-469 fixtures — does the address exist, and is the zone safe to rely on?
+# ---------------------------------------------------------------------------
+
+# HRM's own published per-segment address ranges, copied from the live
+# corpus's halifax_street_centerlines ingest. Windsor Street is here so
+# "567 Windsor Street" (the issue's measured example) is provably past the low
+# end of the street; Oxford Street so the already-seeded interpolated fixture
+# "1234 Oxford Street" is provably covered. Robie Street is deliberately
+# ABSENT: the corpus's primary fixture address is 100 Robie Street, and a
+# street the data has never heard of yields "unverifiable", which is what
+# keeps every pre-ABS-469 expectation about that address intact.
+CENTERLINES_DATASET_NAME = "e2e_rclub_street_centerlines"
+CENTERLINE_SEGMENTS: tuple[tuple[str, str, str, int, int, int, int], ...] = (
+    ("E2E-ST-WINDSOR-1", "WINDSOR", "ST", 2000, 2006, 2001, 2007),
+    ("E2E-ST-WINDSOR-2", "WINDSOR", "ST", 2008, 2088, 2009, 2089),
+    ("E2E-ST-OXFORD-1", "OXFORD", "ST", 1222, 1388, 1223, 1389),
+)
+
+# ABS-469 tier 4. Two lots hard against the HR-2 / CEN-1 line at -63.58:
+#
+#   7 Boundary Street — rooftop point ~9 m west of the line, on a lot that
+#     straddles it. Both signals fire: proximity AND a split parcel. This is
+#     the shape of 6321 Quinpool Road in the live corpus (ROOFTOP, inside
+#     CEN-2, 7.6 m from CEN-1) — a perfect geocode that is still not a safe
+#     answer.
+#   9 Boundary Street — a lot wholly inside HR-2 whose eastern edge touches
+#     the line. Zone polygons share edges, so this picks up a sliver of CEN-1
+#     from coordinate precision alone and must NOT be reported as split.
+BOUNDARY_ADDRESS_RAW = "7 Boundary Street"
+BOUNDARY_ADDRESS_NORMALIZED = "civic:7 boundary st"
+_BOUNDARY_POINT: dict[str, Any] = {"type": "Point", "coordinates": [-63.580115, 44.65]}
+SLIVER_ADDRESS_RAW = "9 Boundary Street"
+SLIVER_ADDRESS_NORMALIZED = "civic:9 boundary st"
+_SLIVER_POINT: dict[str, Any] = {"type": "Point", "coordinates": [-63.58040, 44.6490]}
+_SPLIT_PARCEL: dict[str, Any] = {
+    "type": "Polygon",
+    "coordinates": [
+        [
+            [-63.58043, 44.6499],
+            [-63.57957, 44.6499],
+            [-63.57957, 44.6501],
+            [-63.58043, 44.6501],
+            [-63.58043, 44.6499],
+        ]
+    ],
+}
+_SLIVER_PARCEL: dict[str, Any] = {
+    "type": "Polygon",
+    "coordinates": [
+        [
+            [-63.58080, 44.6489],
+            [-63.57999, 44.6489],
+            [-63.57999, 44.6491],
+            [-63.58080, 44.6491],
+            [-63.58080, 44.6489],
+        ]
+    ],
+}
+
 _M_PER_DEG_LAT = 111_320.0
 # Half-width of the synthetic lots in degrees of longitude at Quinpool's
 # latitude (cos 44.646° ≈ 0.712). Narrow enough that neither lot overlaps the
@@ -440,12 +540,87 @@ def _polygon() -> dict[str, Any]:
     return {"type": "Polygon", "coordinates": [_BOX]}
 
 
-def _polygon_feature_collection(props: dict[str, Any]) -> dict[str, Any]:
+def _polygon_feature_collection(
+    props: dict[str, Any],
+    *,
+    extra: tuple[tuple[dict[str, Any], dict[str, Any]], ...] = (),
+) -> dict[str, Any]:
+    """The overlay's polygon over the test point, plus any extra features.
+
+    ``extra`` is (properties, geometry) pairs — used by the zoning layer,
+    which needs a second polygon carrying a different zone code so the
+    zone-boundary and split-parcel signals have a boundary to be near
+    (ABS-469).
+    """
+    features = [{"type": "Feature", "geometry": _polygon(), "properties": props}]
+    features.extend(
+        {"type": "Feature", "geometry": geometry, "properties": extra_props}
+        for extra_props, geometry in extra
+    )
     return {
         "type": "FeatureCollection",
         "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
-        "features": [{"type": "Feature", "geometry": _polygon(), "properties": props}],
+        "features": features,
     }
+
+
+def _centerlines_feature_collection() -> dict[str, Any]:
+    """HRM-shaped street segments: a name, a type, and per-side ranges."""
+    return {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {
+                    "ASSETID": key,
+                    "STR_NAME": name,
+                    "STR_TYPE": street_type,
+                    "FROM_LEFT": from_left,
+                    "TO_LEFT": to_left,
+                    "FROM_RIGHT": from_right,
+                    "TO_RIGHT": to_right,
+                },
+                # Geometry is incidental here — the address ranges are the
+                # payload — but every feature needs one to ingest.
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[-63.5950, 44.6480], [-63.5950, 44.6520]],
+                },
+            }
+            for (
+                key,
+                name,
+                street_type,
+                from_left,
+                to_left,
+                from_right,
+                to_right,
+            ) in CENTERLINE_SEGMENTS
+        ],
+    }
+
+
+def _centerlines_config_yaml(geojson_path: Path) -> str:
+    # Base geography like the parcels: no links_to, and the role tag is what
+    # layer2.retrieval.civic_address looks for.
+    return (
+        f"name: {CENTERLINES_DATASET_NAME}\n"
+        "publisher: e2e_seed\n"
+        "format: geojson\n"
+        f"source_path: {geojson_path}\n"
+        "crs: EPSG:4326\n"
+        "role: road_centerlines\n"
+        "attributes:\n"
+        "  feature_key: ASSETID\n"
+        "  canonical:\n"
+        "    street_name: { from: STR_NAME, type: string, optional: true }\n"
+        "    street_type: { from: STR_TYPE, type: string, optional: true }\n"
+        "    civic_from_left: { from: FROM_LEFT, type: int, optional: true }\n"
+        "    civic_to_left: { from: TO_LEFT, type: int, optional: true }\n"
+        "    civic_from_right: { from: FROM_RIGHT, type: int, optional: true }\n"
+        "    civic_to_right: { from: TO_RIGHT, type: int, optional: true }\n"
+    )
 
 
 def _pocs_feature_collection() -> dict[str, Any]:
@@ -502,6 +677,16 @@ def _parcels_feature_collection() -> dict[str, Any]:
                 "type": "Feature",
                 "properties": {"PID": "E2E-RCLUB-BACK", "CIVIC": BACK_LOT_ADDRESS_RAW},
                 "geometry": _lot_polygon(BACK_LOT_LON, front_m=25.0, rear_m=65.0),
+            },
+            {
+                "type": "Feature",
+                "properties": {"PID": "E2E-RCLUB-SPLIT", "CIVIC": BOUNDARY_ADDRESS_RAW},
+                "geometry": _SPLIT_PARCEL,
+            },
+            {
+                "type": "Feature",
+                "properties": {"PID": "E2E-RCLUB-SLIVER", "CIVIC": SLIVER_ADDRESS_RAW},
+                "geometry": _SLIVER_PARCEL,
             },
         ],
     }
@@ -569,7 +754,11 @@ def _dataset_specs() -> list[tuple[str, str]]:
     specs = [
         (
             overlay["name"],
-            json.dumps(_polygon_feature_collection(overlay["properties"])),
+            json.dumps(
+                _polygon_feature_collection(
+                    overlay["properties"], extra=overlay.get("extra", ())
+                )
+            ),
         )
         for overlay in POLYGON_OVERLAYS
     ]
@@ -631,6 +820,33 @@ _GEOCODE_ROWS: tuple[
         0.95,
         "seeded for the unified RC-LUB e2e corpus (ABS-435 back lot control)",
         None,
+    ),
+    # ABS-469: parked on the zoned test point deliberately. If the profile
+    # ever answers this one with a zone, it is answering a civic number that
+    # does not exist from a point that belongs to someone else's property.
+    (
+        NONEXISTENT_ADDRESS_NORMALIZED,
+        NONEXISTENT_ADDRESS_RAW,
+        TEST_POINT,
+        0.85,
+        "seeded for ABS-469 (civic number outside every published street range)",
+        "RANGE_INTERPOLATED",
+    ),
+    (
+        BOUNDARY_ADDRESS_NORMALIZED,
+        BOUNDARY_ADDRESS_RAW,
+        _BOUNDARY_POINT,
+        0.95,
+        "seeded for ABS-469 (rooftop match ~9 m from the HR-2/CEN-1 line)",
+        "ROOFTOP",
+    ),
+    (
+        SLIVER_ADDRESS_NORMALIZED,
+        SLIVER_ADDRESS_RAW,
+        _SLIVER_POINT,
+        0.95,
+        "seeded for ABS-469 (lot touching the zone line — sliver control)",
+        "ROOFTOP",
     ),
 )
 
@@ -963,8 +1179,10 @@ def dataset_converged(session, *, name: str, geojson_text: str) -> bool:
     )
 
 
-def role_dataset_converged(session, *, name: str, geojson_text: str) -> bool:
-    """``dataset_converged`` for a base-geography dataset (ABS-435 parcels).
+def role_dataset_converged(
+    session, *, name: str, geojson_text: str, role: str = "property_parcels"
+) -> bool:
+    """``dataset_converged`` for a base-geography dataset (parcels, centerlines).
 
     Same content-hash check, minus the linkage requirement: a ``role`` dataset
     is not bound to a bylaw fragment, so ``linked_fragment_id`` is always None
@@ -976,7 +1194,7 @@ def role_dataset_converged(session, *, name: str, geojson_text: str) -> bool:
         row is not None
         and row.content_hash == expected
         and row.parse_status == ParseStatus.PARSED
-        and (row.metadata_json or {}).get("role") == "property_parcels"
+        and (row.metadata_json or {}).get("role") == role
     )
 
 
@@ -1094,6 +1312,13 @@ def _corpus_converged(session, dataset_specs: list[tuple[str, str]]) -> bool:
         geojson_text=json.dumps(_parcels_feature_collection()),
     ):
         return False
+    if not role_dataset_converged(
+        session,
+        name=CENTERLINES_DATASET_NAME,
+        geojson_text=json.dumps(_centerlines_feature_collection()),
+        role="road_centerlines",
+    ):
+        return False
     return _geocode_converged(session)
 
 
@@ -1141,7 +1366,9 @@ def main() -> int:
             linked = 0
             for overlay in POLYGON_OVERLAYS:
                 geojson_text = json.dumps(
-                    _polygon_feature_collection(overlay["properties"])
+                    _polygon_feature_collection(
+                        overlay["properties"], extra=overlay.get("extra", ())
+                    )
                 )
                 if dataset_converged(
                     session, name=overlay["name"], geojson_text=geojson_text
@@ -1188,6 +1415,26 @@ def main() -> int:
                 cfg_path = work_dir / f"{PARCELS_DATASET_NAME}.yaml"
                 cfg_path.write_text(
                     _parcels_config_yaml(geojson_path), encoding="utf-8"
+                )
+                ingest_geo_dataset(session, cfg_path)
+
+            # ABS-469 street centerlines. Also base geography, and also
+            # uncounted in ``linked``: it exists so the civic-address verifier
+            # can ask whether a civic number is real before the geocoder gets
+            # a chance to invent a position for it.
+            centerlines_geojson_text = json.dumps(_centerlines_feature_collection())
+            if not role_dataset_converged(
+                session,
+                name=CENTERLINES_DATASET_NAME,
+                geojson_text=centerlines_geojson_text,
+                role="road_centerlines",
+            ):
+                _drop_existing_dataset(session, CENTERLINES_DATASET_NAME)
+                geojson_path = work_dir / f"{CENTERLINES_DATASET_NAME}.geojson"
+                geojson_path.write_text(centerlines_geojson_text, encoding="utf-8")
+                cfg_path = work_dir / f"{CENTERLINES_DATASET_NAME}.yaml"
+                cfg_path.write_text(
+                    _centerlines_config_yaml(geojson_path), encoding="utf-8"
                 )
                 ingest_geo_dataset(session, cfg_path)
 

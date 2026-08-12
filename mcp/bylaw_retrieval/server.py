@@ -303,6 +303,26 @@ def create_mcp_server(db_url: str | None = None, *, all_documents: bool = False)
         user rather than stating the zone as fact. ``outside_mapped_area:
         true`` means a point WAS found but falls outside every mapped
         boundary — report that, do not report a zone.
+
+        DOES THE ADDRESS EXIST? (ABS-469) ``civic_address_status`` is checked
+        against the municipality's own data before anything is looked up.
+        ``not_found`` means the street is known and NO published civic address
+        or street-segment range covers this number — the address does not
+        exist. The response then carries no zone at all, plus
+        ``valid_civic_number_ranges`` and ``suggested_civic_numbers``: tell
+        the user the address could not be found, quote those, and ask them to
+        confirm. Do not re-issue the lookup with a geocoder — a geocoder
+        answers a fabricated address by estimating a position from the
+        surrounding numbering, which is the failure this check exists to
+        stop. ``confirmed`` means the number exists; ``unverifiable`` means no
+        municipal address data was in scope and says nothing either way.
+
+        IS THE ZONE SAFE TO RELY ON? Independent of the geocode's quality:
+        ``zone_boundary_distance_m`` (with ``nearest_other_zone``) reports
+        when the point sits within ~25 m of a different zone, and
+        ``parcel_zones`` lists every zone the parcel intersects when the lot
+        is split between more than one. A split lot has no single governing
+        zone — say so and ask where on the lot the work is proposed.
         """
         with session_scope(db_url) as session:
             service = _service(session)

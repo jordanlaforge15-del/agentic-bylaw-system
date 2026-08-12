@@ -575,6 +575,141 @@ def find_abutting_features(
     return out
 
 
+# ABS-469 — how close is "close enough to matter" for a zone boundary.
+#
+# A zone code is only as good as the parcel the point landed on, and a point
+# near a zone line is the mechanism that produces a confidently wrong setback
+# even when the geocode is a perfect rooftop match. Measured over the 45
+# addresses the dev corpus has resolved into a zone, the distance from the
+# geocoded point to the nearest polygon carrying a DIFFERENT zone code runs
+# 7.6 m to 188 m. 25 m is roughly an arterial right-of-way plus a lot's
+# frontage: below it the boundary is on this lot, its immediate neighbour, or
+# directly across the street — all cases where "confirm the zone with HRM"
+# is the honest answer. Twelve of the 45 (27%) fall inside it, so the flag
+# stays meaningful rather than firing on everything.
+ZONE_BOUNDARY_PROXIMITY_M = 25.0
+
+_M_PER_DEG_LAT = 111_320.0
+
+
+def features_within(
+    session: Session,
+    *,
+    dataset_id: int,
+    location: ResolvedLocation,
+    distance_m: float,
+    limit: int = 12,
+) -> list[tuple[ExternalDatasetFeature, float]]:
+    """Features of ``dataset_id`` within ``distance_m``, nearest first.
+
+    Distinct from ``query_features(predicate="abuts")``, which answers a
+    yes/no question and hides the distance behind a proximity score. Here the
+    distance IS the answer: "this point is 7.6 m from the CEN-1 boundary" is
+    what makes an answer safe to act on, and the caller needs the metre value
+    to say it.
+
+    A feature CONTAINING the location reports 0.0, so the caller must filter
+    out the zone the point is already in before reading the nearest neighbour.
+    """
+    try:
+        location_geom = shapely_shape(location.geometry)
+    except (ValueError, TypeError, KeyError):
+        return []
+    if not location_geom.is_valid or location_geom.is_empty:
+        return []
+
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        geojson = json.dumps(location_geom.__geo_interface__)
+        sql = text(
+            """
+            WITH input_geom AS (
+              SELECT ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326) AS g
+            )
+            SELECT
+              edf.id AS feature_id,
+              ST_Distance(edf.geometry::geography, ig.g::geography) AS distance_m
+            FROM external_dataset_feature edf
+            CROSS JOIN input_geom ig
+            WHERE edf.external_dataset_id = :ds_id
+              AND edf.geometry IS NOT NULL
+              AND ST_DWithin(edf.geometry::geography, ig.g::geography, :dist_m)
+            ORDER BY distance_m ASC
+            LIMIT :lim
+            """
+        )
+        rows = session.execute(
+            sql,
+            {
+                "geojson": geojson,
+                "ds_id": dataset_id,
+                "dist_m": distance_m,
+                "lim": limit,
+            },
+        ).all()
+        if not rows:
+            return []
+        by_id = {
+            feature.id: feature
+            for feature in session.execute(
+                select(ExternalDatasetFeature).where(
+                    ExternalDatasetFeature.id.in_([r.feature_id for r in rows])
+                )
+            )
+            .scalars()
+            .all()
+        }
+        return [
+            (by_id[r.feature_id], float(r.distance_m))
+            for r in rows
+            if r.feature_id in by_id
+        ]
+
+    # SQLite/shapely fallback — same local metre frame the abuts path uses.
+    origin = location_geom.representative_point()
+    lat0, lon0 = origin.y, origin.x
+    m_per_deg_lon = _M_PER_DEG_LAT * cos(radians(lat0))
+
+    def to_metres(x: Any, y: Any, z: Any = None) -> tuple[Any, Any]:
+        return ((x - lon0) * m_per_deg_lon, (y - lat0) * _M_PER_DEG_LAT)
+
+    location_m = shapely_transform(to_metres, location_geom)
+    out: list[tuple[ExternalDatasetFeature, float]] = []
+    features = (
+        session.execute(
+            select(ExternalDatasetFeature).where(
+                ExternalDatasetFeature.external_dataset_id == dataset_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for feature in features:
+        try:
+            geom = shapely_shape(feature.geometry_geojson)
+        except (TypeError, ValueError, KeyError):
+            continue
+        if not geom.is_valid or geom.is_empty:
+            continue
+        measured = shapely_transform(to_metres, geom).distance(location_m)
+        if measured <= distance_m:
+            out.append((feature, float(measured)))
+    out.sort(key=lambda pair: pair[1])
+    return out[:limit]
+
+
+def square_degrees_to_m2(area_deg2: float, latitude: float) -> float:
+    """Convert an EPSG:4326 planar area to approximate square metres.
+
+    ``query_features`` reports overlap in square degrees because that is what
+    both the PostGIS and shapely paths compute cheaply, and it is only ever
+    used for ordering. Deciding whether a parcel GENUINELY straddles two zones
+    or merely picks up a sliver from a polygon edge needs a real unit, and at
+    a single city's latitude the equirectangular approximation is well inside
+    the precision that question requires.
+    """
+    return abs(area_deg2) * _M_PER_DEG_LAT * (_M_PER_DEG_LAT * cos(radians(latitude)))
+
+
 def expand_spatial(
     session: Session,
     candidates: list[CandidateFragment],

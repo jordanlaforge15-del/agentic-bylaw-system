@@ -839,6 +839,87 @@ class AddressProfile(BaseModel):
             "to the user rather than answering as if the zone were certain."
         ),
     )
+    # -- ABS-469: does the address exist? --------------------------------
+    #
+    # A geocoder answers "100 Robie Street" by interpolating a position from
+    # the surrounding civic numbering — it never found the number, because
+    # there is no 100 Robie Street. The fields below check the number against
+    # the municipality's own data, so a fabricated address is refused and
+    # corrected rather than answered from somebody else's parcel.
+    civic_address_status: (
+        Literal["confirmed", "not_found", "unverifiable"] | None
+    ) = Field(
+        default=None,
+        description=(
+            "Whether the civic number exists in the municipality's own data: "
+            "'confirmed' (a published civic-address point, or a street segment "
+            "whose address range covers it), 'not_found' (the street is known "
+            "and NO published address or range covers this number — the "
+            "address does not exist; do NOT state a zone, tell the user and "
+            "offer 'suggested_civic_numbers'), 'unverifiable' (no municipal "
+            "address data in scope, or an unrecognised street — says nothing "
+            "about the address). Null for parcel-id and named-place lookups."
+        ),
+    )
+    civic_address_evidence: str | None = Field(
+        default=None,
+        description=(
+            "What settled 'civic_address_status' — the method and dataset, "
+            "e.g. 'street_centerline_ranges (halifax_street_centerlines)'. A "
+            "'civic_address_points' verdict is a municipal fact; a "
+            "'street_centerline_ranges' verdict is inferred from published "
+            "per-segment address ranges and is right ~99.85% of the time."
+        ),
+    )
+    valid_civic_number_ranges: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Civic-number ranges that DO exist on this street, same parity as "
+            "the number asked about, nearest first (e.g. ['820-2180']). "
+            "Populated when 'civic_address_status' is 'not_found' — quote "
+            "these back so the user can correct the address."
+        ),
+    )
+    suggested_civic_numbers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The nearest valid civic numbers on this street. Populated with "
+            "'valid_civic_number_ranges'; offer them as 'did you mean …?'."
+        ),
+    )
+    # -- ABS-469: is the zone safe to rely on? ---------------------------
+    #
+    # Orthogonal to geocoder quality: even an exact rooftop point is unsafe
+    # when the parcel abuts or straddles a zone line, which is exactly the
+    # mechanism that produces a confidently wrong setback.
+    zone_boundary_distance_m: float | None = Field(
+        default=None,
+        description=(
+            "Distance in metres from the resolved point to the nearest polygon "
+            "carrying a DIFFERENT zone code, when that is within ~25 m. Null "
+            "when no other zone is nearby (or no zoning dataset is in scope). "
+            "A small value means the zone above may belong to the neighbouring "
+            "parcel — say so and name 'nearest_other_zone'."
+        ),
+    )
+    nearest_other_zone: str | None = Field(
+        default=None,
+        description=(
+            "Zone code of the nearest polygon with a different zone, paired "
+            "with 'zone_boundary_distance_m'."
+        ),
+    )
+    parcel_zones: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Every zone the resolved parcel intersects, largest share first, "
+            "when it intersects more than one. A multi-zone parcel means the "
+            "standards differ across the lot and the governing zone depends on "
+            "where on the lot the work is proposed — never answer with one "
+            "zone as if it governed the whole parcel. Empty when the parcel "
+            "sits in a single zone or no parcel fabric is in scope."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

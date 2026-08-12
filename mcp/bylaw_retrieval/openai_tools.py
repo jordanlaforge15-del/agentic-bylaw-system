@@ -198,7 +198,13 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                 "Saves multiple lookups. The 'address' argument is free text in the "
                 "same shape the search_bylaw_evidence 'location' slot accepts. If the "
                 "address can't be resolved, the response carries 'unresolvable': true "
-                "with empty citations rather than an error."
+                "with empty citations rather than an error. Read "
+                "'resolution_quality' before stating the zone — anything below "
+                "'rooftop' means the point was estimated and may sit on a "
+                "neighbouring parcel. 'civic_address_status': 'not_found' means the "
+                "civic number does not exist in the municipality's own data: there is "
+                "no zone, do not geocode it, and offer "
+                "'valid_civic_number_ranges' / 'suggested_civic_numbers' instead."
             ),
             "parameters": {
                 "type": "object",

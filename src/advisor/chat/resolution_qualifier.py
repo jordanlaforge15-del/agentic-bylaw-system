@@ -16,6 +16,13 @@ a below-rooftop resolution without saying so, append the qualification.
 A user can then never receive a flat "your zone is HR-1" that was really
 a guess, regardless of how the live model phrased its turn — and e2e can
 assert the behaviour without depending on model wording.
+
+ABS-469 adds the state above all of these: the civic number does not exist.
+That profile carries no resolution quality at all — there is nothing to be
+precise about — so the ABS-466 flags read it as a clean turn and the net
+would let a fabricated address through silently. Its suffix outranks the
+others and carries the civic numbers that do exist on the street, because
+the correction is what makes the refusal useful.
 """
 from __future__ import annotations
 
@@ -63,6 +70,21 @@ _COVERAGE_SUFFIX = (
 )
 
 
+# ABS-469: the address does not exist. Stronger than either suffix above,
+# because there is no property to qualify an answer about — whatever the turn
+# said about a zone came from a point the geocoder estimated on somebody
+# else's parcel. The valid ranges are appended when the profile carried them,
+# since a correction the user can act on is the whole point of the refusal.
+_NONEXISTENT_SUFFIX = (
+    "\n\n---\n\n"
+    "**About this address:** {street_phrase} could not be found in the "
+    "municipality's own address records — no civic address or street segment "
+    "covers that number. Nothing above should be read as applying to a "
+    "property at this address.{ranges} Please confirm the address before "
+    "relying on any of it."
+)
+
+
 def _payload_texts(output: Any) -> Iterable[str]:
     """Yield every string payload in a tool handler's return value."""
     if isinstance(output, str):
@@ -107,10 +129,69 @@ def address_resolution_flags(tool_calls: Iterable[Any]) -> tuple[bool, bool]:
     return imprecise, outside
 
 
+def nonexistent_address_suffix(tool_calls: Iterable[Any]) -> str | None:
+    """The correction a turn owes the user when the address does not exist.
+
+    Separate from ``address_resolution_flags`` because this is not a question
+    of *precision*: the compact profile for a non-existent address carries no
+    resolution quality at all — there is nothing to be precise about — so the
+    ABS-466 flags read it as a clean turn. Returns None when no address tool
+    reported ``civic_address_status: "not_found"`` this turn.
+    """
+    for call in tool_calls:
+        if getattr(call, "tool_name", None) not in ADDRESS_TOOLS:
+            continue
+        if getattr(call, "error", None):
+            continue
+        for text in _payload_texts(getattr(call, "output", None)):
+            try:
+                payload = json.loads(text)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("civic_address_status") != "not_found":
+                continue
+            address = payload.get("address")
+            street_phrase = (
+                f"“{address}”" if isinstance(address, str) and address else "this address"
+            )
+            ranges = payload.get("valid_civic_number_ranges")
+            ranges_phrase = ""
+            if isinstance(ranges, list) and ranges:
+                quoted = ", ".join(str(r) for r in ranges)
+                ranges_phrase = (
+                    f" The civic numbers that do exist on that street are {quoted}."
+                )
+            return _NONEXISTENT_SUFFIX.format(
+                street_phrase=street_phrase, ranges=ranges_phrase
+            )
+    return None
+
+
 def already_qualified(text: str) -> bool:
     """True when the answer already tells the user the match was imprecise."""
     low = text.lower()
     return any(marker in low for marker in _ALREADY_QUALIFIED_MARKERS)
+
+
+# Markers that mean the answer already tells the user the address is not real
+# (ABS-469). Narrower than ``_ALREADY_QUALIFIED_MARKERS``: a turn that hedges
+# about precision has NOT said the address does not exist, and appending the
+# refusal on top of a hedge is the correct outcome there.
+_ALREADY_REFUSED_MARKERS: tuple[str, ...] = (
+    "could not be found",
+    "does not appear to exist",
+    "does not exist",
+    "no such address",
+    "not a valid address",
+    "no civic address",
+)
+
+
+def _already_refused(text: str) -> bool:
+    low = text.lower()
+    return any(marker in low for marker in _ALREADY_REFUSED_MARKERS)
 
 
 def apply_resolution_qualifier(
@@ -123,14 +204,23 @@ def apply_resolution_qualifier(
     the turn touched no address tool, or when the answer already qualifies
     itself.
     """
+    tool_calls = list(tool_calls)
+    # ABS-469: a non-existent address outranks any precision qualifier — the
+    # honest correction is that there is no such property, not that the point
+    # behind it was estimated.
+    nonexistent = nonexistent_address_suffix(tool_calls)
     imprecise, outside = address_resolution_flags(tool_calls)
-    if not imprecise:
+    if nonexistent is None and not imprecise:
         return content
     text = "".join(b.text for b in content if isinstance(b, TextBlock))
-    if not text.strip() or already_qualified(text):
+    if not text.strip():
+        return content
+    if nonexistent is None and already_qualified(text):
+        return content
+    if nonexistent is not None and _already_refused(text):
         return content
 
-    suffix = _COVERAGE_SUFFIX if outside else _PRECISION_SUFFIX
+    suffix = nonexistent or (_COVERAGE_SUFFIX if outside else _PRECISION_SUFFIX)
     new_content = list(content)
     for i in range(len(new_content) - 1, -1, -1):
         block = new_content[i]
