@@ -237,13 +237,24 @@ test.describe("ABS-462 applicability — the 198(1)(d) side-setback error", () =
       fs.readFileSync(path.join(dir, "verification", "TC-001.verify.json"), "utf-8"),
     ) as VerifyRecord;
 
-    // Everything the old scorer could see is clean: seven citations, all real.
+    // Everything the old scorer could see still clears its bar: seven
+    // citations, all real, and every scalar rate at or above threshold.
     expect(record.grade.citation_hallucinated).toBe(0);
     expect(record.grade.citation_found).toBe(record.grade.citation_total);
     expect(record.grade.citation_total).toBe(7);
-    expect(record.grade.keyword_rate).toBe(1.0);
     expect(record.grade.reference_rate).toBe(1.0);
     expect(record.grade.topic_rate).toBe(1.0);
+
+    // Keyword coverage was 1.0 when this test landed. ABS-470 corrected
+    // TC-001's expectations — s.198(1)(f) puts this lot's side yard at 2.5 m,
+    // and the 3.0 m the corpus used to expect is the townhouse branch — so the
+    // one keyword this answer never says is now scored as the miss it is.
+    expect(record.grade.keyword_rate).toBe(0.833);
+    expect(record.grade.keyword_misses).toEqual(["2.5 m"]);
+    // Which changes nothing about why the applicability check exists: TC-001
+    // is a `simple` case, so the keyword bar is 0.80 (KEYWORD_PASS_BAR), and
+    // 0.833 still clears it. Every scalar the grader reports would pass this
+    // answer. Only the applicability finding below fails it.
 
     // And the answer is still wrong.
     expect(record.grade.verdict).toBe("FAIL_APPLICABILITY");
@@ -276,6 +287,11 @@ test.describe("ABS-462 applicability — the 198(1)(d) side-setback error", () =
     expect(tc001?.verdict).toBe("FAIL_APPLICABILITY");
     expect(tc001?.inapplicable).toBe(1);
     // The same conversation used to grade PARTIAL at 67% keyword coverage.
+    // This is the artifact as it was written on 2026-08-11, against the corpus
+    // of that date; runs under evals/runs/ record what the grader said at the
+    // time and are not rewritten. Re-grading the same transcript today scores
+    // 0.833 — see the test above — because ABS-470 corrected the keyword the
+    // answer gets wrong. The two numbers disagreeing is the point.
     expect(tc001?.kw_rate).toBe(1.0);
   });
 

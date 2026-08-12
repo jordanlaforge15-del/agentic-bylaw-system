@@ -163,7 +163,16 @@ Note: Only `"user"` role turns are stored. The assistant's responses are not pre
 
 Tags are freeform strings used for thematic grouping. Established tags:
 
-`renovation`, `new_construction`, `residential`, `commercial`, `mixed_use`, `multi_unit`, `secondary_suite`, `high_rise`, `downtown`, `heritage`, `corridor`, `institutional`, `due_diligence`, `redevelopment`, `feasibility`, `accessory_structure`, `accessory_dwelling`, `demolition`, `overlay`, `conversion`
+`renovation`, `new_construction`, `residential`, `commercial`, `mixed_use`, `multi_unit`, `two_unit_dwelling`, `backyard_suite`, `internal_conversion`, `high_rise`, `downtown`, `heritage`, `corridor`, `institutional`, `due_diligence`, `redevelopment`, `feasibility`, `accessory_structure`, `accessory_dwelling`, `demolition`, `overlay`, `conversion`
+
+Retired: `secondary_suite`. "Secondary suite" is not a use in the Regional
+Centre Land Use By-Law — the phrase does not appear once in the ingest, and
+`lookup_citation` answers `unknown_use` for it. Table 1B's residential rows are
+`Two-unit dwelling use` (a second unit inside the existing building) and
+`Backyard suite use` (a detached unit in the rear yard), which is why the two
+tags above replace it. Historical run archives under `evals/runs/` still carry
+the old tag; they are records of what was asked at the time and are not
+rewritten (ABS-470).
 
 ---
 
