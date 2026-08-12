@@ -568,6 +568,21 @@ def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
                 "dataset_name": o.dataset_name,
                 **({"label": o.label} if o.label else {}),
                 **({"citation": o.citation} if o.citation else {}),
+                # ABS-473: an overlay from a by-law we don't hold arrives with
+                # its citation already stripped, which on its own reads as
+                # "no citation handy" rather than "wrong by-law". Compacting
+                # these two out was what let a Suburban Housing Accelerator
+                # height precinct present as an uncited Schedule 15 precinct.
+                **(
+                    {"governing_bylaw": o.governing_bylaw}
+                    if o.governing_bylaw and o.governing_bylaw_held is False
+                    else {}
+                ),
+                **(
+                    {"governing_bylaw_held": False}
+                    if o.governing_bylaw_held is False
+                    else {}
+                ),
             }
             for o in profile.overlays
         ]
@@ -645,6 +660,29 @@ def _address_profile_instruction(profile: AddressProfile) -> str:
             "every mapped boundary. Do not state a zone — tell the user the "
             "address is outside the mapped plan area and must be confirmed "
             "with HRM."
+        )
+    # ABS-473: the zone is fine, but an overlay over it — height precinct,
+    # FAR precinct — belongs to a by-law we do not hold. Ranked above the
+    # split-lot and proximity cases below because those say the figure may be
+    # the neighbour's; this says the figure's rules are in a document we do
+    # not have, which no amount of geocoding precision fixes.
+    unheld = next(
+        (
+            o
+            for o in profile.overlays
+            if o.governing_bylaw_held is False and o.governing_bylaw
+        ),
+        None,
+    )
+    if unheld is not None:
+        return (
+            f"The {unheld.kind.replace('_', ' ')} here is mapped under the "
+            f"{unheld.governing_bylaw}, which is not in this corpus. State "
+            "the mapped value and name that by-law, then stop: do NOT give "
+            "the standard that applies it, and do NOT substitute the "
+            "equivalent schedule from a by-law that IS held — it does not "
+            "govern this ground. Tell the user it must be confirmed with HRM "
+            "Planning & Development."
         )
     if profile.parcel_zones:
         return (
