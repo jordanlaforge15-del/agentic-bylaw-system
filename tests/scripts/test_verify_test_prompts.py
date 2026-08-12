@@ -306,10 +306,17 @@ def test_the_condition_may_be_established_in_an_earlier_turn(corpus):
 def test_regrading_the_committed_run_flags_the_side_setback_error(corpus):
     """DoD 4, end to end, on the committed transcript itself.
 
-    Graded against the corpus snapshot, this reproduces the live-database
-    result exactly: 7/7 citations resolve, no hallucinations, keywords and
-    references and topics all 100% — and the case still fails, because clause
-    198(1)(d) does not apply to this lot.
+    Graded against the corpus snapshot: 7/7 citations resolve, no
+    hallucinations, references and topics at 100%, keywords above the bar — and
+    the case still fails, because clause 198(1)(d) does not apply to this lot.
+
+    Keyword coverage was 100% when this test landed. ABS-470 corrected TC-001's
+    expectations -- s.198(1)(f) puts this lot's side yard at 2.5 m, and the
+    3.0 m the corpus used to expect is the townhouse branch -- so the one
+    keyword this answer never says now scores as the miss it is. It changes
+    nothing about the point: `simple` cases are graded against a 0.80 keyword
+    bar (KEYWORD_PASS_BAR), 0.833 clears it, and every scalar the grader
+    reports would still pass this answer. Only applicability fails it.
     """
     transcript = json.loads(COMMITTED_RUN.read_text())
     spec = next(
@@ -321,7 +328,8 @@ def test_regrading_the_committed_run_flags_the_side_setback_error(corpus):
 
     assert grade["citation_hallucinated"] == 0
     assert grade["citation_found"] == grade["citation_total"] == 7
-    assert grade["keyword_rate"] == 1.0
+    assert grade["keyword_rate"] == 0.833
+    assert grade["keyword_misses"] == ["2.5 m"]
     assert grade["reference_rate"] == 1.0
     assert grade["topic_rate"] == 1.0
     assert grade["verdict"] == "FAIL_APPLICABILITY"
