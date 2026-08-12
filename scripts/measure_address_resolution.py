@@ -39,6 +39,7 @@ for _path in (REPO_ROOT / "src", REPO_ROOT / "mcp", REPO_ROOT / "scripts"):
         sys.path.insert(0, str(_path))
 
 from bylaw_retrieval.retrieval.service import RetrievalService  # noqa: E402
+
 from layer2.retrieval.geocode import resolve_location_with_detail  # noqa: E402
 from layer2.retrieval.location import RegexLocationExtractor  # noqa: E402
 
