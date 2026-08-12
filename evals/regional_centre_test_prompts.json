@@ -59,7 +59,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "00055764"
+      "parcel_pid": "00055764",
+      "registered_civics": [
+        "1222 Robie Street, Halifax, NS"
+      ]
     }
   },
   {
@@ -127,7 +130,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "00109439"
+      "parcel_pid": "00109439",
+      "registered_civics": [
+        "65 Wentworth Street, Dartmouth, NS"
+      ]
     }
   },
   {
@@ -207,7 +213,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "00023176"
+      "parcel_pid": "00023176",
+      "registered_civics": [
+        "6457 Jubilee Road, Halifax, NS"
+      ]
     }
   },
   {
@@ -218,7 +227,7 @@
       "subtype": "architect",
       "description": "Registered architect in schematic design for a mid-rise residential client"
     },
-    "address": "251 Stairs Street, Dartmouth, NS",
+    "address": "249 Windmill Road, Dartmouth, NS",
     "zone": "HR-1",
     "complexity": "complex",
     "liability": "high",
@@ -242,7 +251,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I\u2019m an architect working on a new mid-rise residential building at 251 Stairs Street in Dartmouth \u2014 the site is zoned HR-1. We\u2019re targeting a multi-unit dwelling. First pass: what are the permitted uses and key dimensional standards \u2014 height, setbacks, and lot coverage \u2014 for HR-1?"
+        "message": "I\u2019m an architect working on a new mid-rise residential building at 249 Windmill Road in Dartmouth \u2014 the site is zoned HR-1. We\u2019re targeting a multi-unit dwelling. First pass: what are the permitted uses and key dimensional standards \u2014 height, setbacks, and lot coverage \u2014 for HR-1?"
       },
       {
         "turn": 2,
@@ -300,7 +309,12 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "40811085"
+      "parcel_pid": "40811085",
+      "registered_civics": [
+        "249 Windmill Road, Dartmouth, NS",
+        "257 Windmill Road, Dartmouth, NS",
+        "251 Windmill Road, Dartmouth, NS"
+      ]
     }
   },
   {
@@ -397,7 +411,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "40542839"
+      "parcel_pid": "40542839",
+      "registered_civics": [
+        "10 Joseph Young Street, Dartmouth, NS"
+      ]
     }
   },
   {
@@ -507,7 +524,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "00155622"
+      "parcel_pid": "00155622",
+      "registered_civics": [
+        "5531 Nora Bernard Street, Halifax, NS"
+      ]
     }
   },
   {
@@ -584,7 +604,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "41546813"
+      "parcel_pid": "41546813",
+      "registered_civics": [
+        "118 Wyse Road, Dartmouth, NS"
+      ]
     }
   },
   {
@@ -685,7 +708,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": null
+      "parcel_pid": "40634602",
+      "registered_civics": [
+        "1801 Hollis Street, Halifax, NS"
+      ]
     }
   },
   {
@@ -768,7 +794,11 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "41488750"
+      "parcel_pid": "41488750",
+      "registered_civics": [
+        "12 Cutwater, Dartmouth, NS",
+        "16 Kings Wharf Place, Dartmouth, NS"
+      ]
     }
   },
   {
@@ -865,7 +895,11 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "00148858"
+      "parcel_pid": "00148858",
+      "registered_civics": [
+        "2368 Gottingen Street, Halifax, NS",
+        "2370 Gottingen Street, Halifax, NS"
+      ]
     }
   },
   {
@@ -876,7 +910,7 @@
       "subtype": "planner",
       "description": "Senior planner triaging a proposed lab/research building addition on an institutional campus"
     },
-    "address": "1273 Edward Street, Halifax, NS",
+    "address": "5421 Nora Bernard Street, Halifax, NS",
     "zone": "INS",
     "complexity": "medium",
     "liability": "medium",
@@ -897,7 +931,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm reviewing a development application for 1273 Edward Street \u2014 that's in the INS zone. The applicant is proposing to expand an existing university research lab. Before I get into the standards, can you confirm that a university laboratory use is a permitted use as-of-right in the INS zone under the Regional Centre Land Use By-Law?"
+        "message": "I'm reviewing a development application for 5421 Nora Bernard Street \u2014 that's in the INS zone. The applicant is proposing to expand an existing university research lab. Before I get into the standards, can you confirm that a university laboratory use is a permitted use as-of-right in the INS zone under the Regional Centre Land Use By-Law?"
       },
       {
         "turn": 2,
@@ -947,7 +981,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "40069247"
+      "parcel_pid": "41212366",
+      "registered_civics": [
+        "5421 Nora Bernard Street, Halifax, NS"
+      ]
     }
   },
   {
@@ -1022,7 +1059,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "41336363"
+      "parcel_pid": "41336363",
+      "registered_civics": [
+        "65 Georges Island Road, Halifax, NS"
+      ]
     }
   },
   {
@@ -1123,14 +1163,17 @@
       "parking",
       "site_plan_approval"
     ],
-    "notes": "Tests HR-2 FAR, height overlay map (precincts), streetwall + stepback requirements, and parking minimums. SETBACK BRANCH RE-DERIVED (ABS-470): same defect as TC-001, caught by re-running that analysis across the corpus rather than only on the cases the original audit listed — the audit predates the ABS-467 address re-derivation, so it saw this case at a different address. Turn 4 asks for the HR-2 side and rear setbacks. Both s.198 (side) and s.199 (rear) branch on what the lot abuts, and 30 Joseph Young abuts no ER, CH, PCF or RPK lot (nearest PCF polygon 119 m away), so the operative clauses are s.199(1)(b) rear = 3.0 m and s.198(1)(f) side = 2.5 m. The keyword was `6.0 m`, which is s.199(1)(a) — the abutting-ER branch, which does not apply here.",
+    "notes": "Tests HR-2 FAR, height overlay map (precincts), streetwall + stepback requirements, and parking minimums. SETBACK BRANCH RE-DERIVED (ABS-470): same defect as TC-001, caught by re-running that analysis across the corpus rather than only on the cases the original audit listed \u2014 the audit predates the ABS-467 address re-derivation, so it saw this case at a different address. Turn 4 asks for the HR-2 side and rear setbacks. Both s.198 (side) and s.199 (rear) branch on what the lot abuts, and 30 Joseph Young abuts no ER, CH, PCF or RPK lot (nearest PCF polygon 119 m away), so the operative clauses are s.199(1)(b) rear = 3.0 m and s.198(1)(f) side = 2.5 m. The keyword was `6.0 m`, which is s.199(1)(a) \u2014 the abutting-ER branch, which does not apply here.",
     "address_resolution": {
       "resolved_zone": "HR-2",
       "resolution_quality": "rooftop",
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "40542813"
+      "parcel_pid": "40542813",
+      "registered_civics": [
+        "30 Joseph Young Street, Dartmouth, NS"
+      ]
     }
   },
   {
@@ -1141,7 +1184,7 @@
       "subtype": null,
       "description": "Developer exploring bonus zoning provisions to push height and FAR above as-of-right"
     },
-    "address": "3123 Kempt Road, Halifax, NS",
+    "address": "6049 Young Street, Halifax, NS",
     "zone": "CEN-2",
     "complexity": "complex",
     "liability": "high",
@@ -1163,7 +1206,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "We're looking at 3123 Kempt Road in Halifax \u2014 it's zoned CEN-2. We want to develop a mixed-use building and we've heard there are bonus density provisions available in that zone. Can you give me a rundown of what the base FAR and height allowances are for CEN-2, and what the ceiling looks like if we can trigger the bonusing?"
+        "message": "We're looking at 6049 Young Street in Halifax \u2014 it's zoned CEN-2. We want to develop a mixed-use building and we've heard there are bonus density provisions available in that zone. Can you give me a rundown of what the base FAR and height allowances are for CEN-2, and what the ceiling looks like if we can trigger the bonusing?"
       },
       {
         "turn": 2,
@@ -1173,12 +1216,12 @@
       {
         "turn": 3,
         "role": "user",
-        "message": "Let's talk about ground floor use requirements on Kempt Road specifically. I know CEN-2 typically has active-use mandates at grade \u2014 what uses are required, what's the minimum depth or frontage that has to be commercial or active, and are there any restrictions on things like parking garage entrances breaking up the streetwall?"
+        "message": "Let's talk about ground floor use requirements on Young Street specifically. I know CEN-2 typically has active-use mandates at grade \u2014 what uses are required, what's the minimum depth or frontage that has to be commercial or active, and are there any restrictions on things like parking garage entrances breaking up the streetwall?"
       },
       {
         "turn": 4,
         "role": "user",
-        "message": "On the streetwall piece \u2014 what's the required streetwall height and percentage of frontage coverage on a primary street like Kempt Road? If we're going for bonus height, does the bylaw impose any additional stepback requirements above the streetwall level, and at what floor does that kick in?"
+        "message": "On the streetwall piece \u2014 what's the required streetwall height and percentage of frontage coverage on a primary street like Young Street? If we're going for bonus height, does the bylaw impose any additional stepback requirements above the streetwall level, and at what floor does that kick in?"
       },
       {
         "turn": 5,
@@ -1240,7 +1283,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "00152777"
+      "parcel_pid": "40795999",
+      "registered_civics": [
+        "6049 Young Street, Halifax, NS"
+      ]
     }
   },
   {
@@ -1336,7 +1382,14 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "00077909"
+      "parcel_pid": "00077909",
+      "registered_civics": [
+        "5520 Spring Garden Road, Halifax, NS",
+        "5518 Spring Garden Road, Halifax, NS",
+        "5516 Spring Garden Road, Halifax, NS",
+        "5514 Spring Garden Road, Halifax, NS",
+        "5512 Spring Garden Road, Halifax, NS"
+      ]
     }
   },
   {
@@ -1347,7 +1400,7 @@
       "subtype": null,
       "description": "Realtor preparing a marketing package for a downtown Dartmouth property"
     },
-    "address": "15 Kings Wharf Place, Dartmouth, NS",
+    "address": "155 Ochterloney Street, Dartmouth, NS",
     "zone": "DD",
     "complexity": "medium",
     "liability": "medium",
@@ -1367,7 +1420,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I'm doing due diligence on a listing at 15 Kings Wharf Place in Dartmouth \u2014 it's in the DD zone. The current building has ground-floor retail with residential above. Can you confirm that mixed-use setup is actually permitted as-of-right in DD, and are there any restrictions on what types of commercial uses are allowed on the ground floor specifically?"
+        "message": "Hey, I'm doing due diligence on a listing at 155 Ochterloney Street in Dartmouth \u2014 it's in the DD zone. The current building has ground-floor retail with residential above. Can you confirm that mixed-use setup is actually permitted as-of-right in DD, and are there any restrictions on what types of commercial uses are allowed on the ground floor specifically?"
       },
       {
         "turn": 2,
@@ -1418,7 +1471,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "41488750"
+      "parcel_pid": "00128637",
+      "registered_civics": [
+        "155 Ochterloney Street, Dartmouth, NS"
+      ]
     }
   },
   {
@@ -1493,14 +1549,17 @@
       "lot_coverage",
       "development_permit"
     ],
-    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here. ZONE RETARGETED ER-1 -> ER-2 (ABS-467): the Regional Centre zoning schedule maps no ER-1 polygon at all \u2014 0 of 11,069 features in halifax_zoning_boundaries carry ZONE=ER-1 \u2014 so no address could ever confirm this case's zone, and the eval would grade every answer against a zone the map does not place anywhere. ER-2 carries the same use permissions the premise depends on, so the non-conforming-duplex question is unchanged. TERMINOLOGY AND AN OPEN QUESTION (ABS-470): that ABS-467 note originally recorded the ER-2 permissions as \"single-unit dwelling P, secondary suite P, multi-unit N\". `secondary suite` is not a use in this by-law at all — the string does not occur once in the ingest; Table 1B's rows are `Single-unit dwelling use`, `Two-unit dwelling use` and `Backyard suite use` (see TC-002). The turn-1 wording is left as written because it is the user's own framing in an adversarial case and nothing is graded on it. Left unresolved, and NOT rewritten here: Table 1B's ER-2 column marks Two-unit dwelling use with footnotes 6, 14 and 15, and footnote 15 reads \"Use is permitted, except within the Halifax Grain Elevator (HGE) Special Area\" — which would mean a two-unit dwelling is permitted in ER-2 and this case has no non-conformity to test. It cannot be settled from the corpus as ingested: the Table 1 cells carry only footnote glyphs, the P/N letters having been dropped in extraction, so a blank cell is indistinguishable from a permitted-without-footnote cell. That is an ingest-fidelity defect rather than an eval-data one and needs its own ticket before this case's premise is either confirmed or retired. The lot-coverage arithmetic in turns 2 and 4 was rescaled to keep the second, separate non-conformity the case was designed to probe: Section 231 caps a non-single-unit use on a lot over 325 m\u00b2 at 50%, so the old 140 m\u00b2 + 30 m\u00b2 on 420 m\u00b2 (40%) stayed comfortably inside it.",
+    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here. ZONE RETARGETED ER-1 -> ER-2 (ABS-467): the Regional Centre zoning schedule maps no ER-1 polygon at all \u2014 0 of 11,069 features in halifax_zoning_boundaries carry ZONE=ER-1 \u2014 so no address could ever confirm this case's zone, and the eval would grade every answer against a zone the map does not place anywhere. ER-2 carries the same use permissions the premise depends on, so the non-conforming-duplex question is unchanged. TERMINOLOGY AND AN OPEN QUESTION (ABS-470): that ABS-467 note originally recorded the ER-2 permissions as \"single-unit dwelling P, secondary suite P, multi-unit N\". `secondary suite` is not a use in this by-law at all \u2014 the string does not occur once in the ingest; Table 1B's rows are `Single-unit dwelling use`, `Two-unit dwelling use` and `Backyard suite use` (see TC-002). The turn-1 wording is left as written because it is the user's own framing in an adversarial case and nothing is graded on it. Left unresolved, and NOT rewritten here: Table 1B's ER-2 column marks Two-unit dwelling use with footnotes 6, 14 and 15, and footnote 15 reads \"Use is permitted, except within the Halifax Grain Elevator (HGE) Special Area\" \u2014 which would mean a two-unit dwelling is permitted in ER-2 and this case has no non-conformity to test. It cannot be settled from the corpus as ingested: the Table 1 cells carry only footnote glyphs, the P/N letters having been dropped in extraction, so a blank cell is indistinguishable from a permitted-without-footnote cell. That is an ingest-fidelity defect rather than an eval-data one and needs its own ticket before this case's premise is either confirmed or retired. The lot-coverage arithmetic in turns 2 and 4 was rescaled to keep the second, separate non-conformity the case was designed to probe: Section 231 caps a non-single-unit use on a lot over 325 m\u00b2 at 50%, so the old 140 m\u00b2 + 30 m\u00b2 on 420 m\u00b2 (40%) stayed comfortably inside it.",
     "address_resolution": {
       "resolved_zone": "ER-2",
       "resolution_quality": "rooftop",
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "00158865"
+      "parcel_pid": "00158865",
+      "registered_civics": [
+        "5562 Nora Bernard Street, Halifax, NS"
+      ]
     }
   },
   {
@@ -1607,7 +1666,11 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "00103762"
+      "parcel_pid": "00103762",
+      "registered_civics": [
+        "5280 Green Street, Halifax, NS",
+        "5249 Smith Street, Halifax, NS"
+      ]
     }
   },
   {
@@ -1618,7 +1681,7 @@
       "subtype": null,
       "description": "Owner of a single-unit lot adding a detached backyard suite over a garage"
     },
-    "address": "1462 Birchdale Avenue, Halifax, NS",
+    "address": "1485 Birchdale Avenue, Halifax, NS",
     "zone": "ER-3",
     "complexity": "medium",
     "liability": "low",
@@ -1638,7 +1701,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I own a house at 1462 Birchdale Avenue in Halifax \u2014 I believe it's zoned ER-3. I'm thinking about building a backyard suite, like a small standalone unit in my rear yard for a family member. Is that even allowed in ER-3, or do I need some kind of special approval?"
+        "message": "Hey, I own a house at 1485 Birchdale Avenue in Halifax \u2014 I believe it's zoned ER-3. I'm thinking about building a backyard suite, like a small standalone unit in my rear yard for a family member. Is that even allowed in ER-3, or do I need some kind of special approval?"
       },
       {
         "turn": 2,
@@ -1690,7 +1753,10 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "00078352"
+      "parcel_pid": "00078246",
+      "registered_civics": [
+        "1485 Birchdale Avenue, Halifax, NS"
+      ]
     }
   },
   {
@@ -1788,7 +1854,21 @@
       "location_type": "ROOFTOP",
       "location_confidence": 0.95,
       "location_resolver": "google_maps",
-      "parcel_pid": "41263179"
+      "parcel_pid": "41263179",
+      "registered_civics": [
+        "2154 Brunswick Street, Halifax, NS",
+        "2166 Brunswick Street, Halifax, NS",
+        "2156 Brunswick Street, Halifax, NS",
+        "2152 Brunswick Street, Halifax, NS",
+        "2164 Brunswick Street, Halifax, NS",
+        "2162 Brunswick Street, Halifax, NS",
+        "2160 Brunswick Street, Halifax, NS",
+        "2168 Brunswick Street, Halifax, NS",
+        "2174 Brunswick Street, Halifax, NS",
+        "2158 Brunswick Street, Halifax, NS",
+        "2170 Brunswick Street, Halifax, NS",
+        "2172 Brunswick Street, Halifax, NS"
+      ]
     }
   }
 ]

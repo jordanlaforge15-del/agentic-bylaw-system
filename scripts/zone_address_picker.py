@@ -109,6 +109,10 @@ STREET_FRONTAGE_DISTANCE_DEG = 0.0006
 MIN_PARCEL_AREA_M2 = 120.0
 MAX_PARCEL_AREA_M2 = 20000.0
 
+_PROVINCE_CODES = frozenset(
+    {"NS", "NB", "PE", "NL", "QC", "ON", "MB", "SK", "AB", "BC", "YT", "NT", "NU"}
+)
+
 _GEOCODE_ENDPOINT = "https://maps.googleapis.com/maps/api/geocode/json"
 # HRM's authoritative civic-address register. Same layer as
 # src/layer1/datasets/halifax_civic_addresses.yaml, queried live because that
@@ -199,6 +203,8 @@ class CivicRegister(Protocol):
 
     def civics_for_pid(self, pid: str) -> list[str]: ...
 
+    def pid_for_address(self, address: str) -> str | None: ...
+
 
 class HrmCivicRegister:
     """HRM's ``CivicAddresses`` layer, queried by parcel ``PID``.
@@ -225,12 +231,43 @@ class HrmCivicRegister:
     def civics_for_pid(self, pid: str) -> list[str]:
         if not pid:
             return []
+        rows = self._query(f"PID='{pid}'")
+        civics: list[str] = []
+        for attributes in rows:
+            composed = _address_from_register_row(attributes)
+            if composed and composed not in civics:
+                civics.append(composed)
+        return civics
+
+    def pid_for_address(self, address: str) -> str | None:
+        """The parcel an address is registered on, or None.
+
+        The inverse lookup, for a case that predates parcel provenance being
+        recorded. Matching is on the register's own columns rather than a
+        string compare, so "1801 Hollis Street, Halifax, NS" finds the row
+        HRM stores as CIV_NUM 1801 / STR_NAME HOLLIS / STR_TYPE ST.
+        """
+        parsed = _parse_composed_address(address)
+        if parsed is None:
+            return None
+        number, street, community = parsed
+        where = f"CIV_NUM={number} AND STR_NAME='{street}'"
+        if community:
+            where += f" AND GSA_NAME='{community}'"
+        for attributes in self._query(where):
+            pid = str(attributes.get("PID") or "").strip()
+            if pid:
+                return pid
+        return None
+
+    def _query(self, where: str) -> list[dict[str, Any]]:
+        """Rows matching ``where``, or [] for any failure. Never raises."""
         try:
             response = httpx.get(
                 _CIVIC_REGISTER_ENDPOINT,
                 params={
-                    "where": f"PID='{pid}'",
-                    "outFields": "CIV_NUM,STR_NAME,STR_TYPE,GSA_NAME",
+                    "where": where,
+                    "outFields": "PID,CIV_NUM,STR_NAME,STR_TYPE,GSA_NAME",
                     "returnGeometry": "false",
                     "f": "json",
                 },
@@ -239,12 +276,32 @@ class HrmCivicRegister:
             payload = response.json()
         except (httpx.HTTPError, OSError, ValueError):
             return []
-        civics: list[str] = []
-        for feature in payload.get("features") or []:
-            composed = _address_from_register_row(feature.get("attributes") or {})
-            if composed and composed not in civics:
-                civics.append(composed)
-        return civics
+        return [f.get("attributes") or {} for f in payload.get("features") or []]
+
+
+def _parse_composed_address(address: str) -> tuple[int, str, str | None] | None:
+    """``"1801 Hollis Street, Halifax, NS"`` -> ``(1801, "HOLLIS", "HALIFAX")``.
+
+    Drops the street type, because the register stores it in its own column
+    and this is only building a query filter — the type is not needed to find
+    the row, and guessing its abbreviation would exclude real matches.
+    """
+    parts = [p.strip() for p in address.split(",") if p.strip()]
+    if not parts:
+        return None
+    head = parts[0].split()
+    if len(head) < 2 or not head[0].isdigit():
+        return None
+    number = int(head[0])
+    words = head[1:]
+    # Trailing street type, when it is one we recognise, is not part of the name.
+    if len(words) > 1 and words[-1].title() in _REGISTER_STREET_TYPES.values():
+        words = words[:-1]
+    street = " ".join(words).upper().replace("'", "''")
+    community = parts[1].upper() if len(parts) >= 3 else None
+    if community in _PROVINCE_CODES:
+        community = None
+    return number, street, community
 
 
 def _address_from_register_row(attributes: dict[str, Any]) -> str | None:
