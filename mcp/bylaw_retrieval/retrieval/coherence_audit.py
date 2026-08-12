@@ -43,7 +43,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from layer1.datasets.config import DatasetConfig, load_dataset_config
-from layer1.db.base import Document, ExternalDataset, SourceFragment
+from layer1.db.base import (
+    Document,
+    ExternalDataset,
+    ExternalDatasetFeature,
+    SourceFragment,
+)
 from layer1.naming import normalized_document_identity
 
 from bylaw_retrieval.retrieval.schemas import (
@@ -53,11 +58,14 @@ from bylaw_retrieval.retrieval.schemas import (
     EnabledDocumentRef,
     EnabledNameCollision,
     EnabledNameCollisionReport,
+    GoverningBylawCoverageReport,
     MissingOverlayRole,
     OverlayDeclaration,
+    UnheldGoverningBylaw,
 )
 from bylaw_retrieval.retrieval.service import (
     DocumentIdResolver,
+    governing_document_for_bylaw_name,
     overlay_role_for_name,
     scoped_linked_datasets,
 )
@@ -198,6 +206,132 @@ def _classify_missing_role(
         reason=reason,
         detail=detail,
     )
+
+
+# ---------------------------------------------------------------------------
+# ABS-472 — governing-by-law coverage
+# ---------------------------------------------------------------------------
+#
+# The audit above asks "is every declared overlay role visible?". This one
+# asks the question a municipality-wide layer forces: of the ground that layer
+# maps, how much is governed by a by-law we actually hold? HRM's zoning layer
+# carries 11,069 features across 22 by-law areas and the corpus holds two of
+# them, so a spatial query can land on real, correctly-mapped ground whose
+# standards live in a document we never ingested.
+#
+# Deliberately NOT part of ``coherent``: an incomplete answer here is the
+# expected steady state, not a regression. It is exposure to size and act on,
+# and the per-request refusal already lives on ``AddressProfile``.
+
+
+def audit_governing_bylaw_coverage(
+    session: Session,
+    *,
+    default_document_id_resolver: DocumentIdResolver | None = None,
+) -> GoverningBylawCoverageReport:
+    """Count features whose governing by-law is outside the retrieval corpus.
+
+    Walks every in-scope linked dataset that declares
+    ``links_to.governing_bylaw_from`` (see ``layer1.datasets.config``), groups
+    its features by the by-law they attribute themselves to, and resolves each
+    against the corpus with the same rule ``get_address_profile`` uses.
+    """
+    scoped_ids = _scoped_document_ids(session, default_document_id_resolver)
+    datasets_checked = 0
+    features_checked = 0
+    covered = 0
+    unheld: list[UnheldGoverningBylaw] = []
+
+    for dataset in scoped_linked_datasets(
+        session, default_document_id_resolver=default_document_id_resolver
+    ):
+        config = ((dataset.metadata_json or {}).get("links_to") or {}).get(
+            "governing_bylaw_from"
+        )
+        if not isinstance(config, dict) or not config.get("name_attribute"):
+            continue
+        datasets_checked += 1
+        municipality = None
+        if dataset.linked_document_id is not None:
+            linked = session.get(Document, dataset.linked_document_id)
+            municipality = linked.municipality if linked is not None else None
+
+        counts = _governing_bylaw_counts(session, dataset, config)
+        for (name, code), count in sorted(counts.items(), key=lambda kv: -kv[1]):
+            features_checked += count
+            document = governing_document_for_bylaw_name(
+                session,
+                name,
+                municipality=municipality,
+                scoped_document_ids=scoped_ids,
+            )
+            if document is not None:
+                covered += count
+                continue
+            unheld.append(
+                UnheldGoverningBylaw(
+                    dataset_name=dataset.name,
+                    governing_bylaw=name,
+                    governing_bylaw_code=code,
+                    feature_count=count,
+                    detail=(
+                        f"{count} feature(s) in {dataset.name!r} are governed by "
+                        f"{name!r}, which is not in the retrieval corpus; they "
+                        "resolve to a zone with no citation and a 'not_held' "
+                        "governing-bylaw status"
+                    ),
+                )
+            )
+
+    unheld.sort(key=lambda row: -row.feature_count)
+    return GoverningBylawCoverageReport(
+        complete=not unheld,
+        datasets_checked=datasets_checked,
+        features_checked=features_checked,
+        covered_features=covered,
+        unheld_features=features_checked - covered,
+        unheld=unheld,
+    )
+
+
+def _scoped_document_ids(
+    session: Session, resolver: DocumentIdResolver | None
+) -> list[int] | None:
+    if resolver is None:
+        return None
+    result = resolver(session)
+    if result is None:
+        return None
+    return [result] if isinstance(result, int) else list(result)
+
+
+def _governing_bylaw_counts(
+    session: Session, dataset: ExternalDataset, config: dict
+) -> dict[tuple[str, str | None], int]:
+    """Feature counts per (governing by-law name, code) for one dataset.
+
+    Counted in Python over the canonical attributes rather than in SQL: the
+    JSON-extraction syntax differs between Postgres and the SQLite the unit
+    tests run on, and this is an ops audit over a five-figure row count, not a
+    request path.
+    """
+    name_attribute = config["name_attribute"]
+    code_attribute = config.get("code_attribute")
+    counts: dict[tuple[str, str | None], int] = {}
+    rows = session.execute(
+        select(ExternalDatasetFeature.canonical_attributes_json).where(
+            ExternalDatasetFeature.external_dataset_id == dataset.id
+        )
+    ).scalars()
+    for canonical in rows:
+        canonical = canonical or {}
+        name = canonical.get(name_attribute)
+        if not isinstance(name, str) or not name.strip():
+            continue
+        code = canonical.get(code_attribute) if code_attribute else None
+        key = (name, code if isinstance(code, str) and code else None)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 # ---------------------------------------------------------------------------

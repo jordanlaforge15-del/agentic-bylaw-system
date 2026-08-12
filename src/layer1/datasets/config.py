@@ -80,9 +80,33 @@ class DocumentMatch(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class GoverningBylawFrom(BaseModel):
+    """How to read a feature's *own* governing by-law off its attributes (ABS-472).
+
+    ``links_to`` binds a whole dataset to one document. That is right for a
+    layer published under a single by-law, and wrong for a municipality-wide
+    layer: ``halifax_zoning_boundaries`` carries 11,069 features spanning 22
+    by-law areas, so linking the dataset to the Regional Centre LUB cites a
+    Downtown Halifax zone to a by-law that does not govern it.
+
+    When a dataset declares this block, the canonical attribute named by
+    ``name_attribute`` carries the by-law that governs *that feature*, and
+    retrieval resolves the citing document per feature instead of trusting
+    the dataset-level link. The attributes are the ones the ABS-66 lookup
+    table already resolves from the publisher's internal area id — the
+    mapping exists, this is what finally uses it for citation.
+    """
+
+    name_attribute: str
+    code_attribute: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
 class LinksTo(BaseModel):
     document_match: DocumentMatch
     fragment_citation: str
+    governing_bylaw_from: GoverningBylawFrom | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -134,6 +158,29 @@ class DatasetConfig(BaseModel):
             raise ValueError(
                 "non-role datasets must declare 'links_to' to bind them to a bylaw fragment"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_governing_bylaw_attributes(self) -> "DatasetConfig":
+        """A per-feature governing by-law must name attributes we actually map.
+
+        Retrieval reads these off ``canonical_attributes_json``; a typo would
+        degrade silently back to the dataset-level link — the exact
+        mis-attribution ABS-472 exists to stop — so it fails at load instead.
+        """
+        governing = self.links_to.governing_bylaw_from if self.links_to else None
+        if governing is None:
+            return self
+        declared = set(self.attributes.canonical)
+        for label, attribute in (
+            ("name_attribute", governing.name_attribute),
+            ("code_attribute", governing.code_attribute),
+        ):
+            if attribute is not None and attribute not in declared:
+                raise ValueError(
+                    f"links_to.governing_bylaw_from.{label} references canonical "
+                    f"field {attribute!r}, which this dataset does not map"
+                )
         return self
 
     @model_validator(mode="after")

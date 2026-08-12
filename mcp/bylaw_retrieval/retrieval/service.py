@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from sqlalchemy import (
@@ -74,6 +75,7 @@ from layer1.db.base import (
     TableSemanticProfile,
 )
 from layer1.models.enums import FragmentType
+from layer1.naming import normalize_bylaw_name
 from layer1.semantic.enrichment import (
     enumerate_permission_column,
     resolve_mainland_permitted_use,
@@ -184,6 +186,40 @@ _MULTI_ZONE_PARCEL_CAVEAT = (
     "the whole property — say the lot is split and ask where the work sits."
 )
 
+# ABS-472: the zoning layer is municipality-wide, so a zone code can name a
+# by-law this corpus does not hold. This is not an imprecision to hedge — the
+# zone itself is the publisher's, and correct — it is a hard limit on what can
+# be answered, because every standard behind the code lives in a document we
+# do not have.
+_GOVERNING_BYLAW_NOT_HELD_CAVEAT = (
+    "This parcel is zoned {zone} under the {bylaw}, which is NOT in this "
+    "corpus. The zone code is the municipality's own published mapping and can "
+    "be stated, but no standard behind it — permitted uses, height, setbacks, "
+    "floor area, parking — is available here, and the standards of the "
+    "by-laws that ARE held do not apply to this parcel. Do not answer with a "
+    "figure from another by-law: name the {bylaw} as the governing by-law and "
+    "tell the user it must be consulted directly with HRM Planning & "
+    "Development."
+)
+
+
+@dataclass(frozen=True)
+class GoverningBylaw:
+    """The by-law governing one matched overlay feature (ABS-472).
+
+    ``document`` is the ingested, in-scope document for that by-law, or None
+    when the corpus does not hold it — the whole point of resolving this per
+    feature rather than per dataset.
+    """
+
+    name: str
+    code: str | None
+    document: Document | None
+
+    @property
+    def held(self) -> bool:
+        return self.document is not None
+
 
 def overlay_role_for_name(name: str | None) -> str:
     """Classify a dataset name into its overlay role via keyword match.
@@ -233,6 +269,56 @@ def scoped_linked_datasets(
     if bylaw_name:
         dataset_stmt = dataset_stmt.where(Document.bylaw_name.ilike(f"%{bylaw_name}%"))
     return list(session.execute(dataset_stmt).scalars().all())
+
+
+def governing_document_for_bylaw_name(
+    session: Session,
+    bylaw_name: str,
+    *,
+    municipality: str | None = None,
+    scoped_document_ids: list[int] | None = None,
+) -> Document | None:
+    """Find the ingested document for a by-law named by a *feature* (ABS-472).
+
+    Module-level twin of ``RetrievalService._document_for_bylaw_name`` (which
+    delegates here behind a per-request memo) so the corpus-coverage audit can
+    ask exactly the question ``get_address_profile`` asks — "do we hold the
+    by-law that governs this ground?" — without re-deriving the matching rule
+    and drifting from what a real request sees.
+
+    Matching is normalized (``layer1.naming``): the by-law names a publisher
+    stamps on its geography differ from our ingested document titles by the
+    case/hyphen noise that module exists for. An exact normalized match wins;
+    otherwise a *prefix* match is accepted when exactly one document qualifies,
+    which absorbs title qualifiers ("… (Consolidated to 2024)") without
+    absorbing a different by-law. Prefix and not substring on purpose:
+    "Dartmouth Land Use By-law" is a substring of "Downtown Dartmouth Land Use
+    By-law", and those govern different ground.
+    """
+    target = normalize_bylaw_name(bylaw_name)
+    if not target:
+        return None
+    normalized_municipality = (
+        normalize_bylaw_name(municipality) if municipality else None
+    )
+    stmt = select(Document)
+    if scoped_document_ids is not None:
+        stmt = stmt.where(Document.id.in_(scoped_document_ids))
+
+    prefix_candidates: list[Document] = []
+    for document in session.execute(stmt).scalars():
+        if normalized_municipality is not None and (
+            normalize_bylaw_name(document.municipality or "") != normalized_municipality
+        ):
+            continue
+        name = normalize_bylaw_name(document.bylaw_name or "")
+        if not name:
+            continue
+        if name == target:
+            return document
+        if name.startswith(target) or target.startswith(name):
+            prefix_candidates.append(document)
+    return prefix_candidates[0] if len(prefix_candidates) == 1 else None
 
 
 def latest_document_id_resolver(session: Session) -> int | None:
@@ -303,6 +389,11 @@ class RetrievalService:
         # upgrade and the ABS-469 split-lot check share it. None = looked up,
         # no parcel.
         self._abut_location_cache: dict[str, dict[str, Any] | None] = {}
+        # ABS-472: memo for "which in-scope document IS this by-law?", keyed by
+        # normalized bylaw name. get_adjacent_zoning resolves it once per
+        # abutting parcel, and every neighbour of a downtown lot names the
+        # same by-law.
+        self._governing_document_cache: dict[str, Document | None] = {}
 
     def _resolve_default_document_ids(self) -> list[int] | None:
         if self._default_document_id_resolver is None:
@@ -1684,7 +1775,7 @@ class RetrievalService:
             )
 
         subject_centroid = self._feature_centroid(subject)
-        subject_zone, _ = self._resolve_zone_at_point(subject_centroid or point)
+        subject_zone, _, _ = self._resolve_zone_at_point(subject_centroid or point)
 
         neighbours_features = find_abutting_features(
             self.session, dataset_ids=parcels_ids, subject=subject
@@ -1695,10 +1786,19 @@ class RetrievalService:
             centroid = self._feature_centroid(feature)
             if centroid is None:
                 continue
-            zone, zone_dataset = self._resolve_zone_at_point(centroid)
-            if citation is None and zone_dataset is not None:
+            zone, zone_dataset, governing = self._resolve_zone_at_point(centroid)
+            # ABS-472: no citation at all beats one naming a by-law that does
+            # not govern the neighbour's land — the setback this profile feeds
+            # would then be read out of the wrong document.
+            if (
+                citation is None
+                and zone_dataset is not None
+                and (governing is None or governing.held)
+            ):
                 citation = self._citation_ref_for_dataset(
-                    zone_dataset, source="zone"
+                    zone_dataset,
+                    source="zone",
+                    governing_document=governing.document if governing else None,
                 )
             neighbours.append(
                 NeighbourZone(
@@ -1764,12 +1864,15 @@ class RetrievalService:
 
     def _resolve_zone_at_point(
         self, point
-    ) -> tuple[str | None, ExternalDataset | None]:
+    ) -> tuple[str | None, ExternalDataset | None, GoverningBylaw | None]:
         """Resolve the zone code covering ``point`` (a shapely Point).
 
         Intersects the point against every in-scope zoning overlay and
-        returns the strongest match's ``zone_code`` plus its dataset (for
-        citation). Returns ``(None, None)`` when no zone polygon covers the
+        returns the strongest match's ``zone_code``, its dataset (for
+        citation), and the by-law that governs that particular feature
+        (ABS-472 — a municipality-wide layer's zone may belong to a by-law
+        this corpus does not hold, and must not be cited to the layer's own
+        linked document). Returns all-None when no zone polygon covers the
         point or no zoning dataset is in scope.
         """
         location = ResolvedLocation(
@@ -1786,8 +1889,8 @@ class RetrievalService:
             canonical = matches[0].feature.canonical_attributes_json or {}
             zone = canonical.get("zone_code")
             if zone:
-                return str(zone), dataset
-        return None, None
+                return str(zone), dataset, self._governing_bylaw(dataset, dict(canonical))
+        return None, None, None
 
     @staticmethod
     def _bearing(origin, target) -> str | None:
@@ -2009,6 +2112,88 @@ class RetrievalService:
     def _overlay_role(self, dataset: ExternalDataset) -> str:
         return overlay_role_for_name(dataset.name)
 
+    # -- ABS-472: per-feature governing by-law ----------------------------
+    #
+    # ``ExternalDataset.linked_document_id`` binds a whole layer to one
+    # document. For a municipality-wide layer that link is a publishing fact,
+    # not a jurisdictional one: HRM's zoning layer spans 22 by-law areas and
+    # only two of them are ingested, so citing every feature to the linked
+    # document attributes a Downtown Halifax zone to the Regional Centre LUB.
+    # These helpers resolve the citing document from the *feature's own*
+    # by-law attribution, and say so plainly when that by-law is not held.
+
+    def _governing_bylaw_config(self, dataset: ExternalDataset) -> dict[str, Any] | None:
+        """The dataset's declared ``links_to.governing_bylaw_from``, if any.
+
+        Read from the persisted ``metadata_json`` the ingest wrote, so
+        retrieval never has to reach back to the YAML on disk.
+        """
+        links_to = (dataset.metadata_json or {}).get("links_to") or {}
+        governing = links_to.get("governing_bylaw_from")
+        return governing if isinstance(governing, dict) else None
+
+    def _governing_bylaw(
+        self, dataset: ExternalDataset, canonical: dict[str, Any]
+    ) -> GoverningBylaw | None:
+        """Resolve which by-law governs one matched feature, and whether we hold it.
+
+        Returns None when the dataset publishes no per-feature attribution (the
+        pre-ABS-472 world, and the correct answer for a layer that genuinely
+        does belong to a single by-law) or when the feature's own attribution
+        is missing — a feature whose by-law area we can't read is not evidence
+        that the dataset-level link is right, but it isn't evidence it's wrong
+        either, so it stays ``unknown`` rather than being refused.
+        """
+        config = self._governing_bylaw_config(dataset)
+        if config is None:
+            return None
+        name = canonical.get(config.get("name_attribute") or "")
+        if not isinstance(name, str) or not name.strip():
+            return None
+        code = canonical.get(config.get("code_attribute") or "")
+        document = self._document_for_bylaw_name(name, fallback=dataset)
+        return GoverningBylaw(
+            name=name,
+            code=code if isinstance(code, str) and code else None,
+            document=document,
+        )
+
+    def _document_for_bylaw_name(
+        self, bylaw_name: str, *, fallback: ExternalDataset
+    ) -> Document | None:
+        """The in-scope document for ``bylaw_name``, or None when not held.
+
+        Delegates the matching rule to
+        :func:`governing_document_for_bylaw_name` (shared with the ABS-472
+        coverage audit) behind a per-request memo, and answers within the
+        active retrieval scope: held means held AND visible right now — a
+        document ingested but never published cannot back a citation.
+
+        Municipality is taken from the layer's own linked document; a layer
+        and its features belong to one municipality even when they span its
+        by-laws.
+        """
+        linked = (
+            self.session.get(Document, fallback.linked_document_id)
+            if fallback.linked_document_id is not None
+            else None
+        )
+        municipality = linked.municipality if linked is not None else None
+        cache_key = (
+            f"{normalize_bylaw_name(municipality or '')}|"
+            f"{normalize_bylaw_name(bylaw_name)}"
+        )
+        if cache_key not in self._governing_document_cache:
+            self._governing_document_cache[cache_key] = (
+                governing_document_for_bylaw_name(
+                    self.session,
+                    bylaw_name,
+                    municipality=municipality,
+                    scoped_document_ids=self._resolve_default_document_ids(),
+                )
+            )
+        return self._governing_document_cache[cache_key]
+
     def _build_address_profile(
         self,
         address: str,
@@ -2074,19 +2259,47 @@ class RetrievalService:
             canonical = dict(best.feature.canonical_attributes_json or {})
             label = self._overlay_label(role, canonical, best.feature.feature_key)
 
+            # ABS-472: the dataset-level link says which document the LAYER
+            # was published with; a municipality-wide layer's feature says
+            # which by-law governs THIS ground. When the two disagree the
+            # feature wins, and when the feature names a by-law we don't hold
+            # there is no citation to give — emitting the layer's one would
+            # attribute the zone to a by-law that does not govern it.
+            governing = self._governing_bylaw(dataset, canonical)
             overlays.append(
                 OverlayRef(
                     kind=role,
                     dataset_name=dataset.name,
                     label=label,
-                    citation=dataset.linked_fragment_citation,
+                    citation=(
+                        None
+                        if governing is not None and not governing.held
+                        else dataset.linked_fragment_citation
+                    ),
                     attributes=canonical,
+                    governing_bylaw=governing.name if governing else None,
+                    governing_bylaw_held=governing.held if governing else None,
                 )
             )
-            citations.append(self._citation_ref_for_dataset(dataset, source=role))
+            if governing is None or governing.held:
+                citations.append(
+                    self._citation_ref_for_dataset(
+                        dataset,
+                        source=role,
+                        governing_document=governing.document if governing else None,
+                    )
+                )
 
             if role == "zone":
                 profile.zone = canonical.get("zone_code") or label
+                if governing is not None:
+                    profile.governing_bylaw = governing.name
+                    profile.governing_bylaw_code = governing.code
+                    profile.governing_bylaw_status = (
+                        "held" if governing.held else "not_held"
+                    )
+                else:
+                    profile.governing_bylaw_status = "unknown"
             elif role == "height_precinct":
                 profile.height_precinct = label
             elif role == "far_precinct":
@@ -2125,6 +2338,15 @@ class RetrievalService:
         # ABS-466: state the resolution's limits instead of letting a zone
         # picked by an estimated point read as fact.
         caveats: list[str] = []
+        # ABS-472 leads: the other caveats qualify how well we found the
+        # parcel; this one says the by-law behind its zone isn't here at all,
+        # which bounds the answer no matter how perfect the resolution was.
+        if profile.governing_bylaw_status == "not_held":
+            caveats.append(
+                _GOVERNING_BYLAW_NOT_HELD_CAVEAT.format(
+                    zone=profile.zone, bylaw=profile.governing_bylaw
+                )
+            )
         quality_caveat = resolution_caveat(quality)
         if quality_caveat is not None:
             caveats.append(quality_caveat)
@@ -2280,8 +2502,30 @@ class RetrievalService:
         ) or feature_key
 
     def _citation_ref_for_dataset(
-        self, dataset: ExternalDataset, *, source: str
+        self,
+        dataset: ExternalDataset,
+        *,
+        source: str,
+        governing_document: Document | None = None,
     ) -> CitationRef:
+        """Cite the document that actually governs the matched feature.
+
+        ``governing_document`` (ABS-472) re-points the citation when a
+        municipality-wide layer's feature is governed by a by-law other than
+        the one the layer is linked to — a Halifax Mainland zone must cite the
+        Halifax Mainland LUB, not the Regional Centre LUB the layer ships
+        alongside. The declared citation label is re-resolved *within* that
+        document; when it carries no such fragment the citation degrades to a
+        document-level pointer rather than borrowing the linked document's
+        fragment, which would put a real fragment id behind a claim that
+        document never made.
+        """
+        if governing_document is not None and (
+            governing_document.id != dataset.linked_document_id
+        ):
+            return self._citation_ref_for_governing_document(
+                dataset, governing_document, source=source
+            )
         fragment = (
             self.session.get(SourceFragment, dataset.linked_fragment_id)
             if dataset.linked_fragment_id is not None
@@ -2301,6 +2545,38 @@ class RetrievalService:
             document_id=document.id if document else None,
             municipality=document.municipality if document else None,
             bylaw_name=document.bylaw_name if document else None,
+            backs=[source],
+        )
+
+    def _citation_ref_for_governing_document(
+        self,
+        dataset: ExternalDataset,
+        document: Document,
+        *,
+        source: str,
+    ) -> CitationRef:
+        """Cite ``document`` for a feature the layer's own link would misattribute."""
+        citation = dataset.linked_fragment_citation
+        fragment = None
+        if citation:
+            fragments = (
+                self.session.execute(
+                    select(SourceFragment).where(
+                        SourceFragment.document_id == document.id,
+                        SourceFragment.citation_label == citation,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if len(fragments) == 1:
+                fragment = fragments[0]
+        return CitationRef(
+            citation_path=fragment.citation_path if fragment else None,
+            citation_label=fragment.citation_label if fragment else None,
+            document_id=document.id,
+            municipality=document.municipality,
+            bylaw_name=document.bylaw_name,
             backs=[source],
         )
 

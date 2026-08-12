@@ -20,6 +20,7 @@ from advisor.chat.resolution_qualifier import (
     address_resolution_flags,
     already_qualified,
     apply_resolution_qualifier,
+    governing_bylaw_suffix,
     nonexistent_address_suffix,
 )
 from advisor.chat.session import ChatSession
@@ -345,3 +346,175 @@ def test_an_answer_that_already_refuses_is_left_alone():
     out = apply_resolution_qualifier(content, [_invocation(_nonexistent_profile())])
 
     assert out is content
+
+
+# --- ABS-472: the governing by-law is not in the corpus -------------------
+
+
+def _unheld_bylaw_profile(**kwargs) -> AddressProfile:
+    """A rooftop-perfect resolution on ground governed by a by-law we lack.
+
+    1657 Barrington Street: DH-1 is a Downtown Halifax LUB zone, and the
+    corpus holds no Downtown Halifax document. The zone code is HRM's own
+    published mapping and is correct; every standard behind it is somewhere
+    we cannot read.
+    """
+    base = dict(
+        address="1657 Barrington Street",
+        civic_number="1657",
+        street="Barrington Street",
+        zone="DH-1",
+        resolution_quality="rooftop",
+        location_confidence=0.95,
+        location_type="ROOFTOP",
+        location_resolver="google_maps",
+        governing_bylaw="Downtown Halifax Land Use By-law",
+        governing_bylaw_code="hrm:DHFX",
+        governing_bylaw_status="not_held",
+        caveats=[
+            "This parcel is zoned DH-1 under the Downtown Halifax Land Use "
+            "By-law, which is NOT in this corpus. …"
+        ],
+    )
+    base.update(kwargs)
+    return AddressProfile(**base)
+
+
+def test_compact_projection_names_the_governing_bylaw_and_forbids_standards():
+    out = compact_address_profile(_unheld_bylaw_profile())
+    assert out["zone"] == "DH-1"
+    assert out["governing_bylaw"] == "Downtown Halifax Land Use By-law"
+    assert out["governing_bylaw_status"] == "not_held"
+    instruction = out["instruction"].lower()
+    assert "downtown halifax land use by-law" in instruction
+    assert "do not give permitted uses" in instruction
+
+
+def test_compact_projection_stays_lean_when_the_bylaw_is_held():
+    """A held by-law is the normal case and must not add an instruction."""
+    out = compact_address_profile(
+        _profile(governing_bylaw="Regional Centre Land Use By-law", governing_bylaw_status="held")
+    )
+    assert out["governing_bylaw_status"] == "held"
+    assert "instruction" not in out
+
+
+def test_an_unheld_bylaw_is_invisible_to_the_precision_flags():
+    """Why this needs its own detector: the resolution is rooftop-perfect, so
+    every ABS-466/469 signal reads the turn as clean."""
+    invocation = _invocation(_unheld_bylaw_profile())
+    assert address_resolution_flags([invocation]) == (False, False)
+    assert nonexistent_address_suffix([invocation]) is None
+    assert governing_bylaw_suffix([invocation]) is not None
+
+
+def test_the_bylaw_disclosure_is_appended_to_a_confident_answer():
+    content = [
+        TextBlock(
+            text=(
+                "1657 Barrington Street is zoned DH-1, which permits a "
+                "maximum height of 27 m and no side-yard setback."
+            )
+        )
+    ]
+    out = apply_resolution_qualifier(content, [_invocation(_unheld_bylaw_profile())])
+
+    assert out is not content
+    appended = out[-1].text
+    assert "Downtown Halifax Land Use By-law" in appended
+    assert "not part of the by-law corpus" in appended
+
+
+def test_the_bylaw_disclosure_outranks_the_precision_hedge():
+    """An interpolated point on unheld ground: both are true, but the by-law
+    gap bounds what can be answered at all, so it is the one appended."""
+    profile = _unheld_bylaw_profile(
+        resolution_quality="interpolated",
+        location_type="RANGE_INTERPOLATED",
+        location_confidence=0.85,
+    )
+    out = apply_resolution_qualifier([TextBlock(text="Zoned DH-1.")], [_invocation(profile)])
+
+    assert "Downtown Halifax Land Use By-law" in out[-1].text
+
+
+def test_a_nonexistent_address_still_outranks_the_bylaw_disclosure():
+    """There is no property to name a governing by-law for."""
+    profile = _nonexistent_profile()
+    profile.governing_bylaw = "Downtown Halifax Land Use By-law"
+    profile.governing_bylaw_status = "not_held"
+    out = apply_resolution_qualifier(
+        [TextBlock(text="1657 Barrington Street is zoned DH-1.")], [_invocation(profile)]
+    )
+
+    assert "could not be found in the municipality" in out[-1].text
+    assert "not part of the by-law corpus" not in out[-1].text
+
+
+def test_an_answer_that_already_discloses_the_gap_is_left_alone():
+    content = [
+        TextBlock(
+            text=(
+                "1657 Barrington Street is zoned DH-1 under the Downtown "
+                "Halifax Land Use By-law, which is not in this corpus — I "
+                "can't give you its standards."
+            )
+        )
+    ]
+    out = apply_resolution_qualifier(content, [_invocation(_unheld_bylaw_profile())])
+
+    assert out is content
+
+
+def test_a_held_bylaw_adds_nothing():
+    invocation = _invocation(
+        _profile(governing_bylaw="Regional Centre Land Use By-law", governing_bylaw_status="held")
+    )
+    assert governing_bylaw_suffix([invocation]) is None
+    content = [TextBlock(text="Zoned HR-1.")]
+    assert apply_resolution_qualifier(content, [invocation]) is content
+
+
+@pytest.mark.asyncio
+async def test_unheld_bylaw_turn_is_disclosed_end_to_end():
+    """The whole point: a user asking about 1657 Barrington gets DH-1 plus
+    dimensional standards reasoned out of the wrong by-law. Whatever the model
+    says, the turn must tell them which by-law governs and that we don't hold
+    it."""
+    session = ChatSession(
+        session_id="sess_abs472",
+        user_id="user_abs472",
+        system_prompt="You are a senior urban planner.",
+        model="claude-opus-4-5",
+    )
+    profile = _unheld_bylaw_profile()
+
+    async def address_handler(payload: dict) -> str:
+        return json.dumps(compact_address_profile(profile))
+
+    session.tool_handlers = {"get_address_profile": address_handler}
+
+    flat_answer = (
+        "1657 Barrington Street is zoned DH-1. Maximum height is 27 m and no "
+        "side-yard setback is required."
+    )
+    gateway = MockGateway(
+        scripted=[
+            tool_use_response(
+                tool_id="tu_1",
+                tool_name="get_address_profile",
+                tool_input={"address": "1657 Barrington Street"},
+            ),
+            text_response(flat_answer),
+        ]
+    )
+
+    response = await session.send_user_message_blocking(
+        gateway, "What can I build at 1657 Barrington Street?"
+    )
+
+    text = response.content[-1].text
+    assert text.startswith(flat_answer)
+    assert "Downtown Halifax Land Use By-law" in text
+    assert "hrm planning" in text.lower()
+    assert session.messages[-1].content[-1].text == text

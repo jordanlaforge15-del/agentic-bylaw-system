@@ -605,6 +605,14 @@ def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
         out["nearest_other_zone"] = profile.nearest_other_zone
     if profile.parcel_zones:
         out["parcel_zones"] = profile.parcel_zones
+    # ABS-472: which by-law the zone above actually belongs to, and whether we
+    # hold it. Without this the model sees a zone code and a citation to
+    # whichever document the zoning layer happens to be linked to, and reasons
+    # the parcel's standards out of a by-law that does not govern it.
+    if profile.governing_bylaw is not None:
+        out["governing_bylaw"] = profile.governing_bylaw
+    if profile.governing_bylaw_status in {"held", "not_held"}:
+        out["governing_bylaw_status"] = profile.governing_bylaw_status
     if profile.caveats:
         out["caveats"] = profile.caveats
         out["instruction"] = _address_profile_instruction(profile)
@@ -614,9 +622,23 @@ def compact_address_profile(profile: AddressProfile) -> dict[str, Any]:
 def _address_profile_instruction(profile: AddressProfile) -> str:
     """The one next-step sentence a caveated profile carries.
 
-    Ordered by how wrong the answer would be if ignored: no zone at all beats
-    a split lot beats a boundary a few metres away beats an imprecise point.
+    Ordered by how wrong the answer would be if ignored: a zone whose by-law
+    we don't hold beats no zone at all beats a split lot beats a boundary a
+    few metres away beats an imprecise point.
     """
+    # ABS-472: the others say the zone might be the wrong parcel's. This one
+    # says the standards behind it are in a document we do not have — so
+    # answering from the by-laws we DO have is not an approximation, it is a
+    # different property's rules.
+    if profile.governing_bylaw_status == "not_held":
+        return (
+            f"This parcel is governed by the {profile.governing_bylaw}, which "
+            "is not in this corpus. State the zone and name that by-law, then "
+            "stop: do NOT give permitted uses, height, setbacks, floor area "
+            "or any other standard, and do NOT substitute a figure from "
+            "another by-law. Tell the user the governing by-law must be "
+            "confirmed with HRM Planning & Development."
+        )
     if profile.outside_mapped_area:
         return (
             "No zone could be assigned: the resolved point falls outside "

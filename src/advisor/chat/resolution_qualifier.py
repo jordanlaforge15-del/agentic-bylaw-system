@@ -17,6 +17,13 @@ A user can then never receive a flat "your zone is HR-1" that was really
 a guess, regardless of how the live model phrased its turn — and e2e can
 assert the behaviour without depending on model wording.
 
+ABS-472 adds an orthogonal one: the address is real and the point is exact,
+but the zone belongs to a by-law this corpus does not hold. HRM's zoning
+layer is municipality-wide, so a downtown parcel comes back with a real zone
+code whose standards live in a document we never ingested. Nothing in the
+ABS-466 flags notices — the resolution is rooftop-perfect — so the net needs
+its own read of ``governing_bylaw_status``.
+
 ABS-469 adds the state above all of these: the civic number does not exist.
 That profile carries no resolution quality at all — there is nothing to be
 precise about — so the ABS-466 flags read it as a clean turn and the net
@@ -85,6 +92,24 @@ _NONEXISTENT_SUFFIX = (
 )
 
 
+# ABS-472: the address is real, the zone is real, and the by-law that defines
+# that zone is not in this corpus. Distinct from every suffix above: those say
+# the point may be the wrong parcel's, this says the parcel is right and the
+# rules are somewhere we cannot read. A turn that answered with standards
+# anyway took them from a by-law that does not govern the property.
+_GOVERNING_BYLAW_SUFFIX = (
+    "\n\n---\n\n"
+    "**About this property's by-law:** this parcel is governed by the "
+    "{bylaw}, which is not part of the by-law corpus behind this answer. The "
+    "zone code comes from HRM's published zoning mapping, but no standard "
+    "under that by-law — permitted uses, height, setbacks, floor area — is "
+    "available here, and the standards of the by-laws that are available do "
+    "not apply to this parcel. Consult the {bylaw} directly, or confirm the "
+    "requirements with HRM Planning & Development, before relying on any "
+    "figure above."
+)
+
+
 def _payload_texts(output: Any) -> Iterable[str]:
     """Yield every string payload in a tool handler's return value."""
     if isinstance(output, str):
@@ -95,6 +120,26 @@ def _payload_texts(output: Any) -> Iterable[str]:
             text = getattr(block, "text", None)
             if isinstance(text, str):
                 yield text
+
+
+def _address_payloads(tool_calls: Iterable[Any]) -> Iterable[dict[str, Any]]:
+    """Yield each address tool's decoded compact payload, in call order.
+
+    Errored calls and unparseable/non-object payloads are skipped — a
+    malformed tool result must not manufacture a qualifier.
+    """
+    for call in tool_calls:
+        if getattr(call, "tool_name", None) not in ADDRESS_TOOLS:
+            continue
+        if getattr(call, "error", None):
+            continue
+        for text in _payload_texts(getattr(call, "output", None)):
+            try:
+                payload = json.loads(text)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(payload, dict):
+                yield payload
 
 
 def address_resolution_flags(tool_calls: Iterable[Any]) -> tuple[bool, bool]:
@@ -108,24 +153,13 @@ def address_resolution_flags(tool_calls: Iterable[Any]) -> tuple[bool, bool]:
     """
     imprecise = False
     outside = False
-    for call in tool_calls:
-        if getattr(call, "tool_name", None) not in ADDRESS_TOOLS:
-            continue
-        if getattr(call, "error", None):
-            continue
-        for text in _payload_texts(getattr(call, "output", None)):
-            try:
-                payload = json.loads(text)
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(payload, dict):
-                continue
-            if payload.get("outside_mapped_area"):
-                outside = True
-                imprecise = True
-            quality = payload.get("resolution_quality")
-            if isinstance(quality, str) and quality != "rooftop":
-                imprecise = True
+    for payload in _address_payloads(tool_calls):
+        if payload.get("outside_mapped_area"):
+            outside = True
+            imprecise = True
+        quality = payload.get("resolution_quality")
+        if isinstance(quality, str) and quality != "rooftop":
+            imprecise = True
     return imprecise, outside
 
 
@@ -138,34 +172,41 @@ def nonexistent_address_suffix(tool_calls: Iterable[Any]) -> str | None:
     ABS-466 flags read it as a clean turn. Returns None when no address tool
     reported ``civic_address_status: "not_found"`` this turn.
     """
-    for call in tool_calls:
-        if getattr(call, "tool_name", None) not in ADDRESS_TOOLS:
+    for payload in _address_payloads(tool_calls):
+        if payload.get("civic_address_status") != "not_found":
             continue
-        if getattr(call, "error", None):
+        address = payload.get("address")
+        street_phrase = (
+            f"“{address}”" if isinstance(address, str) and address else "this address"
+        )
+        ranges = payload.get("valid_civic_number_ranges")
+        ranges_phrase = ""
+        if isinstance(ranges, list) and ranges:
+            quoted = ", ".join(str(r) for r in ranges)
+            ranges_phrase = (
+                f" The civic numbers that do exist on that street are {quoted}."
+            )
+        return _NONEXISTENT_SUFFIX.format(
+            street_phrase=street_phrase, ranges=ranges_phrase
+        )
+    return None
+
+
+def governing_bylaw_suffix(tool_calls: Iterable[Any]) -> str | None:
+    """The disclosure a turn owes when the governing by-law is not in the corpus.
+
+    ABS-472. Returns None unless an address tool reported
+    ``governing_bylaw_status: "not_held"`` with a named by-law — an unnamed
+    one has nothing to tell the user to consult, so it falls through to the
+    precision qualifiers rather than emitting a vague warning.
+    """
+    for payload in _address_payloads(tool_calls):
+        if payload.get("governing_bylaw_status") != "not_held":
             continue
-        for text in _payload_texts(getattr(call, "output", None)):
-            try:
-                payload = json.loads(text)
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(payload, dict):
-                continue
-            if payload.get("civic_address_status") != "not_found":
-                continue
-            address = payload.get("address")
-            street_phrase = (
-                f"“{address}”" if isinstance(address, str) and address else "this address"
-            )
-            ranges = payload.get("valid_civic_number_ranges")
-            ranges_phrase = ""
-            if isinstance(ranges, list) and ranges:
-                quoted = ", ".join(str(r) for r in ranges)
-                ranges_phrase = (
-                    f" The civic numbers that do exist on that street are {quoted}."
-                )
-            return _NONEXISTENT_SUFFIX.format(
-                street_phrase=street_phrase, ranges=ranges_phrase
-            )
+        bylaw = payload.get("governing_bylaw")
+        if not isinstance(bylaw, str) or not bylaw.strip():
+            continue
+        return _GOVERNING_BYLAW_SUFFIX.format(bylaw=bylaw)
     return None
 
 
@@ -194,6 +235,26 @@ def _already_refused(text: str) -> bool:
     return any(marker in low for marker in _ALREADY_REFUSED_MARKERS)
 
 
+# Markers that mean the answer already tells the user the governing by-law is
+# not held (ABS-472). Narrower again than the two sets above: hedging about
+# precision, or refusing the address outright, says nothing about WHICH by-law
+# governs, so neither may suppress this disclosure.
+_ALREADY_DISCLOSED_BYLAW_MARKERS: tuple[str, ...] = (
+    "is not in this corpus",
+    "not part of the by-law corpus",
+    "not part of the bylaw corpus",
+    "do not have the",
+    "don't have the",
+    "is not available here",
+    "not held in",
+)
+
+
+def _already_disclosed_bylaw(text: str) -> bool:
+    low = text.lower()
+    return any(marker in low for marker in _ALREADY_DISCLOSED_BYLAW_MARKERS)
+
+
 def apply_resolution_qualifier(
     content: list[ContentBlock], tool_calls: Iterable[Any]
 ) -> list[ContentBlock]:
@@ -209,18 +270,31 @@ def apply_resolution_qualifier(
     # honest correction is that there is no such property, not that the point
     # behind it was estimated.
     nonexistent = nonexistent_address_suffix(tool_calls)
+    # ABS-472: next after that, because it bounds what can be answered at all
+    # rather than qualifying how well the parcel was found — a perfect rooftop
+    # match on a parcel whose by-law we don't hold still cannot carry a
+    # standard.
+    governing = governing_bylaw_suffix(tool_calls) if nonexistent is None else None
     imprecise, outside = address_resolution_flags(tool_calls)
-    if nonexistent is None and not imprecise:
+    if nonexistent is None and governing is None and not imprecise:
         return content
     text = "".join(b.text for b in content if isinstance(b, TextBlock))
     if not text.strip():
         return content
-    if nonexistent is None and already_qualified(text):
+    if governing is not None and _already_disclosed_bylaw(text):
+        governing = None
+        if nonexistent is None and not imprecise:
+            return content
+    if nonexistent is None and governing is None and already_qualified(text):
         return content
     if nonexistent is not None and _already_refused(text):
         return content
 
-    suffix = nonexistent or (_COVERAGE_SUFFIX if outside else _PRECISION_SUFFIX)
+    suffix = (
+        nonexistent
+        or governing
+        or (_COVERAGE_SUFFIX if outside else _PRECISION_SUFFIX)
+    )
     new_content = list(content)
     for i in range(len(new_content) - 1, -1, -1):
         block = new_content[i]
