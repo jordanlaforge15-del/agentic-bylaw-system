@@ -66,6 +66,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgresql+psycopg://layer1:layer1@localhost:5432/layer1
+      # This job's DSN is byte-identical to the dev laptop's, so ABS-499's
+      # pre-migration snapshot fence would otherwise engage here and fail —
+      # there is no `agentic-bylaw-system-postgres-1` on a runner, and a
+      # throwaway container that gets destroyed with the job has nothing worth
+      # dumping. Opt out explicitly. See docs/DEV_DB_BACKUP.md.
+      BYLAW_SKIP_MIGRATION_SNAPSHOT: "1"
     steps:
       - uses: actions/checkout@v4
 

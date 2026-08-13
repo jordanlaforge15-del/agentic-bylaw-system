@@ -291,6 +291,7 @@ hand, not to make a red run go green.
 | Variable                          | Effect |
 | --------------------------------- | ------ |
 | `BYLAW_SKIP_MIGRATION_SNAPSHOT=1` | Disable the fence (wins over everything) |
+| `GITHUB_ACTIONS=true`             | Disable the fence — CI's pytest job migrates a throwaway container on a DSN byte-identical to the dev laptop's. `.github/workflows/ci.yml` also sets the skip flag explicitly. |
 | `BYLAW_FORCE_MIGRATION_SNAPSHOT=1`| Fence *any* target, not just the dev DB (e.g. a clone) |
 | `BYLAW_SNAPSHOT_SCRIPT`           | Path to the snapshot script |
 | `BYLAW_DEV_PG_PORT` / `BYLAW_PG_DB` | What counts as "the dev database" (5432 / `layer1`) |

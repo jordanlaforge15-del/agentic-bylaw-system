@@ -42,6 +42,9 @@ def _clean_fence_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "BYLAW_SNAPSHOT_SCRIPT",
         "BYLAW_DEV_PG_PORT",
         "BYLAW_PG_DB",
+        # Set on every GitHub Actions runner, where the fence is off by
+        # design — these tests assert the fence's behaviour, not CI's.
+        "GITHUB_ACTIONS",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -123,6 +126,16 @@ def test_force_flag_engages_the_fence_off_the_dev_db(tmp_path: Path, monkeypatch
     assert sentinel.read_text().strip() == "clone-run"
 
 
+def test_github_actions_is_out_of_scope(tmp_path: Path, monkeypatch) -> None:
+    """CI's DSN is byte-identical to the dev laptop's, on a throwaway container."""
+    script, sentinel = _fake_snapshot_script(tmp_path)
+    monkeypatch.setenv("BYLAW_SNAPSHOT_SCRIPT", str(script))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    assert snapshot_before_migration("ci-migrate", database_url=DEV_URL) is None
+    assert not sentinel.exists()
+
+
 def test_skip_flag_beats_the_force_flag(tmp_path: Path, monkeypatch) -> None:
     script, sentinel = _fake_snapshot_script(tmp_path)
     monkeypatch.setenv("BYLAW_SNAPSHOT_SCRIPT", str(script))
@@ -195,6 +208,7 @@ def _run_entry_point(
     # Force the fence on so the test never needs (or risks) the real dev DB.
     env["BYLAW_FORCE_MIGRATION_SNAPSHOT"] = "1"
     env.pop("BYLAW_SKIP_MIGRATION_SNAPSHOT", None)
+    env.pop("GITHUB_ACTIONS", None)
     env["DATABASE_URL"] = f"sqlite:///{tmp_path / 'scratch.db'}"
     # backfill_user_emails refuses to run at all without one; it never leaves
     # the process because the fence aborts first.
@@ -347,6 +361,7 @@ def test_alembic_upgrade_aborts_when_the_snapshot_fails(tmp_path: Path) -> None:
     env["BYLAW_SNAPSHOT_SCRIPT"] = str(script)
     env["BYLAW_FORCE_MIGRATION_SNAPSHOT"] = "1"
     env.pop("BYLAW_SKIP_MIGRATION_SNAPSHOT", None)
+    env.pop("GITHUB_ACTIONS", None)
     env["DATABASE_URL"] = f"sqlite:///{db}"
 
     result = subprocess.run(
@@ -381,6 +396,7 @@ def test_alembic_read_only_commands_are_not_fenced(tmp_path: Path) -> None:
     env["BYLAW_SNAPSHOT_SCRIPT"] = str(script)
     env["BYLAW_FORCE_MIGRATION_SNAPSHOT"] = "1"
     env.pop("BYLAW_SKIP_MIGRATION_SNAPSHOT", None)
+    env.pop("GITHUB_ACTIONS", None)
     env["DATABASE_URL"] = f"sqlite:///{tmp_path / 'current-scratch.db'}"
 
     result = subprocess.run(

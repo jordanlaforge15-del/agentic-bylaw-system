@@ -107,7 +107,14 @@ def targets_dev_database(database_url: str | None = None) -> bool:
 
 
 def _snapshots_disabled() -> bool:
-    return os.getenv("BYLAW_SKIP_MIGRATION_SNAPSHOT", "").strip().lower() in _TRUTHY
+    if os.getenv("BYLAW_SKIP_MIGRATION_SNAPSHOT", "").strip().lower() in _TRUTHY:
+        return True
+    # GitHub Actions' pytest job runs migrations against a DSN byte-identical
+    # to the dev laptop's (localhost:5432/layer1) on a container that is
+    # destroyed with the job. The workflow opts out explicitly too; this is the
+    # belt to that pair of braces, so a future workflow that migrates does not
+    # fail on a snapshot of a database nobody wants.
+    return os.getenv("GITHUB_ACTIONS", "").strip().lower() in _TRUTHY
 
 
 def _snapshots_forced() -> bool:
