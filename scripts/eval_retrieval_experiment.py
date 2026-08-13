@@ -282,6 +282,43 @@ ARMS: tuple[Arm, ...] = (
         text_weights={"text": 1.0, "fts": 1.0},
         text_fusion="rrf",
     ),
+    # --- weight sweep -------------------------------------------------
+    # `fts_hybrid_50` posts the best Recall@10 in this matrix and
+    # `fts_hybrid_25` posts a *worse-than-control* one. Two neighbouring
+    # settings of the same knob cannot straddle the control by 0.12 unless
+    # either the effect is real and steep, or 0.5 happens to fit these 68
+    # unreviewed labels. Those two have opposite consequences for shipping, and
+    # nothing else in the matrix distinguishes them, so the knob gets swept.
+    #
+    # A plateau across neighbouring weights is an effect. A spike at exactly
+    # the round number someone would have guessed first is a constant fitted to
+    # the eval set — which is the defect this issue exists to remove, not a fix
+    # for it.
+    Arm(
+        name="fts_hybrid_35",
+        summary="Sweep: text ladder + FTS, 35/65 toward FTS.",
+        text_weights={"text": 0.35, "fts": 0.65},
+    ),
+    Arm(
+        name="fts_hybrid_40",
+        summary="Sweep: text ladder + FTS, 40/60 toward FTS.",
+        text_weights={"text": 0.40, "fts": 0.60},
+    ),
+    Arm(
+        name="fts_hybrid_60",
+        summary="Sweep: text ladder + FTS, 60/40 toward the ladder.",
+        text_weights={"text": 0.60, "fts": 0.40},
+    ),
+    Arm(
+        name="fts_hybrid_70",
+        summary="Sweep: text ladder + FTS, 70/30 toward the ladder.",
+        text_weights={"text": 0.70, "fts": 0.30},
+    ),
+    Arm(
+        name="fts_hybrid_85",
+        summary="Sweep: text ladder + FTS, 85/15 toward the ladder.",
+        text_weights={"text": 0.85, "fts": 0.15},
+    ),
     Arm(
         name="rrf_all_channels",
         summary="RRF over all four ranked lists: text, FTS, spatial, table.",
@@ -698,7 +735,29 @@ def render_zone_gate_markdown(
     lines.append("")
     lines.append(f"Zones: {', '.join(ZONE_GATE_CODES)} (every zone the labelled query set names).")
     lines.append("")
+
     control = gates[control_arm]
+
+    # State the gate's power before quoting its verdict. On a corpus where the
+    # control populates no dimensional fields at all, "0 field(s) lost" is not
+    # a pass — there was nothing available to lose, and a reader who takes it
+    # for a pass has been misled by this script rather than by the candidate.
+    # The other two signals (unknown-zone flips, permitted-use counts) do have
+    # power on such a corpus, so the gate is weakened here, not empty.
+    control_populated = sum(len(row["populated_fields"]) for row in control)
+    if control_populated == 0:
+        lines.append(
+            "> **Gate power: field comparison is VACUOUS on this corpus.** The "
+            "control populates **zero** dimensional/parking fields across all "
+            f"{len(control)} zones, so no candidate can lose one and "
+            "`0 field(s) lost` below carries no information. What still has "
+            "power: `unknown_zone` flips and permitted-use counts, both "
+            "reported per zone. Read the verdict accordingly — and treat a "
+            "corpus that populates fields as a prerequisite for using this as "
+            "the ship gate the issue names."
+        )
+        lines.append("")
+
     for name, rows in gates.items():
         if name == control_arm:
             continue
@@ -708,9 +767,16 @@ def render_zone_gate_markdown(
         unknown = [row["zone"] for row in diff if row["became_unknown"]]
         lines.append(f"## `{name}` vs `{control_arm}`")
         lines.append("")
+        use_delta = sum(row["permitted_use_delta"] for row in diff)
+        moved_zones = [row["zone"] for row in diff if row["permitted_use_delta"]]
         lines.append(
             f"**{total_lost} field(s) lost, {total_gained} gained** across "
-            f"{len(diff)} zones. Zones newly unknown: {', '.join(unknown) or 'none'}."
+            f"{len(diff)} zones"
+            + (" (vacuous — see above)" if control_populated == 0 else "")
+            + f". Zones newly unknown: {', '.join(unknown) or 'none'}. "
+            f"Permitted-use count Δ: {use_delta:+d}"
+            + (f" (moved: {', '.join(moved_zones)})" if moved_zones else " (no zone moved)")
+            + "."
         )
         lines.append("")
         lines.append("| Zone | lost | gained | permitted-use count Δ |")

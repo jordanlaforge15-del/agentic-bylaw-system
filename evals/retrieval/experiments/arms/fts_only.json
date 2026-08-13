@@ -1,12 +1,12 @@
 {
   "arm": "fts_only",
-  "summary": "Diagnostic: FTS body/label channel alone, shipped fusion. No path scoring.",
+  "summary": "Diagnostic: FTS body/label as the whole text side, shipped fusion. No ladder.",
   "config": {
     "text_weights": {
       "fts": 1.0
     },
     "text_fusion": "weighted",
-    "fusion": "max_bonus",
+    "fusion": "production",
     "fts_rank_fn": "ts_rank_cd",
     "fts_normalisation": 1,
     "rrf_k": null,
@@ -1216,9 +1216,9 @@
         9751,
         9754,
         6496,
+        8226,
         9752,
         9755,
-        8226,
         11014,
         11308,
         11537,
@@ -1321,9 +1321,9 @@
         6496,
         9752,
         9755,
+        9311,
         9751,
         9754,
-        9311,
         9390,
         9310,
         5892,
