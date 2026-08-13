@@ -144,6 +144,26 @@ confident results destroyed. Nine questions moved in the other direction.
 2. **Latency**: mean 394.6 → **444.2 ms** per `search()` (+12.6%), p95 483.9 →
    575.8 ms. One extra index-eligible query per search. Recorded in
    `BASELINE.json`, host-dependent, never used to fail a run.
+3. **Retrieval scores are now length-sensitive.** `ts_rank_cd(..., 1)`
+   normalises by token count, so between two fragments that match a query
+   equally well, the shorter one now ranks higher. That is the intended
+   behaviour of a text ranker and it is most of where the +0.10 comes from,
+   but it is a genuinely new property of `score`: before this change, two
+   fragments matching the same tokens scored the same however long they were.
+
+   It surfaced immediately, in an unrelated place. `abs480-citation-collision`
+   asserts that a citation-path collision costs a provision nothing, and it
+   proved that by comparing a collided clause's score against an uncollided
+   sibling's. The probe corpus's five lines had never been length-matched
+   because length had never been observable — they ran 9 / 9 / 8 / 5 tokens.
+   Under the blend the control outscored its collided sibling by 0.42 and the
+   deliberately-uncertain bullet outscored both, so the spec failed while the
+   behaviour it guards was entirely intact.
+
+   The fixture was equalised at nine tokens per provision, and the seed now
+   asserts that parity itself so a reworded line fails naming the cause. Worth
+   knowing generally: **any test that compares two retrieval scores must now
+   control for length**, or it is measuring brevity.
 
 ## The zone-profile gate, and what it could not tell us
 
