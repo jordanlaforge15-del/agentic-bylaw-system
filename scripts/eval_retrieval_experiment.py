@@ -8,22 +8,27 @@ a table instead of an anecdote.
     python scripts/eval_retrieval_experiment.py --database-url ... --dry-run
     python scripts/eval_retrieval_experiment.py --database-url ... --arms current,rrf_hybrid
 
-Every arm is the **production** ``search()`` with one or two seams swapped:
+Every arm is the **production** ``search()`` with one seam swapped:
 
-* ``_text_channel_scores`` — what the text channel scores a fragment on.
-* ``_merge_channel_scores`` — how per-channel scores become one ranking.
+* ``_merge_channel_scores`` — how per-channel scores become one ranking, and
+  (for the FTS family) what channels there are to merge in the first place.
 
 Nothing else is re-implemented. An arm that reproduced the pipeline instead of
-overriding its two seams would be measuring a program we do not ship, and the
-whole point of the matrix is that the winning arm's numbers survive the move
-into ``RetrievalService`` unchanged.
+overriding that seam would be measuring a program we do not ship, and the whole
+point of the matrix is that the winning arm's numbers survive the move into
+``RetrievalService`` unchanged. The ``current`` arm overrides nothing.
 
-The three families the ticket puts on trial
--------------------------------------------
-``path`` — the shipped ladder (``_score_fragment``): +12 per query token found
+The families the ticket puts on trial
+-------------------------------------
+``text`` — the shipped ladder (``_score_fragment``): +12 per query token found
 in ``citation_path``, +8 in ``citation_label``, +4 in the body, plus flat
-bonuses for a verbatim path hit. Hand-tuned constants, no IDF, no length
-normalisation, summed over tokens.
+bonuses for a verbatim path hit, and since ABS-492 the scope a fragment's
+containers supply. Hand-tuned constants, no IDF, no length normalisation,
+summed over tokens.
+
+``table`` — ABS-500's direct ranking of ``source_table_cell``, keyed by the
+anchor fragment its cells are cited through. Untouched by every arm: it is
+scored before fusion and merely arrives as one more list to fuse.
 
 ``fts`` — Postgres full-text search over
 ``to_tsvector('english', citation_label || ' ' || text)``. That expression is
@@ -37,10 +42,20 @@ they land inside a heading-decorated path.
 
 ``spatial`` — untouched. Overlay intersection, already at Recall@10 = 1.00.
 
-Fusion is either the shipped ``max()`` + ``+10`` both-channels bonus, or
+Fusion is either the shipped ``max()`` + ``+10`` spatial-agreement bonus, or
 Reciprocal Rank Fusion (``sum 1/(k + rank)``). RRF is scale-free: it reads only
 the order of each channel, so it cannot be broken by the fact that a spatial hit
 scores 100.0 and a good text hit scores 37.0 for reasons nobody can restate.
+
+A note on what this matrix is measuring, which changed under it
+--------------------------------------------------------------
+The first run of this script (commit 702cb4c) graded its arms against a control
+that scored Recall@10 = 0.1618, and several arms beat it by +0.34. That control
+no longer exists: ABS-492 added provision-in-context scoring and ABS-500 added
+the table channel, and the shipped retriever now scores 0.5588 on the same set
+without any of the changes this issue proposed. Those results are therefore not
+comparable to these and are not carried forward — the arms are re-derived here
+against the retriever we actually ship.
 
 Reading the output
 ------------------
@@ -175,23 +190,32 @@ def normalised_weighted_sum(
 class Arm:
     """One retriever configuration on trial.
 
-    ``text_channels`` names the sub-channels the text side contributes and how
-    they are combined *within* the text side; ``fusion`` is how the text side
-    then meets the spatial side. Splitting it that way is not cosmetic: the
-    shipped both-channels bonus is defined over ``(text, spatial)``, so an arm
-    that changed the text side alone must still be able to hand ``search()`` a
+    ``text_weights`` names the sub-channels the **text side** contributes and
+    how they combine *within* it; ``fusion`` is how the text side then meets
+    the other production channels. Splitting it that way is not cosmetic: the
+    shipped agreement bonus is defined over ``(spatial, everything else)``, so
+    an arm that changed the text side alone must still hand ``search()`` a
     single text score dict, or it would be changing two things at once and the
-    matrix would not attribute the delta.
+    matrix could not attribute the delta.
+
+    Re-derived for the post-ABS-492/ABS-500 retriever. There are now **four**
+    production channels, not two: ``text`` (the path ladder plus ABS-492's
+    provision-in-context scoring), ``fts``, ``spatial``, and ABS-500's
+    ``table``. The first matrix predates the last two and its control scored
+    Recall@10 = 0.1618; the control here scores 0.5588, so every arm below is
+    being asked a genuinely harder question than its same-named predecessor.
     """
 
     name: str
     summary: str
-    #: Weight per text sub-channel ("path", "fts"). Empty weight = channel off.
-    text_weights: dict[str, float] = field(default_factory=lambda: {"path": 1.0})
+    #: Weight per text sub-channel ("text", "fts"). Zero/absent = channel off.
+    text_weights: dict[str, float] = field(default_factory=lambda: {"text": 1.0})
     #: How the text sub-channels combine: "weighted" or "rrf".
     text_fusion: str = "weighted"
-    #: How text meets spatial: "max_bonus" (shipped) or "rrf".
-    fusion: str = "max_bonus"
+    #: How the channels meet: "production" (shipped max()+bonus) or "rrf".
+    fusion: str = "production"
+    #: Weight per channel under RRF fusion. Absent = 1.0.
+    channel_weights: dict[str, float] = field(default_factory=dict)
     #: Postgres ranking function and normalisation flag for the FTS channel.
     fts_rank_fn: str = "ts_rank_cd"
     fts_normalisation: int = 1
@@ -202,22 +226,37 @@ class Arm:
     def uses_fts(self) -> bool:
         return self.text_weights.get("fts", 0.0) > 0
 
+    @property
+    def is_control(self) -> bool:
+        """True when the arm is production, untouched, byte for byte.
+
+        The control must run through ``super()`` rather than through a
+        faithful-looking reimplementation. A control that merely *resembles*
+        production would make every delta in ``RESULTS.md`` a comparison
+        against a program we do not ship.
+        """
+        return (
+            not self.uses_fts
+            and self.fusion == "production"
+            and self.text_weights.get("text", 0.0) == 1.0
+        )
+
 
 # The matrix. Ordered so each row differs from an earlier one by one decision:
 # control, then fusion alone, then the text channel alone, then both.
 ARMS: tuple[Arm, ...] = (
     Arm(
         name="current",
-        summary="Shipped: path ladder, max() + both-channels bonus. The control.",
+        summary="Shipped: text ladder + context + table channel, max() + spatial bonus. The control.",
     ),
     Arm(
         name="rrf_fusion_only",
-        summary="Path ladder unchanged; RRF replaces max()+bonus across text/spatial.",
+        summary="Channels unchanged; RRF replaces max()+bonus across text/spatial/table.",
         fusion="rrf",
     ),
     Arm(
         name="fts_only",
-        summary="Diagnostic: FTS body/label channel alone, shipped fusion. No path scoring.",
+        summary="Diagnostic: FTS body/label as the whole text side, shipped fusion. No ladder.",
         text_weights={"fts": 1.0},
     ),
     Arm(
@@ -229,47 +268,48 @@ ARMS: tuple[Arm, ...] = (
     ),
     Arm(
         name="fts_hybrid_50",
-        summary="Path ladder + FTS, max-normalised 50/50, shipped fusion.",
-        text_weights={"path": 0.5, "fts": 0.5},
+        summary="Text ladder + FTS, max-normalised 50/50 within the text side, shipped fusion.",
+        text_weights={"text": 0.5, "fts": 0.5},
     ),
     Arm(
         name="fts_hybrid_25",
-        summary="Path ladder + FTS, max-normalised 25/75 toward FTS, shipped fusion.",
-        text_weights={"path": 0.25, "fts": 0.75},
+        summary="Text ladder + FTS, max-normalised 25/75 toward FTS, shipped fusion.",
+        text_weights={"text": 0.25, "fts": 0.75},
     ),
     Arm(
         name="fts_hybrid_rrf_text",
-        summary="Path ladder + FTS fused by RRF within the text channel, shipped fusion.",
-        text_weights={"path": 1.0, "fts": 1.0},
+        summary="Text ladder + FTS fused by RRF within the text side, shipped fusion.",
+        text_weights={"text": 1.0, "fts": 1.0},
         text_fusion="rrf",
     ),
     Arm(
         name="rrf_all_channels",
-        summary="RRF over all three ranked lists: path, FTS, spatial.",
-        text_weights={"path": 1.0, "fts": 1.0},
+        summary="RRF over all four ranked lists: text, FTS, spatial, table.",
+        text_weights={"text": 1.0, "fts": 1.0},
         text_fusion="rrf",
         fusion="rrf",
     ),
     Arm(
         name="rrf_all_channels_ts_rank",
         summary="As rrf_all_channels but ts_rank (term frequency) for the FTS list.",
-        text_weights={"path": 1.0, "fts": 1.0},
+        text_weights={"text": 1.0, "fts": 1.0},
         text_fusion="rrf",
         fusion="rrf",
         fts_rank_fn="ts_rank",
         fts_normalisation=0,
     ),
     Arm(
-        name="rrf_all_channels_path_half",
-        summary="Diagnostic: rrf_all_channels with the path list's vote halved.",
-        text_weights={"path": 0.5, "fts": 1.0},
+        name="rrf_all_channels_text_half",
+        summary="Diagnostic: rrf_all_channels with the ladder list's vote halved.",
+        text_weights={"text": 1.0, "fts": 1.0},
         text_fusion="rrf",
         fusion="rrf",
+        channel_weights={"text": 0.5},
     ),
     Arm(
         name="rrf_all_channels_top50",
-        summary="RRF over path/FTS/spatial, each list truncated to its top 50 first.",
-        text_weights={"path": 1.0, "fts": 1.0},
+        summary="RRF over text/FTS/spatial/table, each list truncated to its top 50 first.",
+        text_weights={"text": 1.0, "fts": 1.0},
         text_fusion="rrf",
         fusion="rrf",
         rrf_depth=50,
@@ -277,7 +317,7 @@ ARMS: tuple[Arm, ...] = (
     Arm(
         name="rrf_all_channels_top50_ts_rank",
         summary="As rrf_all_channels_top50 but ts_rank (term frequency) for the FTS list.",
-        text_weights={"path": 1.0, "fts": 1.0},
+        text_weights={"text": 1.0, "fts": 1.0},
         text_fusion="rrf",
         fusion="rrf",
         rrf_depth=50,
@@ -337,39 +377,44 @@ def fts_or_query(query: str) -> str:
 
 
 def build_experiment_service(session, arm: Arm, resolver):
-    """Return a ``RetrievalService`` whose two scoring seams follow ``arm``."""
+    """Return a ``RetrievalService`` whose scoring seams follow ``arm``."""
     from bylaw_retrieval.retrieval import RetrievalService
 
     class _ExperimentService(RetrievalService):
-        """Production ``search()``; ``arm`` decides the two scoring seams."""
+        """Production ``search()``; ``arm`` decides only the scoring seams.
+
+        Production's seams are ``_text_channel_scores`` (the path ladder plus
+        ABS-492's provision-in-context scoring), ``_table_channel_scores``
+        (ABS-500), ``_spatial_channel_scores``, and ``_merge_channel_scores``.
+        Arms override the last one and add an FTS channel beside it; the
+        ``current`` arm overrides nothing at all and runs straight through
+        ``super()``.
+
+        The text channel is computed on **every** arm, including the ones that
+        give it zero weight. ``search()`` reads ``text_scored.discriminating``
+        to scope the table channel, so an arm that switched the text side off
+        at the source would silently be changing the table channel too, and the
+        matrix would attribute that delta to FTS.
+        """
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self._subchannels: dict[str, dict[int, float]] = {}
+            self._experiment_request = None
 
-        # -- text side ---------------------------------------------------
-        def _text_channel_scores(self, request) -> dict[int, float]:
-            channels: dict[str, dict[int, float]] = {}
-            if arm.text_weights.get("path", 0.0) > 0:
-                channels["path"] = super()._text_channel_scores(request)
-            if arm.uses_fts:
-                channels["fts"] = self._fts_channel_scores(request)
-            self._subchannels = channels
-            if len(channels) == 1:
-                return next(iter(channels.values()))
-            if arm.text_fusion == "rrf":
-                return rrf_fuse(channels, depth=arm.rrf_depth, weights=arm.text_weights)
-            return normalised_weighted_sum(channels, arm.text_weights)
+        def _text_channel_scores(self, request):
+            self._experiment_request = request
+            return super()._text_channel_scores(request)
 
         def _fts_channel_scores(self, request) -> dict[int, float]:
-            """Rank the in-scope corpus by Postgres FTS over label + body.
+            """Rank the in-scope corpus by FTS, with the arm's ranker knobs.
 
-            Reuses ``_fragment_scope_statement`` for scoping rather than
-            rebuilding the WHERE clause, so the FTS channel sees exactly the
-            documents, pages and attribute tags the ladder sees. An arm that
-            searched a wider corpus than the control would post a better recall
-            for a reason that has nothing to do with scoring.
+            Scoping comes from ``_fragment_scope_statement`` — the same
+            statement the text channel is scored over — so an arm cannot post a
+            better recall by searching a wider corpus than the control.
             """
+            if not arm.uses_fts or self._dialect_name() != "postgresql":
+                return {}
+
             from sqlalchemy import select, text as sql_text
 
             from layer1.db.base import SourceFragment
@@ -383,8 +428,6 @@ def build_experiment_service(session, arm: Arm, resolver):
                 .with_only_columns(SourceFragment.id)
                 .order_by(None)
             )
-            scoped_ids = select(scope.subquery().c.id)
-
             rank_expr = sql_text(
                 f"{arm.fts_rank_fn}({FTS_VECTOR_SQL}, to_tsquery('english', :tsq), "
                 f"{arm.fts_normalisation})"
@@ -394,34 +437,141 @@ def build_experiment_service(session, arm: Arm, resolver):
             ).bindparams(tsq=tsquery)
             stmt = (
                 select(SourceFragment.id, rank_expr)
-                .where(SourceFragment.id.in_(scoped_ids))
+                .where(SourceFragment.id.in_(select(scope.subquery().c.id)))
                 .where(matches_expr)
             )
             rows = self.session.execute(stmt).all()
             return {int(fragment_id): float(rank) for fragment_id, rank in rows if rank > 0}
 
-        # -- channel fusion ----------------------------------------------
-        def _merge_channel_scores(self, text_scored, spatial_scored):
-            if arm.fusion != "rrf":
-                return super()._merge_channel_scores(text_scored, spatial_scored)
+        # -- fusion -------------------------------------------------------
+        def _merge_channel_scores(self, text_scored, spatial_scored, table_scored=None):
+            if arm.is_control:
+                return super()._merge_channel_scores(
+                    text_scored, spatial_scored, table_scored
+                )
 
-            channels = {name: scores for name, scores in self._subchannels.items() if scores}
-            if spatial_scored:
-                channels["spatial"] = spatial_scored
-            fused = rrf_fuse(channels, depth=arm.rrf_depth, weights=arm.text_weights)
+            fts_scored = self._fts_channel_scores(self._experiment_request)
+            spatial_scored = dict(spatial_scored or {})
+            table_scored = dict(table_scored or {})
+            ladder_scored = (
+                dict(text_scored) if arm.text_weights.get("text", 0.0) > 0 else {}
+            )
 
-            merged: list[tuple[float, int, list[str]]] = []
-            for fragment_id, score in fused.items():
-                labels: list[str] = []
-                if fragment_id in text_scored:
-                    labels.append("text")
-                if fragment_id in spatial_scored:
-                    labels.append("spatial")
-                merged.append((score, fragment_id, labels))
+            if arm.fusion == "rrf":
+                channels = {
+                    "text": ladder_scored,
+                    "fts": fts_scored,
+                    "spatial": spatial_scored,
+                    "table": table_scored,
+                }
+                live = {name: scores for name, scores in channels.items() if scores}
+                fused = rrf_fuse(
+                    live, depth=arm.rrf_depth, weights=arm.channel_weights or None
+                )
+            else:
+                # Production fusion, with the text side rebuilt from the arm's
+                # sub-channels first. Collapsing text before the merge is what
+                # lets the matrix attribute a delta: an arm that changed the
+                # text side *and* the fusion at once would not say which moved.
+                merged_text = self._combine_text_side(ladder_scored, fts_scored)
+                live = {
+                    name: scores
+                    for name, scores in {
+                        "text": merged_text,
+                        "spatial": spatial_scored,
+                        "table": table_scored,
+                    }.items()
+                    if scores
+                }
+                fused = {}
+                for fragment_id in set().union(*live.values()) if live else set():
+                    text_s = merged_text.get(fragment_id, 0.0)
+                    spatial_s = spatial_scored.get(fragment_id, 0.0)
+                    table_s = table_scored.get(fragment_id, 0.0)
+                    score = max(text_s, spatial_s, table_s)
+                    if spatial_s > 0 and (text_s > 0 or table_s > 0):
+                        score += self._SPATIAL_TEXT_BOTH_BONUS
+                    fused[fragment_id] = score
+                # Label from the real sub-channels, not the collapsed one.
+                live = {
+                    name: scores
+                    for name, scores in {
+                        "text": ladder_scored,
+                        "fts": fts_scored,
+                        "spatial": spatial_scored,
+                        "table": table_scored,
+                    }.items()
+                    if scores
+                }
+
+            merged = [
+                (
+                    score,
+                    fragment_id,
+                    sorted(
+                        name for name, scores in live.items() if fragment_id in scores
+                    ),
+                )
+                for fragment_id, score in fused.items()
+            ]
             merged.sort(key=lambda entry: (-entry[0], entry[1]))
             return merged
 
+        def _combine_text_side(
+            self, ladder_scored: dict[int, float], fts_scored: dict[int, float]
+        ) -> dict[int, float]:
+            """Fold the text sub-channels into one production-scale dict.
+
+            The rescale at the end is load-bearing and easy to miss. Production
+            fusion is a ``max()`` across channels whose scores share the ladder
+            scale — a spatial containment is 100.0, a table cell is scored by
+            the same token ladder the text channel uses. A text side handed
+            back on a normalised [0, 1] scale would therefore lose every
+            ``max()`` it entered, and the arm would be measuring "table channel
+            with the text side deleted" while claiming to measure a hybrid. So
+            the combined ranking is mapped back onto the ladder's own top score
+            before it is returned: the arm changes the text side's *order*,
+            which is the hypothesis, and nothing about its magnitude.
+            """
+            sub_channels = {
+                name: scores
+                for name, scores in {"text": ladder_scored, "fts": fts_scored}.items()
+                if scores
+            }
+            if not sub_channels:
+                return {}
+            if len(sub_channels) == 1:
+                only = next(iter(sub_channels.values()))
+                # A lone FTS side still has to arrive on the ladder's scale.
+                return only if only is ladder_scored else _rescale(only, ladder_scored)
+
+            if arm.text_fusion == "rrf":
+                combined = rrf_fuse(
+                    sub_channels, depth=arm.rrf_depth, weights=arm.text_weights
+                )
+            else:
+                combined = normalised_weighted_sum(sub_channels, arm.text_weights)
+            return _rescale(combined, ladder_scored)
+
     return _ExperimentService(session, default_document_id_resolver=resolver)
+
+
+def _rescale(scores: dict[int, float], reference: dict[int, float]) -> dict[int, float]:
+    """Map ``scores`` onto ``reference``'s top value, preserving order.
+
+    Used to hand a re-ordered text side back to production fusion on the scale
+    that fusion's ``max()`` was calibrated against. When the reference is empty
+    there is no ladder score to borrow, so the ladder's own top-of-scale
+    constant stands in — otherwise an arm whose ladder found nothing would
+    contribute a text side pinned at zero.
+    """
+    if not scores:
+        return {}
+    top = max(scores.values())
+    if top <= 0:
+        return {}
+    target = max(reference.values()) if reference else 100.0
+    return {fragment_id: (score / top) * target for fragment_id, score in scores.items()}
 
 
 # ----------------------------------------------------------------------
@@ -448,6 +598,130 @@ def run_arm(session, arm: Arm, queries, anchor_resolver, k: int) -> Report:
 
     service = build_experiment_service(session, arm, retrieval_enabled_resolver)
     return evaluate(queries, _search_fn(service, k), anchor_resolver, k=k)
+
+
+# ----------------------------------------------------------------------
+# The zone-profile regression gate
+# ----------------------------------------------------------------------
+
+# The zones the labelled query set names. Drawn from an artifact already in
+# the repo rather than invented here, so the gate cannot be accused of having
+# been chosen to make a candidate look good. get_zone_profile is the thick
+# tool that consumes search() output, so it is the surface a ranking change
+# can silently break: a re-ranking that surfaces a *different* fragment first
+# changes which value gets extracted, and Recall@10 would not notice.
+ZONE_GATE_CODES = (
+    "ER-3", "ER-2", "ER-1", "CH-1", "CH-2", "LI", "INS", "UC-2", "PCF",
+    "WA", "CDD-2", "HR-2", "DND", "COR", "DD", "DH", "CLI", "HRI", "RPK",
+)
+
+#: (section, field) pairs a profile can populate. Flattened so an arm's
+#: profile is one comparable set of populated keys.
+_ZONE_FIELDS = (
+    ("dimensions", "max_height_m"),
+    ("dimensions", "max_lot_coverage_pct"),
+    ("dimensions", "front_setback_m"),
+    ("dimensions", "side_setback_m"),
+    ("dimensions", "rear_setback_m"),
+    ("dimensions", "max_far"),
+    ("parking", "applies"),
+    ("parking", "min_spaces_per_dwelling_unit"),
+    ("parking", "schedule_reference"),
+)
+
+
+def zone_profile_summary(service, zone: str) -> dict[str, Any]:
+    """Reduce one ``get_zone_profile`` call to what a regression would move."""
+    profile = service.get_zone_profile(zone)
+    populated = sorted(
+        f"{section}.{field}"
+        for section, field in _ZONE_FIELDS
+        if getattr(getattr(profile, section, None), field, None) is not None
+    )
+    uses = profile.uses
+    return {
+        "zone": zone,
+        "unknown_zone": profile.unknown_zone,
+        "zone_full_name": profile.zone_full_name,
+        "chapter": profile.chapter,
+        "populated_fields": populated,
+        "permitted_use_count": len(uses.permitted) if uses else 0,
+        "citation_count": len(profile.citations),
+        "confidence": {key: round(value, 3) for key, value in sorted(profile.confidence.items())},
+    }
+
+
+def run_zone_gate(session, arm: Arm, zones: Sequence[str]) -> list[dict[str, Any]]:
+    from bylaw_retrieval.retrieval.service import retrieval_enabled_resolver
+
+    service = build_experiment_service(session, arm, retrieval_enabled_resolver)
+    return [zone_profile_summary(service, zone) for zone in zones]
+
+
+def diff_zone_gate(
+    control: list[dict[str, Any]], candidate: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Field-level movement per zone: what the candidate lost, kept and gained.
+
+    "Lost" is the only column that can block a ship. A field the control
+    populated and the candidate does not means the agent stopped being able to
+    answer a question it could answer yesterday, whatever the aggregate says.
+    """
+    by_zone = {row["zone"]: row for row in candidate}
+    rows: list[dict[str, Any]] = []
+    for before in control:
+        after = by_zone[before["zone"]]
+        lost = sorted(set(before["populated_fields"]) - set(after["populated_fields"]))
+        gained = sorted(set(after["populated_fields"]) - set(before["populated_fields"]))
+        rows.append(
+            {
+                "zone": before["zone"],
+                "lost": lost,
+                "gained": gained,
+                "became_unknown": after["unknown_zone"] and not before["unknown_zone"],
+                "permitted_use_delta": after["permitted_use_count"] - before["permitted_use_count"],
+            }
+        )
+    return rows
+
+
+def render_zone_gate_markdown(
+    control_arm: str, gates: dict[str, list[dict[str, Any]]]
+) -> str:
+    lines = ["# ABS-494 — zone-profile regression gate", ""]
+    lines.append(
+        "`get_zone_profile` composes five `search()` calls and extracts a value "
+        "from whichever fragment ranks first, so a ranking change moves it "
+        "without moving Recall@10. This table is the ship gate the issue names: "
+        "a candidate with a non-empty **lost** column is a regression."
+    )
+    lines.append("")
+    lines.append(f"Zones: {', '.join(ZONE_GATE_CODES)} (every zone the labelled query set names).")
+    lines.append("")
+    control = gates[control_arm]
+    for name, rows in gates.items():
+        if name == control_arm:
+            continue
+        diff = diff_zone_gate(control, rows)
+        total_lost = sum(len(row["lost"]) for row in diff)
+        total_gained = sum(len(row["gained"]) for row in diff)
+        unknown = [row["zone"] for row in diff if row["became_unknown"]]
+        lines.append(f"## `{name}` vs `{control_arm}`")
+        lines.append("")
+        lines.append(
+            f"**{total_lost} field(s) lost, {total_gained} gained** across "
+            f"{len(diff)} zones. Zones newly unknown: {', '.join(unknown) or 'none'}."
+        )
+        lines.append("")
+        lines.append("| Zone | lost | gained | permitted-use count Δ |")
+        lines.append("|---|---|---|---|")
+        for row in diff:
+            lines.append(
+                f"| {row['zone']} | {', '.join(row['lost']) or '—'} | "
+                f"{', '.join(row['gained']) or '—'} | {row['permitted_use_delta']:+d} |"
+            )
+        lines.append("")
+    return "\n".join(lines) + "\n"
 
 
 # ----------------------------------------------------------------------
@@ -481,9 +755,18 @@ def render_results_markdown(
     lines.append("")
     lines.append(
         "Generated by `scripts/eval_retrieval_experiment.py`. Every arm is the "
-        "production `RetrievalService.search()` with `_text_channel_scores` "
-        "and/or `_merge_channel_scores` swapped — see that script's docstring "
-        "for what each family is."
+        "production `RetrievalService.search()` with `_merge_channel_scores` "
+        "swapped (and, for the FTS family, one extra channel to merge) — see "
+        "that script's docstring for what each family is. The `current` arm "
+        "overrides nothing and runs straight through production."
+    )
+    lines.append("")
+    lines.append(
+        "**Re-derived against post-ABS-492/ABS-500 dev.** The first run of this "
+        "matrix graded a control that scored Recall@10 = 0.1618; provision-in-"
+        "context scoring (ABS-492) and the table channel (ABS-500) have since "
+        "landed and the shipped retriever now scores 0.5588 unaided. Those "
+        "earlier numbers are not comparable to these and are not carried forward."
     )
     lines.append("")
     lines.append(
@@ -625,6 +908,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Comma-separated arm names; defaults to the whole matrix.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print only; write nothing.")
+    parser.add_argument(
+        "--zone-gate",
+        action="store_true",
+        help=(
+            "Instead of Recall@k, run the zone-profile regression gate: "
+            "get_zone_profile for every zone the query set names, under each "
+            "arm, diffed field-by-field against the control."
+        ),
+    )
     args = parser.parse_args(argv)
 
     from layer1.db.session import session_scope
@@ -644,6 +936,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"FAIL: unknown arm {name!r}", file=sys.stderr)
             return 2
         selected.append(ARMS_BY_NAME[name])
+
+    if args.zone_gate:
+        if CONTROL_ARM not in {arm.name for arm in selected}:
+            print(
+                f"FAIL: the zone gate is a diff, so --arms must include "
+                f"{CONTROL_ARM!r}",
+                file=sys.stderr,
+            )
+            return 2
+        gates: dict[str, list[dict[str, Any]]] = {}
+        with session_scope(args.database_url) as session:
+            for arm in selected:
+                print(f"zone gate: {arm.name} ...", flush=True)
+                gates[arm.name] = run_zone_gate(session, arm, ZONE_GATE_CODES)
+        markdown = render_zone_gate_markdown(CONTROL_ARM, gates)
+        print()
+        print(markdown)
+        if not args.dry_run:
+            args.out_dir.mkdir(parents=True, exist_ok=True)
+            (args.out_dir / "ZONE_GATE.md").write_text(markdown)
+            (args.out_dir / "zone_gate.json").write_text(
+                json.dumps(gates, indent=2, ensure_ascii=False) + "\n"
+            )
+            print(f"Wrote {args.out_dir / 'ZONE_GATE.md'}")
+        return 0
 
     reports: dict[str, Report] = {}
     with session_scope(args.database_url) as session:
