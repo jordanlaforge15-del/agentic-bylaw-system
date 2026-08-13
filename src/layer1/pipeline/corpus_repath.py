@@ -6,8 +6,9 @@ where 720 labelled clauses (16.6% of the document) currently have no citation
 path at all — is corrected by **migration**, never by re-ingest. The reasoning
 is ABS-461's and has not changed (``docs/data-gaps/abs461-production-impact.md``):
 re-ingest cannot run where the data is, it reallocates every ``source_fragment``
-id so every foreign key and every citation recorded in ``answer_log`` stops
-pointing at the row it described, and it would reshape far more than the defect.
+id so every foreign key -- and every citation the Layer 2 answer tables have
+recorded -- stops pointing at the row it described, and it would reshape far
+more than the defect.
 
 This module replays the *same* pure walk the builder runs
 (:func:`~layer1.pipeline.citation_repath.repath_low_level_fragments`) over the

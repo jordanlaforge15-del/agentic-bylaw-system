@@ -8,7 +8,7 @@ count from 720 to 0.
 The parser fix only helps documents ingested after it; this is how a corpus
 already in a database gets the same shape -- on dev, and on production, without
 a 457-page re-ingest that would churn every fragment id and orphan every
-citation already recorded in ``answer_log``. Rationale and the production
+citation the Layer 2 answer tables have recorded. Rationale and the production
 runbook: ``docs/data-gaps/citation-path-repath.md``.
 
 Usage:
