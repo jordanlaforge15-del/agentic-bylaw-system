@@ -57,6 +57,7 @@ from bylaw_retrieval.retrieval.schemas import (
     RetrievalRequest,
     RetrievalResponse,
     ScheduleRowQuery,
+    TableCellMatch,
     TableCellSummary,
     TableSummary,
     ZoneAttributeQuery,
@@ -66,7 +67,14 @@ from bylaw_retrieval.retrieval.schemas import (
     ConditionalUse,
     ZoneUses,
 )
+from bylaw_retrieval.retrieval.binding import ZoneScopeIndex, build_zone_scope_index
+from bylaw_retrieval.retrieval.channels import TextChannelScores
 from bylaw_retrieval.retrieval.context import AncestorIndex, split_citation_path
+from bylaw_retrieval.retrieval.tables import (
+    TableCellHit,
+    TableIndex,
+    table_channel_scores,
+)
 from layer1.db.base import (
     CrossReference,
     Document,
@@ -1617,11 +1625,13 @@ class RetrievalService:
     _SPATIAL_TEXT_BOTH_BONUS = 10.0
 
     def search(self, request: RetrievalRequest) -> RetrievalResponse:
-        # Two retrievers run in parallel: text-keyword scoring against
-        # fragments, and spatial intersection against linked geo datasets
-        # when a location is supplied. They produce disjoint or overlapping
-        # candidate fragment sets that are merged on fragment_id, with a
-        # bonus for fragments surfaced by both channels.
+        # Three retrievers run in parallel: text-keyword scoring against
+        # fragments, spatial intersection against linked geo datasets when a
+        # location is supplied, and direct scoring of table cells (ABS-500).
+        # They produce disjoint or overlapping candidate sets that are merged
+        # on fragment_id — the table channel keys its cells by the anchor
+        # fragment they are cited through — with a bonus for fragments
+        # surfaced by more than one channel.
         resolved_location, resolution_detail = self._resolve_location_slot(
             request.location
         )
@@ -1632,8 +1642,11 @@ class RetrievalService:
             if resolved_location is not None
             else {}
         )
+        table_scored, table_hits = self._table_channel_scores(
+            request, discriminating=text_scored.discriminating
+        )
 
-        merged = self._merge_channel_scores(text_scored, spatial_scored)
+        merged = self._merge_channel_scores(text_scored, spatial_scored, table_scored)
         total_matches = len(merged)
 
         notes = self._build_response_notes(
@@ -1671,6 +1684,16 @@ class RetrievalService:
                 resolved_location=resolved_location,
             )
             match.retrieval_channels = sorted(channels)
+            # Attached whatever ``include_tables`` says: a table-channel match
+            # ranked *because of* a cell, and returning it without naming that
+            # cell would hand the model an anchor fragment it cannot ground the
+            # answer in. ``include_tables`` still governs the bulk
+            # ``related_tables`` dump, which is a different thing — everything
+            # near the fragment, whether or not it bore on the query.
+            if "table" in channels:
+                match.table_matches = [
+                    self._table_cell_match(hit) for hit in table_hits.get(fragment_id, [])
+                ]
             matches.append(match)
 
         return RetrievalResponse(
@@ -2908,22 +2931,59 @@ class RetrievalService:
     # and to a corpus this repo has not ingested yet.
     _CONTEXT_TOKEN_MAX_DF = 0.15
 
-    def _text_channel_scores(self, request: RetrievalRequest) -> dict[int, float]:
+    # Zone-scope binding (ABS-500). A clause sitting under a container that
+    # declares the query's zone ("Part V, Chapter 9: Built Form and Siting
+    # Requirements within the ER3, ER-2, and ER-1 Zones") is *governed by* that
+    # zone. That is a structural fact about how the clause is addressed, so it
+    # scores at the citation-path rung (+12) rather than the inherited-context
+    # rung (+2) — which is what stops a landscaping clause that merely lists
+    # ER-1 among abutting zones (own text, +4) from outranking the section that
+    # states the ER-1 standard. See bylaw_retrieval.retrieval.binding.
+    _ZONE_SCOPE_BINDING_SCORE = 12.0
+
+    def _zone_scope_index(self) -> ZoneScopeIndex:
+        """The corpus's zone vocabulary and zone-declaring containers, cached.
+
+        Keyed on the *default* document scope rather than the request's: the
+        vocabulary is a property of the ingest, and rebuilding it per filter
+        shape would put two extra scans in front of every search.
+        """
+        scope = self._resolve_default_document_ids()
+        key = tuple(sorted(scope)) if scope is not None else None
+        cached = getattr(self, "_zone_scope_index_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, build_zone_scope_index(self.session, scope))
+            self._zone_scope_index_cache = cached
+        return cached[1]
+
+    def _table_index(self) -> TableIndex:
+        """Tables, cells, axis labels and anchors for the default scope, cached."""
+        scope = self._resolve_default_document_ids()
+        key = tuple(sorted(scope)) if scope is not None else None
+        cached = getattr(self, "_table_index_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, TableIndex.build(self.session, scope))
+            self._table_index_cache = cached
+        return cached[1]
+
+    def _text_channel_scores(self, request: RetrievalRequest) -> TextChannelScores:
         """Keyword-score every in-scope fragment. Returns {fragment_id: score}
         for fragments whose score exceeds the parse-status baseline (i.e. the
         query text actually matched some content).
 
-        Two things are scored: the fragment's own citable identity (text,
-        label, structural citation path) and the scope its containers supply —
+        Three things are scored: the fragment's own citable identity (text,
+        label, structural citation path), the scope its containers supply —
         the bracketed prose in its own path plus every ancestor's heading and
-        text. The threshold is applied to the sum, which is what makes a
-        stripped list item ("(f) 2.5 metres elsewhere.") reachable through its
-        parent section's terms instead of invisible to the channel entirely.
+        text — and, when the query names a zone, whether the fragment is
+        *governed by* a container declaring that zone. The threshold is applied
+        to the sum, which is what makes a stripped list item ("(f) 2.5 metres
+        elsewhere.") reachable through its parent section's terms instead of
+        invisible to the channel entirely.
         """
         stmt = self._fragment_scope_statement(request)
         fragments = self.session.execute(stmt).scalars().all()
         if not fragments:
-            return {}
+            return TextChannelScores()
 
         details = {
             fragment.id: score_fragment_detail(fragment, request.query)
@@ -2939,7 +2999,15 @@ class RetrievalService:
         # descendant.
         ancestor_tokens: dict[int, frozenset[str]] = {}
 
-        scored: dict[int, float] = {}
+        # Containers declaring a zone the query named. A fragment binds when it
+        # *is* one of them (so "where are the COR built-form requirements?"
+        # still ranks the chapter heading above the sections it scopes) or when
+        # one of them is an ancestor.
+        declaring = self._zone_scope_index().containers_declaring(
+            self._zones_named(request.query)
+        )
+
+        scored = TextChannelScores(discriminating=discriminating)
         for fragment in fragments:
             detail = details[fragment.id]
             context = self._context_tokens(
@@ -2949,9 +3017,62 @@ class RetrievalService:
             # ancestor repeating the clause's own words is not new evidence.
             inherited = (context & discriminating) - detail.matched_tokens
             score = detail.score + self._CONTEXT_TOKEN_SCORE * len(inherited)
+            if declaring and (
+                fragment.id in declaring
+                or any(ancestor in declaring for ancestor in index.chain(fragment.id))
+            ):
+                score += self._ZONE_SCOPE_BINDING_SCORE
             if score > self._TEXT_CHANNEL_THRESHOLD:
                 scored[fragment.id] = score
         return scored
+
+    def _zones_named(self, query: str) -> frozenset[str]:
+        """The zone codes this query names, read against the corpus vocabulary."""
+        return self._zone_scope_index().zones_named_in(query)
+
+    def _table_channel_scores(
+        self,
+        request: RetrievalRequest,
+        discriminating: frozenset[str] = frozenset(),
+    ) -> tuple[dict[int, float], dict[int, list[TableCellHit]]]:
+        """Rank ``source_table_cell`` directly. Returns (scores, cell hits).
+
+        Both maps are keyed by the table's **anchor fragment** — the provision
+        that introduces the table — because that is how a cell is cited (see
+        ``docs/ABS-500-TABLE-CHANNEL.md``) and because it is what lets the
+        result fuse with the fragment-keyed text and spatial channels.
+
+        Scoped to the same documents the text channel sees. Page and
+        citation-path filters are deliberately not applied: they address
+        fragments, and a table's page band is the table's, not its anchor's.
+        """
+        scope = self._resolve_default_document_ids()
+        allowed: set[int] | None = set(scope) if scope is not None else None
+        if request.document_id is not None:
+            allowed = (
+                {request.document_id}
+                if allowed is None
+                else allowed & {request.document_id}
+            )
+        if request.municipality or request.bylaw_name:
+            stmt = select(Document.id)
+            if request.municipality:
+                stmt = stmt.where(Document.municipality.ilike(f"%{request.municipality}%"))
+            if request.bylaw_name:
+                stmt = stmt.where(Document.bylaw_name.ilike(f"%{request.bylaw_name}%"))
+            named = set(self.session.execute(stmt).scalars().all())
+            allowed = named if allowed is None else allowed & named
+        if allowed is not None and not allowed:
+            return {}, {}
+
+        result = table_channel_scores(
+            self._table_index(),
+            token_patterns=query_token_patterns(request.query.strip().lower()),
+            zones_named=self._zones_named(request.query),
+            discriminating=discriminating,
+            document_ids=allowed,
+        )
+        return result.scores, result.hits
 
     def _discriminating_tokens(
         self,
@@ -3091,26 +3212,43 @@ class RetrievalService:
         self,
         text_scored: dict[int, float],
         spatial_scored: dict[int, float],
+        table_scored: dict[int, float] | None = None,
     ) -> list[tuple[float, int, list[str]]]:
         """Return [(score, fragment_id, channels)] sorted by score desc.
 
         Channel set per fragment lets the caller see whether the match came
-        from text, spatial, or both. Fragments hit by both channels get a
-        small bonus on top of the max channel score so they outrank
-        single-channel hits with the same raw score.
+        from text, spatial, table, or several. Fragments hit by more than one
+        channel get a small bonus on top of the max channel score so they
+        outrank single-channel hits with the same raw score.
+
+        The table channel is keyed by the anchor fragment its cells are cited
+        through, which is what lets it fuse here rather than arrive as a
+        separate result list the caller has to interleave itself.
         """
-        fragment_ids = set(text_scored) | set(spatial_scored)
+        table_scored = table_scored or {}
+        fragment_ids = set(text_scored) | set(spatial_scored) | set(table_scored)
         merged: list[tuple[float, int, list[str]]] = []
         for fid in fragment_ids:
             text_s = text_scored.get(fid, 0.0)
             spatial_s = spatial_scored.get(fid, 0.0)
+            table_s = table_scored.get(fid, 0.0)
             channels: list[str] = []
             if text_s > 0:
                 channels.append("text")
             if spatial_s > 0:
                 channels.append("spatial")
-            score = max(text_s, spatial_s)
-            if text_s > 0 and spatial_s > 0:
+            if table_s > 0:
+                channels.append("table")
+            score = max(text_s, spatial_s, table_s)
+            # The agreement bonus is for *independent* channels. Text and
+            # spatial are independent: keyword relevance and a point falling
+            # inside a precinct polygon are two different reasons to believe.
+            # Text and table are not — a table's anchor fragment is usually the
+            # sentence introducing the table, so it echoes the caption the
+            # table channel just scored, and paying for both double-counts one
+            # piece of evidence and lifts every captioned table above the prose
+            # that states the standard.
+            if spatial_s > 0 and (text_s > 0 or table_s > 0):
                 score += self._SPATIAL_TEXT_BOTH_BONUS
             merged.append((score, fid, channels))
         merged.sort(key=lambda entry: (-entry[0], entry[1]))
@@ -3356,6 +3494,44 @@ class RetrievalService:
             )
             for ref in refs
         ]
+
+    def _table_cell_match(self, hit: TableCellHit) -> TableCellMatch:
+        """Project a ranked cell into its citation.
+
+        The citation is the anchor fragment's — the provision that introduces
+        the table — exactly as ``_table_citation`` already cites a permitted-use
+        matrix. What the cell adds on top is its address: the table, the row and
+        column labels that name it, and the coordinates that let a reader find
+        it on the page. See ``docs/ABS-500-TABLE-CHANNEL.md``.
+        """
+        document = self._get_document(hit.document_id)
+        citation_path: str | None = None
+        citation_label: str | None = hit.caption
+        if hit.anchor_fragment_id is not None:
+            anchor = self.session.get(SourceFragment, hit.anchor_fragment_id)
+            if anchor is not None:
+                citation_path = anchor.citation_path
+                citation_label = anchor.citation_label or hit.caption
+        return TableCellMatch(
+            table_id=hit.table_id,
+            document_id=hit.document_id,
+            municipality=document.municipality,
+            bylaw_name=document.bylaw_name,
+            caption=hit.caption,
+            profile_type=hit.profile_type,
+            anchor_fragment_id=hit.anchor_fragment_id,
+            citation_path=citation_path,
+            citation_label=citation_label,
+            page_start=hit.page_start,
+            page_end=hit.page_end,
+            row_index=hit.row_index,
+            col_index=hit.col_index,
+            row_label=hit.row_label,
+            col_label=hit.col_label,
+            text=hit.text,
+            score=hit.score,
+            bound_by=list(hit.bound_by),
+        )
 
     def _related_tables_for_fragment(self, fragment: SourceFragment) -> list[TableSummary]:
         tables = self.session.execute(
