@@ -1984,6 +1984,39 @@ def _mount_search_evidence_raw_endpoint(app: FastAPI) -> None:
             return response.model_dump(mode="json")
 
 
+def _mount_openai_tool_search_endpoint(app: FastAPI) -> None:
+    """ABS-492: drive ``search_bylaw_evidence`` through the OpenAI tool surface.
+
+    ``/v1/_test/search-evidence-raw`` builds a ``RetrievalRequest`` directly, so
+    it exercises the request model's defaults, not a tool's. This one goes
+    through ``OpenAIToolExecutor`` — the code path an LLM's tool call actually
+    takes — with no ``include_*`` keys in the arguments, which is how a model
+    calls it in practice: no persona tells it to set the flags.
+
+    That makes the assertion behavioural rather than introspective. The spec
+    does not read a flag off a captured request; it reads the ``ancestor_chain``
+    off the returned match. After ABS-492 a fragment can rank on scope its
+    containers state and it does not, so a match arriving without its chain is
+    a rule with its scope stripped off — which is the regression this guards,
+    and it is invisible to the ABS-297 guard on the advisor's own handler.
+    """
+    from typing import Any  # noqa: PLC0415
+
+    from bylaw_retrieval.openai_tools import OpenAIToolExecutor  # noqa: PLC0415
+
+    @app.post("/v1/_test/openai-tool-search")
+    async def openai_tool_search(body: _SearchEvidenceBody) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"query": body.query, "limit": body.limit}
+        if body.bylaw_name:
+            arguments["bylaw_name"] = body.bylaw_name
+        if body.municipality:
+            arguments["municipality"] = body.municipality
+        with session_scope() as session:
+            return OpenAIToolExecutor(session).execute(
+                "search_bylaw_evidence", arguments
+            )
+
+
 def _mount_advisor_search_include_flags_endpoint(app: FastAPI) -> None:
     """ABS-297: WI-7 / WI-3 drift guard.
 
@@ -3009,6 +3042,7 @@ _mount_search_evidence_raw_endpoint(app)
 _mount_zone_profile_endpoint(app)
 _mount_bylaw_query_endpoint(app)
 _mount_spatial_candidate_text_endpoint(app)
+_mount_openai_tool_search_endpoint(app)
 _mount_advisor_search_include_flags_endpoint(app)
 _mount_advisor_search_attribute_tag_filter_endpoint(app)
 _mount_claude_code_translation_endpoints(app)
