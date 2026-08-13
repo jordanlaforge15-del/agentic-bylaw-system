@@ -114,7 +114,7 @@ def test_footnote_like_numeric_line_is_not_treated_as_section():
     assert fragments[0].fragment_type.value == "footnote"
 
 
-def test_duplicate_citation_paths_are_downgraded_to_uncertain():
+def test_duplicate_citation_paths_are_blanked_and_recorded():
     fragments = reconstruct_hierarchy(
         [
             block("26 Parking", 0, BlockType.HEADING),
@@ -125,8 +125,36 @@ def test_duplicate_citation_paths_are_downgraded_to_uncertain():
     duplicate_clauses = [fragment for fragment in fragments if fragment.citation_label == "(g)"]
     assert len(duplicate_clauses) == 2
     assert all(fragment.citation_path is None for fragment in duplicate_clauses)
-    assert all(fragment.parse_status == ParseStatus.UNCERTAIN for fragment in duplicate_clauses)
     assert all(fragment.metadata.get("duplicate_citation_path") == "26 > (g)" for fragment in duplicate_clauses)
+
+
+def test_duplicate_citation_paths_keep_parse_status_and_confidence():
+    """ABS-480: a path collision is a naming failure, not a parse failure.
+
+    The demotion this used to apply is read by the retrieval scorer as a
+    quality signal (+1.0 parsed becomes -2.0), so a cleanly-parsed provision
+    was penalised in ranking for the fact that a *sibling* shared its address.
+    The control fragment ``(h)`` never collides, so its status and confidence
+    are what the colliding clauses would have carried without the collision.
+    """
+    blocks = [
+        block("26 Parking", 0, BlockType.HEADING),
+        block("(g) First clause under section 26.", 1, BlockType.LIST_ITEM),
+        block("(g) Second clause under section 26.", 2, BlockType.LIST_ITEM),
+        block("(h) A clause whose path is unique.", 3, BlockType.LIST_ITEM),
+    ]
+    fragments = reconstruct_hierarchy(blocks)
+
+    control = next(fragment for fragment in fragments if fragment.citation_label == "(h)")
+    assert control.citation_path == "26 > (h)"
+    assert control.parse_status == ParseStatus.PARSED
+    assert control.confidence is not None and control.confidence > 0.6
+
+    duplicate_clauses = [fragment for fragment in fragments if fragment.citation_label == "(g)"]
+    assert len(duplicate_clauses) == 2
+    for fragment in duplicate_clauses:
+        assert fragment.parse_status == ParseStatus.PARSED
+        assert fragment.confidence == control.confidence
 
 
 def test_footer_blocks_are_not_converted_to_fragments():

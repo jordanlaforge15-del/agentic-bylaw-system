@@ -696,6 +696,18 @@ def _split_toc_block(block: PageBlockData, profile: ParsingProfile) -> list[Page
 
 
 def _clear_duplicate_citation_paths(fragments: list[FragmentData]) -> None:
+    """Blank the ``citation_path`` of fragments whose derived paths collide.
+
+    A collision is a *naming* failure, not a parse failure: two provisions
+    computed the same address, so neither can be cited unambiguously, but the
+    text of both was read and structured correctly. ABS-480: this used to also
+    flip ``PARSED`` -> ``UNCERTAIN`` and cap ``confidence`` at 0.6, which the
+    retrieval scorer reads as a quality signal — ``_score_fragment`` turns the
+    +1.0 parsed bonus into a -2.0 penalty, sinking weak-but-correct matches in
+    the ranking and labelling a cleanly-parsed provision "uncertain" in every
+    response the advisor sees. The collision is recorded in metadata (and
+    scored by ``audit.score_page_risk``); the parse verdict stays as parsed.
+    """
     counts = Counter(fragment.citation_path for fragment in fragments if fragment.citation_path)
     duplicate_paths = {path for path, count in counts.items() if count > 1}
     if not duplicate_paths:
@@ -707,7 +719,3 @@ def _clear_duplicate_citation_paths(fragments: list[FragmentData]) -> None:
         metadata["duplicate_citation_path"] = fragment.citation_path
         fragment.metadata = metadata
         fragment.citation_path = None
-        if fragment.parse_status == ParseStatus.PARSED:
-            fragment.parse_status = ParseStatus.UNCERTAIN
-        if fragment.confidence is not None:
-            fragment.confidence = min(fragment.confidence, 0.6)
