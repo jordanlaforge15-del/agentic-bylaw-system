@@ -468,10 +468,10 @@ def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
                 "The uses under 'undetermined' could NOT be determined from "
                 "the ingested source — their permission cell was missing or "
                 "unreadable and no prose stated it. Say the answer is not "
-                "determinable from the ingested source and point the reader at "
-                "the cited table; do NOT report them as permitted, as "
-                "prohibited, or as absent from the zone, and do not cite "
-                "anything as support for them."
+                "determinable from the ingested source and refer the reader to "
+                "the bylaw's permission table itself; do NOT report them as "
+                "permitted, as prohibited, or as absent from the zone, and do "
+                "not cite anything as support for them."
             )
         out["uses"] = uses
 
