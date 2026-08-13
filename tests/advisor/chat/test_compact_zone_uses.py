@@ -73,3 +73,30 @@ def test_conditional_only_uses_still_project():
     )
     out = compact_zone_profile(profile)
     assert out["uses"]["conditional"][0] == {"use": "Restaurant use"}
+
+
+# ---------------------------------------------------------------------------
+# ABS-484 — the undetermined bucket has to reach the model, with the language
+# that stops it being relayed as a prohibition
+# ---------------------------------------------------------------------------
+
+
+def test_undetermined_uses_project_with_a_do_not_conclude_instruction():
+    profile = _profile(
+        uses=ZoneUses(permitted=["Office use"], undetermined=["Restaurant use"])
+    )
+    out = compact_zone_profile(profile)
+    assert out["uses"]["undetermined"] == ["Restaurant use"]
+    instruction = out["uses"]["instruction"]
+    assert "not determinable" in instruction
+    assert "prohibited" in instruction
+
+
+def test_undetermined_only_uses_still_project():
+    """A zone whose whole column was unreadable used to project no ``uses`` key
+    at all, which reads to the model as 'no use restrictions found'."""
+    profile = _profile(uses=ZoneUses(undetermined=["Restaurant use"]))
+    out = compact_zone_profile(profile)
+    assert out["uses"]["undetermined"] == ["Restaurant use"]
+    assert "permitted" not in out["uses"]
+    assert "not_permitted" not in out["uses"]

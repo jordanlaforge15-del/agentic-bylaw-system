@@ -284,6 +284,20 @@ def compact_permitted_use(result: PermittedUseResult) -> dict[str, Any]:
                 "query with the closest label from suggested_uses verbatim; do "
                 "NOT guess further use variants."
             )
+        elif result.reason_code == "unreadable_cell":
+            # ABS-484: an UNKNOWN cell yields no citable support, so the
+            # compact result deliberately carries none (the service keeps the
+            # table pointer for callers that want to locate the gap). Without
+            # this instruction the writer treats "no permission returned" as a
+            # prohibition — the collapse the UNKNOWN state exists to prevent.
+            out["instruction"] = (
+                "This use's permission is NOT determinable from the ingested "
+                "source — the matrix cell could not be read. State that it "
+                "cannot be determined from the bylaw as ingested and refer the "
+                "reader to the permission table itself; do NOT state or imply "
+                "the use is permitted or prohibited, and do not cite anything "
+                "as support for a permission verdict here."
+            )
         return out
 
     out["permission"] = result.permission
@@ -414,7 +428,10 @@ def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
             out["dimensions"] = dims
 
     if profile.uses is not None and (
-        profile.uses.permitted or profile.uses.not_permitted or profile.uses.conditional
+        profile.uses.permitted
+        or profile.uses.not_permitted
+        or profile.uses.conditional
+        or profile.uses.undetermined
     ):
         uses: dict[str, Any] = {}
         if profile.uses.permitted:
@@ -442,6 +459,20 @@ def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
                 for item in profile.uses.conditional
             ]
             uses["conditional"] = _capped_list(conditional)
+        if profile.uses.undetermined:
+            # ABS-484: the UNKNOWN list. Without the inline instruction the
+            # writer reads "absent from permitted" as "prohibited" — exactly
+            # the collapse the undetermined list exists to prevent.
+            uses["undetermined"] = _capped_list(list(profile.uses.undetermined))
+            uses["instruction"] = (
+                "The uses under 'undetermined' could NOT be determined from "
+                "the ingested source — their permission cell was missing or "
+                "unreadable and no prose stated it. Say the answer is not "
+                "determinable from the ingested source and point the reader at "
+                "the cited table; do NOT report them as permitted, as "
+                "prohibited, or as absent from the zone, and do not cite "
+                "anything as support for them."
+            )
         out["uses"] = uses
 
     if profile.parking is not None:

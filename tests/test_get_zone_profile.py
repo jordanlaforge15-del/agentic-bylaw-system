@@ -519,6 +519,174 @@ def test_abs409_matrix_only_zone_is_known(tmp_path: Path):
         assert "Restaurant use" in profile.uses.permitted
 
 
+# ---------------------------------------------------------------------------
+# ABS-484 — UNKNOWN absorbs: a cell we could not read is undetermined, never
+# a prohibition, and it is never cited
+# ---------------------------------------------------------------------------
+
+
+# Row index of each MATRIX_409 use row, and the column index of each zone.
+_MATRIX_ROW = {label: idx for idx, (label, *_rest) in enumerate(MATRIX_409)}
+_MATRIX_COL = {zone: idx for idx, zone in enumerate(MATRIX_409[0])}
+
+
+def _punch_hole(session, *, use: str, zone: str) -> None:
+    """Delete a cell so the bound row has nothing to read in ``zone``'s column.
+
+    This is the extraction failure ABS-483 made producible: the row binding
+    survives (the bylaw HAS this use row), the cell does not.
+    """
+    from layer1.db.base import SourceTable, SourceTableCell
+
+    table_id = session.query(SourceTable).first().id
+    session.query(SourceTableCell).filter(
+        SourceTableCell.table_id == table_id,
+        SourceTableCell.row_index == _MATRIX_ROW[use],
+        SourceTableCell.col_index == _MATRIX_COL[zone],
+    ).delete(synchronize_session=False)
+    session.flush()
+
+
+def _add_use_prose(session, document_id: int, text: str, *, zone: str) -> None:
+    """A P/N prose use row — the other reading of the same permissions."""
+    _add_fragment(
+        session,
+        document_id,
+        text=text,
+        citation_path=f"Table 1B > {zone}",
+        citation_label=zone,
+        page=3,
+        order=500,
+    )
+    session.flush()
+
+
+def test_abs484_missing_cell_is_undetermined_not_not_permitted(tmp_path: Path):
+    """The headline bug: a hole in the COR column used to be served as an
+    authoritative prohibition. It must land in ``undetermined`` instead, while
+    the genuinely blank cell beside it keeps meaning not-permitted."""
+    db_url = f"sqlite:///{tmp_path / 'hole.db'}"
+    _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        _punch_hole(session, use="Multi-unit dwelling use", zone="COR")
+        profile = _service(db_url, session).get_zone_profile("COR")
+
+    assert profile.uses is not None
+    assert "Multi-unit dwelling use" in profile.uses.undetermined
+    assert "Multi-unit dwelling use" not in profile.uses.not_permitted
+    assert "Multi-unit dwelling use" not in profile.uses.permitted
+    # The blank-cell convention is real bylaw content and survives untouched.
+    assert "Restaurant use" in profile.uses.not_permitted
+    assert "Office use" in profile.uses.permitted
+
+
+def test_abs484_all_unknown_column_carries_no_citation_and_no_confidence(
+    tmp_path: Path,
+):
+    """When every cell in the column is a hole the profile asserts nothing, so
+    it must claim nothing: no 0.9 confidence, and no citation backing ``uses``
+    (a citation beside an UNKNOWN reads as evidence for a verdict)."""
+    db_url = f"sqlite:///{tmp_path / 'all_holes.db'}"
+    _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        for use in ("Restaurant use", "Office use", "Multi-unit dwelling use"):
+            _punch_hole(session, use=use, zone="COR")
+        profile = _service(db_url, session).get_zone_profile("COR")
+
+    assert profile.uses is not None
+    assert sorted(profile.uses.undetermined) == [
+        "Multi-unit dwelling use",
+        "Office use",
+        "Restaurant use",
+    ]
+    assert profile.uses.permitted == []
+    assert profile.uses.not_permitted == []
+    assert profile.uses.conditional == []
+    assert "uses" not in profile.confidence
+    assert [c for c in profile.citations if "uses" in c.backs] == []
+
+
+def test_abs484_prose_fallback_wins_for_an_undetermined_use(tmp_path: Path):
+    """The matrix path may no longer short-circuit while it holds UNKNOWNs: the
+    prose row states what the lost cell would have, so the use moves into
+    ``permitted`` and carries the prose fragment's citation."""
+    db_url = f"sqlite:///{tmp_path / 'prose_wins.db'}"
+    doc_id = _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        _punch_hole(session, use="Multi-unit dwelling use", zone="COR")
+        _add_use_prose(
+            session,
+            doc_id,
+            "Use Permissions COR multi-unit dwelling P daycare P",
+            zone="COR",
+        )
+        profile = _service(db_url, session).get_zone_profile("COR")
+
+    assert profile.uses is not None
+    assert "Multi-unit dwelling use" in profile.uses.permitted
+    assert profile.uses.undetermined == []
+    uses_paths = {c.citation_path for c in profile.citations if "uses" in c.backs}
+    assert "Table 1B > COR" in uses_paths
+    # The block now mixes a matrix reading with a weaker prose one, so the
+    # matrix's 0.9 no longer stands for the whole thing.
+    assert profile.confidence["uses"] < 0.9
+
+
+def test_abs484_prose_fallback_can_resolve_to_not_permitted(tmp_path: Path):
+    """Prose wins in both directions — an explicit 'N' is a real prohibition,
+    unlike the hole it replaces."""
+    db_url = f"sqlite:///{tmp_path / 'prose_n.db'}"
+    doc_id = _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        _punch_hole(session, use="Multi-unit dwelling use", zone="COR")
+        _add_use_prose(
+            session,
+            doc_id,
+            "Use Permissions COR multi-unit dwelling N daycare P",
+            zone="COR",
+        )
+        profile = _service(db_url, session).get_zone_profile("COR")
+
+    assert profile.uses is not None
+    assert "Multi-unit dwelling use" in profile.uses.not_permitted
+    assert profile.uses.undetermined == []
+
+
+def test_abs484_prose_silence_leaves_the_use_undetermined(tmp_path: Path):
+    """A prose row that simply doesn't mention the use resolves nothing — the
+    gap stays a gap rather than being read as an omission-is-prohibition."""
+    db_url = f"sqlite:///{tmp_path / 'prose_silent.db'}"
+    doc_id = _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        _punch_hole(session, use="Multi-unit dwelling use", zone="COR")
+        _add_use_prose(
+            session,
+            doc_id,
+            "Use Permissions COR daycare P single-unit dwelling N",
+            zone="COR",
+        )
+        profile = _service(db_url, session).get_zone_profile("COR")
+
+    assert profile.uses is not None
+    assert profile.uses.undetermined == ["Multi-unit dwelling use"]
+    assert "Multi-unit dwelling use" not in profile.uses.not_permitted
+    # Nothing prose-derived entered the block, so the matrix claim stands.
+    assert profile.confidence["uses"] == 0.9
+
+
+def test_abs484_determinate_zone_reports_no_undetermined(tmp_path: Path):
+    """Regression guard: the ABS-409 happy path must not grow a phantom
+    undetermined list."""
+    db_url = f"sqlite:///{tmp_path / 'clean.db'}"
+    _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        profile = _service(db_url, session).get_zone_profile("DH")
+
+    assert profile.uses is not None
+    assert profile.uses.undetermined == []
+    assert profile.confidence["uses"] == 0.9
+
+
 def test_abs409_caption_linked_citation_carries_path(tmp_path: Path):
     """After the ABS-409 caption linking pass, the uses citation resolves to
     the caption fragment's citation_path."""

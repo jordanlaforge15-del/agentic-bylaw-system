@@ -1349,6 +1349,14 @@ class RetrievalService:
         # the fallback for P/N-styled corpora.
         matrix = self._build_zone_uses_from_matrix(zone, citations, confidence)
         if matrix is not None:
+            # ABS-484: the matrix path may no longer short-circuit while it
+            # holds UNKNOWNs. A cell the parser lost is not an answer, so the
+            # prose path is consulted for exactly those uses before the gap is
+            # reported as a gap.
+            if matrix.undetermined:
+                self._resolve_undetermined_from_prose(
+                    matrix, uses_match, zone, citations, confidence
+                )
             return matrix
 
         uses = ZoneUses()
@@ -1364,6 +1372,69 @@ class RetrievalService:
             confidence["uses"] = round(conf, 3)
             citations.add(uses_match, ["uses"])
         return uses
+
+    def _resolve_undetermined_from_prose(
+        self,
+        uses: ZoneUses,
+        uses_match: RetrievalMatch | None,
+        zone: str,
+        citations: "_CitationAccumulator",
+        confidence: dict[str, float],
+    ) -> None:
+        """Try the prose path on exactly the uses the matrix left UNKNOWN (ABS-484).
+
+        The matrix column and the P/N prose row are two readings of the same
+        bylaw, and a corpus may carry both — a cell dropped in table parsing
+        can still be stated in the section text. So a use the matrix could not
+        read is looked up in the prose row *by name*: when the prose answers,
+        the use moves into the determinate list it belongs to and the prose
+        fragment is cited for it; when the prose is silent (or absent, or too
+        weak a match), the use stays in ``undetermined``, uncited.
+
+        Mutates ``uses`` in place. Only ever *removes* from ``undetermined`` —
+        it never manufactures new undetermined entries.
+        """
+        if uses_match is None or not uses.undetermined:
+            return
+        conf = self._field_confidence(uses_match)
+        if conf < self._ZONE_FIELD_MIN_CONFIDENCE:
+            return
+        permitted, not_permitted = _extract_uses(uses_match.text, zone)
+        prose: dict[str, str] = {}
+        for name in not_permitted:
+            for key in _use_match_keys(name):
+                prose[key] = "not_permitted"
+        # Permitted wins a collision: a prose row that lists the use on both
+        # sides is itself ambiguous, and the permissive reading is the one that
+        # doesn't invent a prohibition.
+        for name in permitted:
+            for key in _use_match_keys(name):
+                prose[key] = "permitted"
+
+        remaining: list[str] = []
+        resolved = False
+        for label in uses.undetermined:
+            verdict = next(
+                (prose[key] for key in _use_match_keys(label) if key in prose), None
+            )
+            if verdict == "permitted":
+                uses.permitted.append(label)
+            elif verdict == "not_permitted":
+                uses.not_permitted.append(label)
+            else:
+                remaining.append(label)
+                continue
+            resolved = True
+        uses.undetermined = remaining
+        if not resolved:
+            return
+        citations.add(uses_match, ["uses"])
+        # The ``uses`` block now mixes matrix cells with a weaker prose
+        # reading, so its confidence drops to the weaker of the two rather
+        # than keeping the matrix's 0.9 for entries the matrix never produced.
+        prose_conf = round(conf, 3)
+        existing = confidence.get("uses")
+        confidence["uses"] = prose_conf if existing is None else min(existing, prose_conf)
 
     # Confidence recorded for matrix-enumerated use lists. Matches the table
     # classifier's permission-matrix confidence (_classify_table) — the cells
@@ -1416,11 +1487,14 @@ class RetrievalService:
                     continue
                 seen.add(label)
                 permission = row["permission"]
-                # ABS-483: an ``unknown`` row (bound, but with no cell in this
-                # column) matches none of the branches below and is listed
-                # nowhere — folding it into not_permitted would state a
-                # prohibition we never read. Surfacing the gap is DM-07.
-                if permission == "permitted":
+                # ABS-483/ABS-484: an ``unknown`` row (bound, but with no
+                # readable cell in this column) is an extraction gap, not a
+                # prohibition — folding it into not_permitted would state a
+                # prohibition we never read. It goes to ``undetermined``, where
+                # it carries neither citation nor confidence.
+                if permission == UNKNOWN:
+                    uses.undetermined.append(label)
+                elif permission == "permitted":
                     uses.permitted.append(label)
                 elif permission == "conditional":
                     ordinal = row.get("footnote_ordinal")
@@ -1440,16 +1514,21 @@ class RetrievalService:
                 elif permission == "not_permitted":
                     uses.not_permitted.append(label)
 
-        if not contributing or not (
-            uses.permitted or uses.conditional or uses.not_permitted
-        ):
+        determinate = bool(uses.permitted or uses.conditional or uses.not_permitted)
+        if not contributing or not (determinate or uses.undetermined):
             # No matrix binds the zone (or only placeholder rows did) — let
             # the caller fall through to the prose-extraction path.
             return None
-        confidence["uses"] = self._MATRIX_USES_CONFIDENCE
-        for table in contributing:
-            ref = self._table_citation(table)
-            citations.add_ref(ref, ["uses"])
+        if determinate:
+            # ABS-484: the 0.9 claim covers the cells we actually read. A
+            # column of nothing but UNKNOWNs asserts nothing, so it gets no
+            # confidence entry and no citation — a citation beside an
+            # extraction gap reads as evidence for a verdict that was never
+            # extracted.
+            confidence["uses"] = self._MATRIX_USES_CONFIDENCE
+            for table in contributing:
+                ref = self._table_citation(table)
+                citations.add_ref(ref, ["uses"])
         return uses
 
     def _build_zone_parking(
@@ -3504,6 +3583,20 @@ def _extract_far(text: str) -> float | None:
         re.IGNORECASE,
     )
     return float(match.group(1)) if match else None
+
+
+def _use_match_keys(name: str) -> set[str]:
+    """Canonical keys for matching one use name against another (ABS-484).
+
+    Matrix row labels print the bylaw's own noun phrase ("Multi-unit dwelling
+    use") while the P/N prose row writes the bare use ("multi-unit dwelling").
+    ``normalize_use`` folds the alias table but not that suffix, so both forms
+    are emitted and a hit on either is the same use.
+    """
+    normalized = normalize_use(name)
+    if normalized.endswith(" use"):
+        return {normalized, normalized[: -len(" use")]}
+    return {normalized, f"{normalized} use"}
 
 
 def _extract_uses(text: str, zone: str) -> tuple[list[str], list[str]]:

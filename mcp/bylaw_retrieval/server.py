@@ -414,6 +414,11 @@ def create_mcp_server(db_url: str | None = None, *, all_documents: bool = False)
         applicability under ``parking``; and a ``citations`` list that
         backs every populated field.
 
+        ``uses`` may also carry an ``undetermined`` list (ABS-484): uses
+        whose permission the ingested source did not yield. They are
+        extraction gaps, not prohibitions, and carry no citation — report
+        them as not determinable from the ingested source.
+
         Prefer this over issuing several ``search_bylaw_evidence`` calls
         for the same zone — it collapses that sequence into one call.
         The implementation still composes semantic retrieval internally,
