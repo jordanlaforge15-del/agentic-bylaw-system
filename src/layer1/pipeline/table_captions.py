@@ -15,7 +15,7 @@ This pass links them after persistence:
 * a fragment matching the profile's ``table_caption_re`` gains a
   ``citation_label`` ("Table 1A") and a ``citation_path``
   ("Part I > [Table 1A]", the bracket-segment convention of
-  ``pipeline.hierarchy._heading_context_segment``);
+  ``pipeline.citation_repath.context_segment``);
 * the ``source_table`` rows that follow the caption (same page, or up to
   ``table_caption_page_span`` pages after it, stopping at the next caption)
   gain ``parent_fragment_id`` and ``caption``.
