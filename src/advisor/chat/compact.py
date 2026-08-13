@@ -60,6 +60,7 @@ from bylaw_retrieval.retrieval.schemas import (
     PermittedUseResult,
     RetrievalMatch,
     RetrievalResponse,
+    TableCellMatch,
     TableSummary,
     ZoneProfile,
 )
@@ -150,6 +151,38 @@ def compact_table(table: TableSummary) -> dict[str, Any]:
     return out
 
 
+def compact_table_cell_match(cell: TableCellMatch) -> dict[str, Any]:
+    """The cell that made a match rank, and how to cite it (ABS-500).
+
+    Kept whole rather than previewed, unlike ``compact_table``: this is one
+    cell, not a table dump, and every field on it is load-bearing for a
+    grounded answer. The value is what the model quotes; the row and column
+    labels are what let it say *which* standard for *which* zone; the citation
+    is the provision the cell is cited through. Dropping any of them hands the
+    model a number it cannot attribute — which is worse than not surfacing the
+    cell at all.
+    """
+    out: dict[str, Any] = {
+        "table_id": cell.table_id,
+        "page_start": cell.page_start,
+        "page_end": cell.page_end,
+        "value": cell.text,
+    }
+    if cell.row_label:
+        out["row_label"] = cell.row_label
+    if cell.col_label:
+        out["col_label"] = cell.col_label
+    if cell.citation_path:
+        out["citation_path"] = cell.citation_path
+    if cell.citation_label:
+        out["citation_label"] = cell.citation_label
+    if cell.caption:
+        out["caption"] = cell.caption
+    if cell.bound_by:
+        out["bound_by"] = list(cell.bound_by)
+    return out
+
+
 def compact_linked_dataset(ds: LinkedDataset) -> dict[str, Any]:
     """Drop the verbose dataset metadata; keep the values the LLM
     actually quotes when answering ("max height is X meters").
@@ -197,6 +230,10 @@ def compact_match(match: RetrievalMatch) -> dict[str, Any]:
     if match.cross_references:
         out["cross_references"] = [
             compact_cross_reference(ref) for ref in match.cross_references
+        ]
+    if match.table_matches:
+        out["table_matches"] = [
+            compact_table_cell_match(cell) for cell in match.table_matches
         ]
     if match.related_tables:
         out["tables"] = [compact_table(t) for t in match.related_tables]

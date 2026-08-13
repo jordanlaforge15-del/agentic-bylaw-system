@@ -58,6 +58,56 @@ class TableSummary(BaseModel):
     cells: list[TableCellSummary] = Field(default_factory=list)
 
 
+class TableCellMatch(BaseModel):
+    """One table cell the table channel ranked, and how to cite it (ABS-500).
+
+    A cell is not a ``source_fragment``, and ``RetrievalMatch`` is
+    fragment-shaped, so the ranked cell is cited *through* the provision that
+    introduces its table — ``anchor_fragment_id`` / ``citation_path`` — and
+    addressed by the row and column labels that name it. That is the same
+    citation rule ``get_permitted_use`` already applies to a permission matrix;
+    the reader's route to the value is "section X, table Y, row R, column C",
+    which is how a by-law table is cited on paper.
+
+    Present only on matches whose ``retrieval_channels`` include ``"table"``,
+    and present there regardless of ``include_tables``: a match that ranked
+    because of a cell is not groundable without naming the cell.
+    """
+
+    table_id: int
+    document_id: int
+    municipality: str
+    bylaw_name: str
+    caption: str | None = None
+    profile_type: str | None = Field(
+        default=None,
+        description=(
+            "The table's enrichment classification — 'dimensional_matrix', "
+            "'permission_matrix', 'parking_matrix', 'key_value_table' — or null "
+            "when the table was never classified."
+        ),
+    )
+    anchor_fragment_id: int | None = None
+    citation_path: str | None = None
+    citation_label: str | None = None
+    page_start: int
+    page_end: int
+    row_index: int
+    col_index: int
+    row_label: str | None = None
+    col_label: str | None = None
+    text: str
+    score: float
+    bound_by: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Why this cell was addressed, e.g. \"row bound to zone 'R-1'\". "
+            "Empty when the cell was reached by matching the caption and header "
+            "text alone rather than by a semantic axis binding."
+        ),
+    )
+
+
 class DatasetFeatureMatch(BaseModel):
     """A single precinct/feature match against an external geo dataset.
 
@@ -122,13 +172,24 @@ class RetrievalMatch(BaseModel):
         default_factory=list,
         description=(
             "Which retrieval channel(s) surfaced this match — e.g. ['text'], "
-            "['spatial'], or ['text', 'spatial']. A spatial-only match means "
-            "the location intersected a linked dataset even though keyword "
-            "scoring didn't pick the fragment up."
+            "['spatial'], ['table'], or any combination. A spatial-only match "
+            "means the location intersected a linked dataset even though "
+            "keyword scoring didn't pick the fragment up; a table-only match "
+            "means a cell of a table anchored to this fragment answered the "
+            "query even though the fragment's own prose did not, and the cell "
+            "is named in 'table_matches'."
         ),
     )
     ancestor_chain: list[AncestorFragment] = Field(default_factory=list)
     cross_references: list[CrossReferenceSummary] = Field(default_factory=list)
+    table_matches: list[TableCellMatch] = Field(
+        default_factory=list,
+        description=(
+            "The table cell(s) that made this match rank, when the table "
+            "channel surfaced it. Distinct from 'related_tables', which is "
+            "everything near the fragment whether or not it bore on the query."
+        ),
+    )
     related_tables: list[TableSummary] = Field(default_factory=list)
     linked_datasets: list[LinkedDataset] = Field(default_factory=list)
     metadata_json: dict[str, Any] = Field(default_factory=dict)

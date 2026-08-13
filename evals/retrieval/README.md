@@ -163,8 +163,8 @@ ambiguous-anchor failure are all covered without a database.
 
 ## The baseline, and how to read it
 
-`BASELINE.json` currently records **Recall@10 = 0.4412, set-Recall@10 = 0.4412,
-MRR@10 = 0.2775** over 68 questions against the two-document dev corpus.
+`BASELINE.json` currently records **Recall@10 = 0.5588, set-Recall@10 = 0.5588,
+MRR@10 = 0.3077** over 68 questions against the two-document dev corpus.
 
 ### The floor it is measured against
 
@@ -214,17 +214,59 @@ definitions, so it has almost no way to reward surfacing a stripped list item,
 which is the case the ancestor channel exists for. The unit that does grade it
 is `tests/bylaw_retrieval/test_provision_in_context.py`.
 
+### What ABS-500 changed: 0.4412 → 0.5588
+
+`dimensional` **0.056 → 0.500** (1/18 → 9/18). Every other class holds its
+Recall@10 exactly, and no question that passed before fails after. Overall
+MRR@10 0.2775 → 0.3077.
+
+ABS-500 was written as "tables are never independently ranked", and it added
+the table channel that observation calls for — `source_table_cell` is now
+scored and fused directly, cited through the provision that introduces its
+table (`docs/ABS-500-TABLE-CHANNEL.md`). But the table channel is *not* what
+moved this number, and the difference is worth recording because it is a fact
+about the labels:
+
+**17 of the 18 dimensional questions are answered by a prose section, not a
+table.** What those sections have in common is that they never name the zone —
+the by-law declares it once, in the chapter heading ("Part V, Chapter 9: Built
+Form and Siting Requirements within the ER3, ER-2, and ER-1 Zones") — while
+dozens of unrelated clauses list the same zone among *abutting* land. The
+scorer paid +4 for the passing mention (own text) and +2 for the governing
+chapter (inherited context), so a landscaping clause about abutting land
+outranked the section that states the ER-1 standard. That inversion is why
+every arm of ABS-494's fusion matrix measured ~0.06: the evidence was backwards
+*inside* a channel, and no weighting of channels against each other can fix
+that.
+
+`mcp/bylaw_retrieval/retrieval/binding.py` re-states the rule: a clause
+governed by a container that declares the query's zone states that zone as
+surely as if it carried it in its own citation path, and scores at the
+citation-path rung (+12). The declaring container is bound to its own zone too,
+which is what keeps a question asking *for the chapter* from being buried under
+the sections it scopes — without that, `zone_anchored` measured 1.00 → 0.90.
+
+The cost, stated plainly: **MRR fell in two classes** while their Recall@10
+held — `permitted_use` 0.476 → 0.318, `zone_anchored` 0.678 → 0.608. Binding
+lifts every clause in the right chapter, so on a query whose answer is *not* in
+that chapter the answer sits lower in a top-10 it still reaches. Overall MRR
+still rose, carried by `dimensional` 0.008 → 0.284. p95 for one `search` call
+went 364ms → 460ms on the same host, from the added ancestor walk; the table
+index is built once and cached per document scope.
+
 ### What is still broken, and why it is not a ranking problem
 
-`dimensional` (18 questions) and `definition` (12) remain near zero, and
-probing them shows why neither is reachable from the scorer:
+`definition` (12 questions) remains near zero, and nine `dimensional` questions
+still miss. Neither is reachable from the scorer:
 
-* **`dimensional`** — `_tokenize` splits "ER-3" into `er-3`, `er`, `3`, and the
-  bare `3` is a genuine word-boundary hit on any path ending `(3)`, worth +12.
-  Chapter headings also write the zone unhyphenated ("ER3"), which `er-3` never
-  matches and `er` cannot reach across a word boundary. ABS-478 explicitly left
-  the tokenizer's zone handling to **DM-16**; this is that work, not this one's.
 * **`definition`** — Part XVII terms ingest as PROSE with a NULL `citation_path`
   *and* a parent pointing at an unrelated chapter, so there is no path to score
   and the ancestor chain supplies the wrong scope. That is a chunking and
   hierarchy defect for **DM-11**, not something a scorer can outrank.
+* **the remaining `dimensional` misses** split two ways. The Halifax Mainland
+  by-law *has* zone-declaring headings ("R-1 ZONE: SINGLE FAMILY DWELLING
+  ZONE") but the ingest left its tree flat, so those headings are not ancestors
+  of the sections they scope and there is nothing to bind through — an ingest
+  gap. The rest are questions whose zone is implied rather than named ("Does
+  the by-law impose a maximum rear setback anywhere?"), which no zone binding
+  can help.

@@ -41,6 +41,9 @@ SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     # ABS-492: the provision-in-context probe tree (chapter > section > list
     # item, plus the repathed decoy the fix demotes).
     "seed_e2e_abs492_provision_context.py",
+    # ABS-500: the dimensional-retrieval probe — a height matrix bound to its
+    # zone rows, a parentless table, and a zone-declaring chapter.
+    "seed_e2e_abs500_table_channel.py",
     "seed_e2e_amendment_relink.py",
     "seed_e2e_axis_binding.py",
     "seed_e2e_contamination_marker.py",
