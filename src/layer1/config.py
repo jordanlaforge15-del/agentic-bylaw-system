@@ -5,6 +5,8 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from layer1.seed_guard import apply_pg_port_precedence
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -29,4 +31,10 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    # ABS-501: an inherited DATABASE_URL that disagrees with PG_PORT is a
+    # stale export from a torn-down e2e stack, not an intent. Reconcile
+    # before pydantic reads the environment so pytest and the FastAPI app
+    # target the port the live stack is actually on (loudly — the helper
+    # prints the conflict to stderr).
+    apply_pg_port_precedence()
     return Settings()

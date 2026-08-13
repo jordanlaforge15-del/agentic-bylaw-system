@@ -24,6 +24,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { expect, test, E2E_API_URL } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 const TEST_PID = "E2E00100"; // seeded by seed_e2e_evaluator_bylaws.py
 
@@ -39,10 +40,7 @@ test.describe("submission storage writability (ABS-87)", () => {
     );
     const venvPython = path.join(repoRoot, ".venv", "bin", "python");
     // ABS-207: honor PG_PORT for the parallel-worktree case.
-    const pgPort = process.env.PG_PORT || "5433";
-    const databaseUrl =
-      process.env.DATABASE_URL ||
-      `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+    const databaseUrl = resolveDatabaseUrl();
     execSync(`"${venvPython}" "${seed}"`, {
       env: {
         ...process.env,

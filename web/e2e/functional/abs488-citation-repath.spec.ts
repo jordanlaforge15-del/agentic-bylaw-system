@@ -33,6 +33,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { E2E_API_URL, expect, test } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 const BYLAW_NAME = "Citation Repath Probe Bylaw (ABS-488 E2E)";
 const STEM = "On a registered heritage property, a development permit shall be required for";
@@ -50,10 +51,7 @@ let documentId: number | null = null;
 test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   const output = execSync(
     `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_abs488_citation_repath.py")}"`,
     {

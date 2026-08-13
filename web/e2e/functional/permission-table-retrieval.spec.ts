@@ -11,6 +11,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { E2E_API_URL, expect, test } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 // ABS-433: the single unified RC-LUB e2e document (scripts/seed_e2e_rclub_unified.py).
 const RCLUB_UNIFIED_BYLAW_NAME = "Regional Centre Land Use By-Law (Unified RC-LUB E2E)";
@@ -20,10 +21,7 @@ function runSeeds(): void {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT for the parallel-worktree case.
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   const env = {
     ...process.env,
     DATABASE_URL: databaseUrl,

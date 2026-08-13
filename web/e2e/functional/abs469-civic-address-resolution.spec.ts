@@ -31,6 +31,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { E2E_API_URL, expect, test } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 type AddressProfile = {
   address: string;
@@ -55,10 +56,7 @@ function runSeed(): void {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const seed = path.join(repoRoot, "scripts", "seed_e2e_rclub_unified.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
 
   execSync(`"${venvPython}" "${seed}"`, {
     env: {

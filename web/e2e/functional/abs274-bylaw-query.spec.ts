@@ -21,15 +21,13 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { test, expect, E2E_API_URL, DEMO_USER_ID } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 let zoneDocumentId: number | null = null;
 
 function repoEnv() {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   return {
     repoRoot,
     venvPython: path.join(repoRoot, ".venv", "bin", "python"),

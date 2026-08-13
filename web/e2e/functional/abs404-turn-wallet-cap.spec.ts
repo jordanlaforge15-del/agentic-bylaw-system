@@ -43,6 +43,7 @@ import {
   TOKENS_PER_TURN,
   TURN_MAX_WALLET_TOKENS,
 } from "../fixtures/wallet-params";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 const TEST_USER_ID = `abs404-${Date.now()}-${Math.random()
   .toString(36)
@@ -52,10 +53,7 @@ test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const seed = path.join(repoRoot, "scripts", "seed_e2e_user.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   execSync(
     `"${venvPython}" "${seed}" --user-id "${TEST_USER_ID}" ` +
       `--email "${TEST_USER_ID}@e2e.test" --credits-per-tier 5`,
