@@ -566,6 +566,60 @@ def test_profile_refuses_a_nonexistent_address_with_a_suggestion(
     assert "halifax_street_centerlines" in (profile.civic_address_evidence or "")
 
 
+def test_profile_passes_the_community_through_to_the_civic_check(
+    seeded_db: str,
+) -> None:
+    """ABS-474/476 — pins the *wiring*, not the rule.
+
+    ``test_community_separates_same_named_streets_in_two_places`` proves
+    ``verify_civic_address`` narrows by community. It calls the function
+    directly, so it says nothing about whether production invokes it that way.
+    A review mutation probe deleted
+
+        community=community_from_address(canonical_address)
+
+    from ``RetrievalService.get_address_profile`` and **280 tests stayed
+    green**: the whole request path silently reverted to the merged 1-6099
+    extent, where a fabricated "251 Stairs Street, Dartmouth" reads as an
+    in-gap number and is answered rather than refused.
+
+    This asserts through ``get_address_profile``, so removing that kwarg turns
+    it red. That is the acceptance check — not the assertion below on its own.
+    """
+    with session_scope(seeded_db) as session:
+        profile = RetrievalService(session).get_address_profile(
+            "251 Stairs Street, Dartmouth, NS"
+        )
+
+    assert profile.civic_address_status == "not_found", (
+        "get_address_profile did not narrow to Dartmouth's Stairs Street — "
+        "check that it still passes community=community_from_address(...) to "
+        "verify_civic_address"
+    )
+    assert profile.zone is None
+    # Halifax's 5600s are a different street; quoting them here would send the
+    # user to the wrong side of the harbour.
+    assert profile.valid_civic_number_ranges == ["1-29"]
+
+
+def test_profile_without_a_community_keeps_the_conservative_verdict(
+    seeded_db: str,
+) -> None:
+    """The other half of the wiring: no community must not become a refusal.
+
+    ``community_from_address`` returns None for an address that names no
+    community, and ``_filter_by_community`` then keeps every segment. The
+    merged extent is what it always was, so the verdict has to stay
+    ``unverifiable`` — narrowing happens on a positive match or not at all.
+    Without this, a fix for the Dartmouth case could quietly start refusing
+    real addresses that simply did not spell out their community.
+    """
+    with session_scope(seeded_db) as session:
+        profile = RetrievalService(session).get_address_profile("251 Stairs Street")
+
+    assert profile.civic_address_status != "not_found"
+
+
 def test_profile_distinguishes_outside_mapped_area_from_nonexistent(
     seeded_db: str,
 ) -> None:

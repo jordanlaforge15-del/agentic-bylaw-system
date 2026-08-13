@@ -1678,12 +1678,15 @@ class RetrievalService:
                 self.session,
                 civic_number=ref.civic_number,
                 street=ref.street,
-                # The community is in the address the caller typed, not in the
-                # LocationReference the extractor produces. Without it,
-                # same-named streets in different communities share one
-                # address extent and a fabricated number lands in the
-                # apparent gap between them (ABS-474).
-                community=community_from_address(canonical_address),
+                # Read off ``address`` — what the caller typed — not
+                # ``canonical_address``. The extractor's ``raw_text`` is only
+                # the span it matched ("251 Stairs Street"), so the community
+                # has already been stripped by the time it reaches the
+                # LocationReference. Without the community, same-named streets
+                # in different communities share one address extent and a
+                # fabricated number lands in the apparent gap between them
+                # (ABS-474).
+                community=community_from_address(address),
             )
             if verdict.status == "not_found":
                 return self._nonexistent_address_profile(
