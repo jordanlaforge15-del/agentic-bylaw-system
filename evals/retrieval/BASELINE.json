@@ -48,7 +48,15 @@
       "src/layer1/pipeline/corpus_repath.py": "sha256:2f62324c41d765e5f4fdfd6365dec52d342001c3f2b599fc177912924a086fb8",
       "src/layer1/pipeline/hierarchy.py": "sha256:bfc82920c948677e294b9343e91916dc45ee9da92a11b42c37df10929e4cbc6c"
     },
-    "acknowledged_drift": null
+    "acknowledged_drift": {
+      "_comment": "A deliberate decision to keep a baseline measured against slightly older retrieval code. Valid only for the exact digest below; the next change to any watched file fails the gate again.",
+      "digest": "sha256:e7fdf7ae8547ed6f6abd418957053bef7860d4f7809dc529d51d3d2f1321fecb",
+      "reason": "ABS-499 added a pre-write snapshot fence to scripts/repath_citation_paths.py: an import plus two fence_or_abort() calls in main(), guarding the apply and --revert paths. Nothing in the repath algorithm, the retrieval ladder, or any scoring input changed, so the recorded numbers still describe the code that produces them.",
+      "acknowledged_commit": "897c673617aacef3ae30e85ee84bf409ffdf890a",
+      "drifted_files": [
+        "scripts/repath_citation_paths.py"
+      ]
+    }
   },
   "k": 10,
   "query_count": 68,
