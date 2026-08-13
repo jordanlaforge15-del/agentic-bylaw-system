@@ -45,6 +45,7 @@ from layer1.db.base import (
     SourceFragment,
     utcnow,
 )
+from layer1.db.geometry import sync_feature_geometry
 from layer1.db.session import session_scope
 from layer1.models.enums import FragmentType, ParseStatus
 
@@ -304,21 +305,27 @@ def _ensure_dataset_feature(session, *, dataset_id: int, parcel_id: int) -> None
             ExternalDatasetFeature.feature_key == TEST_PID,
         )
     ).scalars().first()
-    if existing is not None:
-        return
-    session.add(
-        ExternalDatasetFeature(
-            external_dataset_id=dataset_id,
-            feature_key=TEST_PID,
-            attributes_json={"PID": TEST_PID},
-            canonical_attributes_json={"parcel_id": TEST_PID},
-            geometry_geojson=_polygon(),
-            geometry_bbox_json=_bbox(),
-            parse_status=ParseStatus.PARSED,
-            metadata_json={},
-            parcel_id=parcel_id,
+    if existing is None:
+        session.add(
+            ExternalDatasetFeature(
+                external_dataset_id=dataset_id,
+                feature_key=TEST_PID,
+                attributes_json={"PID": TEST_PID},
+                canonical_attributes_json={"parcel_id": TEST_PID},
+                geometry_geojson=_polygon(),
+                geometry_bbox_json=_bbox(),
+                parse_status=ParseStatus.PARSED,
+                metadata_json={},
+                parcel_id=parcel_id,
+            )
         )
-    )
+    # ABS-491: the PostGIS ``geometry`` column is a denormalization of
+    # ``geometry_geojson``; a seeded feature that skips this writer is
+    # invisible to every ST_Intersects the retrieval path runs — which is
+    # what this seed did until now. Unconditional, so a feature left
+    # behind by the older revision heals on the next seed instead of
+    # staying spatially invisible in an existing e2e database.
+    sync_feature_geometry(session, dataset_id=dataset_id)
 
 
 def _ensure_geocode_cache(session) -> None:

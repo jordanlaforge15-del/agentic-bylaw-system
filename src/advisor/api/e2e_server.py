@@ -258,6 +258,17 @@ class _LinkTableCaptionsBody(BaseModel):
     dry_run: bool = False
 
 
+class _GeometryConsistencyBody(BaseModel):
+    """Body for ``POST /v1/_test/geometry-consistency`` (ABS-491).
+
+    Optional scope: omit ``dataset_id`` to audit every ingested feature in
+    the database, which is what a spec asserting "no seed forgot the
+    writer" wants.
+    """
+
+    dataset_id: int | None = None
+
+
 class _ProfilePermissionTablesBody(BaseModel):
     bylaw_name: str = Field(min_length=1, max_length=256)
     use_name: str | None = Field(default=None, max_length=256)
@@ -1192,6 +1203,30 @@ def _mount_test_router(app: FastAPI) -> None:
 
         with session_scope() as session:
             report = audit_e2e_contamination(session)
+        return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/geometry-consistency")
+    async def geometry_consistency(
+        body: _GeometryConsistencyBody | None = None,
+    ) -> dict[str, object]:
+        """Audit ``external_dataset_feature.geometry`` against its GeoJSON (ABS-491).
+
+        The PostGIS ``geometry`` column is a denormalization of
+        ``geometry_geojson`` — the shape every spatial query actually
+        matches against, derived from the shape every other read path
+        trusts. sqlite unit tests can't see the column at all, so this is
+        the only place the two are compared against a real PostGIS: a
+        Playwright spec seeds features through the single writer and
+        asserts the audit finds zero rows missing, drifted, or in the
+        wrong SRID.
+        """
+        from layer1.db.geometry import audit_feature_geometry  # noqa: PLC0415
+
+        with session_scope() as session:
+            report = audit_feature_geometry(
+                session,
+                dataset_id=body.dataset_id if body else None,
+            )
         return report.model_dump(mode="json")
 
     @app.post("/v1/_test/enabled-name-collisions")
