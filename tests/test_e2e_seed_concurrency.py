@@ -33,6 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Playwright worker, so they must serialise via advisory lock.
 SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     "seed_e2e_abs270_structured.py",
+    "seed_e2e_abs478_tokenization.py",
     "seed_e2e_amendment_relink.py",
     "seed_e2e_axis_binding.py",
     "seed_e2e_contamination_marker.py",
