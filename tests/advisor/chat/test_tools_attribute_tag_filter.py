@@ -42,6 +42,10 @@ from layer1.models.enums import FragmentType, ParseStatus
 
 TAXONOMY_PATH = Path("src/layer2/compliance/attributes/taxonomy.yaml")
 
+# tests/advisor/chat/<this file> -> repo root
+REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_MCP_SERVER_PATH = REPO_ROOT / "mcp" / "bylaw_retrieval" / "server.py"
+
 
 @pytest.fixture()
 def tagged_service(tmp_path: Path):
@@ -225,8 +229,23 @@ def test_mcp_server_signature_accepts_every_advertised_parameter():
     signature rather than a JSON Schema, so parity there means "every
     advertised property is an accepted keyword". A property the MCP tool
     can't accept would be a TypeError at call time.
+
+    The import is ``bylaw_retrieval``, NOT ``mcp.bylaw_retrieval``: the repo's
+    ``mcp/`` directory is itself on ``pythonpath`` (pyproject), and the name
+    ``mcp`` belongs to the installed MCP SDK. Importing through the ``mcp.``
+    prefix made this test's outcome depend on whether that unrelated SDK
+    happened to be installed (ABS-503).
     """
-    from mcp.bylaw_retrieval import server as mcp_server  # noqa: PLC0415
+    from bylaw_retrieval import server as mcp_server  # noqa: PLC0415
+
+    # Guard against the collision silently returning: if ``bylaw_retrieval``
+    # ever resolved to something under site-packages, the parity assertions
+    # below would be checking the wrong source and could pass for the wrong
+    # reason.
+    assert Path(mcp_server.__file__).resolve() == REPO_MCP_SERVER_PATH, (
+        f"expected the repo's MCP server module at {REPO_MCP_SERVER_PATH}, "
+        f"got {mcp_server.__file__}"
+    )
 
     source = inspect.getsource(mcp_server.create_mcp_server)
     signature_start = source.index("def search_bylaw_evidence(")
