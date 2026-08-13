@@ -229,8 +229,8 @@ ambiguous-anchor failure are all covered without a database.
 
 ## The baseline, and how to read it
 
-`BASELINE.json` currently records **Recall@10 = 0.5588, set-Recall@10 = 0.5588,
-MRR@10 = 0.3077** over 68 questions against the two-document dev corpus.
+`BASELINE.json` currently records **Recall@10 = 0.6618, set-Recall@10 = 0.6618,
+MRR@10 = 0.3388** over 68 questions against the two-document dev corpus.
 
 ### The floor it is measured against
 
@@ -328,6 +328,26 @@ still rose, carried by `dimensional` 0.008 → 0.284. p95 for one `search` call
 went 364ms → 460ms on the same host, from the added ancestor walk; the table
 index is built once and cached per document scope.
 
+### What ABS-494 changed
+
+**0.5588 → 0.6618** (+0.1030), MRR 0.3077 → 0.3388. A Postgres full-text
+ranking now joins the text channel, blended 50/50 with the path/context ladder
+(`_fts_channel_scores`, `_blend_fts_into_text`).
+
+The issue was posed as "RRF vs FTS-hybrid vs keep" and expected the uncalibrated
+`max()` fusion to be the defect. It was not: **RRF fusion measured worse than
+the shipped rule** (0.5441, −0.0147) and was rejected. The text channel's
+coverage was the defect. Full reasoning, including the weight sweep that shows
+this is a plateau rather than a constant fitted to 68 unreviewed labels, is in
+[`docs/decisions/ABS-494-SCORING-FUSION-DECISION.md`](../../docs/decisions/ABS-494-SCORING-FUSION-DECISION.md);
+the 17-arm matrix is in [`experiments/RESULTS.md`](experiments/RESULTS.md).
+
+The cost, stated plainly: **`dimensional` MRR halved** (0.284 → 0.130) while its
+recall rose (0.50 → 0.56), and `zone_anchored` recall went 1.00 → 0.90. Two
+questions were lost, both of which the control ranked 8th and 9th — bottom-of-
+window marginals — against nine gained. p95 for one `search` call went 484ms →
+576ms from the extra index-eligible query.
+
 ### What is still broken, and why it is not a ranking problem
 
 `definition` (12 questions) remains near zero, and nine `dimensional` questions
@@ -337,6 +357,14 @@ still miss. Neither is reachable from the scorer:
   *and* a parent pointing at an unrelated chapter, so there is no path to score
   and the ancestor chain supplies the wrong scope. That is a chunking and
   hierarchy defect for **DM-11**, not something a scorer can outrank.
+
+  **ABS-494 partly refuted this.** The claim was too strong: no *path-based*
+  route can reach these fragments, but their body text is indexed, and adding a
+  full-text channel over it lifted `definition` from 0.08 to 0.33 without any
+  ingest change. The class is still the worst of the six, and the hierarchy
+  defect above is still real and still DM-11's — but "not reachable from the
+  scorer" was a statement about the channels that existed, not about the
+  fragments.
 * **the remaining `dimensional` misses** split two ways. The Halifax Mainland
   by-law *has* zone-declaring headings ("R-1 ZONE: SINGLE FAMILY DWELLING
   ZONE") but the ingest left its tree flat, so those headings are not ancestors

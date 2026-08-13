@@ -19,6 +19,7 @@ from sqlalchemy import (
     desc,
     or_,
     select,
+    text as sql_text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, JSONB
 from sqlalchemy.orm import Session
@@ -1638,6 +1639,13 @@ class RetrievalService:
         )
 
         text_scored = self._text_channel_scores(request)
+        # ABS-494: full-text search joins the text side as a second opinion on
+        # the same question the ladder answers. It is blended into the text
+        # channel rather than merged as a peer of spatial/table because the two
+        # are not independent evidence — see _blend_fts_into_text.
+        text_scored = self._blend_fts_into_text(
+            text_scored, self._fts_channel_scores(request)
+        )
         spatial_scored = (
             self._spatial_channel_scores(request, resolved_location)
             if resolved_location is not None
@@ -3027,6 +3035,129 @@ class RetrievalService:
                 scored[fragment.id] = score
         return scored
 
+    def _fts_channel_scores(self, request: RetrievalRequest) -> dict[int, float]:
+        """Rank the in-scope corpus by Postgres full-text search (ABS-494).
+
+        The ranked expression is *verbatim* the one indexed by
+        ``ix_source_fragment_text_tsv`` (0002:243), so the predicate is index-
+        eligible. Any drift between the two turns an index scan into a
+        7,100-row sequential re-tsvectorisation that still returns the right
+        answer — the kind of regression a correctness test cannot see, which is
+        why the expression is a module constant shared with the eval harness
+        rather than written out twice.
+
+        That index is also why this is a **hybrid and not a replacement**: the
+        tsvector covers ``citation_label`` and ``text`` and cannot see
+        ``citation_path``, which is the whole basis of the ladder's structural
+        scoring. Neither channel can be dropped for the other.
+
+        The tsquery is a **disjunction**. ``websearch_to_tsquery`` conjoins
+        terms, and a nine-term conjunction over a by-law clause matches nothing
+        at all — every dimensional question would come back empty. Retrieval
+        wants a graded ranking over partial matches, which is a disjunction
+        plus a rank function. Leaving the stop words in the string is
+        deliberate too: ``to_tsquery`` runs them through the english dictionary
+        and drops them itself, which is the single largest correction this
+        channel makes to the ladder, where ``a``/``in``/``for`` each earn +12
+        whenever they land inside a heading-decorated citation path.
+
+        Returns ``{}`` on any non-Postgres dialect. The sqlite-backed unit
+        tests therefore exercise the ladder alone, and the blend below is a
+        no-op for them.
+        """
+        if self._dialect_name() != "postgresql":
+            return {}
+        tsquery = fts_or_query(request.query or "")
+        if not tsquery:
+            return {}
+
+        scope = (
+            self._fragment_scope_statement(request)
+            .with_only_columns(SourceFragment.id)
+            .order_by(None)
+        )
+        rank_expr = sql_text(
+            f"ts_rank_cd({FTS_VECTOR_SQL}, to_tsquery('english', :tsq), 1)"
+        ).bindparams(tsq=tsquery)
+        matches_expr = sql_text(
+            f"{FTS_VECTOR_SQL} @@ to_tsquery('english', :tsq)"
+        ).bindparams(tsq=tsquery)
+        stmt = (
+            select(SourceFragment.id, rank_expr)
+            .where(SourceFragment.id.in_(select(scope.subquery().c.id)))
+            .where(matches_expr)
+        )
+        return {
+            int(fragment_id): float(rank)
+            for fragment_id, rank in self.session.execute(stmt).all()
+            if rank > 0
+        }
+
+    #: How the two text sub-channels split the vote. Chosen from the sweep in
+    #: `evals/retrieval/experiments/RESULTS.md`, not from taste: every weight in
+    #: [0.35, 0.70] beats the control, the curve is smooth and unimodal, and
+    #: recall peaks over 0.40-0.50. It is a plateau rather than a spike, which
+    #: is the evidence that this is an effect and not a constant fitted to 68
+    #: unreviewed labels. 0.50 is the midpoint of the peak and posts the better
+    #: MRR of the two settings tied for best recall.
+    _FTS_TEXT_WEIGHT = 0.5
+
+    def _blend_fts_into_text(
+        self, text_scored: TextChannelScores, fts_scored: dict[int, float]
+    ) -> TextChannelScores:
+        """Fold the FTS ranking into the text channel, on the ladder's scale.
+
+        Two decisions, both load-bearing.
+
+        **Why blend instead of merging as a fourth peer channel.**
+        ``_merge_channel_scores`` takes a ``max()`` and pays an agreement bonus
+        for *independent* channels. FTS is not independent of the ladder: both
+        read the fragment's own words, so a clause matching on both has
+        supplied one piece of evidence twice, and paying an agreement bonus for
+        it would lift every verbose clause above the terse one that actually
+        states the standard. This is the same argument ABS-500 made for not
+        paying text and table a joint bonus.
+
+        **Why the result is rescaled back onto the ladder's top score.**
+        Fusion downstream is a ``max()`` across channels denominated in ladder
+        units — a spatial containment is 100.0, a table cell is scored by the
+        same token ladder. A text side handed back on a normalised [0, 1] scale
+        would lose every ``max()`` it entered, and the retriever would silently
+        become "table channel, text deleted". So the blend changes the text
+        side's *order*, which is the hypothesis the experiment tested, and
+        nothing about its magnitude.
+
+        Max-normalisation rather than min-max: the channels have a meaningful
+        zero (nothing matched) and no meaningful floor among the fragments that
+        did match, so subtracting the minimum would inflate a weak channel's
+        worst surviving candidate instead of leaving it near zero.
+
+        ``discriminating`` is carried through untouched. ``search()`` reads it
+        off this object to scope the table channel, so dropping it here would
+        silently re-scope a channel this method has no business touching.
+        """
+        if not fts_scored or not text_scored:
+            return text_scored
+        ladder_top = max(text_scored.values())
+        fts_top = max(fts_scored.values())
+        if ladder_top <= 0 or fts_top <= 0:
+            return text_scored
+
+        weight = self._FTS_TEXT_WEIGHT
+        blended = TextChannelScores(discriminating=text_scored.discriminating)
+        combined: dict[int, float] = {}
+        for fragment_id in set(text_scored) | set(fts_scored):
+            combined[fragment_id] = (
+                weight * (text_scored.get(fragment_id, 0.0) / ladder_top)
+                + (1.0 - weight) * (fts_scored.get(fragment_id, 0.0) / fts_top)
+            )
+        combined_top = max(combined.values())
+        if combined_top <= 0:
+            return text_scored
+        for fragment_id, score in combined.items():
+            blended[fragment_id] = (score / combined_top) * ladder_top
+        return blended
+
     def _zones_named(self, query: str) -> frozenset[str]:
         """The zone codes this query names, read against the corpus vocabulary."""
         return self._zone_scope_index().zones_named_in(query)
@@ -3774,6 +3905,29 @@ def _attribute_tag_filter_clause(attribute_tags: list[str], *, dialect_name: str
         )
     # sqlite + anything else: LIKE-match each quoted attribute id.
     return or_(*(column.cast(Text).like(f'%"{tag}"%') for tag in attribute_tags))
+
+
+# The indexed expression, verbatim from 0002_layer2_retrieval_schema.py:243.
+# Shared with scripts/eval_retrieval_experiment.py so the arm that was measured
+# and the channel that shipped cannot drift apart into two different programs.
+FTS_VECTOR_SQL = (
+    "to_tsvector('english', coalesce(citation_label, '') || ' ' || coalesce(text, ''))"
+)
+
+_FTS_TERM_RE = re.compile(r"[A-Za-z0-9]+")
+
+
+def fts_or_query(query: str) -> str:
+    """Build an OR tsquery string from a natural-language question.
+
+    ``"side setback in the ER-3 zone"`` -> ``"side | setback | in | the | er | 3 | zone"``.
+
+    Hyphenated compounds are split rather than quoted: ``er-3`` would parse as
+    a phrase (``'er-3' & 'er' & '3'``) and smuggle a conjunction into what has
+    to stay a disjunction. See ``_fts_channel_scores`` for why.
+    """
+    terms = [term.lower() for term in _FTS_TERM_RE.findall(query)]
+    return " | ".join(dict.fromkeys(terms))
 
 
 def _tokenize(text: str) -> list[str]:

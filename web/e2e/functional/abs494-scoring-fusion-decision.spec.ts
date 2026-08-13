@@ -30,8 +30,13 @@
 // ----------------
 //   1. Both artifacts the Definition of Done names exist: a results table with
 //      a per-query-class breakdown, and a decision doc in docs/decisions/.
-//   2. The control arm's headline numbers equal BASELINE.json's, to the digit.
-//      This is the load-bearing one — see above.
+//   2. The live BASELINE.json equals the *shipped arm's* numbers, to the digit.
+//      This is the load-bearing one. ABS-494 shipped `fts_hybrid_50`, and the
+//      harness's design premise is that every arm is production's own search()
+//      with one seam swapped — so "the winning arm's numbers survive the move
+//      into RetrievalService unchanged" is checkable, and this checks it.
+//      It also asserts the shipped arm still beats the control and is still
+//      the best arm measured.
 //   3. Every arm named in RESULTS.md has a machine-readable arms/*.json beside
 //      it, and vice versa. A table row with no data file cannot be re-derived.
 //   4. Each arm's reported recall_at_k is what its own per-query rows say it
@@ -63,6 +68,8 @@ const DECISIONS_DIR = path.join(REPO_ROOT, "docs", "decisions");
 const DECISION_FILE = path.join(DECISIONS_DIR, "ABS-494-SCORING-FUSION-DECISION.md");
 
 const CONTROL_ARM = "current";
+/** The arm ABS-494 selected and moved into RetrievalService. */
+const SHIPPED_ARM = "fts_hybrid_50";
 const REQUIRED_CATEGORIES = [
   "dimensional",
   "permitted_use",
@@ -131,7 +138,18 @@ test.describe("ABS-494 scoring & fusion decision artifacts", () => {
   });
 
   // The one that matters. See the header.
-  test("the control arm reproduces the live BASELINE.json, to the digit", () => {
+  //
+  // ABS-494 shipped `fts_hybrid_50`, so the live retriever is now the *winning
+  // arm*, not the control. That makes this assertion sharper than the one it
+  // would have been under a keep-decision: the entire premise of the harness
+  // is that each arm is production's own search() with one seam swapped, so
+  // "the winning arm's numbers survive the move into RetrievalService
+  // unchanged" is a checkable claim rather than a hope. This checks it.
+  //
+  // A failure here means one of two things, and both are serious: either the
+  // shipped blend is not what was measured, or BASELINE.json was re-recorded
+  // against a retriever that has since moved again.
+  test("the live BASELINE.json reproduces the shipped arm, to the digit", () => {
     const baseline = readJson<{
       k: number;
       query_count: number;
@@ -140,29 +158,57 @@ test.describe("ABS-494 scoring & fusion decision artifacts", () => {
       mrr: number;
       by_category: Record<string, { recall_at_k: number }>;
     }>(BASELINE_FILE);
-    const control = loadArms().find((arm) => arm.arm === CONTROL_ARM);
-    expect(control, `an arm named '${CONTROL_ARM}' must exist`).toBeTruthy();
+    const shipped = loadArms().find((arm) => arm.arm === SHIPPED_ARM);
+    expect(shipped, `an arm named '${SHIPPED_ARM}' must exist`).toBeTruthy();
 
     expect(
-      control!.recall_at_k,
-      "the matrix's control has drifted from the shipped retriever's baseline. " +
-        "Every delta in RESULTS.md is quoted against this number, so a drifted " +
-        "control certifies a winner that may already be beaten by dev. " +
-        "Re-run scripts/eval_retrieval_experiment.py — do NOT edit this by hand.",
-    ).toBeCloseTo(baseline.recall_at_k, 4);
-    expect(control!.set_recall_at_k).toBeCloseTo(baseline.set_recall_at_k, 4);
-    expect(control!.mrr).toBeCloseTo(baseline.mrr, 4);
-    expect(control!.k).toBe(baseline.k);
-    expect(control!.query_count).toBe(baseline.query_count);
+      baseline.recall_at_k,
+      `the shipped retriever no longer reproduces the arm ABS-494 selected. ` +
+        `Either the blend in RetrievalService has drifted from the ` +
+        `'${SHIPPED_ARM}' configuration that was measured, or BASELINE.json ` +
+        `was re-recorded against a retriever that has moved since. Re-run ` +
+        `scripts/eval_retrieval_experiment.py and compare — do NOT reconcile ` +
+        `these by hand.`,
+    ).toBeCloseTo(shipped!.recall_at_k, 4);
+    expect(baseline.set_recall_at_k).toBeCloseTo(shipped!.set_recall_at_k, 4);
+    expect(baseline.mrr).toBeCloseTo(shipped!.mrr, 4);
+    expect(baseline.k).toBe(shipped!.k);
+    expect(baseline.query_count).toBe(shipped!.query_count);
 
-    // Per category too: a control can match on the headline while disagreeing
-    // underneath, and the per-class table is what the ship gate is read from.
+    // Per category too: the headline can agree while the classes underneath
+    // disagree, and the per-class table is what the ship gate was read from.
     for (const category of REQUIRED_CATEGORIES) {
       expect(
-        control!.by_category[category]?.recall_at_k,
-        `control's ${category} recall must match the baseline's`,
-      ).toBeCloseTo(baseline.by_category[category].recall_at_k, 4);
+        baseline.by_category[category].recall_at_k,
+        `${category} recall must match the shipped arm's`,
+      ).toBeCloseTo(shipped!.by_category[category].recall_at_k, 4);
     }
+  });
+
+  test("the shipped arm actually beat the control it was selected over", () => {
+    const arms = loadArms();
+    const control = arms.find((arm) => arm.arm === CONTROL_ARM);
+    const shipped = arms.find((arm) => arm.arm === SHIPPED_ARM);
+    expect(control, `an arm named '${CONTROL_ARM}' must exist`).toBeTruthy();
+
+    // The issue's stated ship gate: Recall@10 improves. Asserted against the
+    // committed evidence so that a later edit which quietly makes the shipped
+    // configuration worse than the retriever it replaced cannot pass review by
+    // pointing at a decision doc whose numbers no longer hold.
+    expect(
+      shipped!.recall_at_k,
+      "the shipped arm no longer beats the control in the committed matrix",
+    ).toBeGreaterThan(control!.recall_at_k);
+
+    // And it must still be the best arm measured. If a later run finds a
+    // better one, that is a new decision to make deliberately — not something
+    // to leave sitting unremarked in the results table.
+    const best = Math.max(...arms.map((arm) => arm.recall_at_k));
+    expect(
+      shipped!.recall_at_k,
+      "an arm in the matrix now beats the one that shipped — re-decide rather " +
+        "than leaving the better result unremarked in RESULTS.md",
+    ).toBeCloseTo(best, 4);
   });
 
   test("every arm in the table has a data file, and every data file a row", () => {
@@ -246,9 +292,11 @@ test.describe("ABS-494 scoring & fusion decision artifacts", () => {
     }
   });
 
-  test("the decision doc states a verdict and the control it was decided against", () => {
+  test("the decision doc states a verdict and both numbers it turns on", () => {
     const decision = fs.readFileSync(DECISION_FILE, "utf8");
-    const baseline = readJson<{ recall_at_k: number }>(BASELINE_FILE);
+    const arms = loadArms();
+    const control = arms.find((arm) => arm.arm === CONTROL_ARM)!;
+    const shipped = arms.find((arm) => arm.arm === SHIPPED_ARM)!;
 
     expect(
       /^#\s+ABS-494/m.test(decision),
@@ -258,14 +306,27 @@ test.describe("ABS-494 scoring & fusion decision artifacts", () => {
       /\b(KEEP|SHIP)\b/.test(decision),
       "the doc must state an unambiguous verdict — KEEP or SHIP",
     ).toBe(true);
-    // The control's Recall@10 must appear in the text. This is what lets a
-    // future reader notice the doc has gone stale the same way the first
-    // matrix did, instead of trusting a conclusion measured against a
-    // retriever that no longer exists.
+
+    // Both the control it was decided against and the result it claims must
+    // appear in the text. This is what lets a future reader notice the doc has
+    // gone stale the way the first matrix did — quoting a conclusion measured
+    // against a retriever that no longer exists — instead of trusting it.
+    for (const [label, value] of [
+      ["the control it was decided against", control.recall_at_k],
+      ["the result it claims", shipped.recall_at_k],
+    ] as const) {
+      expect(
+        decision.includes(value.toFixed(4)),
+        `the doc must quote ${label} (${value.toFixed(4)}) so staleness is detectable`,
+      ).toBe(true);
+    }
+
+    // RRF was the issue's headline hypothesis and the matrix refuted it. A
+    // decision doc that does not say so leaves the next person to re-run the
+    // same experiment and rediscover the same negative result.
     expect(
-      decision.includes(baseline.recall_at_k.toFixed(4)),
-      `the doc must quote the control it was decided against ` +
-        `(${baseline.recall_at_k.toFixed(4)}), so its staleness is detectable`,
+      /\bRRF\b/.test(decision),
+      "the doc must record the verdict on RRF, not only the winner",
     ).toBe(true);
   });
 });

@@ -371,41 +371,14 @@ CONTROL_ARM = "current"
 # The FTS channel
 # ----------------------------------------------------------------------
 
-# The indexed expression, verbatim from 0002_layer2_retrieval_schema.py:243.
-# Any drift between this string and the index turns an index scan into a
-# 7,100-row sequential re-tsvectorisation that still returns the right answer,
-# which is the kind of regression a correctness test cannot see.
-FTS_VECTOR_SQL = (
-    "to_tsvector('english', coalesce(citation_label, '') || ' ' || coalesce(text, ''))"
+# Imported from the service rather than restated here. ABS-494 shipped the FTS
+# channel, so these are now production's own definitions: a copy in this file
+# would let the arm that gets measured and the channel that gets served drift
+# apart silently, which is precisely the failure the matrix exists to prevent.
+from bylaw_retrieval.retrieval.service import (  # noqa: E402
+    FTS_VECTOR_SQL,
+    fts_or_query,
 )
-
-_FTS_TERM_RE = re.compile(r"[A-Za-z0-9]+")
-
-
-def fts_or_query(query: str) -> str:
-    """Build an OR tsquery string from a natural-language question.
-
-    ``"side setback in the ER-3 zone"`` -> ``"side | setback | in | the | er | 3 | zone"``.
-
-    Two deliberate choices:
-
-    * **OR, not AND.** ``websearch_to_tsquery`` conjoins terms, and a nine-term
-      conjunction over a by-law clause matches nothing — every dimensional
-      question would return an empty channel. Retrieval wants a graded ranking
-      over partial matches, which is what disjunction plus a rank function is.
-    * **The stop words are left in the string.** ``to_tsquery`` runs them
-      through the english dictionary and drops them itself
-      (``to_tsquery('english', 'the | cat')`` is ``'cat'``), so the tokenizer
-      here does not need a stop list of its own to maintain. That dropping is
-      the single largest correction to the ladder, where each stop word earns
-      +12 whenever it lands inside a heading-decorated citation path.
-
-    Hyphenated compounds are split rather than quoted: ``er-3`` would parse as
-    a phrase (``'er-3' & 'er' & '3'``) and smuggle a conjunction into a
-    disjunction.
-    """
-    terms = [term.lower() for term in _FTS_TERM_RE.findall(query)]
-    return " | ".join(dict.fromkeys(terms))
 
 
 # ----------------------------------------------------------------------
