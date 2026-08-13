@@ -24,8 +24,16 @@ This migration:
 
 SQLite-safety: the test suite uses sqlite, which has no PostGIS. We
 detect the dialect at upgrade time and skip every PostGIS statement
-on sqlite. The ORM doesn't declare the geometry column (the column
-is server-managed) so model load works on sqlite regardless.
+on sqlite.
+
+ABS-491 note: the ORM does declare the column now
+(``ExternalDatasetFeature.geometry``, typed by
+``layer1.db.geometry.postgis_geometry_type`` — an inert TEXT column on
+sqlite), and every write since goes through
+``layer1.db.geometry.sync_feature_geometry``. The backfill below stays
+hand-written: it is history, already applied on every deployed database,
+and rewriting an applied migration to call today's helper would change
+what a replay does.
 """
 from __future__ import annotations
 
