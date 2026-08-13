@@ -250,6 +250,52 @@ def test_abs483_unmapped_glyph_cell_is_indeterminate(matrix_db):
     assert result.reason_code == "unreadable_cell"
 
 
+def test_abs483_a_gap_in_one_matrix_slice_falls_through_to_the_next(matrix_db):
+    """Table 1A spans several ``source_table`` rows. A gap in the slice that
+    happens to be scanned first must not end the search — the slice that DOES
+    carry the cell answers."""
+    with session_scope(matrix_db["db_url"]) as session:
+        document_id = matrix_db["document_id"]
+        # A second slice of the same logical matrix, carrying a ● where the
+        # first slice's cell is about to go missing.
+        second = SourceTable(
+            document_id=document_id,
+            caption="Table 1A: Permitted uses by zone — Commercial",
+            page_start=47,
+            page_end=47,
+            parse_status=ParseStatus.PARSED,
+            metadata_json={},
+        )
+        session.add(second)
+        session.flush()
+        for row_index, row in enumerate(
+            [["Use", "COR"], ["Multi-unit dwelling use", "●"]]
+        ):
+            for col_index, text in enumerate(row):
+                session.add(
+                    SourceTableCell(
+                        table_id=second.id,
+                        row_index=row_index,
+                        col_index=col_index,
+                        row_header_path=row[0] if row_index else None,
+                        col_header_path="COR" if row_index and col_index else None,
+                        text=text,
+                        metadata_json={},
+                    )
+                )
+        _drop_cell(session, matrix_db["table_id"], 3, 3)
+        enrich_document_semantics(session, document_id=document_id)
+
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(
+            use="Multi-unit dwelling use", zone="COR"
+        )
+
+    assert result.indeterminate is False
+    assert result.permission == "permitted"
+    assert result.table_id == second.id
+
+
 def test_abs483_blank_cell_still_resolves_to_not_permitted(matrix_db):
     """Guard the other side of the line: the blank-cell convention is real
     bylaw content and must NOT be swept into the new indeterminate branch."""
