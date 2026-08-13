@@ -1416,6 +1416,10 @@ class RetrievalService:
                     continue
                 seen.add(label)
                 permission = row["permission"]
+                # ABS-483: an ``unknown`` row (bound, but with no cell in this
+                # column) matches none of the branches below and is listed
+                # nowhere — folding it into not_permitted would state a
+                # prohibition we never read. Surfacing the gap is DM-07.
                 if permission == "permitted":
                     uses.permitted.append(label)
                 elif permission == "conditional":
@@ -1435,10 +1439,6 @@ class RetrievalService:
                     )
                 elif permission == "not_permitted":
                     uses.not_permitted.append(label)
-                # ABS-483: an ``unknown`` row (no cell in this column) is
-                # deliberately listed nowhere — folding it into not_permitted
-                # would state a prohibition we never read. Surfacing the gap to
-                # the caller is DM-07.
 
         if not contributing or not (
             uses.permitted or uses.conditional or uses.not_permitted
