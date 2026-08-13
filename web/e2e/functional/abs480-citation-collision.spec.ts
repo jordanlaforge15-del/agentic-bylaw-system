@@ -21,12 +21,27 @@
 //   (h)          derives "26 > (h)" — the control: same block type, same
 //                clause pattern, same confidence, no collision
 //   - bullet     an unlabelled list item the parser marks uncertain on its own
-//                merits, which must stay uncertain
+//                merits, which must stay uncertain. It carries a word more
+//                than the clauses because a clause's citation_label is
+//                indexed on top of the text it came from — see the seed.
 //
-// Every fragment contains "bicycle", so the query scores identically against
-// all of them on content and the only thing separating their scores is the
-// parse_status bonus. Every search is scoped by bylaw_name to the probe
-// document, so no other seeded corpus can contribute matches.
+// Every provision contains "bicycle" exactly once AND indexes to exactly nine
+// tsvector tokens, so the query scores identically against all of them on
+// content and the only thing separating their scores is the parse_status
+// bonus. The token-count half of that is an ABS-494 requirement: FTS now
+// blends into the text channel and ts_rank_cd normalises by length, so an
+// unequal-length corpus would rank these on brevity and this spec would read
+// the result as a collision penalty. The seed owns that invariant and
+// documents how to re-check it after a reword.
+//
+// Note the ladder's 3.0-point parse_status spread arrives here halved: the
+// text channel is a 50/50 blend of ladder and FTS, and FTS is by construction
+// flat across this corpus. The assertions below are equality and strict
+// inequality, so they hold for any blend weight — deliberately, since that
+// weight is the knob ABS-494 swept.
+//
+// Every search is scoped by bylaw_name to the probe document, so no other
+// seeded corpus can contribute matches.
 
 import { execSync } from "node:child_process";
 import * as path from "node:path";
