@@ -210,9 +210,13 @@ class RetrievalRequest(BaseModel):
             "preserves prior behaviour for non-evaluator callers. Populated by "
             "the compliance evaluator (one search per submission attribute) "
             "so per-attribute retrieval is O(clauses-tagged-with-this-attribute) "
-            "instead of O(all-clauses)."
+            "instead of O(all-clauses). Valid IDs come from the Phase-1 attribute "
+            "taxonomy (``src/layer2/compliance/attributes/taxonomy.yaml``). Omit "
+            "the field to search unfiltered; an EMPTY list is a validation error, "
+            "not a no-op."
         ),
     )
+
     include_context: bool = Field(
         default=False,
         description="Include ancestor chain and related context for each match.",
@@ -239,6 +243,27 @@ class RetrievalRequest(BaseModel):
             "cap is 50. Higher values reduce iteration count at the cost of larger tool-result payloads."
         ),
     )
+
+    @model_validator(mode="after")
+    def _reject_empty_attribute_tag_filter(self) -> "RetrievalRequest":
+        """An empty ``attribute_tag_filter`` is a caller error, not "no filter".
+
+        ABS-479 exposed this field to the chat + OpenAI tool surfaces, so an
+        LLM can now send it, and ``[]`` is exactly the shape a model emits when
+        it means "no filter". The service's ``if request.attribute_tag_filter:``
+        gate would accept that silently as unfiltered — the opposite of what
+        ``_attribute_tag_filter_clause`` decided (it raises on empty precisely
+        because an empty clause set degrades into always-true/always-false).
+        Rejecting here applies the same rule to every caller as a clean
+        validation error, which the chat tool loop renders as a tool error the
+        model can correct instead of an unnoticed widening of the search.
+        """
+        if self.attribute_tag_filter is not None and not self.attribute_tag_filter:
+            raise ValueError(
+                "attribute_tag_filter must be non-empty; omit the field "
+                "entirely to search without an attribute pre-filter"
+            )
+        return self
 
 
 class RetrievalResponse(BaseModel):
