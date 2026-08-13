@@ -317,10 +317,13 @@ def repath_low_level_fragments(nodes: Sequence[RepathNode]) -> list[str | None]:
             # whose label the simple-enumerator rule does not recognise all land
             # here: none of them is repathed, they only shape what follows.
             level = nominal_level
+            while stack and stack[-1].level >= level:
+                stack.pop()
             path = results[index]
             if level == CONTEXT_LEVEL:
-                while stack and stack[-1].level >= level:
-                    stack.pop()
+                # A container anchors to the nearest structural fragment (the
+                # pop above has already exposed it) and contributes a segment
+                # derived from its own text.
                 anchor = stack[-1].path if stack else None
                 segment = context_segment(node.text)
                 path = citation_path(anchor, segment) if anchor and segment else None
@@ -328,8 +331,6 @@ def repath_low_level_fragments(nodes: Sequence[RepathNode]) -> list[str | None]:
                 previous_sibling.clear()
             if level < CLAUSE_LEVEL:
                 previous_low = None
-            while stack and stack[-1].level >= level:
-                stack.pop()
             stack.append(_StackEntry(level, path))
             continue
 
