@@ -251,9 +251,11 @@ class HrmCivicRegister:
         if parsed is None:
             return None
         number, street, community = parsed
-        where = f"CIV_NUM={number} AND STR_NAME='{street}'"
+        # Doubling is how a literal quote is escaped in an ArcGIS where
+        # clause; it belongs with the clause, not with address parsing.
+        where = f"CIV_NUM={number} AND STR_NAME='{_sql_quote(street)}'"
         if community:
-            where += f" AND GSA_NAME='{community}'"
+            where += f" AND GSA_NAME='{_sql_quote(community)}'"
         for attributes in self._query(where):
             pid = str(attributes.get("PID") or "").strip()
             if pid:
@@ -279,6 +281,11 @@ class HrmCivicRegister:
         return [f.get("attributes") or {} for f in payload.get("features") or []]
 
 
+def _sql_quote(value: str) -> str:
+    """Escape a literal for an ArcGIS ``where`` clause."""
+    return value.replace("'", "''")
+
+
 def _parse_composed_address(address: str) -> tuple[int, str, str | None] | None:
     """``"1801 Hollis Street, Halifax, NS"`` -> ``(1801, "HOLLIS", "HALIFAX")``.
 
@@ -297,7 +304,7 @@ def _parse_composed_address(address: str) -> tuple[int, str, str | None] | None:
     # Trailing street type, when it is one we recognise, is not part of the name.
     if len(words) > 1 and words[-1].title() in _REGISTER_STREET_TYPES.values():
         words = words[:-1]
-    street = " ".join(words).upper().replace("'", "''")
+    street = " ".join(words).upper()
     community = parts[1].upper() if len(parts) >= 3 else None
     if community in _PROVINCE_CODES:
         community = None

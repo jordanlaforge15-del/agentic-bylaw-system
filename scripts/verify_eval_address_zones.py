@@ -359,9 +359,10 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.backfill_civics:
             unregistered = 0
+            civic_register = _build_civic_register()
             for case in selected:
                 line, ok = backfill_registered_civics(
-                    case, civic_register=_build_civic_register()
+                    case, civic_register=civic_register
                 )
                 print(line)
                 unregistered += 0 if ok else 1
