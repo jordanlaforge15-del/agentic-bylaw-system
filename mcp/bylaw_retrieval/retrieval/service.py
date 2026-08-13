@@ -1643,9 +1643,16 @@ class RetrievalService:
         # the same question the ladder answers. It is blended into the text
         # channel rather than merged as a peer of spatial/table because the two
         # are not independent evidence — see _blend_fts_into_text.
-        text_scored = self._blend_fts_into_text(
-            text_scored, self._fts_channel_scores(request)
-        )
+        #
+        # Skipped outright when the ladder found nothing: the blend discards a
+        # lone FTS ranking anyway (there is no ladder scale to borrow), so
+        # issuing the query would be paying for a result that cannot be used.
+        # This is the spatial-only path — "what applies at this address?" with
+        # no keywords the corpus matches.
+        if text_scored:
+            text_scored = self._blend_fts_into_text(
+                text_scored, self._fts_channel_scores(request)
+            )
         spatial_scored = (
             self._spatial_channel_scores(request, resolved_location)
             if resolved_location is not None
