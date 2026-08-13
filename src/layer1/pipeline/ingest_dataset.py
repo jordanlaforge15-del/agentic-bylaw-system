@@ -10,12 +10,12 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from layer1.datasets.config import DatasetConfig, load_dataset_config
 from layer1.datasets.linker import LinkResult, link_dataset_to_bylaw
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature
+from layer1.db.geometry import sync_feature_geometry
 from layer1.models.enums import ParseStatus
 from layer1.parsers.geo_dataset import GeoDatasetParseResult, parse_geojson
 
@@ -146,24 +146,13 @@ def ingest_geo_dataset(
                 metadata_json=dict(feature.metadata),
             )
         )
-    session.flush()
     # Populate the PostGIS geometry column for the rows we just inserted.
     # Migration 0009 added the column and backfilled rows present at that
     # time; subsequent ingests need to populate it themselves or every
     # ST_Intersects / ST_Contains query against the new dataset misses.
-    # SQLite skips this — the spatial.py shapely fallback reads geometry_geojson.
-    if session.bind is not None and session.bind.dialect.name == "postgresql":
-        session.execute(
-            text(
-                """
-                UPDATE external_dataset_feature
-                   SET geometry = ST_GeomFromGeoJSON(geometry_geojson::text)
-                 WHERE external_dataset_id = :ds_id AND geometry IS NULL
-                """
-            ),
-            {"ds_id": dataset.id},
-        )
-        session.flush()
+    # SQLite is a no-op inside the helper — the spatial.py shapely fallback
+    # reads geometry_geojson there.
+    sync_feature_geometry(session, dataset_id=dataset.id)
     if config.links_to is not None:
         link_result = link_dataset_to_bylaw(session, dataset.id)
     else:

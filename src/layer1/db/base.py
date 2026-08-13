@@ -21,6 +21,7 @@ from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
+from layer1.db.geometry import postgis_geometry_type
 from layer1.models.enums import (
     BlockType,
     FragmentType,
@@ -363,6 +364,17 @@ class ExternalDatasetFeature(Base):
     canonical_attributes_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
     geometry_geojson: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
     geometry_bbox_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    # The authoritative spatial column (ABS-491). Added by migration
+    # 0009_postgis_spatial_index and, until now, invisible to the ORM —
+    # which is how three separate raw-SQL writers ended up maintaining it
+    # independently. It is a denormalization of ``geometry_geojson``:
+    # derive it only through ``layer1.db.geometry.sync_feature_geometry``,
+    # never by assigning this attribute. Deferred because the WKB payload
+    # dwarfs the rest of the row (11k Halifax polygons) and no ORM read
+    # path wants it — the spatial hot path queries it in SQL, by index.
+    geometry: Mapped[object | None] = mapped_column(
+        postgis_geometry_type(), deferred=True
+    )
     parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
     # Phase-1 link to the cadastral parcel this feature corresponds to,
