@@ -1040,7 +1040,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
             )
         (args.out_dir / "RESULTS.md").write_text(markdown)
+
+        # Drop arm files that this matrix no longer defines. Renaming an arm
+        # (rrf_all_channels_path_half -> ..._text_half) used to leave the old
+        # file behind holding numbers from a superseded run, with no row in
+        # RESULTS.md pointing at it — a measurement that looks committed and
+        # current while describing a retriever that no longer exists. That is
+        # the same failure ABS-502 was written against, one directory down.
+        #
+        # Only prunes on a FULL run: `--arms a,b` deliberately writes a subset
+        # and must not delete the arms it was not asked to measure.
+        pruned: list[str] = []
+        if len(selected) == len(ARMS):
+            keep = {f"{arm.name}.json" for arm in ARMS}
+            for stale in sorted(arms_dir.glob("*.json")):
+                if stale.name not in keep:
+                    stale.unlink()
+                    pruned.append(stale.stem)
+
         print(f"Wrote {args.out_dir / 'RESULTS.md'} and {len(selected)} arm files")
+        if pruned:
+            print(f"Pruned {len(pruned)} arm file(s) no longer in the matrix: {', '.join(pruned)}")
     return 0
 
 
