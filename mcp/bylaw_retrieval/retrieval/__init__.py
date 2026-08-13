@@ -9,6 +9,8 @@ from bylaw_retrieval.retrieval.coherence_audit import (
 from bylaw_retrieval.retrieval.schemas import (
     ATTRIBUTE_VOCABULARY,
     BYLAW_INTENTS,
+    EVIDENCE_CLASS_CONFIDENCE,
+    MIN_GATED_EVIDENCE_CONFIDENCE,
     AddressProfile,
     BylawIntent,
     BylawQueryResponse,
@@ -25,6 +27,7 @@ from bylaw_retrieval.retrieval.schemas import (
     EnabledDocumentRef,
     EnabledNameCollision,
     EnabledNameCollisionReport,
+    EvidenceClass,
     GoverningBylawCoverageReport,
     DocumentSummary,
     LinkedDataset,
@@ -59,6 +62,8 @@ from bylaw_retrieval.retrieval.service import (
 __all__ = [
     "ATTRIBUTE_VOCABULARY",
     "BYLAW_INTENTS",
+    "EVIDENCE_CLASS_CONFIDENCE",
+    "MIN_GATED_EVIDENCE_CONFIDENCE",
     "DEFAULT_DATASET_CONFIG_DIR",
     "OVERLAY_ROLE_KEYWORDS",
     "AddressProfile",
@@ -78,6 +83,7 @@ __all__ = [
     "E2eContaminationReport",
     "EnabledDocumentRef",
     "EnabledNameCollision",
+    "EvidenceClass",
     "EnabledNameCollisionReport",
     "GoverningBylawCoverageReport",
     "LinkedDataset",

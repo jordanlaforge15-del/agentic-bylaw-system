@@ -1026,10 +1026,93 @@ class AddressProfile(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class EvidenceClass(str, Enum):
+    """What KIND of evidence ties a retrieved value to the thing asked about (ABS-493).
+
+    Zone-profile confidence is an **ordinal evidence class**, not a
+    probability. It answers "how is this fragment addressed by the query?"
+    — never "how likely is this value correct?". Nothing in the pipeline
+    is calibrated against labelled outcomes, so a number that looked like
+    a probability could only ever be a lie dressed as one.
+
+    The ladder, strongest rung first (see
+    :data:`EVIDENCE_CLASS_CONFIDENCE` for the numeric rung each maps to,
+    and ``docs/decisions/ABS-493-CONFIDENCE-DEFINITION.md`` for the full
+    rationale):
+
+    ``EXACT_PATH``
+        The query names the fragment's ``citation_path`` verbatim. This is
+        an identity lookup, not a search.
+    ``BOUND_TABLE_CELL``
+        The value was read out of a table cell on an enrichment-bound axis
+        (the ABS-409 permission-matrix path). Structured, not keyword-matched.
+    ``PATH_ANCHORED``
+        A query term matches inside the fragment's ``citation_path`` — the
+        corpus itself files this fragment under what was asked about.
+    ``LABELLED_ROW``
+        A query term matches the fragment's ``citation_label`` — a labelled
+        row or table entry bearing the term.
+    ``BODY_PHRASE``
+        The query appears verbatim in the fragment's body text. The prose
+        is *about* the thing asked about, but nothing structural says so.
+    ``BODY_TERMS``
+        Only scattered query terms appear in the body. A brush, not a hit.
+    ``NO_MATCH``
+        Nothing matched anywhere.
+
+    Two ordering principles: structural addressing (path, label) outranks
+    textual mention (body), and within textual mention a verbatim phrase
+    outranks scattered terms.
+
+    **The class never depends on how many query terms match** — only on
+    where they land. That is the whole point: the previous
+    ``min(1.0, score / 40.0)`` normalisation made the verdict a function
+    of query word count, so ``"COR setback"`` (2 tokens) failed the gate
+    on the very same ``Table 3 > COR`` row that ``"CEN-2 setback"``
+    (4 tokens) passed it on.
+    """
+
+    EXACT_PATH = "exact_path"
+    BOUND_TABLE_CELL = "bound_table_cell"
+    PATH_ANCHORED = "path_anchored"
+    LABELLED_ROW = "labelled_row"
+    BODY_PHRASE = "body_phrase"
+    BODY_TERMS = "body_terms"
+    NO_MATCH = "no_match"
+
+
+# The rung each evidence class occupies. These are ORDINAL LABELS, not
+# probabilities: only their order (and their position relative to
+# MIN_GATED_EVIDENCE_CONFIDENCE) carries meaning. They are floats because
+# the wire contract types ``ZoneProfile.confidence`` as float — a caller
+# must not read 0.8 as "80% likely correct".
+EVIDENCE_CLASS_CONFIDENCE: dict[EvidenceClass, float] = {
+    EvidenceClass.EXACT_PATH: 1.0,
+    EvidenceClass.BOUND_TABLE_CELL: 0.9,
+    EvidenceClass.PATH_ANCHORED: 0.8,
+    EvidenceClass.LABELLED_ROW: 0.6,
+    EvidenceClass.BODY_PHRASE: 0.4,
+    EvidenceClass.BODY_TERMS: 0.2,
+    EvidenceClass.NO_MATCH: 0.0,
+}
+
+# The gate (AC-2.9, re-derived for ABS-493): a field whose evidence class
+# sits BELOW ``BODY_PHRASE`` is not confidently extracted — its value is
+# dropped to None and NO citation is emitted for it. In evidence-class
+# terms the cut is "the corpus's structure ties this fragment to the
+# query, or the fragment states the query verbatim" vs "some of the words
+# happen to co-occur in the prose".
+MIN_GATED_EVIDENCE_CONFIDENCE = EVIDENCE_CLASS_CONFIDENCE[EvidenceClass.BODY_PHRASE]
+
+
 class ZoneDimensions(BaseModel):
     """Dimensional standards for a zone. All fields optional — ``None``
     when the bylaw doesn't specify the value or it couldn't be extracted
     with sufficient confidence.
+
+    "Sufficient confidence" is the :class:`EvidenceClass` gate: a value
+    whose supporting fragment is only ``BODY_TERMS``-class evidence is
+    dropped here rather than served with a citation that doesn't back it.
     """
 
     max_height_m: float | None = Field(
@@ -1175,7 +1258,17 @@ class ZoneProfile(BaseModel):
     )
     confidence: dict[str, float] = Field(
         default_factory=dict,
-        description="Per-field semantic match confidence (0..1), keyed by DTO field name, for populated fields.",
+        description=(
+            "Per-field EVIDENCE CLASS, keyed by DTO field name, for populated "
+            "fields. NOT a probability: each value is the ordinal rung of a "
+            "documented evidence ladder (see EvidenceClass) answering 'what "
+            "kind of evidence ties this value to the zone?' — 1.0 exact "
+            "citation-path match, 0.9 bound table cell, 0.8 the term is in "
+            "the fragment's citation path, 0.6 in its label, 0.4 the query "
+            "appears verbatim in its body text. Fields below 0.4 are dropped "
+            "and never appear here. Compare rungs to each other; do not read "
+            "0.8 as '80% likely correct'."
+        ),
     )
 
 

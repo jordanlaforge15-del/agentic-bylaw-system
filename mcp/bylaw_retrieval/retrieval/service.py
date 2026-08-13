@@ -28,6 +28,8 @@ from shapely.geometry import shape as shapely_shape
 from bylaw_retrieval.retrieval.schemas import (
     ATTRIBUTE_VOCABULARY,
     BYLAW_INTENTS,
+    EVIDENCE_CLASS_CONFIDENCE,
+    MIN_GATED_EVIDENCE_CONFIDENCE,
     AddressProfile,
     AdjacentZoningProfile,
     AncestorFragment,
@@ -43,6 +45,7 @@ from bylaw_retrieval.retrieval.schemas import (
     DocumentOutlineItem,
     DocumentOutlineResponse,
     DocumentSummary,
+    EvidenceClass,
     LinkedDataset,
     LocationSlot,
     NeighbourZone,
@@ -1142,20 +1145,22 @@ class RetrievalService:
     # right row even when sibling zones share keyword tokens.
     _ZONE_PROFILE_SEARCH_LIMIT = 10
 
-    # Confidence normalisation. ``_score_fragment`` is unbounded but a
-    # *zone-anchored* hit — where the zone code appears in the matched
-    # fragment's citation_path or label, not just its body text — scores
-    # well above this when the dimension keywords also land. Dividing by
-    # this constant maps a solid zone-anchored hit to ~1.0 while a
-    # body-text-only brush (the zone is mentioned but the dimension
-    # keywords are absent) lands below ``_ZONE_FIELD_MIN_CONFIDENCE``.
-    _ZONE_FIELD_FULL_SCORE = 40.0
-
-    # Below this normalised confidence a field is treated as "not
-    # confidently extracted": the value is dropped to None and NO
-    # citation is emitted for it (AC-2.9). Keeps the DTO honest — a
-    # value the retrieval couldn't stand behind never reaches the LLM.
-    _ZONE_FIELD_MIN_CONFIDENCE = 0.5
+    # Below this confidence a field is treated as "not confidently
+    # extracted": the value is dropped to None and NO citation is emitted
+    # for it (AC-2.9). Keeps the DTO honest — a value the retrieval
+    # couldn't stand behind never reaches the LLM.
+    #
+    # ABS-493: this used to compare ``min(1.0, score / 40.0)`` against
+    # 0.5, which made the verdict a function of query WORD COUNT —
+    # ``_score_fragment`` adds a fixed bonus per matching query token, so
+    # a wordier query out-scored a terser one on identical evidence. On
+    # the Regional Centre fixture that cost COR all three of its setbacks
+    # (query "COR setback", 2 tokens, 0.425) while CEN-2 kept them off
+    # the very same ``Table 3 > <zone>`` row shape (query "CEN-2 setback",
+    # 4 tokens, 1.0). The gate now reads an ordinal
+    # :class:`EvidenceClass` — see the enum's docstring and
+    # ``docs/decisions/ABS-493-CONFIDENCE-DEFINITION.md``.
+    _ZONE_FIELD_MIN_CONFIDENCE = MIN_GATED_EVIDENCE_CONFIDENCE
 
     def get_zone_profile(
         self,
@@ -1220,7 +1225,7 @@ class RetrievalService:
             zone_full_name = _extract_zone_full_name(identity.text, zone)
             chapter = _extract_chapter(identity.citation_path)
             if (zone_full_name or chapter) and identity.citation_path:
-                citations.add(identity, ["zone_full_name", "chapter"])
+                citations.add(identity.match, ["zone_full_name", "chapter"])
 
         dimensions: ZoneDimensions | None = None
         if "dimensions" in wanted:
@@ -1264,12 +1269,17 @@ class RetrievalService:
         )
         return self.search(request).matches
 
-    def _zone_best_match(self, query: str, zone_pattern) -> RetrievalMatch | None:
+    def _zone_best_match(self, query: str, zone_pattern) -> "_ZoneEvidence | None":
         """Highest-scoring search match whose text/citation names the zone.
 
         Filtering to fragments that actually mention the zone code is
         what keeps a sibling zone's row (which shares dimension keywords)
         from being mistaken for this zone's row.
+
+        Returns the match paired with its :class:`EvidenceClass` (ABS-493).
+        The class is a property of the (query, fragment) pair, so it is
+        computed here — where the query is still in hand — rather than
+        re-derived downstream from a score that has already forgotten it.
         """
         for match in self._zone_search(query):
             haystack = " ".join(
@@ -1278,17 +1288,18 @@ class RetrievalService:
                 if part
             )
             if zone_pattern.search(haystack):
-                return match
+                return self._evidence(match, query)
         return None
 
-    def _field_confidence(self, match: RetrievalMatch) -> float:
-        return min(1.0, match.score / self._ZONE_FIELD_FULL_SCORE)
+    def _evidence(self, match: RetrievalMatch, query: str) -> "_ZoneEvidence":
+        """Pair a match with the :class:`EvidenceClass` its query earns it."""
+        return _ZoneEvidence(match=match, evidence_class=_classify_evidence(query, match))
 
     def _build_zone_dimensions(
         self,
-        dims_match: RetrievalMatch | None,
-        setback_match: RetrievalMatch | None,
-        far_match: RetrievalMatch | None,
+        dims_match: "_ZoneEvidence | None",
+        setback_match: "_ZoneEvidence | None",
+        far_match: "_ZoneEvidence | None",
         citations: "_CitationAccumulator",
         confidence: dict[str, float],
     ) -> ZoneDimensions:
@@ -1297,21 +1308,21 @@ class RetrievalService:
         # Height + lot coverage live in one row (Table 5), so they share
         # the same match + citation.
         if dims_match is not None:
-            conf = self._field_confidence(dims_match)
+            conf = dims_match.confidence
             if conf >= self._ZONE_FIELD_MIN_CONFIDENCE:
                 height = _extract_height_m(dims_match.text)
                 coverage = _extract_coverage_pct(dims_match.text)
                 if height is not None:
                     dims.max_height_m = height
-                    confidence["max_height_m"] = round(conf, 3)
-                    citations.add(dims_match, ["max_height_m"])
+                    confidence["max_height_m"] = conf
+                    citations.add(dims_match.match, ["max_height_m"])
                 if coverage is not None:
                     dims.max_lot_coverage_pct = coverage
-                    confidence["max_lot_coverage_pct"] = round(conf, 3)
-                    citations.add(dims_match, ["max_lot_coverage_pct"])
+                    confidence["max_lot_coverage_pct"] = conf
+                    citations.add(dims_match.match, ["max_lot_coverage_pct"])
 
         if setback_match is not None:
-            conf = self._field_confidence(setback_match)
+            conf = setback_match.confidence
             if conf >= self._ZONE_FIELD_MIN_CONFIDENCE:
                 for kind, attr in (
                     ("front", "front_setback_m"),
@@ -1321,23 +1332,23 @@ class RetrievalService:
                     value = _extract_setback_m(setback_match.text, kind)
                     if value is not None:
                         setattr(dims, attr, value)
-                        confidence[attr] = round(conf, 3)
-                        citations.add(setback_match, [attr])
+                        confidence[attr] = conf
+                        citations.add(setback_match.match, [attr])
 
         if far_match is not None:
-            conf = self._field_confidence(far_match)
+            conf = far_match.confidence
             if conf >= self._ZONE_FIELD_MIN_CONFIDENCE:
                 far = _extract_far(far_match.text)
                 if far is not None:
                     dims.max_far = far
-                    confidence["max_far"] = round(conf, 3)
-                    citations.add(far_match, ["max_far"])
+                    confidence["max_far"] = conf
+                    citations.add(far_match.match, ["max_far"])
 
         return dims
 
     def _build_zone_uses(
         self,
-        uses_match: RetrievalMatch | None,
+        uses_match: "_ZoneEvidence | None",
         zone: str,
         citations: "_CitationAccumulator",
         confidence: dict[str, float],
@@ -1362,21 +1373,21 @@ class RetrievalService:
         uses = ZoneUses()
         if uses_match is None:
             return uses
-        conf = self._field_confidence(uses_match)
+        conf = uses_match.confidence
         if conf < self._ZONE_FIELD_MIN_CONFIDENCE:
             return uses
         permitted, not_permitted = _extract_uses(uses_match.text, zone)
         if permitted or not_permitted:
             uses.permitted = permitted
             uses.not_permitted = not_permitted
-            confidence["uses"] = round(conf, 3)
-            citations.add(uses_match, ["uses"])
+            confidence["uses"] = conf
+            citations.add(uses_match.match, ["uses"])
         return uses
 
     def _resolve_undetermined_from_prose(
         self,
         uses: ZoneUses,
-        uses_match: RetrievalMatch | None,
+        uses_match: "_ZoneEvidence | None",
         zone: str,
         citations: "_CitationAccumulator",
         confidence: dict[str, float],
@@ -1396,7 +1407,7 @@ class RetrievalService:
         """
         if uses_match is None or not uses.undetermined:
             return
-        conf = self._field_confidence(uses_match)
+        conf = uses_match.confidence
         if conf < self._ZONE_FIELD_MIN_CONFIDENCE:
             return
         permitted, not_permitted = _extract_uses(uses_match.text, zone)
@@ -1428,18 +1439,22 @@ class RetrievalService:
         uses.undetermined = remaining
         if not resolved:
             return
-        citations.add(uses_match, ["uses"])
+        citations.add(uses_match.match, ["uses"])
         # The ``uses`` block now mixes matrix cells with a weaker prose
         # reading, so its confidence drops to the weaker of the two rather
-        # than keeping the matrix's 0.9 for entries the matrix never produced.
-        prose_conf = round(conf, 3)
+        # than keeping the matrix's rung for entries the matrix never
+        # produced. Taking the min is well-defined precisely because these
+        # are rungs on one ordinal ladder (ABS-493) — the block is only as
+        # well-evidenced as its weakest contributing reading.
         existing = confidence.get("uses")
-        confidence["uses"] = prose_conf if existing is None else min(existing, prose_conf)
+        confidence["uses"] = conf if existing is None else min(existing, conf)
 
-    # Confidence recorded for matrix-enumerated use lists. Matches the table
-    # classifier's permission-matrix confidence (_classify_table) — the cells
-    # are read directly off bound axes, not regex-extracted from prose.
-    _MATRIX_USES_CONFIDENCE = 0.9
+    # Confidence recorded for matrix-enumerated use lists: the BOUND_TABLE_CELL
+    # rung (ABS-493). Matches the table classifier's permission-matrix
+    # confidence (_classify_table) — the cells are read directly off bound
+    # axes, not regex-extracted from prose, which is why this outranks every
+    # keyword-derived rung except an outright citation-path identity match.
+    _MATRIX_USES_CONFIDENCE = EVIDENCE_CLASS_CONFIDENCE[EvidenceClass.BOUND_TABLE_CELL]
 
     def _zone_bound_in_permission_matrix(self, zone: str) -> bool:
         """True when a scoped permission matrix binds ``zone`` as a column."""
@@ -1543,11 +1558,13 @@ class RetrievalService:
         exemption clause.
         """
         parking = ZoneParking()
-        matches = self._zone_search("off-street parking requirements")
+        query = "off-street parking requirements"
+        matches = self._zone_search(query)
         if not matches:
             return parking
-        match = matches[0]
-        conf = self._field_confidence(match)
+        evidence = self._evidence(matches[0], query)
+        match = evidence.match
+        conf = evidence.confidence
         if conf < self._ZONE_FIELD_MIN_CONFIDENCE:
             return parking
 
@@ -1564,7 +1581,7 @@ class RetrievalService:
                 parking.schedule_reference,
             )
         ):
-            confidence["parking"] = round(conf, 3)
+            confidence["parking"] = conf
             citations.add(match, ["parking"])
         return parking
 
@@ -3305,6 +3322,85 @@ class RetrievalService:
         return score
 
 
+@dataclass(frozen=True)
+class _ZoneEvidence:
+    """A zone-profile match plus the evidence class its query earns it (ABS-493).
+
+    ``get_zone_profile`` runs five separate searches and hands the winning
+    matches down to the section builders. The evidence class depends on the
+    *pair* (query, fragment), so it has to travel with the match — the
+    builders no longer see the query, and ``RetrievalMatch.score`` cannot
+    reconstruct it (the score is a sum, not a locus).
+
+    Proxies ``text`` / ``citation_path`` so builder bodies read the fragment
+    exactly as they did when they were handed a bare ``RetrievalMatch``;
+    ``.match`` is the underlying match, needed for citation accumulation.
+    """
+
+    match: RetrievalMatch
+    evidence_class: EvidenceClass
+
+    @property
+    def confidence(self) -> float:
+        """The evidence class's ordinal rung — the value served as ``confidence``."""
+        return EVIDENCE_CLASS_CONFIDENCE[self.evidence_class]
+
+    @property
+    def text(self) -> str:
+        return self.match.text
+
+    @property
+    def citation_path(self) -> str | None:
+        return self.match.citation_path
+
+
+def _classify_evidence(query: str, match: RetrievalMatch) -> EvidenceClass:
+    """Classify HOW ``match`` is evidence for ``query`` (ABS-493).
+
+    Walks the :class:`EvidenceClass` ladder strongest-rung-first and returns
+    the first rung the pair reaches. The classification depends only on
+    *where* the query's terms land — citation path, citation label, or body
+    text — and never on *how many* of them land, which is what decouples the
+    zone-profile gate from query verbosity.
+
+    The loci mirror the tiers ``RetrievalService._score_fragment`` already
+    recognises (exact path, path substring, path/label/text token hits), so
+    this is an ordinalisation of signals the scorer computes rather than a
+    second, divergent notion of relevance. What it drops is the summation:
+    the scorer adds a bonus per matching token, and it was that sum — not
+    the evidence — that the old ``score / 40.0`` gate was reading.
+
+    ``BODY_PHRASE`` is the one rung sensitive to the query string as a whole,
+    and only in the safe direction: adding words can turn a verbatim phrase
+    into scattered terms (a demotion), never the reverse. The pathological
+    "more words ⇒ clears the gate" behaviour is therefore unreachable.
+    """
+    query_text = query.strip().lower()
+    tokens = set(_tokenize(query_text))
+    if not query_text or not tokens:
+        return EvidenceClass.NO_MATCH
+
+    path = (match.citation_path or "").lower()
+    label = (match.citation_label or "").lower()
+    body = (match.text or "").lower()
+
+    if query_text == path:
+        return EvidenceClass.EXACT_PATH
+    if path and (
+        query_text in path or any(_token_matches(token, path) for token in tokens)
+    ):
+        return EvidenceClass.PATH_ANCHORED
+    if label and (
+        query_text in label or any(_token_matches(token, label) for token in tokens)
+    ):
+        return EvidenceClass.LABELLED_ROW
+    if query_text in body:
+        return EvidenceClass.BODY_PHRASE
+    if any(_token_matches(token, body) for token in tokens):
+        return EvidenceClass.BODY_TERMS
+    return EvidenceClass.NO_MATCH
+
+
 def _attribute_tag_filter_clause(attribute_tags: list[str], *, dialect_name: str):
     """Build the dialect-appropriate clause for the attribute_tag filter.
 
@@ -3353,10 +3449,11 @@ def _tokenize(text: str) -> list[str]:
 
     The compound is what makes a zone code addressable as one term. The
     parts are kept because they are still genuine words of the query — a
-    fragment cited as ``Table 3 > HR-2`` legitimately matches all three —
-    and because dropping them would silently deflate every zone-anchored
-    score past ``_ZONE_FIELD_MIN_CONFIDENCE``, which is DM-16's call to
-    make, not this change's. What makes the parts safe is that scoring
+    fragment cited as ``Table 3 > HR-2`` legitimately matches all three.
+    They used to matter to the zone-profile gate too (each extra token
+    inflated the score the gate divided by 40); since ABS-493 that gate
+    reads an evidence class instead, so token *count* no longer moves it —
+    only ranking. What makes the parts safe is that scoring
     now matches on word boundaries (see :func:`_token_matches`): "hr" no
     longer hits "through", "2" no longer hits "2nd". Same reason ordinary
     prose compounds are split — "single-family" should still match text
