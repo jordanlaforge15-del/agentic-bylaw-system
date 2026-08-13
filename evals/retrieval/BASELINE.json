@@ -29,46 +29,55 @@
   },
   "k": 10,
   "query_count": 68,
-  "recall_at_k": 0.1029,
-  "set_recall_at_k": 0.1029,
-  "mrr": 0.0667,
+  "recall_at_k": 0.4412,
+  "set_recall_at_k": 0.4412,
+  "mrr": 0.2775,
   "by_category": {
     "citation_lookup": {
       "query_count": 8,
-      "recall_at_k": 0.125,
-      "set_recall_at_k": 0.125,
-      "mrr": 0.125
+      "recall_at_k": 0.375,
+      "set_recall_at_k": 0.375,
+      "mrr": 0.1875
     },
     "definition": {
       "query_count": 12,
-      "recall_at_k": 0.0,
-      "set_recall_at_k": 0.0,
-      "mrr": 0.0
+      "recall_at_k": 0.0833,
+      "set_recall_at_k": 0.0833,
+      "mrr": 0.0167
     },
     "dimensional": {
       "query_count": 18,
-      "recall_at_k": 0.0,
-      "set_recall_at_k": 0.0,
-      "mrr": 0.0
+      "recall_at_k": 0.0556,
+      "set_recall_at_k": 0.0556,
+      "mrr": 0.0079
     },
     "permitted_use": {
       "query_count": 14,
-      "recall_at_k": 0.0,
-      "set_recall_at_k": 0.0,
-      "mrr": 0.0
+      "recall_at_k": 0.6429,
+      "set_recall_at_k": 0.6429,
+      "mrr": 0.4762
     },
     "spatial": {
       "query_count": 6,
       "recall_at_k": 1.0,
       "set_recall_at_k": 1.0,
-      "mrr": 0.5889
+      "mrr": 0.5972
     },
     "zone_anchored": {
       "query_count": 10,
-      "recall_at_k": 0.0,
-      "set_recall_at_k": 0.0,
-      "mrr": 0.0
+      "recall_at_k": 1.0,
+      "set_recall_at_k": 1.0,
+      "mrr": 0.6775
     }
+  },
+  "latency_ms": {
+    "_comment": "Wall-clock milliseconds for one RetrievalService.search call, measured on whatever host ran the harness. Host-dependent and not reproducible: this is the ONE block of this file that moves between two runs over an unchanged corpus. Reported so a ranking change that buys recall by scoring more per fragment can be read against what it costs to serve; never used to fail a run.",
+    "n": 68,
+    "mean": 315.5,
+    "p50": 318.8,
+    "p95": 364.4,
+    "p99": 377.4,
+    "max": 431.5
   },
   "queries": [
     {
@@ -79,21 +88,22 @@
         7339
       ],
       "ranked_fragment_ids": [
-        5788,
-        5790,
-        5791,
-        5796,
-        6072,
-        6807,
-        6808,
-        6809,
-        7964,
-        7965
+        11357,
+        11200,
+        10954,
+        11498,
+        6676,
+        8605,
+        7340,
+        7867,
+        10607,
+        10634
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 338.3
     },
     {
       "id": "RQ-D02",
@@ -103,21 +113,22 @@
         7349
       ],
       "ranked_fragment_ids": [
-        6351,
-        6352,
-        6397,
-        6398,
-        7964,
-        7965,
-        10542,
-        6354,
-        6396,
-        6626
+        10643,
+        10647,
+        11356,
+        10718,
+        10719,
+        6676,
+        7867,
+        7954,
+        10882,
+        11287
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 355.2
     },
     {
       "id": "RQ-D03",
@@ -127,21 +138,22 @@
         7351
       ],
       "ranked_fragment_ids": [
-        6012,
-        5789,
-        5790,
-        5791,
-        5795,
-        6046,
-        6047,
-        6048,
-        6049,
-        6050
+        8621,
+        11498,
+        8658,
+        10682,
+        6395,
+        6467,
+        6612,
+        6676,
+        6688,
+        6690
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 305.1
     },
     {
       "id": "RQ-D04",
@@ -151,21 +163,22 @@
         7399
       ],
       "ranked_fragment_ids": [
-        6351,
+        10842,
         11498,
-        11702,
-        6013,
-        6354,
-        10198,
-        10199,
-        10404,
-        10470,
-        10539
+        6676,
+        10691,
+        11186,
+        10950,
+        11191,
+        11352,
+        11537,
+        11551
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 364.4
     },
     {
       "id": "RQ-D05",
@@ -175,21 +188,22 @@
         7409
       ],
       "ranked_fragment_ids": [
-        6012,
-        8307,
-        8308,
-        6013,
-        6014,
-        6046,
-        6047,
-        6048,
-        6049,
-        6050
+        7426,
+        7432,
+        7771,
+        7778,
+        7832,
+        7837,
+        10741,
+        10753,
+        10847,
+        11374
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 334.3
     },
     {
       "id": "RQ-D06",
@@ -199,21 +213,22 @@
         7436
       ],
       "ranked_fragment_ids": [
-        6046,
-        6047,
-        6048,
-        6049,
-        6050,
-        6051,
-        8159,
-        8307,
-        8308,
-        8310
+        7356,
+        7437,
+        7358,
+        7370,
+        7409,
+        7410,
+        7493,
+        7712,
+        7784,
+        7804
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 296.3
     },
     {
       "id": "RQ-D07",
@@ -223,21 +238,22 @@
         7492
       ],
       "ranked_fragment_ids": [
-        8307,
-        6046,
-        6047,
-        6048,
-        6049,
-        6050,
-        6051,
-        8308,
-        8310,
-        8311
+        7356,
+        7493,
+        7358,
+        7370,
+        7409,
+        7410,
+        7437,
+        7712,
+        7784,
+        7804
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 308.9
     },
     {
       "id": "RQ-D08",
@@ -247,21 +263,22 @@
         7602
       ],
       "ranked_fragment_ids": [
-        8307,
-        6046,
-        6047,
-        6048,
-        6049,
-        6050,
-        6051,
-        8308,
-        8310,
-        8311
+        8288,
+        8330,
+        8364,
+        10741,
+        10753,
+        10847,
+        10606,
+        11702,
+        11742,
+        6528
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 315.2
     },
     {
       "id": "RQ-D09",
@@ -271,21 +288,22 @@
         7803
       ],
       "ranked_fragment_ids": [
-        8307,
-        6046,
-        6047,
-        6048,
-        6049,
-        6050,
-        6051,
-        8308,
-        8310,
-        8311
+        7356,
+        7804,
+        8621,
+        7358,
+        7370,
+        7409,
+        7410,
+        7437,
+        7493,
+        7712
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 301.7
     },
     {
       "id": "RQ-D10",
@@ -295,21 +313,22 @@
         7816
       ],
       "ranked_fragment_ids": [
-        6791,
-        6792,
-        6796,
-        6797,
-        6728,
-        6803,
-        6804,
-        5962,
-        5963,
-        5964
+        11498,
+        11200,
+        11357,
+        6675,
+        6676,
+        6856,
+        6949,
+        7011,
+        7093,
+        7134
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 320.9
     },
     {
       "id": "RQ-D11",
@@ -319,21 +338,22 @@
         7819
       ],
       "ranked_fragment_ids": [
+        10539,
+        11200,
+        11306,
+        11498,
+        6533,
+        6864,
         7015,
         7139,
         7271,
-        7432,
-        7457,
-        7778,
-        7837,
-        6791,
-        6792,
-        6796
+        7432
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 264.0
     },
     {
       "id": "RQ-D12",
@@ -343,21 +363,22 @@
         7840
       ],
       "ranked_fragment_ids": [
-        8307,
-        6046,
-        6047,
-        6048,
-        6049,
-        6050,
-        6051,
-        8308,
-        8310,
-        8311
+        6534,
+        6865,
+        8288,
+        9124,
+        9719,
+        7409,
+        7840,
+        7841,
+        10185,
+        10741
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 7,
+      "reciprocal_rank": 0.1429,
+      "set_recall": 1.0,
+      "latency_ms": 332.9
     },
     {
       "id": "RQ-D13",
@@ -367,21 +388,22 @@
         7871
       ],
       "ranked_fragment_ids": [
-        7861,
-        7862,
-        5436,
-        7877,
-        7977,
-        8997,
-        9000,
-        11541,
-        11588,
-        12171
+        10285,
+        7879,
+        9114,
+        9116,
+        10218,
+        10286,
+        5939,
+        10344,
+        9911,
+        6223
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 318.3
     },
     {
       "id": "RQ-D14",
@@ -391,21 +413,22 @@
         6400
       ],
       "ranked_fragment_ids": [
-        5436,
-        6814,
-        10286,
-        5434,
-        5435,
-        6813,
-        7015,
-        7139,
-        7271,
-        7432
+        6352,
+        5627,
+        10403,
+        10599,
+        11566,
+        12106,
+        6517,
+        6544,
+        6875,
+        7021
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 326.3
     },
     {
       "id": "RQ-D15",
@@ -415,21 +438,22 @@
         7120
       ],
       "ranked_fragment_ids": [
-        8308,
-        8311,
-        8307,
-        8310,
-        8309,
-        6072,
-        6301,
-        6302,
-        6303,
-        6304
+        11498,
+        11356,
+        7867,
+        11193,
+        11357,
+        6966,
+        7426,
+        7771,
+        7832,
+        10643
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 327.1
     },
     {
       "id": "RQ-D16",
@@ -439,21 +463,22 @@
         7770
       ],
       "ranked_fragment_ids": [
-        5962,
-        5963,
-        5964,
-        5965,
-        6791,
-        6792,
-        6796,
-        6797,
-        5788,
-        6013
+        11498,
+        7773,
+        11200,
+        11357,
+        6675,
+        6676,
+        6856,
+        6949,
+        7011,
+        7093
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 322.6
     },
     {
       "id": "RQ-D17",
@@ -463,21 +488,22 @@
         10441
       ],
       "ranked_fragment_ids": [
-        12174,
-        12171,
-        12155,
-        11702,
-        12151,
-        12152,
-        12153,
-        12156,
-        12175,
-        12176
+        11537,
+        11551,
+        10611,
+        10638,
+        10689,
+        10737,
+        10938,
+        10949,
+        11835,
+        10159
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 431.5
     },
     {
       "id": "RQ-D18",
@@ -487,21 +513,22 @@
         10002
       ],
       "ranked_fragment_ids": [
-        12174,
-        12175,
-        12176,
-        12177,
-        12151,
-        12152,
-        12153,
-        12154,
-        12155,
-        12156
+        10198,
+        11313,
+        11642,
+        12035,
+        12125,
+        12130,
+        5434,
+        6206,
+        8696,
+        8701
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 355.8
     },
     {
       "id": "RQ-P01",
@@ -511,21 +538,22 @@
         6409
       ],
       "ranked_fragment_ids": [
-        8158,
-        8159,
-        8756,
-        5802,
-        5803,
-        5806,
-        5807,
-        5808,
-        5809,
-        6012
+        6409,
+        10286,
+        5939,
+        12462,
+        12463,
+        5417,
+        5801,
+        6204,
+        7910,
+        8513
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 307.6
     },
     {
       "id": "RQ-P02",
@@ -535,21 +563,22 @@
         8975
       ],
       "ranked_fragment_ids": [
-        6012,
-        6013,
-        6014,
-        6015,
-        6016,
-        6017,
-        5784,
-        5785,
-        5786,
-        5787
+        8975,
+        6441,
+        8954,
+        11438,
+        5591,
+        5592,
+        5801,
+        5815,
+        5818,
+        5886
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 262.4
     },
     {
       "id": "RQ-P03",
@@ -559,21 +588,22 @@
         8470
       ],
       "ranked_fragment_ids": [
-        6046,
-        6047,
-        6048,
-        6049,
-        6050,
-        6051,
-        8483,
-        8484,
-        5823,
-        5824
+        11515,
+        11837,
+        7426,
+        7432,
+        7771,
+        7778,
+        7832,
+        7837,
+        11544,
+        11547
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 324.5
     },
     {
       "id": "RQ-P04",
@@ -583,21 +613,22 @@
         7885
       ],
       "ranked_fragment_ids": [
-        5706,
-        5707,
-        5708,
-        5709,
-        5710,
-        5711,
-        5965,
-        8159,
-        8741,
-        8742
+        7885,
+        8734,
+        5801,
+        8916,
+        6358,
+        6409,
+        6441,
+        7908,
+        7910,
+        8470
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 258.9
     },
     {
       "id": "RQ-P05",
@@ -607,21 +638,22 @@
         5933
       ],
       "ranked_fragment_ids": [
-        7915,
-        5806,
-        5807,
-        5809,
-        6396,
-        6397,
-        6398,
-        7913,
-        7914,
-        7916
+        5868,
+        10280,
+        11357,
+        9752,
+        5876,
+        5881,
+        5883,
+        5885,
+        5894,
+        5913
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 323.9
     },
     {
       "id": "RQ-P06",
@@ -631,21 +663,22 @@
         5996
       ],
       "ranked_fragment_ids": [
-        8391,
-        8392,
-        8398,
-        8399,
-        8400,
-        8996,
-        8997,
-        8998,
-        8999,
-        9000
+        10670,
+        10823,
+        11203,
+        11322,
+        11464,
+        11576,
+        9223,
+        10969,
+        5425,
+        5453
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 296.4
     },
     {
       "id": "RQ-P07",
@@ -655,21 +688,22 @@
         6001
       ],
       "ranked_fragment_ids": [
-        6336,
-        6337,
-        6338,
-        6339,
-        5788,
-        8973,
-        5784,
-        5785,
-        5786,
-        5787
+        9121,
+        9133,
+        9147,
+        6001,
+        6002,
+        9141,
+        10390,
+        10391,
+        10394,
+        6009
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 4,
+      "reciprocal_rank": 0.25,
+      "set_recall": 1.0,
+      "latency_ms": 317.7
     },
     {
       "id": "RQ-P08",
@@ -679,21 +713,22 @@
         5869
       ],
       "ranked_fragment_ids": [
-        8996,
-        8997,
-        8998,
-        8999,
-        9000,
-        11705,
-        8740,
-        11699,
-        11702,
-        5578
+        5869,
+        6204,
+        8850,
+        7983,
+        10611,
+        10638,
+        11189,
+        8952,
+        9752,
+        5801
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 322.0
     },
     {
       "id": "RQ-P09",
@@ -703,21 +738,22 @@
         5878
       ],
       "ranked_fragment_ids": [
-        6013,
-        6016,
-        6012,
-        6014,
-        6015,
-        6017,
-        6792,
-        11206,
-        6791,
-        8973
+        7890,
+        6467,
+        8906,
+        7983,
+        8986,
+        5878,
+        5961,
+        6688,
+        7320,
+        7514
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 6,
+      "reciprocal_rank": 0.1667,
+      "set_recall": 1.0,
+      "latency_ms": 360.1
     },
     {
       "id": "RQ-P10",
@@ -727,21 +763,22 @@
         5900
       ],
       "ranked_fragment_ids": [
-        6012,
-        6016,
-        6017,
-        8996,
-        5803,
-        5806,
-        5807,
-        6013,
-        6014,
-        6015
+        5900,
+        5906,
+        7919,
+        7921,
+        7922,
+        5869,
+        5878,
+        5887,
+        5961,
+        6037
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 318.8
     },
     {
       "id": "RQ-P11",
@@ -751,21 +788,22 @@
         6186
       ],
       "ranked_fragment_ids": [
-        6190,
-        6189,
-        9613,
-        8756,
-        6336,
-        6337,
-        6338,
-        6339,
-        9437,
-        9438
+        6186,
+        5466,
+        5795,
+        5868,
+        6135,
+        9116,
+        10758,
+        10857,
+        6182,
+        6190
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 328.6
     },
     {
       "id": "RQ-P12",
@@ -775,21 +813,22 @@
         7908
       ],
       "ranked_fragment_ids": [
-        5789,
-        5797,
-        9072,
+        8241,
         9073,
-        5696,
-        5697,
-        5698,
-        5699,
-        5700,
-        5701
+        8267,
+        8386,
+        8853,
+        9071,
+        9072,
+        11988,
+        11990,
+        11999
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 294.8
     },
     {
       "id": "RQ-P13",
@@ -799,21 +838,22 @@
         10088
       ],
       "ranked_fragment_ids": [
-        12151,
-        12154,
-        12156,
-        12163,
-        12167,
-        12171,
-        12178,
-        12152,
-        12153,
-        12155
+        12120,
+        5434,
+        10198,
+        10280,
+        10286,
+        11313,
+        11537,
+        11551,
+        11642,
+        12125
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 333.6
     },
     {
       "id": "RQ-P14",
@@ -823,21 +863,22 @@
         8736
       ],
       "ranked_fragment_ids": [
-        8741,
-        8742,
-        8743,
-        8738,
-        8739,
-        8740,
-        8756,
-        8549,
-        8543,
-        8544
+        8734,
+        8757,
+        8758,
+        8736,
+        8748,
+        8752,
+        8753,
+        10226,
+        8759,
+        8737
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 4,
+      "reciprocal_rank": 0.25,
+      "set_recall": 1.0,
+      "latency_ms": 287.4
     },
     {
       "id": "RQ-F01",
@@ -847,21 +888,22 @@
         9163
       ],
       "ranked_fragment_ids": [
-        12171,
-        12151,
-        12152,
-        12153,
-        12154,
-        12155,
-        12156,
-        12160,
-        12163,
-        12166
+        10286,
+        5939,
+        9114,
+        9116,
+        5417,
+        9752,
+        9817,
+        5429,
+        5436,
+        5868
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 327.9
     },
     {
       "id": "RQ-F02",
@@ -871,21 +913,22 @@
         9168
       ],
       "ranked_fragment_ids": [
-        6138,
+        6120,
+        6201,
+        8048,
         8058,
-        8059,
-        6137,
-        6139,
-        6140,
-        8054,
-        8055,
-        8056,
-        8060
+        10911,
+        11293,
+        8070,
+        9285,
+        11105,
+        11453
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 245.3
     },
     {
       "id": "RQ-F03",
@@ -895,21 +938,22 @@
         9180
       ],
       "ranked_fragment_ids": [
-        5647,
-        6594,
-        6595,
-        6596,
-        6597,
-        6605,
-        6606,
-        6756,
-        6757,
-        6758
+        6700,
+        6701,
+        7280,
+        7281,
+        7466,
+        7467,
+        7576,
+        7577,
+        7676,
+        7677
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 277.7
     },
     {
       "id": "RQ-F04",
@@ -919,21 +963,22 @@
         9183
       ],
       "ranked_fragment_ids": [
-        6024,
-        6025,
-        6026,
-        6027,
-        6028,
-        6181,
-        6182,
-        6189,
-        6190,
-        8971
+        5453,
+        5671,
+        5774,
+        7852,
+        11439,
+        5918,
+        6021,
+        6030,
+        6032,
+        7861
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 262.6
     },
     {
       "id": "RQ-F05",
@@ -943,21 +988,22 @@
         9190
       ],
       "ranked_fragment_ids": [
-        5436,
-        5434,
-        5435,
-        6814,
-        10201,
-        11541,
-        11588,
-        12166,
-        12168,
-        12171
+        10720,
+        12130,
+        6352,
+        5429,
+        5627,
+        5819,
+        9111,
+        9116,
+        10107,
+        10280
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 321.6
     },
     {
       "id": "RQ-F06",
@@ -967,21 +1013,22 @@
         9204
       ],
       "ranked_fragment_ids": [
-        10198,
-        7965,
-        8950,
-        8951,
-        9069,
-        9070,
-        9071,
-        9072,
-        9073,
-        9074
+        6578,
+        6608,
+        6738,
+        6770,
+        6907,
+        6938,
+        7053,
+        7083,
+        7179,
+        7209
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 250.1
     },
     {
       "id": "RQ-F07",
@@ -991,21 +1038,22 @@
         9230
       ],
       "ranked_fragment_ids": [
-        5631,
-        5632,
-        5633,
-        5634,
-        5635,
-        5636,
-        5637,
-        5638,
-        5639,
-        5640
+        8791,
+        12130,
+        5523,
+        5597,
+        5601,
+        5605,
+        5784,
+        5819,
+        5913,
+        6003
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 262.6
     },
     {
       "id": "RQ-F08",
@@ -1015,21 +1063,22 @@
         9601
       ],
       "ranked_fragment_ids": [
-        8310,
-        8311,
-        9069,
-        9070,
-        9071,
-        9072,
-        9073,
-        9074,
-        10198,
-        10199
+        6528,
+        6540,
+        6681,
+        6695,
+        6858,
+        6871,
+        7557,
+        7568,
+        7660,
+        7669
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 343.8
     },
     {
       "id": "RQ-F09",
@@ -1039,21 +1088,22 @@
         9588
       ],
       "ranked_fragment_ids": [
-        5962,
-        5963,
-        5964,
-        5965,
+        10280,
+        12130,
+        5913,
+        6012,
+        7852,
         8791,
-        5786,
-        5787,
-        5788,
-        5793,
-        5795
+        8989,
+        8996,
+        9003,
+        10247
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 254.7
     },
     {
       "id": "RQ-F10",
@@ -1063,21 +1113,22 @@
         9643
       ],
       "ranked_fragment_ids": [
-        5823,
-        6072,
-        8308,
-        8311,
-        8756,
-        12171,
-        5436,
-        5790,
-        5791,
-        5797
+        9123,
+        9126,
+        9151,
+        9752,
+        5591,
+        9111,
+        9114,
+        9116,
+        9121,
+        9133
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 342.5
     },
     {
       "id": "RQ-F11",
@@ -1087,21 +1138,22 @@
         9159
       ],
       "ranked_fragment_ids": [
-        8544,
-        8549,
-        8543,
-        8738,
-        8739,
-        8740,
-        8741,
-        8742,
-        8743,
-        8766
+        8540,
+        8693,
+        8765,
+        8862,
+        9159,
+        7879,
+        8550,
+        8621,
+        8680,
+        8681
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 5,
+      "reciprocal_rank": 0.2,
+      "set_recall": 1.0,
+      "latency_ms": 265.1
     },
     {
       "id": "RQ-F12",
@@ -1111,21 +1163,22 @@
         9573
       ],
       "ranked_fragment_ids": [
-        6627,
-        6629,
-        6630,
-        6960,
-        6961,
-        7102,
-        7103,
-        7231,
-        7233,
-        7234
+        6626,
+        6957,
+        7101,
+        7124,
+        7230,
+        7528,
+        7636,
+        7746,
+        6396,
+        6439
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 320.5
     },
     {
       "id": "RQ-Z01",
@@ -1135,21 +1188,22 @@
         6485
       ],
       "ranked_fragment_ids": [
-        7382,
-        7381,
-        7383,
-        6808,
-        6807,
-        6809,
-        11416,
-        11417,
-        11408,
-        11410
+        6487,
+        6489,
+        6495,
+        6645,
+        6485,
+        7919,
+        9752,
+        6643,
+        6821,
+        6827
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 5,
+      "reciprocal_rank": 0.2,
+      "set_recall": 1.0,
+      "latency_ms": 293.3
     },
     {
       "id": "RQ-Z02",
@@ -1159,21 +1213,22 @@
         6979
       ],
       "ranked_fragment_ids": [
-        6808,
-        7382,
-        6807,
-        6809,
-        7381,
-        7383,
-        11417,
-        11415,
-        11416,
-        11408
+        6981,
+        6489,
+        6645,
+        6979,
+        7919,
+        9752,
+        6487,
+        6495,
+        6643,
+        6821
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 4,
+      "reciprocal_rank": 0.25,
+      "set_recall": 1.0,
+      "latency_ms": 336.0
     },
     {
       "id": "RQ-Z03",
@@ -1183,21 +1238,22 @@
         7254
       ],
       "ranked_fragment_ids": [
-        6807,
-        6808,
-        6809,
-        7381,
-        7382,
-        7383,
-        11416,
-        11417,
-        11408,
-        11409
+        7254,
+        6485,
+        6641,
+        6819,
+        6979,
+        7111,
+        7330,
+        7386,
+        7415,
+        7440
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 299.7
     },
     {
       "id": "RQ-Z04",
@@ -1207,21 +1263,22 @@
         7440
       ],
       "ranked_fragment_ids": [
-        6807,
-        6808,
-        6809,
-        7381,
-        7382,
-        7383,
-        11416,
-        11417,
-        11408,
-        11409
+        7440,
+        6485,
+        6641,
+        6819,
+        6979,
+        7111,
+        7254,
+        7330,
+        7386,
+        7415
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 307.5
     },
     {
       "id": "RQ-Z05",
@@ -1231,21 +1288,22 @@
         7330
       ],
       "ranked_fragment_ids": [
-        6808,
-        6807,
-        6809,
-        7382,
-        6013,
-        6014,
-        6016,
-        7381,
-        7383,
-        11705
+        7330,
+        7426,
+        7432,
+        7771,
+        7778,
+        7832,
+        7837,
+        6467,
+        7320,
+        7514
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 348.2
     },
     {
       "id": "RQ-Z06",
@@ -1255,21 +1313,22 @@
         5695
       ],
       "ranked_fragment_ids": [
+        10286,
+        5417,
+        5429,
         5436,
-        5434,
-        5435,
-        8756,
-        12171,
-        5962,
-        5963,
-        5964,
-        5965,
-        8158
+        5695,
+        8482,
+        9111,
+        9114,
+        9116,
+        9123
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 5,
+      "reciprocal_rank": 0.2,
+      "set_recall": 1.0,
+      "latency_ms": 310.7
     },
     {
       "id": "RQ-Z07",
@@ -1279,21 +1338,22 @@
         6040
       ],
       "ranked_fragment_ids": [
-        6046,
-        6047,
-        6048,
-        6049,
-        6050,
-        6051,
-        6012,
-        5807,
-        5808,
-        5802
+        6040,
+        6064,
+        6052,
+        6524,
+        6533,
+        6673,
+        6864,
+        7015,
+        7139,
+        7265
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 371.6
     },
     {
       "id": "RQ-Z08",
@@ -1303,21 +1363,22 @@
         7921
       ],
       "ranked_fragment_ids": [
-        5719,
-        5720,
-        5721,
+        7921,
+        7923,
+        7920,
+        5471,
+        7924,
+        7919,
+        9753,
+        5783,
         5784,
-        5785,
-        5786,
-        5787,
-        5788,
-        5789,
         5790
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 286.7
     },
     {
       "id": "RQ-Z09",
@@ -1327,21 +1388,22 @@
         7646
       ],
       "ranked_fragment_ids": [
-        6807,
-        6808,
-        6809,
-        11416,
-        11417,
-        11412,
-        11415,
-        7382,
-        7383,
-        10180
+        7646,
+        6341,
+        6819,
+        7111,
+        7330,
+        7386,
+        7543,
+        7822,
+        6441,
+        6467
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 1.0,
+      "latency_ms": 335.6
     },
     {
       "id": "RQ-Z10",
@@ -1351,21 +1413,22 @@
         10529
       ],
       "ranked_fragment_ids": [
-        12155,
-        12174,
-        10176,
-        11702,
-        12151,
-        12152,
-        12153,
-        12154,
-        12156,
-        12160
+        10401,
+        10694,
+        11537,
+        11551,
+        11694,
+        11178,
+        10526,
+        10529,
+        10606,
+        10611
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 8,
+      "reciprocal_rank": 0.125,
+      "set_recall": 1.0,
+      "latency_ms": 377.4
     },
     {
       "id": "RQ-S01",
@@ -1377,19 +1440,20 @@
       "ranked_fragment_ids": [
         6496,
         9751,
-        9752,
         9754,
+        9752,
         9755,
-        6814,
-        7933,
-        7934,
-        6544,
-        6812
+        11702,
+        11742,
+        6702,
+        6809,
+        6814
       ],
       "hit": true,
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
-      "set_recall": 1.0
+      "set_recall": 1.0,
+      "latency_ms": 342.3
     },
     {
       "id": "RQ-S02",
@@ -1402,18 +1466,19 @@
         9751,
         9752,
         9754,
-        5790,
-        5791,
-        5797,
-        8223,
-        5784,
-        5785,
-        5786
+        10950,
+        11352,
+        6827,
+        9767,
+        5442,
+        5592,
+        5806
       ],
       "hit": true,
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
-      "set_recall": 1.0
+      "set_recall": 1.0,
+      "latency_ms": 318.8
     },
     {
       "id": "RQ-S03",
@@ -1426,18 +1491,19 @@
         6496,
         9751,
         9752,
-        9754,
         9755,
-        5683,
-        5790,
-        5791,
-        5797,
-        5696
+        9754,
+        9652,
+        9656,
+        9684,
+        10599,
+        10950
       ],
       "hit": true,
-      "first_hit_rank": 5,
-      "reciprocal_rank": 0.2,
-      "set_recall": 1.0
+      "first_hit_rank": 4,
+      "reciprocal_rank": 0.25,
+      "set_recall": 1.0,
+      "latency_ms": 306.2
     },
     {
       "id": "RQ-S04",
@@ -1450,18 +1516,19 @@
         9751,
         9752,
         9754,
+        9112,
+        12087,
+        11939,
+        9013,
         9104,
-        9038,
-        9039,
-        9096,
-        9097,
-        9098,
-        8222
+        9131,
+        11938
       ],
       "hit": true,
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
-      "set_recall": 1.0
+      "set_recall": 1.0,
+      "latency_ms": 339.0
     },
     {
       "id": "RQ-S05",
@@ -1472,20 +1539,21 @@
       ],
       "ranked_fragment_ids": [
         9753,
-        8222,
-        8223,
         8391,
-        8392,
-        8398,
-        8399,
-        8400,
-        5790,
-        5791
+        5784,
+        8222,
+        8383,
+        9071,
+        9111,
+        11988,
+        11999,
+        5781
       ],
       "hit": true,
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
-      "set_recall": 1.0
+      "set_recall": 1.0,
+      "latency_ms": 298.4
     },
     {
       "id": "RQ-S06",
@@ -1498,18 +1566,19 @@
         6496,
         9751,
         9752,
-        9754,
         9755,
-        5536,
-        5537,
-        5538,
-        5539,
-        5540
+        9754,
+        9311,
+        5889,
+        7879,
+        9684,
+        10102
       ],
       "hit": true,
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
-      "set_recall": 1.0
+      "set_recall": 1.0,
+      "latency_ms": 324.9
     },
     {
       "id": "RQ-C01",
@@ -1519,21 +1588,22 @@
         7120
       ],
       "ranked_fragment_ids": [
+        7132,
+        9114,
+        5417,
+        9752,
+        5429,
         5436,
-        12171,
-        5434,
-        5435,
-        12151,
-        12152,
-        12153,
-        12154,
-        12155,
-        12156
+        9116,
+        9151,
+        9775,
+        10199
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 326.5
     },
     {
       "id": "RQ-C02",
@@ -1543,21 +1613,22 @@
         8706
       ],
       "ranked_fragment_ids": [
+        10401,
+        9114,
+        10403,
+        9151,
+        5417,
+        9752,
+        5429,
         5436,
-        12151,
-        12156,
-        12171,
-        5434,
-        5435,
-        12152,
-        12153,
-        12154,
-        12155
+        9116,
+        10156
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 349.3
     },
     {
       "id": "RQ-C03",
@@ -1567,21 +1638,22 @@
         8800
       ],
       "ranked_fragment_ids": [
-        5436,
-        5790,
-        5791,
-        5797,
-        10198,
-        10199,
-        5435,
-        5785,
-        5788,
+        9111,
+        9116,
+        9123,
+        9126,
+        10401,
+        9151,
+        12064,
+        5417,
+        9752,
         5806
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 308.2
     },
     {
       "id": "RQ-C04",
@@ -1591,21 +1663,22 @@
         9158
       ],
       "ranked_fragment_ids": [
-        5436,
-        5434,
-        5435,
-        9438,
-        9439,
-        9440,
-        9441,
-        9557,
-        9575,
-        9576
+        9460,
+        9213,
+        9459,
+        9111,
+        9116,
+        9158,
+        9631,
+        9216,
+        9395,
+        9523
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 6,
+      "reciprocal_rank": 0.1667,
+      "set_recall": 1.0,
+      "latency_ms": 325.0
     },
     {
       "id": "RQ-C05",
@@ -1615,21 +1688,22 @@
         6317
       ],
       "ranked_fragment_ids": [
-        5436,
-        5434,
-        6791,
-        6792,
-        5435,
-        5806,
-        5807,
-        6803,
-        6804,
-        9741
+        5429,
+        10107,
+        10606,
+        10733,
+        11651,
+        9123,
+        9701,
+        9714,
+        9718,
+        9959
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 312.8
     },
     {
       "id": "RQ-C06",
@@ -1639,21 +1713,22 @@
         5626
       ],
       "ranked_fragment_ids": [
-        5436,
-        5434,
-        5435,
-        5634,
-        5639,
-        5686,
-        5631,
-        5632,
-        5633,
-        5635
+        9213,
+        5627,
+        5626,
+        9216,
+        9460,
+        6314,
+        9111,
+        9114,
+        9116,
+        9123
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "hit": true,
+      "first_hit_rank": 3,
+      "reciprocal_rank": 0.3333,
+      "set_recall": 1.0,
+      "latency_ms": 316.7
     },
     {
       "id": "RQ-C07",
@@ -1664,20 +1739,21 @@
       ],
       "ranked_fragment_ids": [
         8643,
-        8645,
-        8646,
-        6750,
-        8631,
-        8632,
-        8633,
-        8634,
-        8635,
-        8636
+        12454,
+        8640,
+        12106,
+        7646,
+        5531,
+        6317,
+        6319,
+        6321,
+        6324
       ],
       "hit": true,
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
-      "set_recall": 1.0
+      "set_recall": 1.0,
+      "latency_ms": 276.5
     },
     {
       "id": "RQ-C08",
@@ -1687,21 +1763,22 @@
         7871
       ],
       "ranked_fragment_ids": [
-        5436,
-        5434,
-        5435,
-        6352,
-        10199,
-        12171,
-        5574,
-        5575,
-        5576,
-        5577
+        9460,
+        6314,
+        9111,
+        9114,
+        9116,
+        9123,
+        9126,
+        9151,
+        9684,
+        10170
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
-      "set_recall": 0.0
+      "set_recall": 0.0,
+      "latency_ms": 309.3
     }
   ]
 }
