@@ -1,4 +1,4 @@
-.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland eval-retrieval-baseline check-retrieval-baseline
+.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate check-migration-drift init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland eval-retrieval-baseline check-retrieval-baseline
 
 DB_URL ?= postgresql+psycopg://layer1:layer1@localhost:5432/layer1
 
@@ -27,6 +27,12 @@ db-down:
 
 migrate:
 	DATABASE_URL="$(DB_URL)" alembic upgrade head
+
+# Is the target DB behind the migrations on this branch? Exits 1 when it is.
+# Run it before a data migration: applying data migrations on top of a pending
+# schema migration is the split state ABS-499 exists to surface.
+check-migration-drift:
+	DATABASE_URL="$(DB_URL)" python scripts/check_migration_drift.py
 
 init-db:
 	layer1 init-db --db-url "$(DB_URL)"

@@ -36,6 +36,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from layer1.db.migration_fence import fence_or_abort
 from layer1.db.session import session_scope
 from layer1.pipeline.corpus_repath import (
     DocumentRepath,
@@ -99,6 +100,8 @@ def main() -> int:
     started = time.monotonic()
 
     if args.revert:
+        # ABS-499: a revert is a corpus-wide write like any other.
+        fence_or_abort("repath-citation-paths-revert", database_url=args.database_url, log=logger)
         payload = json.loads(Path(args.revert).read_text())
         with session_scope(args.database_url) as session:
             restored = revert_corpus_repath(session, payload["fragments"])
@@ -107,6 +110,10 @@ def main() -> int:
             f"elapsed_s={time.monotonic() - started:.1f}"
         )
         return 0
+
+    if not args.dry_run:
+        # ABS-499: no corpus-wide repath without a labelled pre-change snapshot.
+        fence_or_abort("repath-citation-paths", database_url=args.database_url, log=logger)
 
     with session_scope(args.database_url) as session:
         stats = repath_corpus(session, document_id=args.document_id, dry_run=args.dry_run)
