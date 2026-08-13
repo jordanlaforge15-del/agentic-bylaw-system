@@ -15,6 +15,45 @@ from bylaw_retrieval.retrieval import (
 )
 
 
+# ABS-479: the single indexed retrieval pre-filter in the repo (the GIN
+# index on ``source_fragment.attribute_tags`` from migration 0014) was
+# reachable only from the compliance evaluator. This property definition is
+# the one the LLM-facing surfaces share — ``src/advisor/chat/tools.py``
+# imports it rather than re-typing it, so the Anthropic-shaped and
+# OpenAI-shaped specs cannot drift the way the ABS-466/ABS-469 descriptions
+# did. Embed a shallow copy per spec so no caller can mutate the shared dict.
+ATTRIBUTE_TAG_FILTER_PROPERTY: dict[str, Any] = {
+    "type": "array",
+    "items": {"type": "string"},
+    "minItems": 1,
+    "description": (
+        "Indexed hard pre-filter on the candidate clause set. When set, only "
+        "fragments tagged with at least one of these attribute IDs are scored "
+        "(multiple IDs are a union, not an intersection). Use it when the "
+        "question targets specific regulated dimensions — e.g. "
+        "['building_height_m'] for a height question, or ['front_setback_m', "
+        "'rear_setback_m', 'side_setback_left_m', 'side_setback_right_m'] for "
+        "setbacks — so the search narrows to tagged clauses before text "
+        "scoring. Valid IDs are the 'id' values in the Phase-1 attribute "
+        "taxonomy at src/layer2/compliance/attributes/taxonomy.yaml: "
+        "building_height_m, building_height_storeys, gross_floor_area_m2, "
+        "floor_area_ratio, lot_coverage_percent, building_footprint_area_m2, "
+        "front_setback_m, rear_setback_m, side_setback_left_m, "
+        "side_setback_right_m, height_to_eaves_m, height_to_ridge_m, "
+        "primary_use_class, secondary_use_classes, occupancy_type, "
+        "construction_type, residential_unit_count, residential_unit_mix, "
+        "parking_stalls_count, parking_stalls_accessible_count, "
+        "bicycle_stalls_count, loading_bays_count, zone_code, "
+        "height_precinct_code, heritage_overlay, flood_overlay, "
+        "transit_catchment, lot_area_m2, corner_lot_boolean, "
+        "arterial_frontage_boolean. Do not invent IDs — an ID outside the "
+        "taxonomy matches no clause and the search returns empty. Omit the "
+        "field entirely for exploratory questions; an EMPTY array is rejected "
+        "as a validation error rather than treated as 'no filter'."
+    ),
+}
+
+
 def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
     return [
         {
@@ -129,7 +168,13 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                 "Example for '6321 Quinpool Road': set query='maximum building height' "
                 "and location={civic_number: '6321', street: 'Quinpool Road'}. "
                 "If the response's 'notes' array contains a warning that 'location' was "
-                "missing, re-issue the call with the slot set."
+                "missing, re-issue the call with the slot set. "
+                "When the question targets a specific regulated dimension (height, a "
+                "setback, lot coverage, floor area ratio, parking), also set "
+                "'attribute_tag_filter' to the matching attribute IDs — an indexed "
+                "hard pre-filter that restricts scoring to the clauses which actually "
+                "regulate that attribute. Valid IDs are the 'id' values in "
+                "src/layer2/compliance/attributes/taxonomy.yaml."
             ),
             "parameters": {
                 "type": "object",
@@ -169,6 +214,7 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                         },
                         "additionalProperties": False,
                     },
+                    "attribute_tag_filter": dict(ATTRIBUTE_TAG_FILTER_PROPERTY),
                     "include_context": {"type": "boolean", "default": False},
                     "include_cross_references": {"type": "boolean", "default": False},
                     "include_tables": {"type": "boolean", "default": False},

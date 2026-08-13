@@ -46,6 +46,7 @@ from advisor.chat.compact import (
 )
 from advisor.llm import ToolDefinition
 from advisor.llm.tool_loop import ToolHandler
+from bylaw_retrieval.openai_tools import ATTRIBUTE_TAG_FILTER_PROPERTY
 from bylaw_retrieval.retrieval import (
     ATTRIBUTE_VOCABULARY,
     BYLAW_INTENTS,
@@ -158,6 +159,19 @@ _DESC_SEARCH_BYLAW_EVIDENCE = (
     "advisories. If you see a note saying the address should have been "
     "in the 'location' field, RE-ISSUE the call with the slot populated "
     "— do not just ignore it.\n\n"
+    "--------------------------------------------------------------------\n"
+    "Narrowing by regulated attribute via 'attribute_tag_filter':\n\n"
+    "When the question is about a specific regulated dimension (height, a "
+    "setback, lot coverage, floor area ratio, parking), pass the matching "
+    "attribute IDs in ``attribute_tag_filter``. It is an indexed hard "
+    "pre-filter: only clauses tagged with at least one of those IDs are "
+    "scored, so the answer comes from the clauses that actually regulate "
+    "the attribute instead of whatever prose happens to share vocabulary. "
+    "Valid IDs are the 'id' values in the Phase-1 attribute taxonomy "
+    "(src/layer2/compliance/attributes/taxonomy.yaml) — e.g. "
+    "building_height_m, front_setback_m, lot_coverage_percent, "
+    "floor_area_ratio, parking_stalls_count. Multiple IDs union. Omit the "
+    "field for exploratory questions; never send an empty array.\n\n"
     "--------------------------------------------------------------------\n"
     "Tuning the result-set size via 'limit':\n\n"
     "Default 5; bump to 15 when the question covers multiple dimensions "
@@ -320,6 +334,10 @@ _SCHEMA_SEARCH_BYLAW_EVIDENCE: dict[str, Any] = {
             },
             "additionalProperties": False,
         },
+        # ABS-479: imported, not re-typed, so this surface and the
+        # OpenAI-shaped spec in ``mcp/bylaw_retrieval/openai_tools.py``
+        # cannot drift apart (the failure mode ABS-469 had to clean up).
+        "attribute_tag_filter": dict(ATTRIBUTE_TAG_FILTER_PROPERTY),
         "include_context": {"type": "boolean", "default": True},
         "include_cross_references": {"type": "boolean", "default": True},
         "include_tables": {"type": "boolean", "default": True},
@@ -871,6 +889,11 @@ def build_bylaw_tools(
             page_start=payload.get("page_start"),
             page_end=payload.get("page_end"),
             location=location,
+            # ABS-479: passthrough for the indexed attribute_tags pre-filter.
+            # An empty list is rejected by RetrievalRequest's validator; the
+            # resulting ValidationError is caught by the tool loop and handed
+            # back to the model as a tool error, not raised out of the request.
+            attribute_tag_filter=payload.get("attribute_tag_filter"),
             include_context=payload.get("include_context", True),
             include_cross_references=payload.get("include_cross_references", True),
             include_tables=payload.get("include_tables", True),

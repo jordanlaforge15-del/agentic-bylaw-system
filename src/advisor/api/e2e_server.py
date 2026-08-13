@@ -2010,6 +2010,50 @@ def _mount_advisor_search_include_flags_endpoint(app: FastAPI) -> None:
         }
 
 
+def _mount_advisor_search_attribute_tag_filter_endpoint(app: FastAPI) -> None:
+    """ABS-479: drive ``attribute_tag_filter`` through the real chat handler.
+
+    The parameter reaches the LLM only if three things line up: it is in the
+    tool's JSON Schema, the handler forwards it onto ``RetrievalRequest``, and
+    the service turns it into the indexed ``attribute_tags`` clause. Pytest
+    covers each link in isolation; this endpoint runs the whole chain inside
+    the deployed FastAPI process against the real Postgres, so a missing
+    migration-0014 index, a JSONB-operator dialect mismatch (the ``?|``-vs-
+    LIKE split that sqlite unit tests mask), or a schema/handler drift trips
+    e2e rather than production.
+
+    Returns the tool's own JSON payload on success. On failure it returns
+    ``ok: false`` with the error string INSTEAD of a 500 — that mirrors
+    ``advisor.llm.tool_loop``, which converts a handler exception into an
+    ``is_error`` tool_result the model can correct. The empty-list case is
+    exactly that path, so the spec asserts on the error string and a 200.
+    """
+    import json  # noqa: PLC0415
+    from contextlib import contextmanager  # noqa: PLC0415
+
+    from fastapi import Body  # noqa: PLC0415
+
+    from advisor.chat.tools import build_bylaw_tools  # noqa: PLC0415
+
+    @contextmanager
+    def _service_factory():
+        with session_scope() as session:
+            yield RetrievalService(session)
+
+    @app.post("/v1/_test/advisor-search-attribute-tag-filter")
+    async def advisor_search_attribute_tag_filter(
+        body: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        if not isinstance(body.get("query"), str):
+            raise HTTPException(status_code=422, detail="missing 'query' (string) in body")
+        _, handlers = build_bylaw_tools(_service_factory)
+        try:
+            raw = await handlers["search_bylaw_evidence"](body)
+        except Exception as exc:  # noqa: BLE001 — the tool-error path under test
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True, "result": json.loads(raw)}
+
+
 class _ClaudeCodeEnvelopeBody(BaseModel):
     """ABS-454: an envelope (+ optional CLI payload) to translate."""
 
@@ -2931,6 +2975,7 @@ _mount_zone_profile_endpoint(app)
 _mount_bylaw_query_endpoint(app)
 _mount_spatial_candidate_text_endpoint(app)
 _mount_advisor_search_include_flags_endpoint(app)
+_mount_advisor_search_attribute_tag_filter_endpoint(app)
 _mount_claude_code_translation_endpoints(app)
 _mount_claude_code_transport_endpoint(app)
 _mount_llm_registry_probe_endpoint(app)

@@ -233,6 +233,29 @@ def create_mcp_server(db_url: str | None = None, *, all_documents: bool = False)
           - geometry: caller-supplied GeoJSON Point/Polygon in EPSG:4326
 
         --------------------------------------------------------------------
+        Narrowing by regulated attribute:
+
+        ``attribute_tag_filter`` is an INDEXED hard pre-filter on the
+        candidate clause set. When the question targets a specific
+        regulated dimension, pass the matching attribute IDs and only
+        clauses tagged with at least one of them are scored — so the
+        answer comes from the provisions that actually regulate the
+        attribute rather than any prose sharing its vocabulary.
+
+            search_bylaw_evidence(
+                query="maximum building height",
+                attribute_tag_filter=["building_height_m"],
+            )
+
+        Valid IDs are the ``id`` values in the Phase-1 attribute taxonomy
+        (``src/layer2/compliance/attributes/taxonomy.yaml``) — e.g.
+        building_height_m, front_setback_m, rear_setback_m,
+        lot_coverage_percent, floor_area_ratio, parking_stalls_count.
+        Multiple IDs union (any-of). An ID outside the taxonomy matches
+        nothing, so don't invent one. Omit the argument for exploratory
+        questions; an EMPTY list is a validation error, not "no filter".
+
+        --------------------------------------------------------------------
         Reading the response:
 
         Each match's ``linked_datasets[*].location_confidence`` reports the
