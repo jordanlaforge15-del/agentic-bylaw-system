@@ -457,17 +457,23 @@ def _is_value_cell(text: str, row_label: str | None, col_label: str | None) -> b
 
     Two exclusions, both of them cells the ingest produces in quantity:
 
-    * **Glyph-only cells.** A permission matrix marks its cells with symbols
-      from a private-use font range (``\\uf020``, ``\\uf098``); stripped of
-      whitespace they are non-empty but carry nothing a reader can read. The
-      marker's *meaning* is what ``get_permitted_use`` resolves, and it does so
-      through the permission-marker vocabulary — not by quoting the glyph.
+    * **Marker-only cells.** A permission matrix marks its cells with symbols
+      from a private-use font range (``\\uf020``, ``\\uf098``) and with circled
+      digits keyed to a footnote legend (``④``); stripped of whitespace they
+      are non-empty but carry nothing a reader can quote back. The marker's
+      *meaning* is what ``get_permitted_use`` resolves, and it does so through
+      the permission-marker vocabulary — not by quoting the glyph. The test is
+      ``isdecimal() or isalpha()`` rather than ``isalnum()`` precisely because
+      ``"④".isalnum()`` is True: a circled digit is a numeral to Python and a
+      footnote reference to a by-law.
     * **Header cells.** A header repeated as its own axis label is the
       question, not the answer: ranking "ER-3" as the value found under the
       column "ER-3" tells the reader nothing.
     """
     stripped = text.strip()
-    if not any(character.isalnum() for character in stripped):
+    if not any(
+        character.isdecimal() or character.isalpha() for character in stripped
+    ):
         return False
     folded = stripped.casefold()
     return folded not in {
