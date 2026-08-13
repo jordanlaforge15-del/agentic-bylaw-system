@@ -3435,34 +3435,31 @@ def score_fragment_detail(fragment: SourceFragment, query: str) -> FragmentScore
     token_patterns = query_token_patterns(query_text)
     if not token_patterns:
         return FragmentScore(score=0.0, matched_tokens=frozenset())
-    haystacks = [fragment.text.lower()]
-    if fragment.citation_label:
-        haystacks.append(fragment.citation_label.lower())
-    if fragment.citation_path:
-        haystacks.append(fragment.citation_path.lower())
-
-    score = 0.0
-    joined = " ".join(haystacks)
-    if query_text == (fragment.citation_path or "").lower():
-        score += 100.0
-    elif fragment.citation_path and query_text in fragment.citation_path.lower():
-        score += 35.0
-    elif query_text in joined:
-        score += 20.0
-
-    # Only the *structural* steps of the path earn path weight. ABS-488
+    # Only the *structural* steps of the path speak for the fragment. ABS-488
     # repathed clauses onto the container that scopes them, which put the
     # container's whole sentence into the child's path as a bracketed segment
-    # — so before ABS-492 a leaf clause banked +12 per token for prose it does
-    # not contain, three times what the fragment that actually states the rule
-    # earns for its own text (+4). That inverted the ranking wholesale: every
-    # "(a)"/"(b)" under a topically-worded container outranked the section
-    # stating the standard. The bracketed prose is not discarded —
-    # ``_text_channel_scores`` re-admits it through the context channel, at
-    # context weight.
+    # — so before ABS-492 a leaf clause banked +12 per token, and +35 for a
+    # phrase, on prose it does not contain: three and nine times what the
+    # fragment that actually states the rule earns for its own text (+4). That
+    # inverted the ranking wholesale, every "(a)"/"(b)" under a topically
+    # worded container outranking the section stating the standard. The
+    # bracketed prose is not discarded — ``_text_channel_scores`` re-admits it
+    # through the context channel, at context weight.
     citation_path, _descriptive = split_citation_path(fragment.citation_path)
     citation_label = (fragment.citation_label or "").lower()
-    text = haystacks[0]
+    text = fragment.text.lower()
+
+    score = 0.0
+    # An exact echo of the path, in either the form the ingest stores or the
+    # form a reader would cite. The rungs below it are strictly the fragment's
+    # own words — its structural path, then its text and label.
+    if query_text in {(fragment.citation_path or "").lower(), citation_path}:
+        score += 100.0
+    elif citation_path and query_text in citation_path:
+        score += 35.0
+    elif query_text in f"{text} {citation_label}":
+        score += 20.0
+
     matched: set[str] = set()
     for token, pattern in token_patterns:
         if citation_path and pattern.search(citation_path):
