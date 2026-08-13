@@ -23,7 +23,7 @@
 //      evaluator still resolves a submission through it — proving the
 //      removal cost no behaviour.
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 
 import { E2E_API_URL, expect, test } from "../fixtures/test-env";
@@ -46,7 +46,7 @@ function pythonEnv(): NodeJS.ProcessEnv {
 
 function runSeed(): void {
   const seed = path.join(repoRoot, "scripts", "seed_e2e_evaluator_bylaws.py");
-  execSync(`"${venvPython}" "${seed}"`, { env: pythonEnv(), stdio: "inherit" });
+  execFileSync(venvPython, [seed], { env: pythonEnv(), stdio: "inherit" });
 }
 
 /** Introspect the migrated e2e database and return the result as JSON. */
@@ -66,7 +66,10 @@ function inspectSchema(): {
     "n = conn.execute(text(\"SELECT count(*) FROM parcel WHERE parcel_identifier = 'E2E00100'\")).scalar_one()",
     "print(json.dumps({'parcel_columns': cols, 'parcel_indexes': idx, 'seeded_parcels': n}))",
   ].join("\n");
-  const out = execSync(`"${venvPython}" -c ${JSON.stringify(script)}`, {
+  // execFileSync, not execSync: the script is multi-line, and routing it
+  // through a shell turns the newlines into literal `\n` escapes inside
+  // the double-quoted `-c` argument, which python rejects outright.
+  const out = execFileSync(venvPython, ["-c", script], {
     env: pythonEnv(),
     encoding: "utf8",
   });
