@@ -59,6 +59,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -130,6 +131,7 @@ class QueryResult:
     first_hit_rank: int | None
     reciprocal_rank: float
     set_recall: float
+    latency_ms: float = 0.0
 
 
 @dataclass
@@ -141,6 +143,38 @@ class Report:
     mrr: float
     by_category: dict[str, dict[str, float | int]]
     results: list[QueryResult] = field(default_factory=list)
+    #: Wall-clock for one ``search`` call, summarised. Host-dependent, and the
+    #: only part of a report that moves on a re-run — see ``latency_summary``.
+    latency_ms: dict[str, float] = field(default_factory=dict)
+
+
+def latency_summary(samples: Sequence[float]) -> dict[str, float]:
+    """Percentiles for one ``search`` call, by nearest rank.
+
+    A ranking change that buys recall by scoring more per fragment has to be
+    read against what it costs to serve, so the harness times the same call it
+    grades rather than leaving latency to a separate one-off script. These
+    numbers describe the host as much as the retriever: they are not
+    reproducible across machines and they will differ between two runs on the
+    same one, which is why they are reported apart from the ranking metrics
+    and never used to fail a run.
+    """
+    if not samples:
+        return {}
+    ordered = sorted(samples)
+
+    def at(quantile: float) -> float:
+        rank = max(1, min(len(ordered), int(round(quantile * len(ordered)))))
+        return round(ordered[rank - 1], 1)
+
+    return {
+        "n": len(ordered),
+        "mean": round(sum(ordered) / len(ordered), 1),
+        "p50": at(0.50),
+        "p95": at(0.95),
+        "p99": at(0.99),
+        "max": round(ordered[-1], 1),
+    }
 
 
 # ----------------------------------------------------------------------
@@ -296,7 +330,9 @@ def evaluate(
     results: list[QueryResult] = []
     for query in queries:
         acceptable = resolve_acceptable_ids(query, resolver)
+        started = time.perf_counter()
         ranked = list(search(query))
+        latency_ms = (time.perf_counter() - started) * 1000.0
         hit, rank, rr, set_recall = score_ranking(ranked, acceptable, k)
         results.append(
             QueryResult(
@@ -309,6 +345,7 @@ def evaluate(
                 first_hit_rank=rank,
                 reciprocal_rank=rr,
                 set_recall=set_recall,
+                latency_ms=latency_ms,
             )
         )
 
@@ -331,6 +368,7 @@ def evaluate(
         mrr=_mean(r.reciprocal_rank for r in results),
         by_category=by_category,
         results=results,
+        latency_ms=latency_summary([r.latency_ms for r in results]),
     )
 
 
@@ -367,6 +405,18 @@ def report_to_dict(
         "set_recall_at_k": report.set_recall_at_k,
         "mrr": report.mrr,
         "by_category": report.by_category,
+        "latency_ms": {
+            "_comment": (
+                "Wall-clock milliseconds for one RetrievalService.search call, "
+                "measured on whatever host ran the harness. Host-dependent and "
+                "not reproducible: this is the ONE block of this file that "
+                "moves between two runs over an unchanged corpus. Reported so "
+                "a ranking change that buys recall by scoring more per fragment "
+                "can be read against what it costs to serve; never used to fail "
+                "a run."
+            ),
+            **report.latency_ms,
+        },
         "queries": [
             {
                 "id": r.id,
@@ -378,6 +428,7 @@ def report_to_dict(
                 "first_hit_rank": r.first_hit_rank,
                 "reciprocal_rank": round(r.reciprocal_rank, 4),
                 "set_recall": round(r.set_recall, 4),
+                "latency_ms": round(r.latency_ms, 1),
             }
             for r in report.results
         ],
@@ -569,6 +620,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Recall@{args.k:<8}: {report.recall_at_k:.4f}")
     print(f"SetRecall@{args.k:<5}: {report.set_recall_at_k:.4f}")
     print(f"MRR@{args.k:<11}: {report.mrr:.4f}")
+    if report.latency_ms:
+        print(
+            f"search latency : p50 {report.latency_ms['p50']:.1f}ms  "
+            f"p95 {report.latency_ms['p95']:.1f}ms  "
+            f"p99 {report.latency_ms['p99']:.1f}ms  "
+            f"(host-dependent)"
+        )
     print()
     print(f"{'category':<16} {'n':>4} {'recall':>8} {'setrec':>8} {'mrr':>8}")
     for category, stats in report.by_category.items():

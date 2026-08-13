@@ -24,6 +24,7 @@ from scripts.eval_retrieval_recall import (
     QuerySetError,
     _db_search_fn,
     evaluate,
+    latency_summary,
     load_query_set,
     report_to_dict,
     resolve_acceptable_ids,
@@ -400,3 +401,62 @@ def test_the_baseline_aggregates_agree_with_its_own_per_query_rows():
         else:
             assert row["first_hit_rank"] is None
             assert row["reciprocal_rank"] == 0.0
+
+
+# ----------------------------------------------------------------------
+# latency (ABS-492)
+# ----------------------------------------------------------------------
+
+
+def test_latency_percentiles_are_nearest_rank_and_include_the_top_sample():
+    """p95 of 100 samples is the 95th, and max is the 100th.
+
+    A percentile that interpolated, or that clipped the tail, would let a
+    ranking change hide its worst case inside an average.
+    """
+    summary = latency_summary([float(value) for value in range(1, 101)])
+    assert summary["n"] == 100
+    assert summary["p50"] == 50.0
+    assert summary["p95"] == 95.0
+    assert summary["p99"] == 99.0
+    assert summary["max"] == 100.0
+    assert summary["mean"] == 50.5
+
+
+def test_latency_summary_of_nothing_is_empty_not_zero():
+    """An empty run has no latency, which is not the same as a fast one."""
+    assert latency_summary([]) == {}
+
+
+def test_evaluate_times_the_same_call_it_grades():
+    """The measurement has to be the graded call, not a separate replay.
+
+    A latency number taken from a warm second pass would understate what the
+    graded ranking actually costs to serve.
+    """
+    service = _StubService({"a": [10]})
+    report = evaluate(
+        [_query("Q1", category="dimensional", question="a")],
+        _db_search_fn(service, 10),
+        _resolver({"Part V > 1": [10]}),
+        k=10,
+    )
+    assert report.latency_ms["n"] == 1
+    assert report.results[0].latency_ms >= 0.0
+    assert report.latency_ms["p95"] == pytest.approx(
+        round(report.results[0].latency_ms, 1)
+    )
+
+
+def test_the_baseline_records_latency_apart_from_the_ranking_metrics():
+    """It is reported, and it is labelled as the one host-dependent block.
+
+    A reviewer diffing BASELINE.json after a re-run must be able to tell the
+    block that always moves from the blocks that only move when ranking does.
+    """
+    baseline = json.loads(BASELINE.read_text())
+    latency = baseline["latency_ms"]
+    assert latency["n"] == baseline["query_count"]
+    assert latency["p50"] <= latency["p95"] <= latency["p99"] <= latency["max"]
+    assert "host-dependent" in latency["_comment"].lower()
+    assert all("latency_ms" in row for row in baseline["queries"])

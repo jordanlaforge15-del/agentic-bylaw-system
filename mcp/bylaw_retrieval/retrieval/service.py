@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Callable
@@ -65,6 +66,7 @@ from bylaw_retrieval.retrieval.schemas import (
     ConditionalUse,
     ZoneUses,
 )
+from bylaw_retrieval.retrieval.context import AncestorIndex, split_citation_path
 from layer1.db.base import (
     CrossReference,
     Document,
@@ -245,6 +247,25 @@ _OVERLAY_ROLE_NOUNS: dict[str, str] = {
     "pedestrian_street": "pedestrian-oriented commercial street designation",
     "overlay": "overlay",
 }
+
+
+#: A query's distinct tokens paired with their compiled word-boundary
+#: matchers, as returned by :func:`query_token_patterns`.
+TokenPatterns = tuple[tuple[str, "re.Pattern[str]"], ...]
+
+
+@dataclass(frozen=True)
+class FragmentScore:
+    """What one fragment earned on its own words, and which words earned it.
+
+    ``matched_tokens`` is the set of query tokens the fragment accounted for
+    itself — through its text, its citation label or the structural steps of
+    its citation path. The context channel subtracts it so scope inherited
+    from a container is only ever paid for once (ABS-492).
+    """
+
+    score: float
+    matched_tokens: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -2870,19 +2891,126 @@ class RetrievalService:
     # only when its score exceeds this baseline.
     _TEXT_CHANNEL_THRESHOLD = 1.0
 
+    # Provision-in-context (ABS-492). A token the clause does not state but
+    # its containers do is real evidence of scope and weaker evidence than the
+    # clause's own words, so it scores below the own-text weight (+4) rather
+    # than at it. Set too high, a Part heading naming a zone drags its whole
+    # subtree above clauses that state the standard; set to zero, the 2,968
+    # fragments with no citation_path keep no visible scope at all.
+    _CONTEXT_TOKEN_SCORE = 2.0
+
+    # A token that matches a large share of the scope is describing the corpus,
+    # not the clause: "the", "is", "zone" and "building" all hit thousands of
+    # fragments, and crediting them as inherited scope would add a near-constant
+    # to every fragment that happens to have an ancestor. The cut is a document
+    # frequency measured on this request's own scope rather than a hand-kept
+    # stop-word list, so it adapts to a narrowed scope (attribute_tag_filter)
+    # and to a corpus this repo has not ingested yet.
+    _CONTEXT_TOKEN_MAX_DF = 0.15
+
     def _text_channel_scores(self, request: RetrievalRequest) -> dict[int, float]:
         """Keyword-score every in-scope fragment. Returns {fragment_id: score}
         for fragments whose score exceeds the parse-status baseline (i.e. the
         query text actually matched some content).
+
+        Two things are scored: the fragment's own citable identity (text,
+        label, structural citation path) and the scope its containers supply —
+        the bracketed prose in its own path plus every ancestor's heading and
+        text. The threshold is applied to the sum, which is what makes a
+        stripped list item ("(f) 2.5 metres elsewhere.") reachable through its
+        parent section's terms instead of invisible to the channel entirely.
         """
         stmt = self._fragment_scope_statement(request)
         fragments = self.session.execute(stmt).scalars().all()
+        if not fragments:
+            return {}
+
+        details = {
+            fragment.id: score_fragment_detail(fragment, request.query)
+            for fragment in fragments
+        }
+        token_patterns = query_token_patterns(request.query.strip().lower())
+        discriminating = self._discriminating_tokens(token_patterns, details.values())
+
+        index = AncestorIndex.build(self.session, fragments)
+        # Ancestors are shared by whole subtrees, so the per-ancestor token
+        # match is memoised: the corpus has ~7k fragments over ~1.6k distinct
+        # ancestors, and a Part heading is re-scored once instead of once per
+        # descendant.
+        ancestor_tokens: dict[int, frozenset[str]] = {}
+
         scored: dict[int, float] = {}
         for fragment in fragments:
-            score = self._score_fragment(fragment, request.query)
+            detail = details[fragment.id]
+            context = self._context_tokens(
+                fragment, index, token_patterns, ancestor_tokens
+            )
+            # Only tokens the fragment does not already account for: an
+            # ancestor repeating the clause's own words is not new evidence.
+            inherited = (context & discriminating) - detail.matched_tokens
+            score = detail.score + self._CONTEXT_TOKEN_SCORE * len(inherited)
             if score > self._TEXT_CHANNEL_THRESHOLD:
                 scored[fragment.id] = score
         return scored
+
+    def _discriminating_tokens(
+        self,
+        token_patterns: TokenPatterns,
+        details: Iterable[FragmentScore],
+    ) -> frozenset[str]:
+        """The query tokens rare enough in this scope to carry scope.
+
+        Document frequency comes from the own-identity match already computed
+        for every in-scope fragment, so the cut costs counting, not a second
+        pass over the text.
+        """
+        document_frequency: Counter[str] = Counter()
+        scope_size = 0
+        for detail in details:
+            scope_size += 1
+            document_frequency.update(detail.matched_tokens)
+        if scope_size == 0:
+            return frozenset()
+        cut = scope_size * self._CONTEXT_TOKEN_MAX_DF
+        return frozenset(
+            token
+            for token, _pattern in token_patterns
+            if document_frequency[token] <= cut
+        )
+
+    def _context_tokens(
+        self,
+        fragment: SourceFragment,
+        index: AncestorIndex,
+        token_patterns: TokenPatterns,
+        ancestor_tokens: dict[int, frozenset[str]],
+    ) -> frozenset[str]:
+        """Query tokens stated by this fragment's containers.
+
+        Two sources, both of them container prose rather than the clause's own
+        words: the bracketed segments of its citation path (the container
+        sentence ABS-488 folded into the path) and the text and heading of
+        every ancestor.
+        """
+        _structural, descriptive = split_citation_path(fragment.citation_path)
+        matched: set[str] = (
+            {token for token, pattern in token_patterns if pattern.search(descriptive)}
+            if descriptive
+            else set()
+        )
+        for ancestor_id in index.chain(fragment.id):
+            cached = ancestor_tokens.get(ancestor_id)
+            if cached is None:
+                node = index.node(ancestor_id)
+                haystack = node.haystack if node is not None else ""
+                cached = frozenset(
+                    token
+                    for token, pattern in token_patterns
+                    if haystack and pattern.search(haystack)
+                )
+                ancestor_tokens[ancestor_id] = cached
+            matched |= cached
+        return frozenset(matched)
 
     def _spatial_channel_scores(
         self,
@@ -3284,42 +3412,71 @@ class RetrievalService:
         return document
 
     def _score_fragment(self, fragment: SourceFragment, query: str) -> float:
-        query_text = query.strip().lower()
-        tokens = _tokenize(query_text)
-        if not tokens:
-            return 0.0
-        haystacks = [fragment.text.lower()]
-        if fragment.citation_label:
-            haystacks.append(fragment.citation_label.lower())
-        if fragment.citation_path:
-            haystacks.append(fragment.citation_path.lower())
+        return score_fragment_detail(fragment, query).score
 
-        score = 0.0
-        joined = " ".join(haystacks)
-        if query_text == (fragment.citation_path or "").lower():
-            score += 100.0
-        elif fragment.citation_path and query_text in fragment.citation_path.lower():
-            score += 35.0
-        elif query_text in joined:
-            score += 20.0
 
-        citation_path = (fragment.citation_path or "").lower()
-        citation_label = (fragment.citation_label or "").lower()
-        text = haystacks[0]
-        unique_tokens = set(tokens)
-        for token in unique_tokens:
-            if citation_path and _token_matches(token, citation_path):
-                score += 12.0
-            elif citation_label and _token_matches(token, citation_label):
-                score += 8.0
-            elif _token_matches(token, text):
-                score += 4.0
+def score_fragment_detail(fragment: SourceFragment, query: str) -> FragmentScore:
+    """Score a fragment on its own citable identity, and say which query tokens
+    it accounted for.
 
-        if fragment.parse_status.value == "parsed":
-            score += 1.0
+    Reads nothing but ``text`` / ``citation_label`` / ``citation_path`` /
+    ``parse_status`` off the fragment, which is why it is a function rather
+    than a method: the scoring rule is pure and is exercised as such by
+    ``tests/bylaw_retrieval/test_score_fragment_tokens.py``.
+
+    The matched-token set is what makes the context channel additive rather
+    than duplicative: a token the fragment already states itself must not be
+    paid for a second time because an ancestor happens to repeat it (see
+    :meth:`RetrievalService._text_channel_scores`). It also supplies the
+    document-frequency counts that decide which tokens are discriminating
+    enough to carry scope at all.
+    """
+    query_text = query.strip().lower()
+    token_patterns = query_token_patterns(query_text)
+    if not token_patterns:
+        return FragmentScore(score=0.0, matched_tokens=frozenset())
+    # Only the *structural* steps of the path speak for the fragment. ABS-488
+    # repathed clauses onto the container that scopes them, which put the
+    # container's whole sentence into the child's path as a bracketed segment
+    # — so before ABS-492 a leaf clause banked +12 per token, and +35 for a
+    # phrase, on prose it does not contain: three and nine times what the
+    # fragment that actually states the rule earns for its own text (+4). That
+    # inverted the ranking wholesale, every "(a)"/"(b)" under a topically
+    # worded container outranking the section stating the standard. The
+    # bracketed prose is not discarded — ``_text_channel_scores`` re-admits it
+    # through the context channel, at context weight.
+    citation_path, _descriptive = split_citation_path(fragment.citation_path)
+    citation_label = (fragment.citation_label or "").lower()
+    text = fragment.text.lower()
+
+    score = 0.0
+    # An exact echo of the path, in either the form the ingest stores or the
+    # form a reader would cite. The rungs below it are strictly the fragment's
+    # own words — its structural path, then its text and label.
+    if query_text in {(fragment.citation_path or "").lower(), citation_path}:
+        score += 100.0
+    elif citation_path and query_text in citation_path:
+        score += 35.0
+    elif query_text in f"{text} {citation_label}":
+        score += 20.0
+
+    matched: set[str] = set()
+    for token, pattern in token_patterns:
+        if citation_path and pattern.search(citation_path):
+            score += 12.0
+        elif citation_label and pattern.search(citation_label):
+            score += 8.0
+        elif pattern.search(text):
+            score += 4.0
         else:
-            score -= 2.0
-        return score
+            continue
+        matched.add(token)
+
+    if fragment.parse_status.value == "parsed":
+        score += 1.0
+    else:
+        score -= 2.0
+    return FragmentScore(score=score, matched_tokens=frozenset(matched))
 
 
 @dataclass(frozen=True)
@@ -3499,6 +3656,26 @@ def _token_matches(token: str, haystack: str) -> bool:
     Whole word up to an inflectional suffix — see :func:`_token_pattern`.
     """
     return _token_pattern(token).search(haystack) is not None
+
+
+@lru_cache(maxsize=1024)
+def query_token_patterns(query_text: str) -> tuple[tuple[str, re.Pattern[str]], ...]:
+    """The query's distinct tokens, each paired with its word-boundary matcher.
+
+    Scoring asks the same question of the same query several million times per
+    request — every distinct token against every haystack of every in-scope
+    fragment — so tokenising and looking the pattern up per fragment is the
+    single largest avoidable cost in the text channel. Deriving both once per
+    query text pays for the whole provision-in-context channel and then some.
+
+    ``dict.fromkeys`` rather than ``set`` so the order is the query's own:
+    scoring is order-independent, but a deterministic order keeps a scoring
+    trace readable when someone is working out why a fragment ranked.
+    """
+    return tuple(
+        (token, _token_pattern(token))
+        for token in dict.fromkeys(_tokenize(query_text))
+    )
 
 
 # "198(1)(f)" -> ["198", "(1)", "(f)"]. Also splits the stored form,

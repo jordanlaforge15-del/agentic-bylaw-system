@@ -38,6 +38,9 @@ SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     # the lock also keeps one worker's get-or-create from overlapping another's.
     "seed_e2e_abs480_citation_collision.py",
     "seed_e2e_abs488_citation_repath.py",
+    # ABS-492: the provision-in-context probe tree (chapter > section > list
+    # item, plus the repathed decoy the fix demotes).
+    "seed_e2e_abs492_provision_context.py",
     "seed_e2e_amendment_relink.py",
     "seed_e2e_axis_binding.py",
     "seed_e2e_contamination_marker.py",
