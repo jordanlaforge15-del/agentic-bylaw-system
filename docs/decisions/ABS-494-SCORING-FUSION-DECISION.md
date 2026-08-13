@@ -148,9 +148,19 @@ confident results destroyed. Nine questions moved in the other direction.
 ## The zone-profile gate, and what it could not tell us
 
 The ticket's ship gate is "Recall@10 improves **without zone-profile
-regression**". The gate was run over all 19 zones the query set names
-(`--zone-gate`). Result for the shipped arm: **no zone became unknown, and no
-zone's permitted-use count moved.**
+regression**". The gate was run over all 19 zones the query set names:
+
+```bash
+python scripts/eval_retrieval_experiment.py --database-url … --zone-gate \
+    --arms current,fts_hybrid_50,rrf_all_channels,rrf_all_channels_top50,fts_hybrid_rrf_text --dry-run
+```
+
+Result for the shipped arm: **no zone became unknown, and no zone's
+permitted-use count moved.** (Run *before* the ship, when `current` was still
+the 0.5588 retriever — that is the comparison the decision turned on. Re-running
+it now compares the hybrid against itself, since the `current` arm tracks
+production; to reproduce the original diff, run it at the parent of the commit
+that shipped the blend.)
 
 **But the field comparison it also reports is vacuous on this corpus, and the
 script now says so rather than printing a clean-looking pass.** The control
