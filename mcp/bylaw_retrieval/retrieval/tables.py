@@ -41,6 +41,7 @@ which already cites a permitted-use matrix through the same anchor.
 """
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -341,16 +342,20 @@ def _fragment_block_order(session, document_id: int) -> list[tuple[int, int, int
 def _preceding_fragment(
     ordered: list[tuple[int, int, int]], table: SourceTable
 ) -> int | None:
-    """The fragment immediately before ``table`` in reading order, or None."""
+    """The fragment immediately before ``table`` in reading order, or None.
+
+    Binary search rather than a scan: ``ordered`` is one entry per fragment in
+    the document (7,100 in the dev corpus) and this is called once per
+    parentless table (63 of them), so scanning would be a real half-million-step
+    loop inside every request that builds the index.
+    """
     block_id = (table.metadata_json or {}).get("source_block_id")
     if isinstance(block_id, int) and ordered:
-        best: int | None = None
-        for candidate_block, _page, fragment_id in ordered:
-            if candidate_block >= block_id:
-                break
-            best = fragment_id
-        if best is not None:
-            return best
+        # bisect_left over the sorted (block_id, …) tuples: the entry before the
+        # insertion point is the last fragment ending strictly before the table.
+        position = bisect_left(ordered, (block_id, -1, -1))
+        if position > 0:
+            return ordered[position - 1][2]
     # No block ordering (a non-docling ingest): fall back to the last fragment
     # that starts on or before the table's first page.
     best_page: int | None = None
