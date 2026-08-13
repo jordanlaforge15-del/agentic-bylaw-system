@@ -142,6 +142,12 @@ python scripts/eval_retrieval_recall.py \
     --k 25 --dry-run
 ```
 
+**Pass `--database-url` explicitly from a worktree shell.** The default comes
+from settings, which a worktree's `PG_PORT` / `DATABASE_URL` exports rewrite —
+so a shell set up for a parallel e2e run points the harness at that worktree's
+*ephemeral* e2e database (empty corpus, every anchor unresolvable) rather than
+at the dev corpus this baseline was measured against.
+
 The harness needs a corpus. The unit test does not: it drives the same pure
 scoring and loading code through a stubbed retrieval service, so the metric
 arithmetic, the category/duplicate/threshold validation and the
