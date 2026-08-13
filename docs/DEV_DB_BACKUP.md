@@ -8,6 +8,13 @@ Two scripts back it up nightly, on a daily / weekly / monthly rotation
 - `scripts/backup-dev-db.sh` — one-shot dump
 - `scripts/install-backup-cron.sh` — install / remove the daily cron entry
 
+A third takes a **labelled, rotation-exempt** snapshot immediately before
+anything migrates the data — see
+[The migration fence](#the-migration-fence-abs-499) below:
+
+- `scripts/snapshot-before-migration.sh` — tagged pre-migration dump
+- `scripts/check_migration_drift.py` — is the DB behind this branch?
+
 ## Where backups live
 
 ```
@@ -24,6 +31,16 @@ $HOME/backups/agentic-bylaw-system/
   ...
   layer1-monthly-2026-08.dump
   backup.log
+```
+
+Labelled pre-migration snapshots live in their own subdirectory, under
+their own timestamped names, and are **never** touched by the rotation
+below — see [The migration fence](#the-migration-fence-abs-499):
+
+```
+$HOME/backups/agentic-bylaw-system/labelled/
+  layer1-alembic-upgrade-from-0025_signup_grant_unique-20260813T104400.dump
+  layer1-repath-citation-paths-20260813T104512.dump
 ```
 
 Dumps use `pg_dump -Fc` (custom format) so they restore with
@@ -57,8 +74,9 @@ Two properties worth knowing:
 - **The prune only ever touches files matching its own tier prefix**
   (`layer1-weekly-*.dump`, `layer1-monthly-*.dump`). A hand-copied
   snapshot such as `layer1-pre-data-model-3.0-20260812.dump` is invisible
-  to it and survives indefinitely. Daily slots are never pruned either —
-  they rotate in place.
+  to it and survives indefinitely, and so is everything under
+  `labelled/`. Daily slots are never pruned either — they rotate in
+  place.
 
 ### Preview the plan without touching anything
 
@@ -129,7 +147,10 @@ cp -p layer1-Wed.dump layer1-pre-<change>-$(date +%Y%m%d).dump
 ```
 
 Those keepsakes are *not* counted in the 17-slot ceiling; budget their
-disk yourself.
+disk yourself. For the pre-migration case specifically you no longer have
+to remember to do this by hand — [the migration
+fence](#the-migration-fence-abs-499) takes a labelled snapshot into
+`labelled/` before anything mutates the data.
 
 To restore into a throwaway Postgres instead of clobbering dev, use
 [the clone script](#isolated-clone-db-for-experiments).
@@ -165,6 +186,158 @@ keeps the newest slots, that hand-copied dumps survive it, and that
 
 ```bash
 .venv/bin/pytest tests/test_backup_dev_db.py
+```
+
+---
+
+## The migration fence (ABS-499)
+
+### Why
+
+The rotation is time-keyed, not event-keyed: the daily tier holds seven
+slots, and the weekly / monthly tiers are promoted copies of whichever daily
+dump happened to land first that week or month. A data migration that runs
+between two nightly dumps can therefore have its pre-change state overwritten
+inside a single seven-day cycle, and whether any longer-lived tier happens to
+preserve it is pure calendar luck — nothing about the rotation knows a
+migration happened.
+
+During Data Model 3.0 that nearly happened twice: ABS-488's repath rewrote
+citation paths corpus-wide (720 citable-but-unpathed fragments → 0) and
+ABS-480's status backfill touched 834 rows. Both landed 22:17–23:29, *after*
+that day's 03:00 dump. A clean pre-change snapshot exists only because of that
+timing. At 02:00 it would have been gone.
+
+So: **nothing mutates dev data without a labelled snapshot landing first.** If
+the snapshot cannot be taken, the migration does not run. A migration that
+didn't run is recoverable; a pre-change state that was never captured is not.
+
+### What is fenced
+
+| Entry point | Tag | Fired when |
+| ----------- | --- | ---------- |
+| `alembic upgrade` / `downgrade` (`alembic/env.py`) | `alembic-<cmd>-from-<current>` | Before the first DDL, and only when a migration is actually pending |
+| `scripts/repath_citation_paths.py` | `repath-citation-paths[-revert]` | Apply and `--revert`; **not** `--dry-run` |
+| `scripts/backfill_*.py` (whole family) | `backfill-<name>[-revert]` | Apply and `--revert`; **not** `--dry-run` |
+
+Read-only alembic subcommands (`current`, `history`) are not fenced, and an
+`alembic upgrade` on a DB already at head skips the dump — there is nothing to
+protect.
+
+Adding a new script that mutates dev data? Two lines:
+
+```python
+from layer1.db.migration_fence import fence_or_abort
+
+if not args.dry_run:
+    fence_or_abort("my-new-backfill", database_url=args.database_url)
+```
+
+`fence_or_abort` prints `ABORT: …` and exits **3** if the snapshot fails —
+before your first write, and without a traceback.
+
+### Scope: dev only
+
+The fence engages only when the target DSN is the local dev database: local
+host, port 5432, database `layer1`. Everything else is deliberately out of
+scope — the e2e stack (`layer1_test` on a per-worktree port), clone DBs, CI,
+and production all have disposable or separately-backed-up state, and dumping
+hundreds of megabytes on every `alembic upgrade` in the e2e boot path would be
+pure cost.
+
+### Take one by hand
+
+```bash
+scripts/snapshot-before-migration.sh abs-512-something-risky
+# => $HOME/backups/agentic-bylaw-system/labelled/layer1-abs-512-something-risky-<stamp>.dump
+```
+
+The path is the only thing on stdout, so it can be captured:
+
+```bash
+snap="$(scripts/snapshot-before-migration.sh abs-512-something-risky)"
+```
+
+### Restore from a labelled snapshot
+
+Same as any other dump — the file is a plain `pg_dump -Fc`:
+
+```bash
+# Newest labelled snapshot for a given tag:
+snap="$(ls -t "$HOME"/backups/agentic-bylaw-system/labelled/layer1-repath-citation-paths-*.dump | head -1)"
+
+docker exec -i agentic-bylaw-system-postgres-1 dropdb -U layer1 --if-exists layer1
+docker exec -i agentic-bylaw-system-postgres-1 createdb -U layer1 layer1
+docker exec -i agentic-bylaw-system-postgres-1 \
+  pg_restore -U layer1 -d layer1 --no-owner < "$snap"
+```
+
+Restoring rewinds the schema too, so re-check for drift afterwards
+(`make check-migration-drift`) and `make migrate` if it reports pending work.
+
+Labelled snapshots are never pruned automatically. They are the record of what
+the corpus looked like before each migration; delete them deliberately, once
+the migration they fence is known good.
+
+### Opting out
+
+```bash
+BYLAW_SKIP_MIGRATION_SNAPSHOT=1 python scripts/backfill_parcels.py
+```
+
+Logged at WARNING every time. Use it when you have *just* taken a snapshot by
+hand, not to make a red run go green.
+
+| Variable                          | Effect |
+| --------------------------------- | ------ |
+| `BYLAW_SKIP_MIGRATION_SNAPSHOT=1` | Disable the fence (wins over everything) |
+| `BYLAW_FORCE_MIGRATION_SNAPSHOT=1`| Fence *any* target, not just the dev DB (e.g. a clone) |
+| `BYLAW_SNAPSHOT_SCRIPT`           | Path to the snapshot script |
+| `BYLAW_DEV_PG_PORT` / `BYLAW_PG_DB` | What counts as "the dev database" (5432 / `layer1`) |
+| `BYLAW_SNAPSHOT_TIMEOUT_S`        | `pg_dump` timeout (default 1800) |
+
+## Migration drift check
+
+Data migrations applied on top of a *pending schema* migration is how DM3.0
+ended up with the dev DB stamped `0025_signup_grant_unique` while
+`0026_drop_parcel_zone_code` had never run. The split state was silent until
+someone went looking. This makes it loud:
+
+```bash
+make check-migration-drift            # or: python scripts/check_migration_drift.py
+```
+
+```
+alembic_version : 0025_signup_grant_unique
+branch head     : 0026_drop_parcel_zone_code
+status          : BEHIND — 1 migration(s) pending
+  - 0026_drop_parcel_zone_code  (alembic/versions/0026_drop_parcel_zone_code.py)
+      Drop the write-only ``parcel.zone_code`` column (ABS-481).
+```
+
+Exit codes: `0` in sync, `1` behind, `2` undeterminable (unreachable DB, or a
+revision recorded in the DB that does not exist on this branch — meaning the
+database is *ahead of* or diverged from the checkout). `--exit-zero` reports
+without failing the caller. Run it before a data migration, and after
+restoring a snapshot.
+
+### Tests
+
+- `tests/test_snapshot_before_migration.py` — labelled path and captured
+  stdout, **rotation exemption** (eight nightly runs leave the labelled dump
+  byte-identical), tag sanitisation, and nonzero-exit-with-no-artifact when
+  `pg_dump` fails.
+- `tests/test_migration_fence.py` — the dev-only scope gate, refusal semantics,
+  and every wired entry point run as a subprocess: each snapshots with its own
+  tag, each aborts with exit 3 before opening a connection when the snapshot
+  fails, dry runs are not fenced, and `alembic upgrade` never reaches its first
+  DDL unsnapshotted while `alembic current` is not fenced at all.
+- `tests/scripts/test_check_migration_drift.py` — the DM3.0 split state,
+  in-sync, never-stamped, and DB-ahead-of-branch cases.
+
+```bash
+.venv/bin/pytest tests/test_snapshot_before_migration.py tests/test_migration_fence.py \
+  tests/scripts/test_check_migration_drift.py
 ```
 
 ---

@@ -28,6 +28,10 @@ Environment overrides
 ``BYLAW_SKIP_MIGRATION_SNAPSHOT``
     Truthy (``1``/``true``/``yes``) disables the fence. Logged at WARNING —
     skipping is a deliberate, visible act, not a default.
+``BYLAW_FORCE_MIGRATION_SNAPSHOT``
+    Truthy engages the fence for *any* target, bypassing the scope gate — for
+    fencing a clone, or for tests that need the fence without a dev DB.
+    ``BYLAW_SKIP_MIGRATION_SNAPSHOT`` still wins.
 ``BYLAW_SNAPSHOT_SCRIPT``
     Path to the snapshot script. Defaults to the copy in this checkout.
 ``BYLAW_DEV_PG_PORT`` / ``BYLAW_PG_DB``
@@ -106,6 +110,10 @@ def _snapshots_disabled() -> bool:
     return os.getenv("BYLAW_SKIP_MIGRATION_SNAPSHOT", "").strip().lower() in _TRUTHY
 
 
+def _snapshots_forced() -> bool:
+    return os.getenv("BYLAW_FORCE_MIGRATION_SNAPSHOT", "").strip().lower() in _TRUTHY
+
+
 def snapshot_before_migration(
     tag: str,
     *,
@@ -129,7 +137,7 @@ def snapshot_before_migration(
         )
         return None
 
-    if not targets_dev_database(database_url):
+    if not _snapshots_forced() and not targets_dev_database(database_url):
         log.debug("snapshot fence skipped for %r: target is not the dev database", tag)
         return None
 
