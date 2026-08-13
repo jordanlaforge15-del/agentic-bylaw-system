@@ -13,10 +13,18 @@ from layer1.pipeline.block_classifier import (
     normalize_text,
     split_toc_lines,
 )
+from layer1.pipeline.citation_repath import (
+    part_label_with_chapter,
+    repath_low_level_fragments,
+)
 from layer1.pipeline.citations import CitationMatch, citation_path, parse_citation_label
 from layer1.profiles import ParsingProfile, get_parsing_profile
 
 LOW_LEVEL_FRAGMENT_TYPES = {FragmentType.CLAUSE, FragmentType.SUBCLAUSE}
+PART_FRAGMENT_TYPES = {FragmentType.PART, FragmentType.SCHEDULE, FragmentType.APPENDIX}
+
+#: Confidence ceiling for a labelled provision no citation path can reach.
+UNADDRESSABLE_CONFIDENCE = 0.6
 
 
 @dataclass
@@ -117,13 +125,6 @@ def _looks_like_heading_title(text: str) -> bool:
     titleish = sum(1 for word in alpha_words[:6] if word[:1].isupper())
     lowerish = sum(1 for word in alpha_words[:6] if word[:1].islower())
     return titleish >= lowerish
-
-
-def _heading_context_segment(text: str) -> str | None:
-    cleaned = normalize_text(text)
-    if not cleaned:
-        return None
-    return f"[{cleaned}]"
 
 
 def _is_mid_sentence_number(match: CitationMatch) -> bool:
@@ -319,28 +320,45 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
                 and definition_container_index is None
             ):
                 contextual_parent_index = current_heading_context_index
-                if path_parent:
-                    heading_segment = _heading_context_segment(fragments[current_heading_context_index].text)
-                    if heading_segment:
-                        path_parent = f"{path_parent} > {heading_segment}"
+                # The path a clause ends up with is decided by
+                # ``repath_low_level_fragments`` once the whole document is
+                # built (ABS-488); the sticky heading only picks the parent
+                # fragment here, it no longer decorates the path.
             can_address = not (match.fragment_type in LOW_LEVEL_FRAGMENT_TYPES and not path_parent)
-            path = citation_path(path_parent, match.label) if can_address else None
+            # A Part's chapter belongs in the Part heading's own label — all
+            # eight of Part I's chapters otherwise compute the bare "Part I" and
+            # collide. Descendants keep inheriting the chapter-free path, so
+            # every stored "Part I > 9" stays exactly where it was.
+            fragment_label = (
+                part_label_with_chapter(match.label, match.title)
+                if match.fragment_type in PART_FRAGMENT_TYPES
+                else match.label
+            )
+            path = citation_path(path_parent, fragment_label) if can_address else None
             status = ParseStatus.PARSED if can_address else ParseStatus.UNCERTAIN
-            confidence = match.confidence if can_address else min(match.confidence, 0.6)
+            # Left uncapped here: the repath pass has the final say on which
+            # low-level fragments are addressable, so it applies the ceiling.
+            confidence = match.confidence
             idx = _append_fragment(
                 fragments,
                 block,
                 block_indices,
                 match.fragment_type,
                 text,
-                match.label,
+                fragment_label,
                 contextual_parent_index,
                 path,
                 status,
                 confidence,
                 page_end=block_page_end,
             )
-            stack.append(StackEntry(index=idx, level=match.level, path=path))
+            stack.append(
+                StackEntry(
+                    index=idx,
+                    level=match.level,
+                    path=citation_path(path_parent, match.label) if can_address else None,
+                )
+            )
             last_content_parent = idx
             if match.fragment_type not in LOW_LEVEL_FRAGMENT_TYPES:
                 definition_context_index = None
@@ -463,8 +481,31 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
                 definition_context_index = idx
             else:
                 definition_context_index = None
+    _apply_low_level_repath(fragments)
     _clear_duplicate_citation_paths(fragments)
     return fragments
+
+
+def _apply_low_level_repath(fragments: list[FragmentData]) -> None:
+    """Rebuild clause and subclause paths from the container that scopes them.
+
+    A post-pass rather than something woven into the walk above, because it has
+    to be the *same* computation the corpus migration runs over rows already in
+    a database (``scripts/repath_citation_paths.py``) — a clause path that
+    ingest and migration disagreed about would be a citation that changes
+    meaning depending on which one last touched the row. See
+    :mod:`layer1.pipeline.citation_repath`.
+    """
+    for fragment, path in zip(fragments, repath_low_level_fragments(fragments), strict=True):
+        if fragment.fragment_type not in LOW_LEVEL_FRAGMENT_TYPES:
+            continue
+        fragment.citation_path = path
+        if path is None:
+            fragment.parse_status = ParseStatus.UNCERTAIN
+            if fragment.confidence is not None:
+                fragment.confidence = min(fragment.confidence, UNADDRESSABLE_CONFIDENCE)
+        else:
+            fragment.parse_status = ParseStatus.PARSED
 
 
 def _prepare_blocks_for_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile) -> list[HierarchyBlock]:

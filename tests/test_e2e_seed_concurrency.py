@@ -34,7 +34,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     "seed_e2e_abs270_structured.py",
     "seed_e2e_abs478_tokenization.py",
+    # ABS-480 / ABS-488: both rebuild their fragments from the real parser, so
+    # the lock also keeps one worker's get-or-create from overlapping another's.
     "seed_e2e_abs480_citation_collision.py",
+    "seed_e2e_abs488_citation_repath.py",
     "seed_e2e_amendment_relink.py",
     "seed_e2e_axis_binding.py",
     "seed_e2e_contamination_marker.py",

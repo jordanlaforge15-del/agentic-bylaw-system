@@ -131,4 +131,6 @@ has to guess at the path format — so the two should ship together.
 
 Separately, the 720 citable-but-missing clauses in
 [citation-path-coverage.md](citation-path-coverage.md) are present on prod
-too and are **not** addressed by this migration. That is the follow-up ticket.
+too and are **not** addressed by this migration. That is ABS-488, whose own
+runbook is [citation-path-repath.md](citation-path-repath.md). Apply that one
+*after* this one: the repath reads the section anchors this repair corrects.

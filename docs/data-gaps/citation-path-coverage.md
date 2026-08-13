@@ -10,6 +10,22 @@ land inside a page-break repair.
 **Measured:** 2026-08-11, dev Postgres, `document_id=4` (HRM Regional Centre
 Land Use By-law), after the ABS-461 page-break repair.
 
+> **Closed by ABS-488 (2026-08-12).** The follow-up ticket proposed at the
+> bottom of this page shipped: clause paths now carry the container that scopes
+> them, Part paths carry their chapter, and
+> `scripts/repath_citation_paths.py` migrates an already-ingested corpus onto
+> that shape. Document 4's citable-but-missing count is **0**; the dev corpus is
+> migrated and production is not yet. The numbers below are the *pre-fix*
+> measurement and are kept as the record of what the defect was —
+> [citation-path-repath.md](citation-path-repath.md) has the after-state, the
+> retrieval-eval numbers and the production runbook.
+>
+> Two things this page raised are still open: the 743 unlabelled `list_item`
+> fragments whose subsection number the renderer stripped (sizing needs the
+> source PDF), and the Mainland LUB's repeated section numbers across schedules,
+> which leave 63 citable-but-missing there and are a section-level collision
+> rather than a clause-level one.
+
 Reproduce with:
 
 ```
@@ -123,6 +139,9 @@ That is a ticket's worth of work with its own migration and its own evaluation,
 and bundling it into a page-break repair would make both harder to review.
 
 ## Proposed follow-up ticket
+
+*Filed and shipped as ABS-488; see the banner at the top. Kept verbatim so the
+scope that was proposed can be compared against the scope that landed.*
 
 > **Title:** Ingest: 720 clauses (16.6% of document 4) are unreachable because
 > their citation path omits the subsection that disambiguates them
