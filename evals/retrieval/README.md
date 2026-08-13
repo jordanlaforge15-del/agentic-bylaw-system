@@ -13,8 +13,10 @@ them controls. Everything here measures the retriever alone: one
 | Question set | `queries.json` — 68 labelled questions |
 | Harness | `scripts/eval_retrieval_recall.py` |
 | Baseline | `BASELINE.json` |
-| Unit test | `tests/scripts/test_eval_retrieval_recall.py` (stubbed service, no DB) |
-| Offline guard | `web/e2e/functional/abs486-retrieval-eval.spec.ts` |
+| Regenerate | **`make eval-retrieval-baseline`** |
+| Freshness gate | `scripts/check_retrieval_baseline.py` / `make check-retrieval-baseline` |
+| Unit tests | `tests/scripts/test_eval_retrieval_recall.py`, `tests/scripts/test_check_retrieval_baseline.py` (no DB) |
+| Offline guards | `web/e2e/functional/abs486-retrieval-eval.spec.ts`, `web/e2e/functional/abs502-retrieval-baseline-freshness.spec.ts` |
 
 ## Tier: agent-drafted, pending human spot-check
 
@@ -114,7 +116,7 @@ After a re-ingest:
 
 ```bash
 python scripts/eval_retrieval_recall.py --refresh-fragment-ids   # review the diff
-python scripts/eval_retrieval_recall.py                          # re-measure
+make eval-retrieval-baseline                                     # re-measure
 ```
 
 The re-measured baseline is a **new measurement, not a regression** against the
@@ -134,6 +136,70 @@ which measures the host and is expected to differ:
    `(-score, fragment_id)`, so ties break on the primary key rather than on set
    iteration order. This matters more than it sounds: at the current scoring the
    top of most rankings is a block of tied scores.
+
+## Regenerating the baseline, and the gate that makes you
+
+```bash
+make eval-retrieval-baseline
+```
+
+That is the whole regeneration path: it runs the harness against the dev corpus,
+rewrites `BASELINE.json`, and stamps into it a fingerprint of every file that can
+move a ranking. Override the database with
+`make eval-retrieval-baseline EVAL_DB_URL=…`; it defaults to the dev DSN rather
+than the ambient `DATABASE_URL` for the reason in **Running it** below.
+
+```bash
+make check-retrieval-baseline        # no database needed
+```
+
+fails when the retrieval code has moved and this baseline has not. It is run by
+`pytest` (`tests/scripts/test_check_retrieval_baseline.py::TestThisRepo`) and by
+the Playwright suite (`abs502-retrieval-baseline-freshness.spec.ts`), so a
+retrieval-affecting merge either re-records the baseline or is stopped — which
+is what did not happen at ABS-478 and ABS-488, and cost ABS-494 its control.
+
+### What the verdict is computed from
+
+Not the file's commit date. The obvious check — "does `BASELINE.json` predate
+the newest commit touching `mcp/bylaw_retrieval/retrieval/**`?" — would have
+fired on ABS-500's `eb613cf`, which touched `service.py` to reword a comment. A
+gate that fails on a reworded comment gets acknowledged reflexively within a
+week, and an acknowledgement habit is this same failure one level up.
+
+So the verdict comes from the **content** of the watched files, normalised so
+that comments, docstrings, blank lines and JSON formatting cannot move it:
+
+| Watched | Because |
+|---|---|
+| `mcp/bylaw_retrieval/retrieval/**.py` | scoring, fusion, zone binding, the table channel |
+| `src/layer1/pipeline/hierarchy.py` | the ancestor chain context and binding walk |
+| `src/layer1/pipeline/{citation,corpus}_repath.py`, `scripts/repath_citation_paths.py` | ABS-488 moved the baseline from here |
+| `scripts/eval_retrieval_recall.py` | the harness defines what the number means |
+| `queries.json` (its `queries` key) | the graded questions and their labels |
+
+The retrieval package is watched by glob, so a channel added tomorrow is watched
+the day it lands. `queries.json` is watched by its `queries` key only, so a human
+spot-check flipping `review_status` does not fire the gate. The fingerprint is
+interpreter-independent — 3.11 (CI), 3.12 and 3.14 agree byte-for-byte.
+
+Being content-based rather than commit-based buys three things a commit
+comparison cannot: prose-only edits never fire, *uncommitted* edits do (so the
+gate answers before the commit rather than after the merge), and a rebase or a
+squash does not invalidate it.
+
+### Acknowledging drift instead of re-measuring
+
+```bash
+python scripts/check_retrieval_baseline.py --acknowledge "why this cannot move a ranking"
+```
+
+This is the narrow escape hatch for a change that genuinely cannot move a
+ranking when the corpus is not to hand. It writes the decision into
+`BASELINE.json` — so it lands as a reviewable line in the diff, not as a flag in
+someone's shell — and it is pinned to the exact fingerprint it was granted for,
+so the next edit to any watched file fails the gate again. The next
+regeneration drops it.
 
 ## Running it
 
@@ -179,6 +245,14 @@ Two changes have moved it since, and the middle number matters when reading the
 jump: ABS-478 and ABS-488 landed after that measurement and lifted it to
 **0.1618** without anyone re-recording it, so the honest before/after for
 ABS-492 is **0.1618 → 0.4412**, not 0.1029 → 0.4412.
+
+That silent drift is what **`make check-retrieval-baseline`** (ABS-502) now
+prevents: from here on a retrieval-affecting change that does not re-record this
+file fails `pytest` and the Playwright suite. The gate was added against a
+baseline that turned out to be numerically current — re-measuring at ABS-502
+reproduced every figure below exactly, and only the host-dependent `latency_ms`
+block moved — but "it happened to be current" is precisely the property that
+cannot be relied on twice.
 
 ### What ABS-492 changed
 

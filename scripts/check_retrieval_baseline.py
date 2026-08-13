@@ -322,7 +322,13 @@ def _head_commit(repo_root: Path) -> str | None:
 
 
 def commits_since(repo_root: Path, commit: str | None) -> list[str]:
-    """Watched-path commits reachable from HEAD but not from *commit*.
+    """Watched-path commits since *commit* that did not re-record the baseline.
+
+    A commit that changed retrieval *and* rewrote BASELINE.json in the same
+    breath is exactly what this gate asks for, so it is filtered out — leaving
+    the list to name only the changes nothing accounted for. That includes the
+    commit carrying the baseline itself, which is always one commit ahead of
+    the HEAD the measurement was taken at.
 
     Best effort and purely informational: a checkout without git history, or a
     recorded commit that was rebased away, yields an empty list and the
@@ -333,17 +339,23 @@ def commits_since(repo_root: Path, commit: str | None) -> list[str]:
     if _git(repo_root, "cat-file", "-e", f"{commit}^{{commit}}") is None:
         return []
     paths = [pattern.split("**")[0].rstrip("/") for pattern, _why in WATCHED_PATTERNS]
-    output = _git(
-        repo_root,
-        "log",
-        "--format=%h %s",
-        f"{commit}..HEAD",
-        "--",
-        *paths,
-    )
+    output = _git(repo_root, "log", "--format=%h %s", f"{commit}..HEAD", "--", *paths)
     if not output:
         return []
-    return [line for line in output.splitlines() if line.strip()]
+    rerecorded = _git(
+        repo_root,
+        "log",
+        "--format=%h",
+        f"{commit}..HEAD",
+        "--",
+        "evals/retrieval/BASELINE.json",
+    )
+    accounted = set((rerecorded or "").split())
+    return [
+        line
+        for line in output.splitlines()
+        if line.strip() and line.split(" ", 1)[0] not in accounted
+    ]
 
 
 # ----------------------------------------------------------------------
