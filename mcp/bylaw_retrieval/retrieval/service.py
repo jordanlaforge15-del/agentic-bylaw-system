@@ -1630,8 +1630,9 @@ class RetrievalService:
         # location is supplied, and direct scoring of table cells (ABS-500).
         # They produce disjoint or overlapping candidate sets that are merged
         # on fragment_id — the table channel keys its cells by the anchor
-        # fragment they are cited through — with a bonus for fragments
-        # surfaced by more than one channel.
+        # fragment they are cited through — with an agreement bonus for
+        # fragments two *independent* channels reached (see
+        # _merge_channel_scores for why text and table are not independent).
         resolved_location, resolution_detail = self._resolve_location_slot(
             request.location
         )

@@ -168,10 +168,21 @@ ABS-486 set, 68 questions, dev corpus (documents 4 + 5), k = 10:
 | zone_anchored | 1.000 | 1.000 |
 | **overall** | **0.441** | **0.559** |
 
-No query that passed before fails after. Latency for one `search` call on the
-same host: p95 415 ms → 461 ms (+11%), driven by the added ancestor-chain walk
-in the text channel; the table index itself is built once and cached per
-document scope.
+No query that passed before fails after.
+
+**The cost, stated plainly.** MRR fell in two classes while their Recall@10
+held: `permitted_use` 0.476 → 0.318, `zone_anchored` 0.678 → 0.608. Zone-scope
+binding lifts *every* clause in the chapter the query's zone names, so on a
+question whose answer lives outside that chapter the answer sits lower in a
+top-10 it still reaches. Overall MRR still rose, 0.2775 → 0.3077, carried by
+`dimensional` 0.008 → 0.284. The table channel is not implicated in either
+direction: measured with it disabled, every per-class recall and MRR figure
+above is identical.
+
+Latency for one `search` call, from the same harness on the same host: p95
+364 ms → 460 ms, mean 316 ms → 385 ms. The cost is the added ancestor-chain
+walk in the text channel; the table index is four reads, built once and cached
+per document scope.
 
 ## What is still missing
 
