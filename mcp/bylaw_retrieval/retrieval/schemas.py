@@ -1071,8 +1071,14 @@ class ZoneUses(BaseModel):
     """Use permissions for a zone. ``permitted`` lists explicitly
     permitted uses; ``not_permitted`` lists uses explicitly marked as
     not permitted; ``conditional`` lists uses permitted subject to a
-    footnote condition (symbol-matrix bylaws). Any may be empty when
-    retrieval found no use table for the zone.
+    footnote condition (symbol-matrix bylaws); ``undetermined`` lists uses
+    the bylaw binds but whose permission could not be read (ABS-484). Any
+    may be empty when retrieval found no use table for the zone.
+
+    ``undetermined`` is the UNKNOWN state, not a fourth permission: it says
+    the ingested source did not yield an answer for that use, so nothing in
+    the profile's citations backs it and the ``uses`` confidence never
+    covers it.
     """
 
     permitted: list[str] = Field(
@@ -1092,6 +1098,18 @@ class ZoneUses(BaseModel):
     conditional: list[ConditionalUse] = Field(
         default_factory=list,
         description="Uses permitted subject to a footnote condition.",
+    )
+    undetermined: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Uses bound to this zone's matrix column whose permission could "
+            "NOT be determined from the ingested source (the cell is missing "
+            "from the parsed grid, or carries an unmapped glyph) and which the "
+            "prose fallback did not resolve either. These are extraction gaps, "
+            "NOT prohibitions: they carry no citation and no confidence. "
+            "Report them as 'not determinable from the ingested source' and "
+            "point the reader at the cited table."
+        ),
     )
 
 

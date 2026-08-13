@@ -565,6 +565,37 @@ def test_compact_permitted_use_conditional_carries_instruction():
     assert "instruction" not in compact_permitted_use(permitted)
 
 
+def test_compact_permitted_use_unreadable_cell_carries_a_gap_instruction():
+    """ABS-484: an unreadable cell is UNKNOWN — the projection must tell the
+    writer to say 'not determinable' and must hand it nothing citable, or the
+    absent permission gets relayed as a prohibition with the table beside it.
+    """
+    from advisor.chat.compact import compact_permitted_use
+    from bylaw_retrieval.retrieval.schemas import CitationRef, PermittedUseResult
+
+    unreadable = PermittedUseResult(
+        use="Multi-unit dwelling use",
+        zone="COR",
+        indeterminate=True,
+        reason_code="unreadable_cell",
+        reason="… This is an extraction gap — it does NOT mean the use is prohibited.",
+        citation=CitationRef(
+            citation_path=None,
+            citation_label="Table 1A: Permitted uses by zone",
+            page_start=45,
+            page_end=45,
+            backs=["permitted_use"],
+        ),
+    )
+    out = compact_permitted_use(unreadable)
+    assert out["indeterminate"] is True
+    assert "permission" not in out
+    assert "citation" not in out
+    instruction = out["instruction"]
+    assert "not determinable" in instruction.lower() or "cannot be determined" in instruction
+    assert "prohibited" in instruction
+
+
 @pytest.mark.asyncio
 async def test_lookup_citation_handler_tolerates_stringified_structured(
     seeded_service,
