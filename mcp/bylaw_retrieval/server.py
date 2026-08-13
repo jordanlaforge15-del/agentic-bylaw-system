@@ -188,7 +188,13 @@ def create_mcp_server(db_url: str | None = None, *, all_documents: bool = False)
         page_end: int | None = None,
         location: dict[str, Any] | None = None,
         attribute_tag_filter: list[str] | None = None,
-        include_context: bool = False,
+        # ABS-492: on by default. A fragment can now rank because of scope its
+        # containers state and it does not — that is the point of the context
+        # channel — so returning the match without its ancestor chain hands the
+        # model a stripped list item and no way to see what scopes it. The
+        # model may still turn it off per call; ``lookup_citation`` has
+        # defaulted it on since ABS-288 for the same reason.
+        include_context: bool = True,
         include_cross_references: bool = False,
         include_tables: bool = False,
         include_datasets: bool = False,

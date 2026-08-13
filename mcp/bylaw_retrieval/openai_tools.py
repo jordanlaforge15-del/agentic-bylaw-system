@@ -145,7 +145,7 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                         ],
                     },
                     "document_id": {"type": "integer"},
-                    "include_context": {"type": "boolean", "default": False},
+                    "include_context": {"type": "boolean", "default": True},
                     "include_cross_references": {"type": "boolean", "default": False},
                     "include_tables": {"type": "boolean", "default": False},
                 },
@@ -215,7 +215,7 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                         "additionalProperties": False,
                     },
                     "attribute_tag_filter": dict(ATTRIBUTE_TAG_FILTER_PROPERTY),
-                    "include_context": {"type": "boolean", "default": False},
+                    "include_context": {"type": "boolean", "default": True},
                     "include_cross_references": {"type": "boolean", "default": False},
                     "include_tables": {"type": "boolean", "default": False},
                     "include_datasets": {"type": "boolean", "default": False},
@@ -354,7 +354,9 @@ class OpenAIToolExecutor:
                 include_text=args.get("include_text", False),
             ).model_dump(mode="json")
         if tool_name == "lookup_citation":
-            request = _validated(CitationLookupRequest, args)
+            request = _validated(
+                CitationLookupRequest, _with_tool_defaults(args)
+            )
             response = service.lookup_citation(request)
             # ABS-261: lookup_citation now returns a
             # CitationLookupResponse envelope. To preserve the existing
@@ -366,7 +368,7 @@ class OpenAIToolExecutor:
                 return response.match.model_dump(mode="json")
             return response.model_dump(mode="json")
         if tool_name == "search_bylaw_evidence":
-            request = _validated(RetrievalRequest, args)
+            request = _validated(RetrievalRequest, _with_tool_defaults(args))
             return service.search(request).model_dump(mode="json")
         if tool_name == "get_address_profile":
             return service.get_address_profile(str(args.get("address") or "")).model_dump(
@@ -380,6 +382,29 @@ class OpenAIToolExecutor:
                 proposed=args.get("proposed"),
             ).model_dump(mode="json")
         raise ValueError(f"Unsupported OpenAI retrieval tool: {tool_name}")
+
+
+#: The include_* defaults an *evidence-bearing tool surface* applies before
+#: validation, as opposed to the request model's own field defaults.
+#:
+#: ABS-288 set ``RetrievalRequest.include_* = False`` so an internal caller
+#: (the compliance evaluator, the zone-profile builder) gets a lean match
+#: unless it asks for more. That is the right default for a caller that knows
+#: what it wants and the wrong one for an LLM, which never sets the flags
+#: because no persona tells it to — ABS-297 pinned that asymmetry for the
+#: advisor's chat handler, which supplies its own True fallback.
+#:
+#: ABS-492 makes the gap consequential rather than merely wasteful: a fragment
+#: can now rank on scope its containers state and it does not, so a match
+#: returned without its ancestor chain is a rule with its scope stripped off.
+#: These surfaces therefore default it on, and the JSON schemas above advertise
+#: that same default. An explicit value from the model still wins — the merge
+#: is defaults-first.
+_TOOL_SURFACE_INCLUDE_DEFAULTS = {"include_context": True}
+
+
+def _with_tool_defaults(args: dict[str, Any]) -> dict[str, Any]:
+    return {**_TOOL_SURFACE_INCLUDE_DEFAULTS, **args}
 
 
 def _validated(model_cls, payload: dict[str, Any]):
