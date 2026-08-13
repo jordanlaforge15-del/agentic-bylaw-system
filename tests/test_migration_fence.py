@@ -190,6 +190,54 @@ def test_fence_or_abort_exits_cleanly(tmp_path: Path, monkeypatch, capsys) -> No
     assert "ABORT:" in capsys.readouterr().err
 
 
+def test_a_behind_database_is_called_out_at_snapshot_time(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    """Applying data migrations onto a pending schema migration is the DM3.0 trap."""
+    import logging
+    import sqlite3
+
+    db = tmp_path / "behind.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE alembic_version (version_num VARCHAR(255) PRIMARY KEY)")
+        conn.execute("INSERT INTO alembic_version VALUES ('0025_signup_grant_unique')")
+
+    script, _ = _fake_snapshot_script(tmp_path)
+    monkeypatch.setenv("BYLAW_SNAPSHOT_SCRIPT", str(script))
+    monkeypatch.setenv("BYLAW_FORCE_MIGRATION_SNAPSHOT", "1")
+
+    with caplog.at_level(logging.WARNING):
+        snapshot_before_migration("backfill-parcels", database_url=f"sqlite:///{db}")
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("MIGRATION DRIFT" in message for message in warnings), warnings
+    assert any("0026_drop_parcel_zone_code" in message for message in warnings), warnings
+
+
+def test_no_drift_warning_when_the_database_is_at_head(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    import logging
+    import sqlite3
+
+    from layer1.db.migration_drift import load_script_directory
+
+    (head,) = load_script_directory().get_heads()
+    db = tmp_path / "at-head.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE alembic_version (version_num VARCHAR(255) PRIMARY KEY)")
+        conn.execute("INSERT INTO alembic_version VALUES (?)", (head,))
+
+    script, _ = _fake_snapshot_script(tmp_path)
+    monkeypatch.setenv("BYLAW_SNAPSHOT_SCRIPT", str(script))
+    monkeypatch.setenv("BYLAW_FORCE_MIGRATION_SNAPSHOT", "1")
+
+    with caplog.at_level(logging.WARNING):
+        snapshot_before_migration("backfill-parcels", database_url=f"sqlite:///{db}")
+
+    assert not [r for r in caplog.records if "MIGRATION DRIFT" in r.getMessage()]
+
+
 # --------------------------------------------------------------------------
 # 3. Wiring — the real entry points, run as subprocesses
 # --------------------------------------------------------------------------

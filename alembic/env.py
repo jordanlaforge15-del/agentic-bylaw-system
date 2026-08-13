@@ -74,7 +74,10 @@ def _fence(connection) -> None:
     label = "-".join(current) if current else "unstamped"
     fence_or_abort(
         f"alembic-{command or 'migrate'}-from-{label}",
-        database_url=str(connection.engine.url.render_as_string(hide_password=False)),
+        database_url=connection.engine.url.render_as_string(hide_password=False),
+        # Being behind is why this command is running; warning about it here
+        # would be noise, and the drift check needs its own connection.
+        check_drift=False,
     )
 
 

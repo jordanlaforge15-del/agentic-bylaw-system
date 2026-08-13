@@ -9,13 +9,22 @@ split state the ticket describes is exactly what the first test asserts.
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
 import pytest
 
-from scripts.check_migration_drift import (
-    compute_drift,
-    load_script_directory,
-    main,
-)
+from layer1.db.migration_drift import compute_drift, drift_report, load_script_directory
+from scripts.check_migration_drift import main
+
+
+def _stamped_sqlite_db(tmp_path: Path, *revisions: str) -> str:
+    """A database stamped like alembic would stamp it, for the read path."""
+    db = tmp_path / "drift.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE alembic_version (version_num VARCHAR(255) PRIMARY KEY)")
+        conn.executemany("INSERT INTO alembic_version VALUES (?)", [(r,) for r in revisions])
+    return f"sqlite:///{db}"
 
 
 @pytest.fixture(scope="module")
@@ -71,6 +80,41 @@ def test_unknown_revision_is_reported_not_swallowed(script_directory) -> None:
     assert report.error is not None
     assert "9999_from_the_future" in report.error
     assert "ahead of" in report.render()
+
+
+def test_reads_the_split_state_off_a_real_database(tmp_path: Path) -> None:
+    """The read path, end to end: stamped table in, verdict out."""
+    report = drift_report(_stamped_sqlite_db(tmp_path, "0025_signup_grant_unique"))
+
+    assert report.is_behind
+    assert [item.revision for item in report.pending] == ["0026_drop_parcel_zone_code"]
+    assert "0026_drop_parcel_zone_code" in report.summary_line()
+
+
+def test_a_database_with_no_alembic_version_reads_as_never_stamped(tmp_path: Path) -> None:
+    db = tmp_path / "empty.db"
+    sqlite3.connect(db).close()
+
+    report = drift_report(f"sqlite:///{db}")
+
+    assert report.error is None
+    assert report.current == ()
+    assert report.is_behind
+
+
+def test_unreachable_database_reports_rather_than_raises() -> None:
+    report = drift_report("postgresql+psycopg://nobody@127.0.0.1:1/nothing")
+
+    assert report.error is not None
+    assert not report.is_behind
+    assert "undetermined" in report.summary_line()
+
+
+def test_main_exits_1_when_behind(tmp_path: Path, capsys) -> None:
+    rc = main(["--database-url", _stamped_sqlite_db(tmp_path, "0025_signup_grant_unique")])
+
+    assert rc == 1
+    assert "BEHIND" in capsys.readouterr().out
 
 
 def test_unreachable_database_exits_2(capsys) -> None:

@@ -309,6 +309,18 @@ someone went looking. This makes it loud:
 make check-migration-drift            # or: python scripts/check_migration_drift.py
 ```
 
+You do not have to remember to run it. Every fenced script also checks for
+drift right after its snapshot lands and warns before it writes:
+
+```
+WARNING MIGRATION DRIFT: database is at 0025_signup_grant_unique but this branch
+head is 0026_drop_parcel_zone_code — 1 migration(s) pending: 0026_drop_parcel_zone_code
+WARNING   run `make check-migration-drift` for the full report
+```
+
+A warning, not a block — the combination is occasionally deliberate. (`alembic
+upgrade` skips the warning: being behind is why it is running.)
+
 ```
 alembic_version : 0025_signup_grant_unique
 branch head     : 0026_drop_parcel_zone_code
@@ -335,7 +347,8 @@ restoring a snapshot.
   fails, dry runs are not fenced, and `alembic upgrade` never reaches its first
   DDL unsnapshotted while `alembic current` is not fenced at all.
 - `tests/scripts/test_check_migration_drift.py` — the DM3.0 split state,
-  in-sync, never-stamped, and DB-ahead-of-branch cases.
+  in-sync, never-stamped, and DB-ahead-of-branch cases, plus the read path
+  against a real stamped database and the CLI's exit codes.
 
 ```bash
 .venv/bin/pytest tests/test_snapshot_before_migration.py tests/test_migration_fence.py \

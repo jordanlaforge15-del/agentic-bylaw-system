@@ -121,11 +121,31 @@ def _snapshots_forced() -> bool:
     return os.getenv("BYLAW_FORCE_MIGRATION_SNAPSHOT", "").strip().lower() in _TRUTHY
 
 
+def warn_on_drift(database_url: str | None, log: logging.Logger) -> None:
+    """Say so when the target DB is behind the migrations on this branch.
+
+    Applying data migrations on top of a pending *schema* migration is exactly
+    how DM3.0 produced its split state, and the moment a data migration is about
+    to run is the moment that is worth knowing. A warning, not a block — the
+    combination is sometimes deliberate, and the fence's job is to be loud.
+    """
+    from layer1.db.migration_drift import drift_report
+
+    report = drift_report(_resolve_url(database_url))
+    if report.error:
+        log.debug("drift check inconclusive: %s", report.error)
+        return
+    if report.is_behind:
+        log.warning("MIGRATION DRIFT: %s", report.summary_line())
+        log.warning("  run `make check-migration-drift` for the full report")
+
+
 def snapshot_before_migration(
     tag: str,
     *,
     database_url: str | None = None,
     log: logging.Logger | None = None,
+    check_drift: bool = True,
 ) -> Path | None:
     """Take a labelled snapshot before a dev-data mutation.
 
@@ -189,6 +209,10 @@ def snapshot_before_migration(
 
     snapshot = Path(path_line)
     log.info("pre-migration snapshot for %r written to %s", tag, snapshot)
+
+    if check_drift:
+        warn_on_drift(database_url, log)
+
     return snapshot
 
 
@@ -200,6 +224,7 @@ def fence_or_abort(
     *,
     database_url: str | None = None,
     log: logging.Logger | None = None,
+    check_drift: bool = True,
 ) -> Path | None:
     """CLI wrapper for :func:`snapshot_before_migration`.
 
@@ -208,7 +233,9 @@ def fence_or_abort(
     touched, not a traceback.
     """
     try:
-        return snapshot_before_migration(tag, database_url=database_url, log=log)
+        return snapshot_before_migration(
+            tag, database_url=database_url, log=log, check_drift=check_drift
+        )
     except SnapshotFenceError as exc:
         print(f"ABORT: {exc}", file=sys.stderr)
         raise SystemExit(ABORT_EXIT_CODE) from exc
