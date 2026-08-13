@@ -364,16 +364,20 @@ def test_get_zone_profile_low_confidence_returns_null_field(tmp_path: Path):
         doc = _add_document(session)
         # Zone code lives only in the fragment body, and the citation
         # path/label carry no dimension keywords — a weak (low-score)
-        # match for "LOWC-1 maximum height lot coverage". The height
+        # match for "LOWC maximum height lot coverage". The height
         # value IS extractable from the prose, so this isolates the
         # confidence gate rather than a missing value.
         _add_fragment(
             session,
             doc.id,
-            text="In LOWC-1 the maximum permitted height is 12.0 metres.",
-            # Digit-free path/label so the zone's '1' token can't anchor
+            text="In LOWC the maximum permitted height is 12.0 metres.",
+            # Digit-free zone code and path/label, so nothing can anchor
             # the score via a citation_path match — the only signal is the
             # weak body-text overlap, keeping confidence below threshold.
+            # (Before ABS-478 this fixture used "LOWC-1"; the zone's '1'
+            # token then substring-matched the "12.0" in its own body text,
+            # so the gate was being tested against a token that only fired
+            # by accident. A digit-free code isolates the gate for real.)
             citation_path="General Standards",
             citation_label="General Standards",
             page=5,
@@ -381,7 +385,7 @@ def test_get_zone_profile_low_confidence_returns_null_field(tmp_path: Path):
         )
 
     with session_scope(db_url) as session:
-        profile = RetrievalService(session).get_zone_profile("LOWC-1")
+        profile = RetrievalService(session).get_zone_profile("LOWC")
 
     # Zone is found (not unknown) but the height field was gated out.
     assert profile.unknown_zone is False

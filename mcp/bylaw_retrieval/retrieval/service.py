@@ -4,6 +4,7 @@ import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Callable
 
 from sqlalchemy import (
@@ -115,7 +116,11 @@ from layer2.retrieval.spatial import (
     square_degrees_to_m2,
 )
 
-TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+# A run of alphanumerics, optionally hyphen-joined to further runs, so a zone
+# code ("HR-2") or a hyphenated compound ("single-family") is captured whole
+# rather than pre-split by the tokenizer. See ``_tokenize`` for what happens
+# to the compound afterwards.
+TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
 
 
 # Resolver signature: takes a session, returns document id(s) to scope
@@ -3150,13 +3155,16 @@ class RetrievalService:
         elif query_text in joined:
             score += 20.0
 
+        citation_path = (fragment.citation_path or "").lower()
+        citation_label = (fragment.citation_label or "").lower()
+        text = haystacks[0]
         unique_tokens = set(tokens)
         for token in unique_tokens:
-            if fragment.citation_path and token in fragment.citation_path.lower():
+            if citation_path and _token_matches(token, citation_path):
                 score += 12.0
-            elif fragment.citation_label and token in fragment.citation_label.lower():
+            elif citation_label and _token_matches(token, citation_label):
                 score += 8.0
-            elif token in fragment.text.lower():
+            elif _token_matches(token, text):
                 score += 4.0
 
         if fragment.parse_status.value == "parsed":
@@ -3208,7 +3216,61 @@ def _attribute_tag_filter_clause(attribute_tags: list[str], *, dialect_name: str
 
 
 def _tokenize(text: str) -> list[str]:
-    return [token.lower() for token in TOKEN_RE.findall(text)]
+    """Query tokens: every hyphenated compound, plus its parts.
+
+    ``"HR-2 setback"`` -> ``["hr-2", "hr", "2", "setback"]``.
+
+    The compound is what makes a zone code addressable as one term. The
+    parts are kept because they are still genuine words of the query — a
+    fragment cited as ``Table 3 > HR-2`` legitimately matches all three —
+    and because dropping them would silently deflate every zone-anchored
+    score past ``_ZONE_FIELD_MIN_CONFIDENCE``, which is DM-16's call to
+    make, not this change's. What makes the parts safe is that scoring
+    now matches on word boundaries (see :func:`_token_matches`): "hr" no
+    longer hits "through", "2" no longer hits "2nd". Same reason ordinary
+    prose compounds are split — "single-family" should still match text
+    that writes "single family".
+    """
+    tokens: list[str] = []
+    for match in TOKEN_RE.findall(text):
+        tokens.append(match.lower())
+        if "-" in match:
+            tokens.extend(part.lower() for part in match.split("-") if part)
+    return tokens
+
+
+# The inflections a by-law freely alternates between: "setback"/"setbacks",
+# "storey"/"storeys", "exempt"/"exempted"/"exempting". Matching these is the
+# one genuinely useful thing the old substring test did, so it is kept
+# explicitly rather than lost as collateral damage of the boundary fix.
+_INFLECTION_SUFFIX = r"(?:e?s|ed|ing)?"
+
+
+@lru_cache(maxsize=2048)
+def _token_pattern(token: str) -> re.Pattern[str]:
+    """A word-boundary matcher for one query token.
+
+    Token scoring used to ask ``token in haystack``, which let "hr" hit
+    "through" and "2" hit "2nd storey" — roughly +8 of guaranteed noise on
+    nearly every fragment of a zone-scoped query (ABS-478). Anchoring the
+    token at a word boundary keeps the hit honest, and works for hyphenated
+    codes too: the hyphen is a non-word character, so ``\\bhr-2\\b`` still
+    boundaries on the "h" and the "2".
+
+    The trailing boundary tolerates an inflectional suffix so "building"
+    still hits "Buildings" — a real match the substring test used to make
+    and word boundaries alone would drop. It does not rescue "2" from
+    "2nd": "nd" is not a suffix in this set.
+    """
+    return re.compile(rf"\b{re.escape(token)}{_INFLECTION_SUFFIX}\b")
+
+
+def _token_matches(token: str, haystack: str) -> bool:
+    """True when ``token`` occurs in ``haystack`` as a whole word.
+
+    Whole word up to an inflectional suffix — see :func:`_token_pattern`.
+    """
+    return _token_pattern(token).search(haystack) is not None
 
 
 # "198(1)(f)" -> ["198", "(1)", "(f)"]. Also splits the stored form,
