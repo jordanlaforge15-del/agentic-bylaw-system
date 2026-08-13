@@ -106,15 +106,18 @@ def targets_dev_database(database_url: str | None = None) -> bool:
     return (url.database or "") == dev_db
 
 
-def _snapshots_disabled() -> bool:
+def _skip_reason() -> str | None:
+    """Why the fence is off, or ``None`` if it is on."""
     if os.getenv("BYLAW_SKIP_MIGRATION_SNAPSHOT", "").strip().lower() in _TRUTHY:
-        return True
+        return "explicit"
     # GitHub Actions' pytest job runs migrations against a DSN byte-identical
     # to the dev laptop's (localhost:5432/layer1) on a container that is
     # destroyed with the job. The workflow opts out explicitly too; this is the
     # belt to that pair of braces, so a future workflow that migrates does not
     # fail on a snapshot of a database nobody wants.
-    return os.getenv("GITHUB_ACTIONS", "").strip().lower() in _TRUTHY
+    if os.getenv("GITHUB_ACTIONS", "").strip().lower() in _TRUTHY:
+        return "github-actions"
+    return None
 
 
 def _snapshots_forced() -> bool:
@@ -156,12 +159,17 @@ def snapshot_before_migration(
     """
     log = log or logger
 
-    if _snapshots_disabled():
+    skipped = _skip_reason()
+    if skipped == "explicit":
+        # Opting out is a deliberate act; say so every time.
         log.warning(
             "BYLAW_SKIP_MIGRATION_SNAPSHOT is set — proceeding with %r "
             "WITHOUT a pre-migration snapshot",
             tag,
         )
+        return None
+    if skipped:
+        log.debug("snapshot fence off (%s): proceeding with %r", skipped, tag)
         return None
 
     if not _snapshots_forced() and not targets_dev_database(database_url):
@@ -208,6 +216,11 @@ def snapshot_before_migration(
         )
 
     snapshot = Path(path_line)
+    if not snapshot.exists():
+        raise SnapshotFenceError(
+            f"pre-migration snapshot for {tag!r} named {snapshot}, which does not "
+            "exist; refusing to mutate the dev database."
+        )
     log.info("pre-migration snapshot for %r written to %s", tag, snapshot)
 
     if check_drift:

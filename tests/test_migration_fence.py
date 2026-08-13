@@ -172,6 +172,17 @@ def test_failed_snapshot_raises_rather_than_returning(tmp_path: Path, monkeypatc
     assert "is not running" in str(excinfo.value)
 
 
+def test_a_snapshot_that_named_a_missing_file_is_a_refusal(tmp_path: Path, monkeypatch) -> None:
+    """Exit 0 is not proof; the dump has to actually be there."""
+    script = tmp_path / "lying-snapshot.sh"
+    script.write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' {tmp_path}/never-written.dump\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("BYLAW_SNAPSHOT_SCRIPT", str(script))
+
+    with pytest.raises(SnapshotFenceError, match="does not exist"):
+        snapshot_before_migration("backfill-parcels", database_url=DEV_URL)
+
+
 def test_missing_snapshot_script_is_a_refusal(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BYLAW_SNAPSHOT_SCRIPT", str(tmp_path / "nope.sh"))
 
