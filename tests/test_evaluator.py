@@ -444,7 +444,7 @@ def test_persists_approval_decision_when_submission_id_set(tmp_path: Path) -> No
     db_url = _make_db(tmp_path)
     with session_scope(db_url) as session:
         _seed_corpus(session)
-        parcel = Parcel(jurisdiction="HRM", parcel_identifier="00012345", zone_code="ER-1")
+        parcel = Parcel(jurisdiction="HRM", parcel_identifier="00012345")
         session.add(parcel)
         session.flush()
         submission = Submission(parcel_id=parcel.id, status=SubmissionStatus.DRAFT)

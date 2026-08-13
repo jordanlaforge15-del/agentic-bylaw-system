@@ -19,7 +19,7 @@ Seeded content:
               conditional corner-lot clause (tested as 'uncertain' in
               the e2e spec when corner_lot_boolean is missing).
 * A ``parcel`` row at ``HRM / E2E00100`` with a small synthetic
-  polygon at Halifax latitudes and zone_code ``ER-1``.
+  polygon at Halifax latitudes.
 * A ``geocode_cache`` row keyed at ``civic:100 evaluator way`` so
   ``LocationSlot{civic_number: 100, street: 'Evaluator Way'}``
   resolves without calling Google.
@@ -257,7 +257,6 @@ def _get_or_create_parcel(session) -> Parcel:
         geometry_geojson=_polygon(),
         centroid_geojson=_centroid_geojson(),
         area_m2=600.0,
-        zone_code="ER-1",
         metadata_json={"source_dataset": PARCELS_DATASET_NAME, "seed": "evaluator-e2e"},
     )
     session.add(parcel)
