@@ -190,6 +190,78 @@ def test_ac4_unknown_zone_is_typed_indeterminate(matrix_db):
 
 
 # --------------------------------------------------------------------------
+# ABS-483 — an unreadable cell is an extraction gap, never a prohibition
+# --------------------------------------------------------------------------
+
+
+def _drop_cell(session, table_id: int, row_index: int, col_index: int) -> None:
+    session.query(SourceTableCell).filter(
+        SourceTableCell.table_id == table_id,
+        SourceTableCell.row_index == row_index,
+        SourceTableCell.col_index == col_index,
+    ).delete(synchronize_session=False)
+    session.flush()
+
+
+def test_abs483_missing_cell_is_indeterminate_not_not_permitted(matrix_db):
+    """(Multi-unit dwelling use, COR) addresses a cell the parser lost. The
+    answer must be a typed indeterminate — the old three-value vocabulary was
+    forced to call it ``not_permitted``, i.e. to invent a prohibition."""
+    with session_scope(matrix_db["db_url"]) as session:
+        _drop_cell(session, matrix_db["table_id"], 3, 3)
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(
+            use="Multi-unit dwelling use", zone="COR"
+        )
+
+    assert result.permission is None
+    assert result.indeterminate is True
+    assert result.reason_code == "unreadable_cell"
+    # The reason has to say WHY, so the model doesn't restate it as a refusal.
+    assert "does NOT mean the use is prohibited" in result.reason
+    # Still grounded: the caller can go read the table it came from.
+    assert result.citation is not None
+    assert result.table_id == matrix_db["table_id"]
+
+
+def test_abs483_unmapped_glyph_cell_is_indeterminate(matrix_db):
+    """Same contract for the other producer: a symbol-font glyph this bylaw's
+    profile does not map. We read *something*, we just can't decode it."""
+    with session_scope(matrix_db["db_url"]) as session:
+        cell = (
+            session.query(SourceTableCell)
+            .filter(
+                SourceTableCell.table_id == matrix_db["table_id"],
+                SourceTableCell.row_index == 3,
+                SourceTableCell.col_index == 3,
+            )
+            .one()
+        )
+        cell.text = chr(0xF0AA)  # unmapped private-use codepoint
+        cell.metadata_json = {}
+        session.flush()
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(
+            use="Multi-unit dwelling use", zone="COR"
+        )
+
+    assert result.indeterminate is True
+    assert result.permission is None
+    assert result.reason_code == "unreadable_cell"
+
+
+def test_abs483_blank_cell_still_resolves_to_not_permitted(matrix_db):
+    """Guard the other side of the line: the blank-cell convention is real
+    bylaw content and must NOT be swept into the new indeterminate branch."""
+    with session_scope(matrix_db["db_url"]) as session:
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(use="Restaurant use", zone="COR")
+
+    assert result.indeterminate is False
+    assert result.permission == "not_permitted"
+
+
+# --------------------------------------------------------------------------
 # ABS-351 — near-miss use terms resolve or suggest, never silently mis-pick
 # --------------------------------------------------------------------------
 

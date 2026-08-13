@@ -19,12 +19,26 @@ Classifies a permission-matrix cell's raw ``text`` into a canonical marker:
 * circled numbers ①..⑮.. (``U+2460..U+2473`` / ``U+3251..U+325F``) →
   ``conditional`` plus the footnote ordinal ``N``
 * ``U+F020`` (symbol-font space, padding) → stripped / ignored
-* empty after stripping → ``not_permitted``
+* empty after stripping → ``not_permitted`` (a blank cell in a symbol matrix
+  IS the bylaw's "not permitted" convention)
+* nothing extracted at all (``text is None`` — no cell) or an *unmapped*
+  private-use glyph → ``unknown``
 
 The codepoint map is data-driven and extensible: a future bylaw may use a
 different PUA codepoint for ●. Any *unmapped* PUA codepoint encountered is
 logged at WARNING level rather than silently dropped, so we notice new
 symbol fonts instead of regressing to blank cells.
+
+Extraction failure is not prohibition (ABS-483)
+-----------------------------------------------
+Before ABS-483 the vocabulary was exactly three values, so a cell we could
+*not read* — a row the table parser dropped, or a glyph from a symbol font we
+have no mapping for — collapsed into ``not_permitted``: "we failed to extract
+this" and "the legislature prohibited this" became the same answer. ``UNKNOWN``
+splits them. The one case that deliberately stays ``not_permitted`` is a cell
+that is *present and blank* in a symbol matrix: an empty cell is how these
+bylaws spell "not permitted", so reading it as unknown would discard real
+information.
 
 The result is persisted on the cell as ``metadata_json.permission_marker``
 (and ``footnote`` when conditional) without clobbering the raw ``text``.
@@ -116,6 +130,9 @@ PERMISSION_MATRIX_PROFILE = "permission_matrix"
 PERMITTED = "permitted"
 CONDITIONAL = "conditional"
 NOT_PERMITTED = "not_permitted"
+# ABS-483: "we could not read this cell" — an extraction failure, distinct from
+# the bylaw's own "not permitted". Never inferred from a blank cell.
+UNKNOWN = "unknown"
 
 
 def _is_private_use(codepoint: int) -> bool:
@@ -138,11 +155,27 @@ def classify_permission_marker(
     * ``{"permission_marker": "permitted"}``
     * ``{"permission_marker": "conditional", "footnote": N}``
     * ``{"permission_marker": "not_permitted"}``
+    * ``{"permission_marker": "unknown"}``
 
     A conditional marker (circled number) takes precedence over a bare dot in
     the same cell; the footnote ordinal is the first circled number found.
-    Unmapped PUA codepoints are logged and treated as empty so the pass never
-    crashes on a new symbol font.
+    Unmapped PUA codepoints are logged and never crash the pass on a new symbol
+    font.
+
+    ABS-483 — the two extraction-failure paths yield ``unknown`` rather than
+    silently reading as prohibition:
+
+    * ``text is None`` — nothing was extracted at all. ``SourceTableCell.text``
+      is NOT NULL, so ``None`` only ever reaches here from a caller that had no
+      cell to read (a row the parser dropped from the grid).
+    * an unmapped private-use glyph and no recognised marker beside it — the
+      cell holds *something* from a symbol font we cannot decode.
+
+    A recognised marker wins over an unmapped glyph in the same cell: the dot
+    or circled number is real information, and the stray glyph is noise. Only a
+    cell whose entire content is undecodable degrades to ``unknown``.
+    An *empty* string is NOT unknown — a blank cell is the symbol matrix's own
+    "not permitted" convention.
 
     ABS-284: the permitted / ignored glyph sets come from ``conventions`` (the
     active bylaw's :class:`~layer1.semantic.conventions.EnrichmentConventions`).
@@ -156,8 +189,13 @@ def classify_permission_marker(
     ignored_codepoints = conventions.ignored_codepoints
     permitted = False
     footnote: int | None = None
+    undecodable = False
 
-    for char in text or "":
+    if text is None:
+        # No cell / no text extracted — an extraction failure, not a verdict.
+        return {"permission_marker": UNKNOWN}
+
+    for char in text:
         codepoint = ord(char)
         if codepoint in ignored_codepoints or char.isspace():
             continue
@@ -172,11 +210,12 @@ def classify_permission_marker(
         if _is_private_use(codepoint):
             logger.warning(
                 "Unmapped private-use codepoint U+%04X in permission-matrix "
-                "cell; treating as empty. Extend PERMITTED_CODEPOINTS / "
-                "IGNORED_CODEPOINTS in layer1.semantic.permission_markers if "
-                "this is a real marker.",
+                "cell; classifying the cell as 'unknown'. Extend "
+                "PERMITTED_CODEPOINTS / IGNORED_CODEPOINTS in "
+                "layer1.semantic.permission_markers if this is a real marker.",
                 codepoint,
             )
+            undecodable = True
             continue
         # Any other ordinary character (stray letter/punctuation) is not a
         # recognised marker — ignore it for classification purposes.
@@ -185,6 +224,9 @@ def classify_permission_marker(
         return {"permission_marker": CONDITIONAL, "footnote": footnote}
     if permitted:
         return {"permission_marker": PERMITTED}
+    if undecodable:
+        # Symbol-font content we can't map: don't pass it off as prohibition.
+        return {"permission_marker": UNKNOWN}
     return {"permission_marker": NOT_PERMITTED}
 
 

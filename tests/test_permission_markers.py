@@ -5,6 +5,11 @@ codepoint ``U+F098``) as ``permitted``, decodes circled-number conditional
 markers into a footnote ordinal, treats stripped/empty cells as
 ``not_permitted``, and surfaces an unmapped PUA codepoint via a warning.
 
+Extraction failure (ABS-483): "we could not read this cell" is its own marker,
+``unknown``, so it is never reported as the bylaw prohibiting a use. Two
+producers — no text at all (``None``, i.e. no cell) and an unmapped private-use
+glyph. A present-but-blank cell deliberately stays ``not_permitted``.
+
 Detection (ABS-281): a table is a permission matrix iff it carries a
 ``permission_matrix`` semantic profile — NOT by caption. The real corpus stores
 empty captions, so every test that exercises detection uses a **caption-absent**
@@ -58,23 +63,60 @@ def test_circled_three_normalizes_to_conditional_with_footnote():
 
 
 def test_empty_and_symbol_space_normalize_to_not_permitted():
+    # ABS-483 AC3: a cell that is PRESENT and blank stays not_permitted — an
+    # empty cell is the symbol matrix's own way of spelling "not permitted".
     assert classify_permission_marker("") == {"permission_marker": "not_permitted"}
-    assert classify_permission_marker(None) == {"permission_marker": "not_permitted"}
     assert classify_permission_marker(SYMBOL_SPACE) == {
         "permission_marker": "not_permitted"
     }
+    assert classify_permission_marker("   ") == {"permission_marker": "not_permitted"}
     # Symbol-space padding around a real dot is stripped, leaving permitted.
     assert classify_permission_marker(SYMBOL_SPACE + DOT + SYMBOL_SPACE) == {
         "permission_marker": "permitted"
     }
 
 
+def test_abs483_missing_text_is_unknown_not_not_permitted():
+    """AC1: ``None`` means no cell was extracted at all — an extraction
+    failure, which must NOT read as the bylaw prohibiting the use."""
+    assert classify_permission_marker(None) == {"permission_marker": "unknown"}
+
+
 def test_unmapped_pua_codepoint_warns_and_does_not_crash(caplog):
+    """AC2: an unmapped private-use glyph is undecodable content, so the cell
+    classifies as ``unknown`` — and the warning that tells us about the new
+    symbol font is still emitted."""
     unmapped = chr(0xF0AA)
     with caplog.at_level(logging.WARNING):
         result = classify_permission_marker(unmapped)
-    assert result == {"permission_marker": "not_permitted"}
+    assert result == {"permission_marker": "unknown"}
     assert any("U+F0AA" in rec.message for rec in caplog.records)
+
+
+def test_abs483_recognised_marker_beats_an_unmapped_glyph_in_the_same_cell():
+    """A dot or circled number is real information; a stray undecodable glyph
+    beside it is noise. Only a wholly undecodable cell degrades to unknown."""
+    unmapped = chr(0xF0AA)
+    assert classify_permission_marker(unmapped + DOT) == {
+        "permission_marker": "permitted"
+    }
+    assert classify_permission_marker(unmapped + "③") == {
+        "permission_marker": "conditional",
+        "footnote": 3,
+    }
+
+
+def test_abs483_ordinary_stray_text_is_still_not_permitted():
+    """Only PRIVATE-USE glyphs signal an undecodable symbol font. A stray
+    ordinary character (a footnote dagger, a hyphen) is not a marker and leaves
+    the blank-cell convention intact."""
+    assert classify_permission_marker("-") == {"permission_marker": "not_permitted"}
+
+
+def test_abs483_annotate_cell_persists_unknown_for_an_unmapped_glyph():
+    cell = SimpleNamespace(text=chr(0xF0AA), metadata_json={})
+    assert annotate_cell(cell) is True
+    assert cell.metadata_json == {"permission_marker": "unknown"}
 
 
 def test_high_circled_number_block():
@@ -110,8 +152,11 @@ def test_abs284_profile_codepoints_classify_custom_glyph_as_permitted():
         "permission_marker": "permitted"
     }
     # And the Regional-Centre dot is NOT permitted under that bylaw's set.
+    # ABS-483: under this profile U+F098 is an *unmapped* private-use glyph —
+    # content we cannot interpret — so it classifies as unknown rather than
+    # asserting a prohibition the bylaw never wrote.
     assert classify_permission_marker(DOT, conventions) == {
-        "permission_marker": "not_permitted"
+        "permission_marker": "unknown"
     }
 
 

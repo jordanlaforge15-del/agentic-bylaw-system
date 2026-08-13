@@ -87,6 +87,7 @@ from layer1.semantic.extractors import normalize_use, normalize_zone
 from layer1.semantic.use_matching import match_use
 from layer1.semantic.permission_markers import (
     PERMISSION_MATRIX_PROFILE,
+    UNKNOWN,
     classify_permission_marker,
     ordinal_to_circled,
 )
@@ -742,10 +743,17 @@ class RetrievalService:
            ``not_permitted``. A ``conditional`` cell additionally carries the
            footnote ordinal and its joined condition text.
         4. Every partial-match case (unknown use, unknown zone, no matrix in
-           scope, or an unbound cell) returns a *typed* indeterminate result
-           with a reason — never a silent empty success (FR3).
+           scope, an unbound cell, or an unreadable one) returns a *typed*
+           indeterminate result with a reason — never a silent empty success
+           (FR3).
+
+        ABS-483: a cell whose marker classifies as ``unknown`` (missing from
+        the parsed grid, or an unmapped symbol-font glyph) is an extraction
+        failure, and returns ``reason_code='unreadable_cell'`` rather than the
+        ``not_permitted`` the three-value vocabulary used to force.
         """
         tables = self._permission_matrix_tables(document_id=document_id)
+        unreadable: SourceTable | None = None
         for table in tables:
             resolved = resolve_permission_cell(
                 self.session,
@@ -753,8 +761,17 @@ class RetrievalService:
                 use_name=use,
                 zone=zone,
             )
-            if resolved is not None:
-                return self._build_permitted_use_result(use, zone, table, resolved)
+            if resolved is None:
+                continue
+            result = self._build_permitted_use_result(use, zone, table, resolved)
+            if result is not None:
+                return result
+            # ABS-483: this matrix addressed the pair but the cell is
+            # unreadable. Remember it and keep looking — another slice of the
+            # same logical table (or the Mainland prose path) may still answer
+            # — but never let the gap collapse into "not_permitted".
+            if unreadable is None:
+                unreadable = table
 
         # ABS-283: the Mainland LUB encodes permitted uses as prose section
         # lists, not a symbol-dot matrix. When no matrix addressed the cell, fall
@@ -763,6 +780,25 @@ class RetrievalService:
         mainland = self._resolve_mainland_permitted_use(use, zone, document_id)
         if mainland is not None:
             return mainland
+
+        if unreadable is not None:
+            return PermittedUseResult(
+                use=use,
+                zone=zone,
+                indeterminate=True,
+                reason_code="unreadable_cell",
+                reason=(
+                    f"Use {use!r} and zone {zone!r} address a cell in the "
+                    "permitted-use matrix, but its permission could not be "
+                    "extracted (the cell is missing from the parsed grid, or "
+                    "carries a symbol-font glyph this bylaw's profile does not "
+                    "map). This is an extraction gap — it does NOT mean the use "
+                    "is prohibited. Consult the cited table directly."
+                ),
+                citation=self._table_citation(unreadable),
+                document_id=unreadable.document_id,
+                table_id=unreadable.id,
+            )
 
         if not tables:
             return PermittedUseResult(
@@ -890,8 +926,14 @@ class RetrievalService:
         zone: str,
         table: SourceTable,
         resolved: dict,
-    ) -> PermittedUseResult:
-        """Project a resolved cell dict into a :class:`PermittedUseResult`."""
+    ) -> PermittedUseResult | None:
+        """Project a resolved cell dict into a :class:`PermittedUseResult`.
+
+        Returns ``None`` when the cell resolved to the ``unknown`` marker
+        (ABS-483) so the caller can keep looking at the remaining matrices
+        before giving up — Table 1A spans several ``source_table`` rows, and a
+        gap in one slice doesn't mean the pair is unanswerable.
+        """
         marker = resolved.get("permission_marker")
         footnote = resolved.get("footnote")
         # Fall back to on-the-fly classification when the cell wasn't
@@ -902,6 +944,12 @@ class RetrievalService:
             classified = classify_permission_marker(resolved.get("cell_text"))
             marker = classified["permission_marker"]
             footnote = classified.get("footnote")
+
+        # ABS-483: an unreadable cell is NOT a verdict. ``permission`` carries
+        # only the three bylaw values, so an extraction failure surfaces as a
+        # typed indeterminate rather than a fabricated "not_permitted".
+        if marker == UNKNOWN:
+            return None
 
         footnote_ordinal: int | None = None
         condition_text: str | None = None
@@ -1387,6 +1435,10 @@ class RetrievalService:
                     )
                 elif permission == "not_permitted":
                     uses.not_permitted.append(label)
+                # ABS-483: an ``unknown`` row (no cell in this column) is
+                # deliberately listed nowhere — folding it into not_permitted
+                # would state a prohibition we never read. Surfacing the gap to
+                # the caller is DM-07.
 
         if not contributing or not (
             uses.permitted or uses.conditional or uses.not_permitted
