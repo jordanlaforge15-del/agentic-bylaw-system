@@ -15,12 +15,16 @@ from pathlib import Path
 import pytest
 
 from bylaw_retrieval.retrieval import (
+    EVIDENCE_CLASS_CONFIDENCE,
+    MIN_GATED_EVIDENCE_CONFIDENCE,
     CitationLookupRequest,
+    EvidenceClass,
+    RetrievalMatch,
     RetrievalRequest,
     RetrievalService,
     ZoneProfile,
 )
-from bylaw_retrieval.retrieval.service import _extract_height_m
+from bylaw_retrieval.retrieval.service import _classify_evidence, _extract_height_m
 from layer1.db.base import Document, SourceFragment
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
@@ -722,3 +726,206 @@ def test_abs409_caption_linked_citation_carries_path(tmp_path: Path):
         assert uses_refs
         assert uses_refs[0].citation_path is not None
         assert uses_refs[0].citation_path.endswith("[Table 1A]")
+
+
+# ---------------------------------------------------------------------------
+# ABS-493 — confidence is an ordinal evidence class, not a function of how
+# many words the internal query happened to contain.
+#
+# See docs/decisions/ABS-493-CONFIDENCE-DEFINITION.md. The gate's *instinct*
+# (drop the value AND its citation below threshold) is unchanged; what these
+# tests pin down is that the threshold now reads WHERE the query's terms land
+# rather than HOW MANY of them land.
+# ---------------------------------------------------------------------------
+
+
+def _row_match(text: str, *, citation_path: str, citation_label: str) -> RetrievalMatch:
+    """A minimal match standing in for one retrieved fragment.
+
+    ``_classify_evidence`` reads only text / citation_path / citation_label, so
+    the rest is filler — deliberately including a ``score`` the classifier must
+    ignore.
+    """
+    return RetrievalMatch(
+        fragment_id=1,
+        document_id=1,
+        municipality="Halifax Regional Municipality",
+        bylaw_name="Regional Centre Land Use By-Law",
+        fragment_type="section",
+        citation_label=citation_label,
+        citation_path=citation_path,
+        page_start=4,
+        page_end=4,
+        parse_status="parsed",
+        text=text,
+        score=999.0,
+    )
+
+
+# The headline invariant (ABS-493 DoD #1): equal evidence, different query
+# word counts, same class — therefore the same gating outcome. "HR-2 setback"
+# tokenizes to 4 terms and "HR-2 floor area ratio" to 6, which is exactly the
+# spread that used to flip the old score/40 gate from 0.325 to 0.525 on one
+# and the same fragment.
+@pytest.mark.parametrize(
+    "path, label, expected_class, gated_in",
+    [
+        # Structurally addressed by the corpus: the row is FILED under HR-2.
+        ("Table 3 > HR-2", "HR-2", EvidenceClass.PATH_ANCHORED, True),
+        # Addressed only by its label.
+        ("Part V > 120", "HR-2", EvidenceClass.LABELLED_ROW, True),
+        # Not addressed at all — the zone is a word in the prose, nothing more.
+        ("General Standards", "General Standards", EvidenceClass.BODY_TERMS, False),
+    ],
+)
+def test_abs493_equal_evidence_gates_the_same_at_any_query_length(
+    path: str, label: str, expected_class: EvidenceClass, gated_in: bool
+):
+    body = (
+        "HR-2 Front Setback 3.0 m Side Setback 3.0 m Rear Setback 3.0 m "
+        "Floor Area Ratio 2.0"
+    )
+    match = _row_match(body, citation_path=path, citation_label=label)
+
+    short = _classify_evidence("HR-2 setback", match)
+    long = _classify_evidence("HR-2 floor area ratio", match)
+
+    assert short == long == expected_class
+    rung = EVIDENCE_CLASS_CONFIDENCE[expected_class]
+    assert (rung >= MIN_GATED_EVIDENCE_CONFIDENCE) is gated_in
+
+
+def test_abs493_evidence_class_ignores_the_match_score():
+    """The class is a property of (query, fragment), not of the score.
+
+    Two fragments with the same locus classify identically no matter what the
+    scorer summed — which is the whole point of taking the score out of the
+    gate.
+    """
+    strong = _row_match("HR-2 Front Setback 3.0 m", citation_path="Table 3 > HR-2", citation_label="HR-2")
+    weak = strong.model_copy(update={"score": 0.5})
+
+    assert _classify_evidence("HR-2 setback", strong) == EvidenceClass.PATH_ANCHORED
+    assert _classify_evidence("HR-2 setback", weak) == EvidenceClass.PATH_ANCHORED
+
+
+def test_abs493_ladder_is_walked_strongest_rung_first():
+    """Each rung, and the strict ordering between them."""
+    body = "off-street parking requirements apply to every development"
+
+    exact = _row_match(body, citation_path="Part V > 120", citation_label="Section 120")
+    assert _classify_evidence("Part V > 120", exact) == EvidenceClass.EXACT_PATH
+    # Path beats label beats body: the same query, three fragments.
+    assert (
+        _classify_evidence(
+            "off-street parking", _row_match(body, citation_path="Part V > Parking", citation_label="Section 120")
+        )
+        == EvidenceClass.PATH_ANCHORED
+    )
+    assert (
+        _classify_evidence(
+            "off-street parking", _row_match(body, citation_path="Part V > 120", citation_label="Parking rules")
+        )
+        == EvidenceClass.LABELLED_ROW
+    )
+    # Verbatim phrase in the body outranks scattered terms in the body.
+    assert _classify_evidence("off-street parking", exact) == EvidenceClass.BODY_PHRASE
+    assert _classify_evidence("off-street bicycle storage", exact) == EvidenceClass.BODY_TERMS
+    assert _classify_evidence("heritage conservation district", exact) == EvidenceClass.NO_MATCH
+
+    rungs = [
+        EVIDENCE_CLASS_CONFIDENCE[c]
+        for c in (
+            EvidenceClass.EXACT_PATH,
+            EvidenceClass.BOUND_TABLE_CELL,
+            EvidenceClass.PATH_ANCHORED,
+            EvidenceClass.LABELLED_ROW,
+            EvidenceClass.BODY_PHRASE,
+            EvidenceClass.BODY_TERMS,
+            EvidenceClass.NO_MATCH,
+        )
+    ]
+    assert rungs == sorted(rungs, reverse=True)
+    assert len(set(rungs)) == len(rungs), "rungs must be distinguishable"
+
+
+def test_abs493_cor_keeps_the_setbacks_its_two_token_query_used_to_lose(
+    tmp_path: Path,
+):
+    """The regression this issue was raised on, end to end.
+
+    Every zone in the fixture carries the identical ``Table 3 > <zone>``
+    setback row. Under ``score / 40.0`` the gate read query length instead of
+    evidence, so COR — whose code has no hyphen to split into extra tokens —
+    silently lost all three setbacks while CEN-2 kept them off the same row
+    shape. Same evidence must now mean same outcome AND the same rung.
+    """
+    db_url = f"sqlite:///{tmp_path / 'verbosity.db'}"
+    _seed_regional_centre(db_url)
+
+    setback_fields = ("front_setback_m", "side_setback_m", "rear_setback_m")
+    with session_scope(db_url) as session:
+        service = RetrievalService(session)
+        profiles = {
+            zone: service.get_zone_profile(zone, include=["dimensions"])
+            for zone in ("HR-2", "HR-1", "COR", "CEN-2")
+        }
+
+    for zone, profile in profiles.items():
+        assert profile.dimensions is not None
+        for field in setback_fields:
+            assert getattr(profile.dimensions, field) is not None, (
+                f"{zone}.{field} was gated out despite a Table 3 > {zone} row"
+            )
+            assert profile.confidence[field] == EVIDENCE_CLASS_CONFIDENCE[
+                EvidenceClass.PATH_ANCHORED
+            ]
+
+    # And the rungs agree across zones — not merely "all above threshold".
+    per_zone = [
+        tuple(profile.confidence[field] for field in setback_fields)
+        for profile in profiles.values()
+    ]
+    assert len(set(per_zone)) == 1, f"identical evidence produced differing rungs: {per_zone}"
+
+
+def test_abs493_body_text_prose_still_clears_the_gate_when_it_states_the_query(
+    tmp_path: Path,
+):
+    """Not every real answer is a table row.
+
+    The Part V parking rule is prose whose citation path ("Part V > 120") says
+    nothing about parking — it clears the gate on ``body_phrase`` because the
+    section states the query verbatim. Tightening the gate to structural
+    anchors alone would have silently dropped it, so this pins the rung.
+    """
+    db_url = f"sqlite:///{tmp_path / 'prose_gate.db'}"
+    _seed_regional_centre(db_url)
+
+    with session_scope(db_url) as session:
+        profile = RetrievalService(session).get_zone_profile("HR-2", include=["parking"])
+
+    assert profile.parking is not None
+    assert profile.parking.min_spaces_per_dwelling_unit == 1.0
+    assert profile.confidence["parking"] == EVIDENCE_CLASS_CONFIDENCE[
+        EvidenceClass.BODY_PHRASE
+    ]
+    assert "parking" in [field for c in profile.citations for field in c.backs]
+
+
+def test_abs493_matrix_uses_report_the_bound_table_cell_rung(tmp_path: Path):
+    """The ABS-409 matrix path's 0.9 is now a named rung on the same ladder,
+    not a free-floating constant — and it outranks every keyword-derived rung
+    below an outright citation-path identity match."""
+    db_url = f"sqlite:///{tmp_path / 'matrix_rung.db'}"
+    _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        profile = _service(db_url, session).get_zone_profile("DH")
+
+    assert profile.confidence["uses"] == EVIDENCE_CLASS_CONFIDENCE[
+        EvidenceClass.BOUND_TABLE_CELL
+    ]
+    assert (
+        EVIDENCE_CLASS_CONFIDENCE[EvidenceClass.BOUND_TABLE_CELL]
+        > EVIDENCE_CLASS_CONFIDENCE[EvidenceClass.PATH_ANCHORED]
+    )
