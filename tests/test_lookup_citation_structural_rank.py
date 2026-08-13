@@ -1,15 +1,21 @@
 """Compact-citation suggestion ranking for ``lookup_citation`` (ABS-461).
 
 The advisor reads "Clause 198(1)(f)" out of the corpus and asks for exactly
-that. The stored path is ``Part V > 198 > [Side Setback Requirements] > (f)``:
-an interposed heading segment, and no ``(1)`` at all because the ingest folded
-subsection 198(1) into its section fragment. rapidfuzz scores the whole string,
-so it ranked short unrelated paths ending in "(f)" above the right one and the
-clause was unreachable.
+that. The stored path is ``Part V > 198 > (f)``: no ``(1)`` at all, because the
+ingest folded subsection 198(1) into its section fragment. rapidfuzz scores the
+whole string, so it ranked short unrelated paths ending in "(f)" above the right
+one and the clause was unreachable.
 
 DoD 4 of ABS-461 requires ``lookup_citation(document_id=4,
 citation_path="198(1)(f)")`` to resolve to the "2.5 metres elsewhere" clause,
 exactly or via the ABS-261 suggestion path.
+
+**ABS-488 moved the corpus under this test.** A clause used to carry the sticky
+heading it sat under (``Part V > 198 > [Side Setback Requirements] > (f)``);
+it now carries the container that actually scopes it, which for 198's clauses is
+the section itself. The paths below are lifted from the repathed dev corpus, and
+a heading segment survives in the 173/209 entries because there the heading does
+interrupt the subsection — the ranker has to stay indifferent to both shapes.
 """
 from __future__ import annotations
 
@@ -24,17 +30,18 @@ from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
 from layer1.models.enums import FragmentType, ParseStatus
 
-SIDE_SETBACK = "[Side Setback Requirements]"
 SEPARATION = "[Minimum Separation Distances]"
 
 # Paths lifted from document_id=4 (Regional Centre LUB) after the ABS-461
-# repair, including the near-misses that used to outrank the right answer.
+# repair and the ABS-488 repath, including the near-misses that used to
+# outrank the right answer.
 CORPUS_PATHS = [
     "Part V > 198",
-    f"Part V > 198 > {SIDE_SETBACK} > (a)",
-    f"Part V > 198 > {SIDE_SETBACK} > (b)",
-    f"Part V > 198 > {SIDE_SETBACK} > (d)",
-    f"Part V > 198 > {SIDE_SETBACK} > (f)",
+    "Part V > 198 > (a)",
+    "Part V > 198 > (a) > (i)",
+    "Part V > 198 > (b)",
+    "Part V > 198 > (d)",
+    "Part V > 198 > (f)",
     f"Part V > 173 > (2.5) > {SEPARATION} > (f)",
     f"Part V > 209 > (2.5) > {SEPARATION} > (f)",
     "Part I > 76 > 76.5 > [Dartmouth Cove (DC) Special Area] > (f)",
@@ -70,7 +77,7 @@ def _seed(db_url: str) -> int:
                     reading_order_end=order,
                     text=(
                         "(f) 2.5 metres elsewhere."
-                        if path.endswith(f"{SIDE_SETBACK} > (f)")
+                        if path == "Part V > 198 > (f)"
                         else f"Body text for {path}."
                     ),
                     parse_status=ParseStatus.PARSED,
@@ -91,14 +98,16 @@ def test_compact_citation_resolves_to_the_catch_all_setback(tmp_path: Path):
             CitationLookupRequest(citation_path="198(1)(f)", document_id=document_id)
         )
 
-    assert response.suggestions[0] == f"Part V > 198 > {SIDE_SETBACK} > (f)"
+    assert response.suggestions[0] == "Part V > 198 > (f)"
 
 
 @pytest.mark.parametrize(
     ("requested", "expected"),
     [
-        ("198(1)(a)", f"Part V > 198 > {SIDE_SETBACK} > (a)"),
-        ("198(1)(d)", f"Part V > 198 > {SIDE_SETBACK} > (d)"),
+        ("198(1)(a)", "Part V > 198 > (a)"),
+        ("198(1)(d)", "Part V > 198 > (d)"),
+        # A subclause one level further down resolves the same way.
+        ("198(1)(a)(i)", "Part V > 198 > (a) > (i)"),
         # Decimal section anchors work the same way.
         ("173(2.5)(f)", f"Part V > 173 > (2.5) > {SEPARATION} > (f)"),
     ],
@@ -136,7 +145,7 @@ def test_exact_paths_still_short_circuit(tmp_path: Path):
     with session_scope(db_url) as session:
         response = RetrievalService(session).lookup_citation(
             CitationLookupRequest(
-                citation_path=f"Part V > 198 > {SIDE_SETBACK} > (f)", document_id=document_id
+                citation_path="Part V > 198 > (f)", document_id=document_id
             )
         )
 
@@ -154,15 +163,13 @@ class TestStructuralRank:
         Every other "(f)" in the corpus belongs to a different section, and
         198's other clauses are not clause (f).
         """
-        assert _structural_citation_rank("198(1)(f)", CORPUS_PATHS) == [
-            f"Part V > 198 > {SIDE_SETBACK} > (f)"
-        ]
+        assert _structural_citation_rank("198(1)(f)", CORPUS_PATHS) == ["Part V > 198 > (f)"]
 
     def test_a_leaf_match_under_the_wrong_section_is_rejected(self):
         assert _structural_citation_rank("198(1)(f)", [f"Part V > 173 > (2.5) > {SEPARATION} > (f)"]) == []
 
     def test_the_right_section_with_the_wrong_leaf_is_rejected(self):
-        assert _structural_citation_rank("198(1)(f)", [f"Part V > 198 > {SIDE_SETBACK} > (a)"]) == []
+        assert _structural_citation_rank("198(1)(f)", ["Part V > 198 > (a)"]) == []
 
     def test_non_citation_requests_are_declined(self):
         assert _structural_citation_rank("Table 1A", CORPUS_PATHS) == []
@@ -172,7 +179,7 @@ class TestStructuralRank:
 
     def test_a_full_token_match_outranks_a_partial_one(self):
         candidates = [
-            f"Part V > 198 > {SIDE_SETBACK} > (b)",  # 2 of 3 tokens: no "(1)"
+            "Part V > 198 > (b)",  # 2 of 3 tokens: no "(1)"
             "Part V > 198 > (1) > (b)",  # all 3
         ]
         assert _structural_citation_rank("198(1)(b)", candidates)[0] == "Part V > 198 > (1) > (b)"
@@ -181,8 +188,6 @@ class TestStructuralRank:
         """Between two equal-token matches, prefer the one with less extra depth."""
         candidates = [
             "Part V > 198 > (9) > (b)",
-            f"Part V > 198 > {SIDE_SETBACK} > (b)",
+            "Part V > 198 > (b)",
         ]
-        assert _structural_citation_rank("198(1)(b)", candidates)[0] == (
-            f"Part V > 198 > {SIDE_SETBACK} > (b)"
-        )
+        assert _structural_citation_rank("198(1)(b)", candidates)[0] == "Part V > 198 > (b)"

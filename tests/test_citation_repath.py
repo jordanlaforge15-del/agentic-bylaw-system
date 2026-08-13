@@ -57,6 +57,10 @@ def heading(text: str) -> Node:
         ("Part I", "", "Part I"),
         # A title that merely mentions a chapter is not one.
         ("Part V", "Requirements as set out in Chapter 4", "Part V"),
+        # Idempotent: the migration re-derives this from rows it may have
+        # already relabelled.
+        ("Part I, Chapter 2", ", Chapter 2: Development Permit", "Part I, Chapter 2"),
+        ("Part I, Chapter 2", "Administration", "Part I"),
     ],
 )
 def test_part_label_folds_in_its_chapter(label: str, title: str, expected: str) -> None:

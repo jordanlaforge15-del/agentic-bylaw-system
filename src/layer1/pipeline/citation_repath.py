@@ -75,6 +75,9 @@ CHAPTER_TITLE_RE = re.compile(
     r"^\s*[,:;\-–—]?\s*(chapter\s+(?:\d+[A-Za-z]?|[IVXLCDM]+))\b",
     re.IGNORECASE,
 )
+LABEL_CHAPTER_SUFFIX_RE = re.compile(
+    r",\s*chapter\s+(?:\d+[A-Za-z]?|[IVXLCDM]+)\s*$", re.IGNORECASE
+)
 
 # A simple enumerator — "(a)", "(iv)". Compound labels ("499(94)(f)") already
 # carry their own discriminator and are left exactly as the builder wrote them.
@@ -162,11 +165,14 @@ def part_label_with_chapter(label: str, title: str) -> str:
     section paths that already read ``Part I > 9``. The chapter discriminates
     the *chapter heading's own* citation; it is not pushed onto descendants.
     """
+    # Idempotent: the corpus migration re-derives this from a row it may have
+    # already relabelled, and "Part I, Chapter 2, Chapter 2" is nobody's citation.
+    base = LABEL_CHAPTER_SUFFIX_RE.sub("", label).strip()
     match = CHAPTER_TITLE_RE.match(title or "")
     if not match:
-        return label
+        return base
     chapter = " ".join(match.group(1).split())
-    return f"{label}, {chapter[:1].upper()}{chapter[1:]}"
+    return f"{base}, {chapter[:1].upper()}{chapter[1:]}"
 
 
 def _trim(text: str) -> str:
