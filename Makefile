@@ -1,4 +1,4 @@
-.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland
+.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland eval-retrieval-baseline check-retrieval-baseline
 
 DB_URL ?= postgresql+psycopg://layer1:layer1@localhost:5432/layer1
 
@@ -87,3 +87,23 @@ e2e-smoke: e2e-up
 e2e: e2e-up
 	cd web && NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true npx playwright test
 	./scripts/e2e-down.sh
+
+# --- Retrieval eval baseline (ABS-502) -----------------------------------
+# `make eval-retrieval-baseline` is THE documented way to re-record
+# evals/retrieval/BASELINE.json. It needs the dev corpus, so it takes an
+# explicit DSN rather than the ambient one: a worktree shell set up for a
+# parallel e2e run exports DATABASE_URL / PG_PORT pointing at that worktree's
+# ephemeral, empty database, and the harness would then measure nothing.
+# Override with `make eval-retrieval-baseline EVAL_DB_URL=…`.
+#
+# `make check-retrieval-baseline` is the gate: it fails when the retrieval code
+# has moved and the baseline has not. It needs no database.
+
+EVAL_DB_URL ?= $(DB_URL)
+PYTHON ?= $(shell test -x .venv/bin/python && echo .venv/bin/python || echo python)
+
+eval-retrieval-baseline:
+	$(PYTHON) scripts/eval_retrieval_recall.py --database-url "$(EVAL_DB_URL)"
+
+check-retrieval-baseline:
+	$(PYTHON) scripts/check_retrieval_baseline.py
