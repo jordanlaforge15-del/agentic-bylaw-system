@@ -222,7 +222,8 @@ didn't run is recoverable; a pre-change state that was never captured is not.
 
 Read-only alembic subcommands (`current`, `history`) are not fenced, and an
 `alembic upgrade` on a DB already at head skips the dump — there is nothing to
-protect.
+protect. Every fenced path fails the same way: `ABORT: …` on stderr and exit
+**3**, before the first write.
 
 Adding a new script that mutates dev data? Two lines:
 

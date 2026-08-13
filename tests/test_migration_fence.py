@@ -374,8 +374,9 @@ def test_alembic_upgrade_aborts_when_the_snapshot_fails(tmp_path: Path) -> None:
         timeout=180,
     )
 
-    assert result.returncode != 0
+    assert result.returncode == 3, f"expected a clean abort, got:\n{result.stderr}"
     assert sentinel.read_text().strip() == "alembic-upgrade-from-unstamped"
+    assert "ABORT:" in result.stderr
     assert "refusing to mutate the dev database" in result.stderr
     # alembic never got as far as stamping a version, so no migration ran.
     if db.exists():

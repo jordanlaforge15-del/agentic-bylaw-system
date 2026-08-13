@@ -8,7 +8,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import engine_from_config, pool
 
 from layer1.db.base import Base
-from layer1.db.migration_fence import snapshot_before_migration
+from layer1.db.migration_fence import fence_or_abort
 import layer2.db.models  # noqa: F401
 import layer2.compliance.db.models  # noqa: F401
 import advisor.db.models  # noqa: F401
@@ -56,10 +56,10 @@ _FENCED_COMMANDS = {None, "upgrade", "downgrade"}
 def _fence(connection) -> None:
     """Snapshot the dev DB before alembic writes to it (ABS-499).
 
-    Raises :class:`SnapshotFenceError` (aborting the migration before the first
-    DDL) if the snapshot cannot be taken. No-op for read-only subcommands, for
-    any target that is not the dev database, and — on an upgrade — when the DB
-    is already at head, so ``make migrate`` on an up-to-date checkout stays free.
+    Prints ``ABORT: …`` and exits 3 — before the first DDL — if the snapshot
+    cannot be taken. No-op for read-only subcommands, for any target that is
+    not the dev database, and — on an upgrade — when the DB is already at head,
+    so ``make migrate`` on an up-to-date checkout stays free.
     """
     command = _alembic_command_name()
     if command not in _FENCED_COMMANDS:
@@ -72,7 +72,7 @@ def _fence(connection) -> None:
         return  # nothing pending — nothing to fence
 
     label = "-".join(current) if current else "unstamped"
-    snapshot_before_migration(
+    fence_or_abort(
         f"alembic-{command or 'migrate'}-from-{label}",
         database_url=str(connection.engine.url.render_as_string(hide_password=False)),
     )
