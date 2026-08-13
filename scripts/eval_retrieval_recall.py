@@ -396,9 +396,9 @@ def _db_anchor_resolver(session) -> AnchorResolver:
     exactly the corpus ``search_bylaw_evidence`` searches — labelling against a
     fragment the retriever cannot reach would grade an impossible target.
     """
+    from bylaw_retrieval.retrieval.service import retrieval_enabled_resolver
     from sqlalchemy import select
 
-    from bylaw_retrieval.retrieval.service import retrieval_enabled_resolver
     from layer1.db.base import Document, SourceFragment
 
     scoped_ids = retrieval_enabled_resolver(session)
@@ -444,9 +444,9 @@ def _corpus_fingerprint(session) -> dict[str, Any]:
     A Recall@k number is meaningless without it: the same harness over a
     re-ingested corpus is a different measurement, not a regression.
     """
+    from bylaw_retrieval.retrieval.service import retrieval_enabled_resolver
     from sqlalchemy import func, select
 
-    from bylaw_retrieval.retrieval.service import retrieval_enabled_resolver
     from layer1.db.base import Document, SourceFragment
 
     scoped_ids = retrieval_enabled_resolver(session)
@@ -521,6 +521,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     from bylaw_retrieval.retrieval import RetrievalService
     from bylaw_retrieval.retrieval.service import retrieval_enabled_resolver
+
     from layer1.db.session import session_scope
 
     try:
@@ -568,7 +569,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Recall@{args.k:<8}: {report.recall_at_k:.4f}")
     print(f"SetRecall@{args.k:<5}: {report.set_recall_at_k:.4f}")
     print(f"MRR@{args.k:<11}: {report.mrr:.4f}")
-    print("")
+    print()
     print(f"{'category':<16} {'n':>4} {'recall':>8} {'setrec':>8} {'mrr':>8}")
     for category, stats in report.by_category.items():
         print(
@@ -578,7 +579,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     misses = [r for r in report.results if not r.hit]
     if misses:
-        print("")
+        print()
         print(f"misses ({len(misses)}):")
         for result in misses:
             print(f"  {result.id} [{result.category}] {result.question}")
@@ -586,7 +587,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.dry_run:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-        print("")
+        print()
         print(f"Wrote {args.out}")
     return 0
 
