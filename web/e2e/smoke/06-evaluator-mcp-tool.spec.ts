@@ -9,6 +9,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { E2E_API_URL, expect, test } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 
 test.beforeAll(() => {
@@ -17,10 +18,7 @@ test.beforeAll(() => {
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT so this seed lands in the right Postgres
   // when a worktree overrides ports for parallel `make e2e`.
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
 
   execSync(`"${venvPython}" "${seed}"`, {
     env: {

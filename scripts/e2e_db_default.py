@@ -48,11 +48,17 @@ import os
 
 from layer1.seed_guard import (  # noqa: F401  (re-exported for callers/tests)
     E2E_PG_PORT_DEFAULT,
+    apply_pg_port_precedence,
     default_e2e_database_url,
     require_test_database,
 )
 
 os.environ.setdefault("DATABASE_URL", default_e2e_database_url())
+
+# ABS-501: an inherited DATABASE_URL whose port disagrees with PG_PORT is a
+# leftover from a torn-down stack — PG_PORT (the live stack's port) wins,
+# with the conflict printed to stderr. No-op when they agree.
+apply_pg_port_precedence()
 
 # ABS-430: refuse to run against any non-test database. SystemExit here
 # kills the importing seed script before it opens a single connection.

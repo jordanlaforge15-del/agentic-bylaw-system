@@ -54,6 +54,92 @@ def default_e2e_database_url(env: Mapping[str, str] | None = None) -> str:
     return f"postgresql+psycopg://layer1:layer1@localhost:{port}/layer1_test"
 
 
+def _url_port(url: str) -> str | None:
+    """Host port of a SQLAlchemy/libpq-style URL, or ``None`` if absent.
+
+    ``urlsplit().port`` raises on a malformed port; a URL we cannot parse
+    carries no port we could disagree with, so it resolves to ``None``.
+    """
+    try:
+        port = urlsplit(url).port
+    except ValueError:
+        return None
+    return None if port is None else str(port)
+
+
+def reconcile_database_url(
+    env: Mapping[str, str] | None = None,
+) -> tuple[str | None, str | None]:
+    """Apply the ABS-501 precedence rule to ``DATABASE_URL`` / ``PG_PORT``.
+
+    ``PG_PORT`` is the per-worktree e2e Postgres port: it is set by
+    whoever owns the *currently running* stack. ``DATABASE_URL``, by
+    contrast, is exported by ``scripts/e2e-up.sh`` (and by the Night
+    Manager's agent runner) and then outlives the stack it described —
+    a stale value pointing at a torn-down port. Preferring it, as every
+    call site used to, misroutes seeds/tests at a dead database and
+    reports a green branch as broken.
+
+    So: **when both are set and their ports disagree, PG_PORT wins**, and
+    the caller gets a warning naming both values. A disagreement is never
+    an intent — an explicit ``DATABASE_URL`` for a *different* port is
+    only ever reachable by unsetting ``PG_PORT``.
+
+    Returns ``(effective_url, warning)``. ``effective_url`` is ``None``
+    when ``DATABASE_URL`` is unset (nothing to reconcile — callers fall
+    back to :func:`default_e2e_database_url` or their own default);
+    ``warning`` is ``None`` unless a conflict was resolved.
+    """
+    env = os.environ if env is None else env
+    url = env.get("DATABASE_URL")
+    pg_port = env.get("PG_PORT")
+    if not url or not pg_port:
+        return url, None
+
+    # sqlite has no port to reconcile.
+    if urlsplit(url).scheme.partition("+")[0] == "sqlite":
+        return url, None
+
+    port = _url_port(url)
+    if port is None or port == pg_port:
+        return url, None
+
+    parts = urlsplit(url)
+    host = parts.hostname or "localhost"
+    userinfo = ""
+    if parts.username:
+        userinfo = parts.username
+        if parts.password:
+            userinfo += f":{parts.password}"
+        userinfo += "@"
+    rewritten = parts._replace(netloc=f"{userinfo}{host}:{pg_port}").geturl()
+    warning = (
+        f"DATABASE_URL/PG_PORT conflict: inherited DATABASE_URL targets port "
+        f"{port} but PG_PORT={pg_port}. PG_PORT wins — using {rewritten}. "
+        f"A stale DATABASE_URL from a torn-down stack is the usual cause; "
+        f"`unset DATABASE_URL` to silence this. [ABS-501]"
+    )
+    return rewritten, warning
+
+
+def apply_pg_port_precedence(env: dict[str, str] | None = None) -> str | None:
+    """Rewrite a conflicting ``DATABASE_URL`` in ``env`` in place (ABS-501).
+
+    Thin imperative wrapper over :func:`reconcile_database_url` for the
+    process environment: mutates ``DATABASE_URL`` when ``PG_PORT``
+    overrides it and prints the warning to stderr so the redirect is
+    never silent. Returns the effective URL (or ``None`` when unset).
+    """
+    target = os.environ if env is None else env
+    url, warning = reconcile_database_url(target)
+    if warning:
+        import sys
+
+        print(f"e2e env preflight: {warning}", file=sys.stderr)
+        target["DATABASE_URL"] = url or ""
+    return url
+
+
 def resolve_database_name(url: str) -> str:
     """Extract the database name from a SQLAlchemy/libpq-style URL.
 

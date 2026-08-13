@@ -273,6 +273,33 @@ The first worktree (using all defaults) and the second (using the overrides abov
 
 Note: each worktree's `postgres-e2e` container, volume, and `layer1_test` DB are per-compose-project, so concurrent runs don't share state — and since every run boots a fresh instance, neither do consecutive runs in the same worktree.
 
+### `DATABASE_URL` vs `PG_PORT` precedence (ABS-501)
+
+`PG_PORT` is authoritative. **When an inherited `DATABASE_URL` names a different port than `PG_PORT`, `PG_PORT` wins** and the override is printed (`e2e env preflight: DATABASE_URL/PG_PORT conflict: … [ABS-501]`). A disagreement is never an intent: to point deliberately at some other database, `unset PG_PORT`.
+
+Why the rule exists: `DATABASE_URL` outlives the stack that defined it. `scripts/e2e-up.sh` exports one built from `PG_PORT`, and the Night Manager's agent runner exports one pinned to the run's assigned port — both survive teardown in the surrounding shell. `PG_PORT`, by contrast, is set by whoever owns the stack that is up *now*.
+
+**Failure signature (what this prevents).** A shell carries a `DATABASE_URL` for a torn-down stack. Seeds, `globalSetup` and pytest all connect to that dead port while FastAPI queries the live one, so a fully green branch reports connection-refused / empty-corpus failures. From the Data Model 3.0 post-mortem:
+
+```
+env -u DATABASE_URL pytest tests/test_feature_geometry_consistency_pg.py  -> 3 passed
+DATABASE_URL=...localhost:5443... pytest (same file)                      -> 3 failed
+```
+
+That cost ~$17 of agent time on ABS-492 chasing six phantom Postgres failures on work that was complete and green throughout.
+
+**Where the rule lives.** One resolver per language, and nothing resolves `DATABASE_URL` inline any more:
+
+| Path | Owner |
+|------|-------|
+| Playwright `globalSetup` + every seeding spec | `web/e2e/helpers/database-url.ts` (`resolveDatabaseUrl()`) |
+| pytest + the FastAPI app (`get_settings()`) | `layer1.seed_guard.apply_pg_port_precedence` |
+| `scripts/seed_e2e_*.py` | `scripts/e2e_db_default` (same helper) |
+
+`tests/test_e2e_spec_pg_port_fallback.py` fails any spec that reads `process.env.DATABASE_URL` itself. Behaviour coverage: `tests/test_abs501_database_url_precedence.py` and `web/e2e/functional/abs501-database-url-precedence.spec.ts` (both the conflicting *and* the agreeing case).
+
+**Still the cleanest habit:** `unset DATABASE_URL` before `./scripts/e2e-down.sh` / `make e2e`, and export only the port triplet. The precedence rule is the safety net, not a licence to carry a stale export around.
+
 ## Troubleshooting
 
 **`make e2e-up` says ports already in use.** A previous run didn't tear down cleanly. `pkill -9 -f advisor.api.e2e_server` and `pkill -9 -f "next dev -p 3001"`, then re-run. If another worktree is intentionally running e2e, use the override recipe in [Parallel worktrees](#parallel-worktrees) instead.

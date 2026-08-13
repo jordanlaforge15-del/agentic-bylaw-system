@@ -36,6 +36,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { expect, test } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 
 type ProbeResult = {
@@ -60,10 +61,7 @@ function venvPython(): string {
 function scriptEnv(): NodeJS.ProcessEnv {
   // ABS-207: honor PG_PORT so the parallel-worktree case lands in the right
   // Postgres; fall back to the standard layer1_test URL otherwise.
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   return {
     ...process.env,
     DATABASE_URL: databaseUrl,

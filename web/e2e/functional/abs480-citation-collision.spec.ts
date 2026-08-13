@@ -32,6 +32,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { test, expect, E2E_API_URL, DEMO_USER_ID } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 const BYLAW_NAME = "Citation Collision Probe Bylaw (ABS-480 E2E)";
 const COLLIDED_PATH = "26 > (g)";
@@ -40,10 +41,7 @@ const CONTROL_PATH = "26 > (h)";
 test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   const env = {
     ...process.env,
     DATABASE_URL: databaseUrl,

@@ -23,6 +23,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { test, expect, E2E_API_URL, DEMO_USER_ID } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 // Seeded zone-profile document id, captured in beforeAll and used to scope
 // every get_zone_profile call to this spec's own bylaw — the shared e2e
@@ -32,10 +33,7 @@ let zoneDocumentId: number | null = null;
 test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   const env = {
     ...process.env,
     DATABASE_URL: databaseUrl,

@@ -29,6 +29,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { E2E_API_URL, expect, test } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 
 const ABS270_BYLAW_NAME = "ABS-270 Structured Query E2E Bylaw";
@@ -45,10 +46,7 @@ const ABS270_BYLAW_NAME = "ABS-270 Structured Query E2E Bylaw";
 function runSeed(): number | null {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   const output = execSync(
     `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_abs270_structured.py")}"`,
     {

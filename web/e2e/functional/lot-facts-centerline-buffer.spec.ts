@@ -43,6 +43,7 @@ import {
   expect,
   test,
 } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 
 // Mid-block expected values: 15 m south edge fully inside the 12 m
@@ -76,10 +77,7 @@ function runSeed(): void {
   const seed = path.join(repoRoot, "scripts", "seed_e2e_parcels.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT for the parallel-worktree case.
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
 
   execSync(`"${venvPython}" "${seed}"`, {
     env: {
@@ -97,10 +95,7 @@ function readCaseMetadata(caseId: number): Record<string, unknown> {
   const inspect = path.join(repoRoot, "scripts", "inspect_case_metadata.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT for the parallel-worktree case.
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
 
   // stdio "pipe" so we can capture stdout; inherit stderr so a Python
   // traceback surfaces in the Playwright log if the inspect step fails.

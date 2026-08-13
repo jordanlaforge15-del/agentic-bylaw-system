@@ -34,6 +34,7 @@ import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 
 import { E2E_API_URL } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 const TEST_USER_ID = `abs305-${Date.now()}-${Math.random()
   .toString(36)
@@ -43,10 +44,7 @@ test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const seed = path.join(repoRoot, "scripts", "seed_e2e_user.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   execSync(
     `"${venvPython}" "${seed}" --user-id "${TEST_USER_ID}" ` +
       `--email "${TEST_USER_ID}@e2e.test" --credits-per-tier 5`,

@@ -26,6 +26,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { test, expect, E2E_API_URL, DEMO_USER_ID } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 let documentId: number;
 
@@ -34,10 +35,7 @@ test.beforeAll(() => {
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT so the seed lands in the right Postgres when a
   // parallel worktree runs on a non-default port triplet.
-  const pgPort = process.env.PG_PORT || "5433";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   const env = {
     ...process.env,
     DATABASE_URL: databaseUrl,
