@@ -239,9 +239,12 @@ Notes:
   zoning section that defines its rules
   (`src/layer1/db/base.py:304-330`).
 - Parcels are seeded by a one-shot backfill
-  (`scripts/backfill_parcels.py`) from the Halifax parcel dataset; the
-  denormalised `parcel.zone_code` is set by intersecting with zoning
-  polygons (`src/layer1/db/base.py:396-435`).
+  (`scripts/backfill_parcels.py`) from the Halifax parcel dataset, which
+  writes identity, geometry, centroid and area only. A parcel's zone is
+  read from the intersecting zoning `external_dataset_feature`, never
+  cached on `parcel` — the denormalised `parcel.zone_code` column was
+  dropped in ABS-481 because nothing ever read it back and nothing
+  refreshed it when the zoning dataset was re-ingested.
 - Address resolution caches in `geocode_cache`
   (`src/layer1/db/base.py:440-469`); the Google geocoder is fenced to
   `country:CA|locality:Halifax` to stop cross-province false matches
@@ -435,7 +438,6 @@ erDiagram
         int id PK
         string jurisdiction
         string parcel_identifier
-        string zone_code
         float area_m2
     }
     SUBMISSION {

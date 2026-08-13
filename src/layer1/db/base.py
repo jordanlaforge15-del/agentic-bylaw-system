@@ -432,6 +432,13 @@ class Parcel(Base):
     geometry column added by ``0009_postgis_spatial_index``) already
     cover the indexed-lookup hot path, so we don't need a duplicate
     geometry column here in Phase 1.
+
+    Zoning is deliberately *not* denormalised onto this table. A
+    ``zone_code`` column lived here until ABS-481: the backfill wrote it
+    by intersecting zone polygons and nothing ever read it back, so it
+    was a stale-able copy with no refresh contract. The zone of record is
+    the intersecting zoning ``external_dataset_feature``'s
+    ``canonical_attributes_json['zone_code']``.
     """
 
     __tablename__ = "parcel"
@@ -447,11 +454,6 @@ class Parcel(Base):
     geometry_geojson: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(json_type()))
     centroid_geojson: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(json_type()))
     area_m2: Mapped[float | None] = mapped_column(Numeric(14, 2))
-    # ``zone_code`` is a denormalised convenience for the evaluator's
-    # zone-applicability filter. Source of truth remains the linked
-    # zoning ``external_dataset_feature``; this column is populated by
-    # the parcel backfill from intersecting zone polygons.
-    zone_code: Mapped[str | None] = mapped_column(String(64), index=True)
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

@@ -92,7 +92,6 @@ def test_parcel_unique_per_jurisdiction(tmp_path: Path) -> None:
             Parcel(
                 jurisdiction="HRM",
                 parcel_identifier="00012345",
-                zone_code="ER-1",
                 area_m2=812.5,
                 metadata_json={"source": "halifax_parcels"},
             )
@@ -175,7 +174,6 @@ def test_submission_roundtrip_with_attributes_and_decision(tmp_path: Path) -> No
         parcel = Parcel(
             jurisdiction="HRM",
             parcel_identifier="00012345",
-            zone_code="ER-1",
         )
         session.add(parcel)
         session.flush()
@@ -217,7 +215,7 @@ def test_submission_roundtrip_with_attributes_and_decision(tmp_path: Path) -> No
         reloaded = session.get(Submission, submission_id)
         assert reloaded is not None
         assert reloaded.parcel is not None
-        assert reloaded.parcel.zone_code == "ER-1"
+        assert reloaded.parcel.parcel_identifier == "00012345"
         assert {a.attribute_key for a in reloaded.attributes} == {
             "front_setback_m",
             "building_height_m",
@@ -266,3 +264,18 @@ def test_submission_attribute_unique_per_key(tmp_path: Path) -> None:
 # pre-existing limitation independent of this migration — the
 # production target is postgres, where the full chain applies cleanly,
 # and the ORM round-trip tests above already cover the new tables.
+
+
+def test_parcel_carries_no_denormalised_zone_code() -> None:
+    """ABS-481: ``parcel.zone_code`` was write-only and is gone.
+
+    Guards against someone re-adding a cached zone column (and the stale
+    copy that comes with it) without a reader and a refresh contract. A
+    parcel's zone is derived from the intersecting zoning
+    ``external_dataset_feature``, which keeps its own ``zone_code``
+    canonical attribute — that one is unrelated and stays.
+    """
+    assert "zone_code" not in Parcel.__table__.columns
+    assert not any(
+        "zone_code" in index.columns for index in Parcel.__table__.indexes
+    )

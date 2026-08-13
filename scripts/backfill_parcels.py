@@ -13,8 +13,7 @@ Safe to re-run. For each Halifax parcel feature:
   ``(jurisdiction, parcel_identifier)``, the row is reused and the
   feature's ``parcel_id`` FK is set / refreshed.
 * otherwise a new row is inserted with centroid + area computed from
-  the feature's geometry and the zone_code looked up from the
-  Halifax zoning dataset.
+  the feature's geometry.
 
 Re-running after schema changes that add columns won't break — the
 script touches only the columns it knows about.
@@ -58,14 +57,12 @@ from layer1.db.session import session_scope
 
 HALIFAX_JURISDICTION = "HRM"
 HALIFAX_PARCELS_DATASET_NAME = "halifax_property_parcels"
-HALIFAX_ZONING_DATASET_NAME = "halifax_zoning_boundaries"
 
 # Canonical attribute key the Halifax parcels YAML maps ``PID`` to. See
 # ``src/layer1/datasets/halifax_property_parcels.yaml`` — feature_key is
 # also ``PID``, but we read from canonical_attributes so a future
 # schema-mapping tweak doesn't silently break this script.
 PARCEL_IDENTIFIER_CANONICAL_KEY = "parcel_id"
-ZONE_CODE_CANONICAL_KEY = "zone_code"
 
 
 logger = logging.getLogger("backfill_parcels")
@@ -82,8 +79,6 @@ class BackfillStats:
     unmatched_features: int = 0
     bad_geometry: int = 0
     missing_identifier: int = 0
-    zone_lookups_successful: int = 0
-    zone_lookups_failed: int = 0
 
     def summary_line(self) -> str:
         return (
@@ -93,9 +88,7 @@ class BackfillStats:
             f"linked={self.features_linked} "
             f"unmatched={self.unmatched_features} "
             f"bad_geometry={self.bad_geometry} "
-            f"missing_identifier={self.missing_identifier} "
-            f"zone_ok={self.zone_lookups_successful} "
-            f"zone_missing={self.zone_lookups_failed}"
+            f"missing_identifier={self.missing_identifier}"
         )
 
 
@@ -114,18 +107,6 @@ def backfill(session: Session, *, dry_run: bool = False) -> BackfillStats:
             f"no external_dataset named {HALIFAX_PARCELS_DATASET_NAME!r} found. "
             "Has the Halifax parcel ingest run on this database?"
         )
-    zoning_dataset = _find_zoning_dataset(session)
-    if zoning_dataset is None:
-        logger.warning(
-            "no %r dataset found; zone_code will be left NULL on inserted parcels",
-            HALIFAX_ZONING_DATASET_NAME,
-        )
-
-    # Pre-load zoning features for the in-memory point-in-polygon lookup.
-    # On postgres we could use ST_Contains via PostGIS; pulling rows
-    # into shapely here keeps the script dialect-agnostic and runs in
-    # acceptable time for Halifax (~11k zoning polygons).
-    zoning_features = _load_zoning_geometries(session, zoning_dataset)
 
     stats = BackfillStats()
     # Pre-count for progress logging, but stream the actual feature rows
@@ -198,18 +179,12 @@ def backfill(session: Session, *, dry_run: bool = False) -> BackfillStats:
             else:
                 centroid_geojson = _centroid_geojson(polygon)
                 area_m2 = _polygon_area_m2(polygon)
-                zone_code = _zone_code_for_polygon(polygon, zoning_features)
-                if zone_code is not None:
-                    stats.zone_lookups_successful += 1
-                else:
-                    stats.zone_lookups_failed += 1
                 parcel = Parcel(
                     jurisdiction=HALIFAX_JURISDICTION,
                     parcel_identifier=parcel_identifier,
                     geometry_geojson=dict(geometry) if geometry else None,
                     centroid_geojson=centroid_geojson,
                     area_m2=area_m2,
-                    zone_code=zone_code,
                     metadata_json={
                         "source_dataset": HALIFAX_PARCELS_DATASET_NAME,
                         "source_feature_id": feature.id,
@@ -261,18 +236,6 @@ def _find_parcels_dataset(session: Session) -> ExternalDataset | None:
         session.execute(
             select(ExternalDataset).where(
                 ExternalDataset.name == HALIFAX_PARCELS_DATASET_NAME
-            )
-        )
-        .scalars()
-        .first()
-    )
-
-
-def _find_zoning_dataset(session: Session) -> ExternalDataset | None:
-    return (
-        session.execute(
-            select(ExternalDataset).where(
-                ExternalDataset.name == HALIFAX_ZONING_DATASET_NAME
             )
         )
         .scalars()
@@ -366,61 +329,6 @@ def _make_equirectangular_projector(lat_origin_deg: float, lon_origin_deg: float
         return ((lon - lon_origin_deg) * m_per_deg_lon, (lat - lat_origin_deg) * m_per_deg_lat)
 
     return project
-
-
-def _load_zoning_geometries(
-    session: Session, zoning_dataset: ExternalDataset | None
-) -> list[tuple[BaseGeometry, str]]:
-    """Pre-load every zoning polygon as (shapely_geometry, zone_code).
-
-    Returns ``[]`` when no zoning dataset is configured. Features
-    without a zone_code (rare; usually a data-quality issue upstream)
-    are dropped here so the point-in-polygon scan doesn't waste time
-    on them.
-    """
-    if zoning_dataset is None:
-        return []
-    rows = (
-        session.execute(
-            select(ExternalDatasetFeature).where(
-                ExternalDatasetFeature.external_dataset_id == zoning_dataset.id
-            )
-        )
-        .scalars()
-        .all()
-    )
-    out: list[tuple[BaseGeometry, str]] = []
-    for row in rows:
-        zone_code = (row.canonical_attributes_json or {}).get(ZONE_CODE_CANONICAL_KEY)
-        if not zone_code:
-            continue
-        geom = _safe_shape(row.geometry_geojson)
-        if geom is None:
-            continue
-        out.append((geom, str(zone_code)))
-    logger.info("loaded %d zoning polygons", len(out))
-    return out
-
-
-def _zone_code_for_polygon(
-    polygon: BaseGeometry, zoning_features: list[tuple[BaseGeometry, str]]
-) -> str | None:
-    """Return the zone_code whose polygon contains the parcel centroid.
-
-    Centroid containment is the right semantics here: a parcel can
-    nominally intersect multiple zones if it straddles a boundary, but
-    the canonical "this parcel is in zone X" answer is the zone its
-    centroid falls inside. Edge cases (centroid exactly on a boundary)
-    are vanishingly rare with floating-point coordinates and resolved
-    by picking the first match.
-    """
-    if not zoning_features:
-        return None
-    centroid = polygon.centroid
-    for geom, zone_code in zoning_features:
-        if geom.contains(centroid):
-            return zone_code
-    return None
 
 
 def main() -> int:
