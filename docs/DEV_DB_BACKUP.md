@@ -43,6 +43,13 @@ $HOME/backups/agentic-bylaw-system/labelled/
   layer1-repath-citation-paths-20260813T104512.dump
 ```
 
+The subdirectory is not cosmetic: `clone-dev-db.sh` restores the most recent
+`layer1-*.dump` in the *top-level* directory, so a hand-made dump left up there
+(there is one — `layer1-pre-data-model-3.0-20260812.dump`, from the DM3.0
+post-mortem, which predates this convention) silently becomes the source every
+clone is built from. Snapshots under `labelled/` never shadow the rotation that
+way.
+
 Dumps use `pg_dump -Fc` (custom format) so they restore with
 `pg_restore` and support partial / parallel restore.
 
