@@ -50,7 +50,9 @@ from bylaw_retrieval.retrieval.service import RetrievalService
 from zone_address_picker import (
     DEFAULT_DB_URL,
     REGIONAL_CENTRE_BYLAW_AREA_ID,
+    _build_civic_register,
     _build_reverse_geocoder,
+    _is_registered,
     pick_address_for_zone,
 )
 
@@ -85,6 +87,11 @@ class CaseCheck:
     unresolvable: bool
     outside_mapped_area: bool
     recorded_drift: list[str]
+    # ABS-474: is ``address`` one of the civics the municipality registers on
+    # the parcel the case was derived from? Read off the recorded snapshot, so
+    # this stays an offline check. None means the snapshot is absent and the
+    # question cannot be asked — run --backfill-civics.
+    address_registered: bool | None = None
 
     @property
     def zone_ok(self) -> bool:
@@ -92,7 +99,11 @@ class CaseCheck:
 
     @property
     def ok(self) -> bool:
-        return self.zone_ok and not self.recorded_drift
+        return (
+            self.zone_ok
+            and not self.recorded_drift
+            and self.address_registered is not False
+        )
 
     def describe(self) -> str:
         if self.unresolvable:
@@ -104,6 +115,8 @@ class CaseCheck:
         if self.zone_ok:
             outcome = f"confirmed {self.resolved_zone} ({self.resolution_quality})"
         drift = f"; recorded drift: {', '.join(self.recorded_drift)}" if self.recorded_drift else ""
+        if self.address_registered is False:
+            drift += "; address is not registered on its parcel"
         return f"{self.case_id} claims {self.claimed_zone}: {outcome}{drift}"
 
 
@@ -153,7 +166,21 @@ def check_case(service: RetrievalService, case: dict[str, Any]) -> CaseCheck:
         unresolvable=bool(live["_unresolvable"]),
         outside_mapped_area=bool(live["_outside_mapped_area"]),
         recorded_drift=recorded_drift(case, live),
+        address_registered=address_is_registered(case),
     )
+
+
+def address_is_registered(case: dict[str, Any]) -> bool | None:
+    """Whether ``address`` is a civic the register puts on the case's parcel.
+
+    Offline: reads the ``registered_civics`` snapshot ``--backfill-civics``
+    writes. None when no snapshot has been recorded, so a corpus that predates
+    ABS-474 reports "cannot tell" rather than failing every case.
+    """
+    registered = (case.get("address_resolution") or {}).get("registered_civics")
+    if not registered:
+        return None
+    return _is_registered(case["address"], registered)
 
 
 def _street_of(address: str) -> str | None:
@@ -183,12 +210,59 @@ def turns_naming(case: dict[str, Any], address: str) -> list[int]:
     return hits
 
 
+def backfill_registered_civics(
+    case: dict[str, Any], *, civic_register: Any
+) -> tuple[str, bool]:
+    """Record the parcel's registered civics on ``case``; say whether it matches.
+
+    ABS-474. Every case already carries the ``parcel_pid`` its address was
+    derived from, so the municipality's own answer for that parcel is one
+    lookup away. Recording it turns the offline guard's question — "is this
+    address real?" — from an inference about street ranges into a fact.
+
+    Returns ``(report line, address_is_registered)``. Never edits ``address``:
+    a case whose address is not registered needs re-deriving through the
+    picker, which is ``--repair``'s job, not this one's.
+    """
+    recorded = case.get("address_resolution") or {}
+    pid = str(recorded.get("parcel_pid") or "")
+    if not pid:
+        # A case authored before parcel provenance was recorded. Its address
+        # may be perfectly good, so look the parcel up from the address rather
+        # than re-deriving and losing a working case's narrative.
+        pid = civic_register.pid_for_address(case["address"]) or ""
+        if not pid:
+            return (
+                f"{case['id']}: no parcel_pid recorded and {case['address']} "
+                "is not in the register — re-derive it with --repair",
+                False,
+            )
+        recorded["parcel_pid"] = pid
+    civics = civic_register.civics_for_pid(pid)
+    if not civics:
+        # An unreachable service and a parcel with no civics are the same
+        # observation here: no evidence. Leave whatever is recorded alone
+        # rather than writing an empty list that would read as "nothing is
+        # registered on this parcel".
+        return f"{case['id']}: register returned nothing for PID {pid}", True
+    recorded["registered_civics"] = list(civics)
+    case["address_resolution"] = recorded
+    if _is_registered(case["address"], civics):
+        return f"{case['id']}: {case['address']} is registered on PID {pid}", True
+    return (
+        f"{case['id']}: ** {case['address']} is NOT registered on PID {pid} ** "
+        f"— HRM assigns {', '.join(civics)}",
+        False,
+    )
+
+
 def repair_case(
     session: Session,
     service: RetrievalService,
     case: dict[str, Any],
     *,
     reverse_geocoder: Any,
+    civic_register: Any,
     candidates: int,
     allow_interpolated: bool,
     exclude: set[str],
@@ -199,6 +273,7 @@ def repair_case(
         session,
         case["zone"],
         reverse_geocoder=reverse_geocoder,
+        civic_register=civic_register,
         service=service,
         candidates=candidates,
         allow_interpolated=allow_interpolated,
@@ -219,6 +294,7 @@ def repair_case(
         "location_confidence": picked.location_confidence,
         "location_resolver": picked.location_resolver,
         "parcel_pid": picked.parcel_pid,
+        "registered_civics": list(picked.registered_civics),
     }
     exclude.add(picked.address.strip().lower())
     note = f"{case['id']}: -> {picked.address} [{picked.resolution_quality}]"
@@ -232,6 +308,15 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="Verify; exit 1 on drift.")
     mode.add_argument("--repair", action="store_true", help="Re-derive failing addresses.")
+    mode.add_argument(
+        "--backfill-civics",
+        action="store_true",
+        help=(
+            "Record each case's parcel's registered civic addresses and report "
+            "any case whose address is not one of them. Never edits the "
+            "address — re-derive those with --repair."
+        ),
+    )
     parser.add_argument("--db-url", default=os.environ.get("DATABASE_URL", DEFAULT_DB_URL))
     parser.add_argument("--prompts-file", type=Path, default=PROMPTS_FILE)
     parser.add_argument("--only", nargs="*", default=[], help="Limit to these case ids.")
@@ -272,7 +357,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\nAll {len(selected)} cases confirm their claimed zone.")
             return 0
 
+        if args.backfill_civics:
+            unregistered = 0
+            civic_register = _build_civic_register()
+            for case in selected:
+                line, ok = backfill_registered_civics(
+                    case, civic_register=civic_register
+                )
+                print(line)
+                unregistered += 0 if ok else 1
+            args.prompts_file.write_text(json.dumps(cases, indent=2) + "\n")
+            print(f"\nWrote {args.prompts_file}")
+            if unregistered:
+                print(
+                    f"{unregistered} of {len(selected)} addresses are not "
+                    "registered on their parcel — re-derive them with "
+                    "--repair --only <ids>.",
+                    file=sys.stderr,
+                )
+                return 1
+            return 0
+
         reverse_geocoder = _build_reverse_geocoder()
+        civic_register = _build_civic_register()
         exclude = {c["address"].strip().lower() for c in cases}
         for case in selected:
             result = check_case(service, case)
@@ -286,10 +393,20 @@ def main(argv: list[str] | None = None) -> int:
                 and result.zone_ok
                 and result.resolution_quality != "rooftop"
             )
-            if result.zone_ok and not result.recorded_drift and not upgradeable:
+            # An address the register does not put on the case's parcel has to
+            # be re-derived, not refreshed: its zone is right by luck (the
+            # fabricated string geocodes back onto the parcel it was composed
+            # from), so no amount of re-recording the resolution fixes it.
+            unregistered = result.address_registered is False
+            if (
+                result.zone_ok
+                and not result.recorded_drift
+                and not upgradeable
+                and not unregistered
+            ):
                 print(f"{case['id']}: already confirmed, left alone")
                 continue
-            if result.zone_ok and not upgradeable:
+            if result.zone_ok and not upgradeable and not unregistered:
                 live = live_resolution(service, case["address"])
                 recorded = case.get("address_resolution") or {}
                 case["address_resolution"] = {
@@ -304,6 +421,7 @@ def main(argv: list[str] | None = None) -> int:
                     service,
                     case,
                     reverse_geocoder=reverse_geocoder,
+                    civic_register=civic_register,
                     candidates=args.candidates,
                     allow_interpolated=args.allow_interpolated,
                     exclude=exclude,

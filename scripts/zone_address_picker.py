@@ -26,14 +26,25 @@ to check:
    ``_resolve_zone_at_point`` returns the first match. A parcel with one and
    only one zone over it cannot be decided by that ordering.
 2. **Reverse-geocodable to a street address.** Google's reverse geocoder
-   turns the parcel's interior point into a civic address. This is the step
-   that makes the address *real* rather than plausible.
-3. **Round-trips through production.** The composed address is fed to
+   turns the parcel's interior point into candidate civic addresses.
+3. **Registered on that parcel.** ABS-474: a reverse geocode returns the
+   *nearest* street address to a point, which is not the same thing as the
+   address the municipality assigns to the parcel. On a corner lot it takes
+   the civic number from one street and the route from another; on a large
+   multi-frontage parcel it interpolates a number between two real ones.
+   Three of the twenty cases this module authored were fabricated that way —
+   parcel 40811085 is registered 249/251/257 Windmill Road and became "251
+   Stairs Street". Every candidate is now checked against HRM's
+   ``CivicAddresses`` register by the parcel's PID, and the register's own
+   list is recorded on the result so a later guard can re-assert it offline.
+4. **Round-trips through production.** The composed address is fed to
    ``RetrievalService.get_address_profile`` — the same call the advisor
    makes — and must come back with the target zone. Anything else is
    discarded, including the case where Google forward-geocodes the address
    to a different city (the production geocoder queries civic-number +
-   street with only a country filter, so that is a live risk).
+   street with only a country filter, so that is a live risk). Note this
+   step cannot substitute for step 3: a fabricated address composed from a
+   corner lot forward-geocodes back onto the same parcel, so it passes.
 
 ROOFTOP resolutions are preferred and searched for first; an interpolated
 match is only returned when ``--allow-interpolated`` is passed, and it is
@@ -98,7 +109,39 @@ STREET_FRONTAGE_DISTANCE_DEG = 0.0006
 MIN_PARCEL_AREA_M2 = 120.0
 MAX_PARCEL_AREA_M2 = 20000.0
 
+_PROVINCE_CODES = frozenset(
+    {"NS", "NB", "PE", "NL", "QC", "ON", "MB", "SK", "AB", "BC", "YT", "NT", "NU"}
+)
+
 _GEOCODE_ENDPOINT = "https://maps.googleapis.com/maps/api/geocode/json"
+# HRM's authoritative civic-address register. Same layer as
+# src/layer1/datasets/halifax_civic_addresses.yaml, queried live because that
+# config is not ingested yet (ABS-475).
+_CIVIC_REGISTER_ENDPOINT = (
+    "https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services"
+    "/CivicAddresses/FeatureServer/0/query"
+)
+# HRM writes the street type abbreviated; the corpus and Google's address
+# components both spell it out. A type with no entry here composes without a
+# suffix, which only makes the comparison stricter.
+_REGISTER_STREET_TYPES = {
+    "ST": "Street",
+    "RD": "Road",
+    "AVE": "Avenue",
+    "AV": "Avenue",
+    "DR": "Drive",
+    "PL": "Place",
+    "LANE": "Lane",
+    "LN": "Lane",
+    "BLVD": "Boulevard",
+    "CRES": "Crescent",
+    "CRT": "Court",
+    "CT": "Court",
+    "TERR": "Terrace",
+    "HWY": "Highway",
+    "PKWY": "Parkway",
+    "WAY": "Way",
+}
 
 # Street suffixes layer2.retrieval.location.RegexLocationExtractor can parse.
 # An address it cannot parse is unresolvable in production no matter how real
@@ -135,6 +178,11 @@ class ZoneAddress:
     location_confidence: float | None
     location_resolver: str | None
     parcel_pid: str | None
+    # Every civic address the municipality registers to ``parcel_pid``, in the
+    # eval file's own shape. Recorded on the case so the offline guard can
+    # assert ``address`` is one of them without the 155k-point register being
+    # ingested (ABS-475 replaces this snapshot with a live lookup).
+    registered_civics: tuple[str, ...] = ()
 
     @property
     def is_rooftop(self) -> bool:
@@ -145,6 +193,141 @@ class ReverseGeocoder(Protocol):
     """Point -> candidate civic addresses. Injected so tests need no network."""
 
     def reverse(self, lat: float, lon: float) -> list[str]: ...
+
+
+class CivicRegister(Protocol):
+    """Parcel id -> the civic addresses the municipality registers on it.
+
+    Injected so tests need no network, exactly like ``ReverseGeocoder``.
+    """
+
+    def civics_for_pid(self, pid: str) -> list[str]: ...
+
+    def pid_for_address(self, address: str) -> str | None: ...
+
+
+class HrmCivicRegister:
+    """HRM's ``CivicAddresses`` layer, queried by parcel ``PID``.
+
+    This is the authority a reverse geocoder is not. Google returns the
+    *nearest* street address to a point, which on a corner lot or a
+    multi-frontage parcel belongs to a different street: parcel 40811085 is
+    registered 249/251/257 Windmill Road, and reverse-geocoding its interior
+    point produced "251 Stairs Street" — the civic number from Windmill and
+    the route from the nearer centerline. The zone round-trip cannot catch
+    that, because forward-geocoding the composed string lands back on the same
+    parcel (ABS-474).
+
+    Queried live rather than from the database on purpose: this is an offline
+    authoring script that already calls Google, and ingesting the layer has
+    prerequisites in the production resolver that are tracked separately
+    (ABS-475). Never raises — an unreachable service yields no civics, which
+    the caller treats as "cannot confirm, skip this candidate".
+    """
+
+    def __init__(self, *, timeout_s: float = 15.0) -> None:
+        self._timeout_s = timeout_s
+
+    def civics_for_pid(self, pid: str) -> list[str]:
+        if not pid:
+            return []
+        rows = self._query(f"PID='{pid}'")
+        civics: list[str] = []
+        for attributes in rows:
+            composed = _address_from_register_row(attributes)
+            if composed and composed not in civics:
+                civics.append(composed)
+        return civics
+
+    def pid_for_address(self, address: str) -> str | None:
+        """The parcel an address is registered on, or None.
+
+        The inverse lookup, for a case that predates parcel provenance being
+        recorded. Matching is on the register's own columns rather than a
+        string compare, so "1801 Hollis Street, Halifax, NS" finds the row
+        HRM stores as CIV_NUM 1801 / STR_NAME HOLLIS / STR_TYPE ST.
+        """
+        parsed = _parse_composed_address(address)
+        if parsed is None:
+            return None
+        number, street, community = parsed
+        # Doubling is how a literal quote is escaped in an ArcGIS where
+        # clause; it belongs with the clause, not with address parsing.
+        where = f"CIV_NUM={number} AND STR_NAME='{_sql_quote(street)}'"
+        if community:
+            where += f" AND GSA_NAME='{_sql_quote(community)}'"
+        for attributes in self._query(where):
+            pid = str(attributes.get("PID") or "").strip()
+            if pid:
+                return pid
+        return None
+
+    def _query(self, where: str) -> list[dict[str, Any]]:
+        """Rows matching ``where``, or [] for any failure. Never raises."""
+        try:
+            response = httpx.get(
+                _CIVIC_REGISTER_ENDPOINT,
+                params={
+                    "where": where,
+                    "outFields": "PID,CIV_NUM,STR_NAME,STR_TYPE,GSA_NAME",
+                    "returnGeometry": "false",
+                    "f": "json",
+                },
+                timeout=self._timeout_s,
+            )
+            payload = response.json()
+        except (httpx.HTTPError, OSError, ValueError):
+            return []
+        return [f.get("attributes") or {} for f in payload.get("features") or []]
+
+
+def _sql_quote(value: str) -> str:
+    """Escape a literal for an ArcGIS ``where`` clause."""
+    return value.replace("'", "''")
+
+
+def _parse_composed_address(address: str) -> tuple[int, str, str | None] | None:
+    """``"1801 Hollis Street, Halifax, NS"`` -> ``(1801, "HOLLIS", "HALIFAX")``.
+
+    Drops the street type, because the register stores it in its own column
+    and this is only building a query filter — the type is not needed to find
+    the row, and guessing its abbreviation would exclude real matches.
+    """
+    parts = [p.strip() for p in address.split(",") if p.strip()]
+    if not parts:
+        return None
+    head = parts[0].split()
+    if len(head) < 2 or not head[0].isdigit():
+        return None
+    number = int(head[0])
+    words = head[1:]
+    # Trailing street type, when it is one we recognise, is not part of the name.
+    if len(words) > 1 and words[-1].title() in _REGISTER_STREET_TYPES.values():
+        words = words[:-1]
+    street = " ".join(words).upper()
+    community = parts[1].upper() if len(parts) >= 3 else None
+    if community in _PROVINCE_CODES:
+        community = None
+    return number, street, community
+
+
+def _address_from_register_row(attributes: dict[str, Any]) -> str | None:
+    """Compose the eval file's address shape from one register row.
+
+    HRM stores the street name and its type in separate columns and writes the
+    type abbreviated (``ST``, ``RD``, ``AVE``), so the abbreviation is expanded
+    back to the word the corpus and Google's components both use.
+    """
+    number = attributes.get("CIV_NUM")
+    name = str(attributes.get("STR_NAME") or "").strip()
+    if number in (None, "") or not name:
+        return None
+    suffix = _REGISTER_STREET_TYPES.get(
+        str(attributes.get("STR_TYPE") or "").strip().upper(), ""
+    )
+    community = str(attributes.get("GSA_NAME") or "").strip().title()
+    street = " ".join(part for part in (name.title(), suffix) if part)
+    return ", ".join(part for part in (f"{number} {street}", community, "NS") if part)
 
 
 class GoogleReverseGeocoder:
@@ -432,6 +615,7 @@ def pick_address_for_zone(
     zone: str,
     *,
     reverse_geocoder: ReverseGeocoder,
+    civic_register: CivicRegister,
     service: RetrievalService | None = None,
     bylaw_area_id: str | None = REGIONAL_CENTRE_BYLAW_AREA_ID,
     candidates: int = 25,
@@ -446,6 +630,12 @@ def pick_address_for_zone(
     ROOFTOP candidate exists and ``allow_interpolated`` is set — the caller
     is then responsible for recording the estimate on the case (ABS-466's
     resolution-quality vocabulary is what it records).
+
+    Every candidate must also be a civic the municipality registers on the
+    parcel it came from. The reverse geocoder proposes; ``civic_register``
+    disposes. Without that check a corner lot yields the civic number from one
+    street and the route from another, and the zone round-trip below confirms
+    it because the composed string geocodes back to the same parcel.
 
     ``on_street``, when given, is tried first and the unrestricted search is
     the fallback, so a case keeps its narrative street where the zone allows
@@ -464,20 +654,58 @@ def pick_address_for_zone(
             session, zone, bylaw_area_id=bylaw_area_id, limit=candidates,
             on_street=street,
         ):
+            # What the municipality actually registers on this parcel. A
+            # reverse geocode is a guess at this; the register is the fact.
+            registered = (
+                civic_register.civics_for_pid(parcel.pid) if parcel.pid else []
+            )
+            if not registered:
+                # Cannot confirm any candidate against this parcel, so nothing
+                # derived from it is evidence. Skipping is the conservative
+                # move: the next parcel is free, a fabricated address is not.
+                continue
             for address in reverse_geocoder.reverse(parcel.lat, parcel.lon):
                 key = address.strip().lower()
                 if key in seen or key in excluded:
                     continue
                 seen.add(key)
+                if not _is_registered(address, registered):
+                    # The composed string names a civic the municipality does
+                    # not put on this parcel — a corner lot's neighbouring
+                    # street, or a number interpolated between two real ones.
+                    continue
                 verified = verify_address(service, zone, address)
                 if verified is None:
                     continue
-                verified = ZoneAddress(**{**asdict(verified), "parcel_pid": parcel.pid})
+                verified = ZoneAddress(
+                    **{
+                        **asdict(verified),
+                        "parcel_pid": parcel.pid,
+                        "registered_civics": tuple(registered),
+                    }
+                )
                 if verified.is_rooftop:
                     return verified
                 if fallback is None:
                     fallback = verified
     return fallback if allow_interpolated else None
+
+
+def _normalize_for_match(address: str) -> str:
+    """Collapse an address to the form two sources can be compared on."""
+    return " ".join(address.replace(",", " ").lower().split())
+
+
+def _is_registered(address: str, registered: Iterable[str]) -> bool:
+    """True when ``address`` is one of the parcel's registered civics.
+
+    Compared on the normalized string rather than parsed parts: both sides are
+    composed by this module into the same shape, so a mismatch means a genuine
+    difference in number, street or community — which is exactly what must be
+    rejected.
+    """
+    target = _normalize_for_match(address)
+    return any(target == _normalize_for_match(known) for known in registered)
 
 
 def _build_reverse_geocoder() -> ReverseGeocoder:
@@ -488,6 +716,11 @@ def _build_reverse_geocoder() -> ReverseGeocoder:
             "parcel interior points, so it needs the same key production uses."
         )
     return GoogleReverseGeocoder(api_key)
+
+
+def _build_civic_register() -> CivicRegister:
+    """HRM's register needs no key — it is an open ArcGIS service."""
+    return HrmCivicRegister()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -518,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
             session,
             args.zone,
             reverse_geocoder=_build_reverse_geocoder(),
+            civic_register=_build_civic_register(),
             bylaw_area_id=args.bylaw_area_id or None,
             candidates=args.candidates,
             allow_interpolated=args.allow_interpolated,

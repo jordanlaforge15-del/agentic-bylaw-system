@@ -41,7 +41,11 @@ from layer1.db.init_db import create_all as create_layer1
 from layer1.db.session import session_scope
 from layer1.models.enums import FragmentType, ParseStatus
 from layer2.db.init_db import create_all as create_layer2
-from layer2.retrieval.civic_address import format_ranges, verify_civic_address
+from layer2.retrieval.civic_address import (
+    community_from_address,
+    format_ranges,
+    verify_civic_address,
+)
 
 # The zoning polygon and a point inside it, matching the other address-profile
 # fixtures so the two suites describe the same synthetic Halifax.
@@ -96,22 +100,33 @@ SLIVER_POINT = {"type": "Point", "coordinates": [-63.58040, 44.6490]}
 
 
 # HRM's published per-segment ranges, straight from the ingested layer.
-# (feature_key, STR_NAME, STR_TYPE, FROM_LEFT, TO_LEFT, FROM_RIGHT, TO_RIGHT)
-CENTERLINE_SEGMENTS: tuple[tuple[str, str, str, int, int, int, int], ...] = (
-    ("ST14888", "ROBIE", "ST", 1200, 1298, 1201, 1299),
-    ("ST4619", "ROBIE", "ST", 2454, 2526, 2453, 2525),
-    ("ST1767", "OXFORD", "ST", 1222, 1388, 1223, 1389),
-    ("ST-WINDSOR-1", "WINDSOR", "ST", 2000, 2006, 2001, 2007),
-    ("ST-WINDSOR-2", "WINDSOR", "ST", 2008, 2088, 2009, 2089),
-    ("ST802", "JUBILEE", "RD", 6600, 6648, 6601, 6649),
-    ("ST-JUBILEE-2", "JUBILEE", "RD", 6000, 6046, 6001, 6045),
+# (feature_key, STR_NAME, STR_TYPE, GSA_LEFT, FROM_LEFT, TO_LEFT, FROM_RIGHT, TO_RIGHT)
+CENTERLINE_SEGMENTS: tuple[
+    tuple[str, str, str, str, int, int, int, int], ...
+] = (
+    ("ST14888", "ROBIE", "ST", "HALIFAX", 1200, 1298, 1201, 1299),
+    ("ST4619", "ROBIE", "ST", "HALIFAX", 2454, 2526, 2453, 2525),
+    ("ST1767", "OXFORD", "ST", "HALIFAX", 1222, 1388, 1223, 1389),
+    ("ST-WINDSOR-1", "WINDSOR", "ST", "HALIFAX", 2000, 2006, 2001, 2007),
+    ("ST-WINDSOR-2", "WINDSOR", "ST", "HALIFAX", 2008, 2088, 2009, 2089),
+    ("ST802", "JUBILEE", "RD", "HALIFAX", 6600, 6648, 6601, 6649),
+    ("ST-JUBILEE-2", "JUBILEE", "RD", "HALIFAX", 6000, 6046, 6001, 6045),
     # Jubilee Court shares the street name and starts at 2. Without the
     # street-type filter, "89 Jubilee Road" lands inside this range and the
     # check confirms an address that does not exist.
-    ("ST-JUBILEE-CRT", "JUBILEE", "CRT", 2, 98, 1, 99),
+    ("ST-JUBILEE-CRT", "JUBILEE", "CRT", "HALIFAX", 2, 98, 1, 99),
     # A service lane with no addressing: HRM writes 0/0, which is a
     # placeholder, not a range that covers the number 0.
-    ("ST-LANEWAY", "BACKLOT", "LANE", 0, 0, 0, 0),
+    ("ST-LANEWAY", "BACKLOT", "LANE", "HALIFAX", 0, 0, 0, 0),
+    # Stairs Street exists in BOTH Dartmouth and Halifax, with the same
+    # STR_TYPE and non-overlapping ranges 5,500 numbers apart. Merged, they
+    # read as one 1-6099 extent and a fabricated "251 Stairs Street,
+    # Dartmouth" lands in the apparent gap between the two communities
+    # (ABS-474).
+    ("ST-STAIRS-DART-1", "STAIRS", "ST", "DARTMOUTH", 1, 7, 2, 8),
+    ("ST-STAIRS-DART-2", "STAIRS", "ST", "DARTMOUTH", 9, 17, 10, 18),
+    ("ST-STAIRS-DART-3", "STAIRS", "ST", "DARTMOUTH", 19, 29, 20, 30),
+    ("ST-STAIRS-HFX", "STAIRS", "ST", "HALIFAX", 5600, 5698, 5601, 5699),
 )
 
 
@@ -181,6 +196,8 @@ def _centerline_features() -> list[tuple[str, dict, dict, dict]]:
             {
                 "STR_NAME": name,
                 "STR_TYPE": street_type,
+                "GSA_LEFT": community,
+                "GSA_RIGHT": community,
                 "FROM_LEFT": from_left,
                 "TO_LEFT": to_left,
                 "FROM_RIGHT": from_right,
@@ -189,9 +206,16 @@ def _centerline_features() -> list[tuple[str, dict, dict, dict]]:
             {},
             {"type": "LineString", "coordinates": [[-63.59, 44.64], [-63.59, 44.66]]},
         )
-        for key, name, street_type, from_left, to_left, from_right, to_right in (
-            CENTERLINE_SEGMENTS
-        )
+        for (
+            key,
+            name,
+            street_type,
+            community,
+            from_left,
+            to_left,
+            from_right,
+            to_right,
+        ) in CENTERLINE_SEGMENTS
     ]
 
 
@@ -396,6 +420,71 @@ def test_a_number_between_two_published_ranges_is_not_refused(seeded_db: str) ->
     assert past_the_end.status == "not_found"
 
 
+def test_community_separates_same_named_streets_in_two_places(seeded_db: str) -> None:
+    """251 Stairs Street, Dartmouth does not exist — Dartmouth's ends at 30.
+
+    Stairs Street exists in both Dartmouth (1-30) and Halifax (5600-5699)
+    with the same STR_TYPE, so the street-type filter cannot separate them.
+    Merged, the extent reads 1-5699 and 251 looks like an in-gap number, which
+    ``_falls_in_a_gap`` deliberately declines to refuse. The community is the
+    only thing that tells the two streets apart.
+
+    This is the shape that put a fabricated address into the eval corpus and
+    survived both the picker's round-trip and the G1 guard (ABS-474).
+    """
+    with session_scope(seeded_db) as session:
+        merged = verify_civic_address(
+            session, civic_number="251", street="Stairs Street"
+        )
+        dartmouth = verify_civic_address(
+            session, civic_number="251", street="Stairs Street", community="DARTMOUTH"
+        )
+
+    assert merged.status == "unverifiable"
+    assert dartmouth.status == "not_found"
+    # Only Dartmouth's ranges are worth quoting back — Halifax's 5600s are a
+    # different street and suggesting them would be worse than saying nothing.
+    assert format_ranges(dartmouth.valid_ranges) == ["1-29"]
+
+
+def test_community_narrows_but_never_widens(seeded_db: str) -> None:
+    """A community nothing claims must not turn a real address into a refusal.
+
+    ``_filter_by_community`` keeps every segment when none match, so an
+    unrecognised, misspelled or absent community can only leave the verdict
+    where it was. Narrowing happens on a positive match or not at all.
+    """
+    with session_scope(seeded_db) as session:
+        real = verify_civic_address(
+            session, civic_number="1250", street="Robie Street", community="BEDFORD"
+        )
+        absent = verify_civic_address(
+            session, civic_number="1250", street="Robie Street", community=None
+        )
+
+    assert real.status == "confirmed"
+    assert absent.status == "confirmed"
+
+
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        ("251 Stairs Street, Dartmouth, NS", "DARTMOUTH"),
+        ("1801 Hollis Street, Halifax, NS", "HALIFAX"),
+        # No community written — the middle slot is the province itself.
+        ("1801 Hollis Street, NS", None),
+        # A postal code in the community slot is not a community.
+        ("1801 Hollis Street, B3J 3N4, NS", None),
+        ("1801 Hollis Street", None),
+        (None, None),
+    ],
+)
+def test_community_is_read_off_the_address_string(
+    address: str | None, expected: str | None
+) -> None:
+    assert community_from_address(address) == expected
+
+
 def test_placeholder_zero_ranges_are_not_treated_as_coverage(seeded_db: str) -> None:
     """A 0/0 segment means 'no addressing here', not 'covers 0'."""
     with session_scope(seeded_db) as session:
@@ -475,6 +564,60 @@ def test_profile_refuses_a_nonexistent_address_with_a_suggestion(
     assert profile.suggested_civic_numbers[0] == "1200"
     assert any("does not exist" in caveat for caveat in profile.caveats)
     assert "halifax_street_centerlines" in (profile.civic_address_evidence or "")
+
+
+def test_profile_passes_the_community_through_to_the_civic_check(
+    seeded_db: str,
+) -> None:
+    """ABS-474/476 — pins the *wiring*, not the rule.
+
+    ``test_community_separates_same_named_streets_in_two_places`` proves
+    ``verify_civic_address`` narrows by community. It calls the function
+    directly, so it says nothing about whether production invokes it that way.
+    A review mutation probe deleted
+
+        community=community_from_address(canonical_address)
+
+    from ``RetrievalService.get_address_profile`` and **280 tests stayed
+    green**: the whole request path silently reverted to the merged 1-6099
+    extent, where a fabricated "251 Stairs Street, Dartmouth" reads as an
+    in-gap number and is answered rather than refused.
+
+    This asserts through ``get_address_profile``, so removing that kwarg turns
+    it red. That is the acceptance check — not the assertion below on its own.
+    """
+    with session_scope(seeded_db) as session:
+        profile = RetrievalService(session).get_address_profile(
+            "251 Stairs Street, Dartmouth, NS"
+        )
+
+    assert profile.civic_address_status == "not_found", (
+        "get_address_profile did not narrow to Dartmouth's Stairs Street — "
+        "check that it still passes community=community_from_address(...) to "
+        "verify_civic_address"
+    )
+    assert profile.zone is None
+    # Halifax's 5600s are a different street; quoting them here would send the
+    # user to the wrong side of the harbour.
+    assert profile.valid_civic_number_ranges == ["1-29"]
+
+
+def test_profile_without_a_community_keeps_the_conservative_verdict(
+    seeded_db: str,
+) -> None:
+    """The other half of the wiring: no community must not become a refusal.
+
+    ``community_from_address`` returns None for an address that names no
+    community, and ``_filter_by_community`` then keeps every segment. The
+    merged extent is what it always was, so the verdict has to stay
+    ``unverifiable`` — narrowing happens on a positive match or not at all.
+    Without this, a fix for the Dartmouth case could quietly start refusing
+    real addresses that simply did not spell out their community.
+    """
+    with session_scope(seeded_db) as session:
+        profile = RetrievalService(session).get_address_profile("251 Stairs Street")
+
+    assert profile.civic_address_status != "not_found"
 
 
 def test_profile_distinguishes_outside_mapped_area_from_nonexistent(

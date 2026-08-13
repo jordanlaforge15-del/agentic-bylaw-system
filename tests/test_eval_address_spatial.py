@@ -91,6 +91,38 @@ def test_the_recorded_resolution_clears_the_confidence_floor(case: dict) -> None
     )
 
 
+@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+def test_the_address_is_one_the_municipality_puts_on_that_parcel(case: dict) -> None:
+    """ABS-474. The check the confidence floor above cannot make.
+
+    Five cases resolved to a real, correctly-zoned parcel under an address the
+    municipality does not assign to it: "251 Stairs Street" on a parcel HRM
+    registers as 249/251/257 Windmill Road, "1462 Birchdale Avenue" on one it
+    registers as 1462 Thornvale Avenue. Every earlier check passed them —
+    ROOFTOP confidence, correct zone — because a string composed from a
+    parcel's own interior point geocodes straight back onto that parcel.
+
+    Offline: ``registered_civics`` is the register's answer for the parcel,
+    snapshotted onto the case by ``--backfill-civics``. ABS-475 replaces the
+    snapshot with a live lookup once the register is ingested.
+    """
+    resolution = case.get("address_resolution") or {}
+    registered = resolution.get("registered_civics")
+    assert registered, (
+        f"{case['id']} records no registered_civics — re-run "
+        "scripts/verify_eval_address_zones.py --backfill-civics"
+    )
+    normalized = {" ".join(a.replace(",", " ").lower().split()) for a in registered}
+    target = " ".join(case["address"].replace(",", " ").lower().split())
+    assert target in normalized, (
+        f"{case['id']}: {case['address']!r} is not a civic address the "
+        f"municipality registers on parcel {resolution.get('parcel_pid')!r}. "
+        f"It registers: {', '.join(registered)}. The zone may still be right — "
+        "that is the trap — but the address names a property that does not "
+        "exist. Re-derive with scripts/verify_eval_address_zones.py --repair."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Live: the spatial assertion
 # ---------------------------------------------------------------------------

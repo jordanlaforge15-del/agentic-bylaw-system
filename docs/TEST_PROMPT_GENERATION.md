@@ -276,11 +276,30 @@ python scripts/generate_regional_centre_test_prompts.py \
   --append
 ```
 
-There is no `--address`. The zone picks a real parcel, the parcel yields a real
-civic address, and that address is resolved back through `get_address_profile`
-before the case is written — so a new case cannot reintroduce the zone/address
-mismatch ABS-467 fixed. This needs `DATABASE_URL` pointing at a database with
-the HRM zoning and parcel datasets, and `GOOGLE_MAPS_API_KEY`.
+There is no `--address`. The zone picks a real parcel, the parcel is
+reverse-geocoded to candidate civic addresses, each candidate is checked
+against HRM's civic-address register for that parcel, and the survivor is
+resolved back through `get_address_profile` before the case is written — so a
+new case cannot reintroduce the zone/address mismatch ABS-467 fixed. This needs
+`DATABASE_URL` pointing at a database with the HRM zoning and parcel datasets,
+and `GOOGLE_MAPS_API_KEY`.
+
+**The register check is not optional, and the zone round-trip cannot replace
+it (ABS-474).** An earlier revision of this document said "the parcel yields a
+real civic address". It could not: `halifax_property_parcels` carries `PID`,
+`AAN` and `ASSESSMENT` and no address field at all, so the address came from
+Google's *reverse* geocoder — which returns the nearest street address to a
+point, not the address the municipality assigns to the parcel. On a corner lot
+that is the civic number from one street and the route from another; on a
+multi-frontage parcel it is a number interpolated between two real ones. Five
+of twenty cases were fabricated that way and passed every check, because a
+string composed from a parcel's interior point forward-geocodes straight back
+onto that parcel: the zone confirms and the confidence reads ROOFTOP.
+
+`scripts/verify_eval_address_zones.py --backfill-civics` records the
+municipality's answer for each case's parcel in `address_resolution.registered_civics`,
+so the guards can re-assert it offline. The register itself is not ingested —
+that has prerequisites in the production resolver, tracked as ABS-475.
 
 Messages come from `claude -p` (billed to the Claude Code subscription). If the
 `claude` binary is missing, the script produces stub messages to fill in
@@ -308,7 +327,8 @@ For large-scale expansion (covering many new zones or personas at once), use the
 Before committing new test cases:
 
 - [ ] All required fields present (`id`, `title`, `persona`, `address`, `address_resolution`, `zone`, `complexity`, `liability`, `tags`, `bylaw_features`, `turns`, `expected_bylaw_references`, `expected_answer_keywords`, `expected_topics`, `notes`)
-- [ ] `python scripts/verify_eval_address_zones.py --check` passes — every address resolves to its case's zone
+- [ ] `python scripts/verify_eval_address_zones.py --check` passes — every address resolves to its case's zone **and** is registered on its parcel
+- [ ] `python scripts/verify_eval_address_zones.py --backfill-civics` passes — every address is a civic HRM assigns to the parcel the case was derived from
 - [ ] `address_resolution.resolution_quality` is `rooftop`, or the notes say why it is not
 - [ ] No `[STUB]` placeholder messages remain in `turns`
 - [ ] `expected_bylaw_references` match real section/table labels in the bylaw fixture
