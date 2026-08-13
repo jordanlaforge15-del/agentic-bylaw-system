@@ -30,6 +30,7 @@ from layer1.models.enums import ParseStatus
 from layer1.semantic.enrichment import (
     enrich_document_semantics,
     enumerate_permission_column,
+    resolve_permission_cell,
 )
 
 DOT = ""  # symbol-font ● "permitted as-of-right"
@@ -122,6 +123,82 @@ def test_blank_cell_is_not_permitted(bound_matrix):
         assert by_use["Restaurant use"]["permission"] == "not_permitted"
         assert by_use["Multi-unit dwelling use"]["permission"] == "not_permitted"
         assert by_use["Office use"]["permission"] == "permitted"
+
+
+def test_abs483_missing_cell_is_unknown_not_not_permitted(tmp_path: Path):
+    """A bound use row with NO cell in the zone's column is an extraction gap.
+
+    The parser dropped the cell; the bylaw said nothing. Reporting
+    ``not_permitted`` there would invent a prohibition, so the row enumerates
+    as ``unknown`` — while the present-but-blank cell one row away still
+    enumerates as ``not_permitted`` (the two cases must stay distinguishable).
+    """
+    db_url = f"sqlite:///{tmp_path / 'missing_cell.db'}"
+    create_all(db_url)
+    with session_scope(db_url) as session:
+        doc = _add_document(session)
+        grid = [
+            ["Use", "DD", "DH"],
+            ["Restaurant use", DOT, ""],  # blank DH cell -> not_permitted
+            ["Office use", DOT, ""],  # DH cell deleted below -> unknown
+        ]
+        table_id = _add_table(
+            session, doc.id, grid, caption="Table 1A: Permitted uses by zone (DD, DH)"
+        )
+        enrich_document_semantics(session, document_id=doc.id)
+        # Drop the (Office use, DH) cell entirely — the shape a table parser
+        # leaves behind when it loses a cell from the grid.
+        session.query(SourceTableCell).filter(
+            SourceTableCell.table_id == table_id,
+            SourceTableCell.row_index == 2,
+            SourceTableCell.col_index == 2,
+        ).delete(synchronize_session=False)
+        session.flush()
+
+        rows = enumerate_permission_column(session, table_id=table_id, zone="DH")
+        assert rows is not None
+        by_use = {row["use_label"]: row["permission"] for row in rows}
+        assert by_use["Office use"] == "unknown"
+        assert by_use["Restaurant use"] == "not_permitted"
+
+
+def test_abs483_resolve_permission_cell_reports_unknown_for_a_missing_cell(
+    tmp_path: Path,
+):
+    """The per-cell resolver propagates the same distinction as the column
+    enumerator: both axes bind, but nothing sits at their intersection."""
+    db_url = f"sqlite:///{tmp_path / 'missing_cell_resolve.db'}"
+    create_all(db_url)
+    with session_scope(db_url) as session:
+        doc = _add_document(session)
+        grid = [
+            ["Use", "DD", "DH"],
+            ["Restaurant use", DOT, ""],
+            ["Office use", DOT, ""],
+        ]
+        table_id = _add_table(
+            session, doc.id, grid, caption="Table 1A: Permitted uses by zone (DD, DH)"
+        )
+        enrich_document_semantics(session, document_id=doc.id)
+        session.query(SourceTableCell).filter(
+            SourceTableCell.table_id == table_id,
+            SourceTableCell.row_index == 2,
+            SourceTableCell.col_index == 2,
+        ).delete(synchronize_session=False)
+        session.flush()
+
+        missing = resolve_permission_cell(
+            session, table_id=table_id, use_name="Office use", zone="DH"
+        )
+        assert missing is not None
+        assert missing["permission_marker"] == "unknown"
+        assert missing["cell_text"] is None
+
+        blank = resolve_permission_cell(
+            session, table_id=table_id, use_name="Restaurant use", zone="DH"
+        )
+        assert blank is not None
+        assert blank["permission_marker"] == "not_permitted"
 
 
 def test_unbound_zone_returns_none(bound_matrix):

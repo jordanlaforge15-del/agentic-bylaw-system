@@ -675,8 +675,11 @@ class PermittedUseResult(BaseModel):
       ``citation`` traces the answer to the source table.
     * **Indeterminate** — ``indeterminate=True``, ``permission`` is null, and
       ``reason`` / ``reason_code`` explain why the cell could not be addressed
-      (unknown use, unknown zone, no permission matrix in scope, or an unbound
-      cell). This is a *typed* not-found, never a silent empty success.
+      (unknown use, unknown zone, no permission matrix in scope, an unbound
+      cell, or — ABS-483 — an ``unreadable_cell``: the pair addressed a cell
+      whose marker could not be extracted, which is a gap in our data and not
+      a prohibition). This is a *typed* not-found, never a silent empty
+      success.
     """
 
     use: str = Field(..., description="The use as queried (echoed).")
@@ -689,8 +692,10 @@ class PermittedUseResult(BaseModel):
         default=None,
         description=(
             "Machine-readable indeterminate cause: 'unknown_use', "
-            "'unknown_zone', 'unknown_use_and_zone', 'unbound_cell', or "
-            "'no_permission_matrix'. Null when resolved."
+            "'unknown_zone', 'unknown_use_and_zone', 'unbound_cell', "
+            "'unreadable_cell' (the cell was addressed but its marker could "
+            "not be extracted — NOT a prohibition), or 'no_permission_matrix'. "
+            "Null when resolved."
         ),
     )
     reason: str | None = Field(
