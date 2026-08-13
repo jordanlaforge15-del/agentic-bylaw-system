@@ -48,6 +48,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from layer1.db.base import SourceTable, TableSemanticProfile
+from layer1.db.migration_fence import fence_or_abort
 from layer1.db.session import session_scope
 from layer1.semantic.enrichment import enrich_document_semantics
 
@@ -153,6 +154,10 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    if not args.dry_run:
+        # ABS-499: no unfenced write to the dev corpus.
+        fence_or_abort("backfill-table-profiles", database_url=args.database_url)
 
     started = time.monotonic()
     with session_scope(args.database_url) as session:

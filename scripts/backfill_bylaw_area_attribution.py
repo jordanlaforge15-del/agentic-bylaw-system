@@ -47,6 +47,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from layer1.datasets.config import DatasetConfig, load_dataset_config
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature
+from layer1.db.migration_fence import fence_or_abort
 from layer1.db.session import session_scope
 
 DATASET_CONFIG_DIR = (
@@ -185,6 +186,9 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    # ABS-499: this script has no dry-run mode — it always writes.
+    fence_or_abort("backfill-bylaw-area-attribution")
+
     with session_scope() as db:
         report = backfill(db, configs)
         print(report.summary())

@@ -52,6 +52,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature, Parcel
+from layer1.db.migration_fence import fence_or_abort
 from layer1.db.session import session_scope
 
 
@@ -352,6 +353,10 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    if not args.dry_run:
+        # ABS-499: no unfenced write to the dev corpus.
+        fence_or_abort("backfill-parcels", database_url=args.database_url)
 
     started = time.monotonic()
     with session_scope(args.database_url) as session:

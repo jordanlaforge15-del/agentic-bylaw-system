@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from advisor.auth.clerk_backend import ClerkBackendClient, ClerkBackendError
 from advisor.db.models import User
 from layer1.db.base import utcnow
+from layer1.db.migration_fence import fence_or_abort
 from layer1.db.session import session_scope
 
 logger = logging.getLogger("backfill_user_emails")
@@ -113,6 +114,10 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    if args.apply:
+        # ABS-499: no unfenced write to the dev database.
+        fence_or_abort("backfill-user-emails", database_url=args.db_url)
 
     touched = 0
     with session_scope(args.db_url) as db:

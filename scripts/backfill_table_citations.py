@@ -42,6 +42,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from layer1.db.migration_fence import fence_or_abort
 from layer1.db.session import session_scope
 from layer1.pipeline.table_captions import (
     LinkStats,
@@ -136,6 +137,8 @@ def main() -> int:
     started = time.monotonic()
 
     if args.revert:
+        # ABS-499: a revert is a write like any other.
+        fence_or_abort("backfill-table-citations-revert", database_url=args.database_url)
         payload = json.loads(Path(args.revert).read_text())
         with session_scope(args.database_url) as session:
             restored = revert_table_captions(session, payload["touched"])
@@ -144,6 +147,10 @@ def main() -> int:
 
     if not args.profile:
         parser.error("--profile is required (or use --revert)")
+
+    if not args.dry_run:
+        # ABS-499: no unfenced write to the dev corpus.
+        fence_or_abort("backfill-table-citations", database_url=args.database_url)
 
     with session_scope(args.database_url) as session:
         stats = backfill(
