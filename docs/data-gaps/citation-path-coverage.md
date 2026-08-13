@@ -60,6 +60,14 @@ it because two or more fragments computed the identical path, and the
 fragments with a label but *no* recorded collision is **zero** — the collision
 rule accounts for the entire class.
 
+> **Update (ABS-480).** The collision rule used to *also* flip these rows
+> PARSED -> UNCERTAIN and cap their confidence at 0.6, which cost each one
+> 3 points in `_score_fragment` (+1.0 parsed becomes -2.0) and labelled a
+> cleanly-parsed provision "uncertain" in every retrieval response. It no
+> longer does; `scripts/backfill_duplicate_citation_path_status.py` repairs the
+> rows already written that way (834 corpus-wide, 720 of them here). The path
+> is still blanked — repathing is the follow-up ticket below.
+
 | `fragment_type` | Count |
 |---|---:|
 | `clause` | 680 |
