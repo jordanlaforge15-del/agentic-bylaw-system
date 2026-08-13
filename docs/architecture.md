@@ -2,7 +2,7 @@
 
 Layer 1 is a source-normalization pipeline. It stores provenance, layout blocks, a conservative fragment tree, tables, cross-references, and validation results. It does not extract legal rules or infer zoning permissions.
 
-Layer 2 is the retrieval, prompt, answer, claim, and feedback layer. It treats Layer 1 as immutable legal source-of-truth storage and persists all question-time reasoning artifacts in Layer 2-owned tables.
+Layer 2 is the retrieval, prompt, answer, claim, and feedback layer. It treats Layer 1 as immutable legal source-of-truth storage and persists all question-time reasoning artifacts in Layer 2-owned tables. **The Layer 2 answer pipeline is dormant** — it has no production caller, and live questions are served by the MCP retrieval path (`mcp/bylaw_retrieval/retrieval/service.py`). See [Layer 2 Flow](#layer-2-flow).
 
 Repo integration anchors:
 
@@ -44,6 +44,25 @@ Pages can then be sampled by risk or selected explicitly. Optional LLM review is
 ## Future Layers
 
 ## Layer 2 Flow
+
+> **Status: dormant — not the production answer path.**
+>
+> The `fragment_embedding → prompt_log → answer_log → generated_claim →
+> feedback` pipeline described below is implemented (`src/layer2/pipeline/`,
+> `src/layer2/feedback/`, reachable from `src/layer2/cli.py` and
+> `src/layer2/eval/harness.py`) but has **no production caller**. Nothing in
+> the deployed advisor, the web app, or the MCP server invokes it; it runs only
+> from the Layer 2 CLI and the offline eval harness.
+>
+> The live question-answering path is the MCP retrieval service —
+> `mcp/bylaw_retrieval/retrieval/service.py` — which returns cited Layer 1
+> evidence and leaves reasoning to the calling agent. See
+> [MCP Retrieval Interface](#mcp-retrieval-interface) below.
+>
+> Treat this section as a design record for the retrieval-first answer model,
+> not as a description of what serves user questions today. Anything written
+> here about answer quality, claim reuse, or feedback loops is unexercised in
+> production.
 
 1. `query session`: persist the question, known facts, and normalized question text in `query_session`.
 2. `retrieval`: combine metadata filtering, full-text search, vector similarity, table lookup, cross-reference expansion, hierarchy expansion, and verified-claim reuse into `retrieval_run` and `retrieval_result`.

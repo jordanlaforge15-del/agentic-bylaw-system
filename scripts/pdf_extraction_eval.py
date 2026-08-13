@@ -11,6 +11,12 @@ Usage
     # Demo mode (synthetic fixtures, no real files needed):
     python scripts/pdf_extraction_eval.py --demo
 
+`--demo` scores hardcoded fixtures against hardcoded ground truth. It exercises
+the metric plumbing; it measures nothing about the extraction pipeline. Reports
+it writes are named `pdf_accuracy_SYNTHETIC_<date>.md` and carry a SYNTHETIC
+banner so they can never be mistaken for a measurement. Only `--manifest` runs
+over real IFC/PDF pairs produce accuracy evidence.
+
     # Specify output directory:
     python scripts/pdf_extraction_eval.py --manifest manifest.yaml --out docs/extraction/
 
@@ -191,6 +197,10 @@ class EvalReport:
     projects: list[ProjectEvalResult]
     per_attribute: dict[str, AttributeStats]
     calibration: list[CalibrationBucket]
+    # True when the underlying results came from --demo fixtures rather than
+    # real IFC/PDF pairs. Rendered as a prominent banner so a synthetic report
+    # is never mistaken for a measurement.
+    synthetic: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -703,8 +713,13 @@ def _infer_page_count_from_warnings(warnings: list[str]) -> int:
 # --------------------------------------------------------------------------
 
 
-def build_report(results: list[ProjectEvalResult]) -> EvalReport:
-    """Aggregate all project results into an EvalReport."""
+def build_report(
+    results: list[ProjectEvalResult], *, synthetic: bool = False
+) -> EvalReport:
+    """Aggregate all project results into an EvalReport.
+
+    Pass ``synthetic=True`` when ``results`` came from ``--demo`` fixtures.
+    """
     all_comparisons = [cmp for r in results for cmp in r.comparisons]
     per_attribute = build_attribute_stats(all_comparisons)
     calibration = build_calibration(all_comparisons)
@@ -713,6 +728,7 @@ def build_report(results: list[ProjectEvalResult]) -> EvalReport:
         projects=results,
         per_attribute=per_attribute,
         calibration=calibration,
+        synthetic=synthetic,
     )
 
 
@@ -721,11 +737,26 @@ def render_report_markdown(report: EvalReport) -> str:
     lines: list[str] = []
     d = report.generated_at.strftime("%Y-%m-%d %H:%M UTC")
     lines += [
-        f"# PDF Extraction Accuracy Report — {report.generated_at.strftime('%Y-%m-%d')}",
+        "# PDF Extraction Accuracy Report"
+        + (" [SYNTHETIC]" if report.synthetic else "")
+        + f" — {report.generated_at.strftime('%Y-%m-%d')}",
         "",
         f"_Generated {d}_",
         "",
     ]
+
+    if report.synthetic:
+        lines += [
+            "> **SYNTHETIC — demo fixtures, not a measurement.**",
+            ">",
+            "> This report was produced by `scripts/pdf_extraction_eval.py --demo`,",
+            "> which scores hardcoded fixtures against hardcoded ground truth. Every",
+            "> number below — including the exit-gate verdict — is a property of the",
+            "> fixtures, not of the extraction pipeline. Do not cite it as accuracy",
+            "> evidence. Run the harness with `--manifest` over real IFC/PDF pairs to",
+            "> obtain a measurement.",
+            "",
+        ]
 
     # --- Summary ---
     all_cmps = [c for r in report.projects for c in r.comparisons]
@@ -754,7 +785,10 @@ def render_report_markdown(report: EvalReport) -> str:
     ]
 
     # --- Exit gate status ---
-    lines += ["## Exit Gate Status (Phase 3 PDF Track)", ""]
+    gate_heading = "## Exit Gate Status (Phase 3 PDF Track)"
+    if report.synthetic:
+        gate_heading += " — SYNTHETIC, NOT A GATE RESULT"
+    lines += [gate_heading, ""]
     top10_stats = [
         report.per_attribute.get(k) for k in TOP_10_HIGH_VALUE
         if k in report.per_attribute
@@ -1159,11 +1193,12 @@ def main(argv: list[str] | None = None) -> int:
                 evaluate_project(record, use_llm=not args.no_llm, llm_model=args.model)
             )
 
-    report = build_report(results)
+    report = build_report(results, synthetic=args.demo)
     markdown = render_report_markdown(report)
 
     args.out.mkdir(parents=True, exist_ok=True)
-    out_file = args.out / f"pdf_accuracy_{date.today().isoformat()}.md"
+    stem = "pdf_accuracy_SYNTHETIC" if args.demo else "pdf_accuracy"
+    out_file = args.out / f"{stem}_{date.today().isoformat()}.md"
     out_file.write_text(markdown, encoding="utf-8")
     print(f"Report written: {out_file}", file=sys.stderr)
 
