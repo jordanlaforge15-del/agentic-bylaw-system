@@ -247,7 +247,7 @@ class Arm:
 ARMS: tuple[Arm, ...] = (
     Arm(
         name="current",
-        summary="Shipped: text ladder + context + table channel, max() + spatial bonus. The control.",
+        summary="Production as shipped, untouched. The control every delta is quoted against.",
     ),
     Arm(
         name="rrf_fusion_only",
@@ -415,6 +415,26 @@ def build_experiment_service(session, arm: Arm, resolver):
             self._experiment_request = request
             return super()._text_channel_scores(request)
 
+        def _blend_fts_into_text(self, text_scored, fts_scored):
+            """Hand non-control arms the bare ladder.
+
+            Since ABS-494 shipped the hybrid, production's own ``search()``
+            blends FTS into the text channel before fusion. Every arm below
+            then builds its *own* text side from that same FTS ranking, so
+            without this the channel would be blended twice — once at
+            production's weight and again at the arm's — and the matrix would
+            be grading a configuration nothing could ship.
+
+            The control is exempt on purpose: it must remain production
+            untouched, which now includes the blend. A re-run after this ship
+            should therefore show ``current`` and ``fts_hybrid_50`` agreeing
+            exactly, and that agreement is a useful check rather than a
+            redundancy.
+            """
+            if arm.is_control:
+                return super()._blend_fts_into_text(text_scored, fts_scored)
+            return text_scored
+
         def _fts_channel_scores(self, request) -> dict[int, float]:
             """Rank the in-scope corpus by FTS, with the arm's ranker knobs.
 
@@ -422,6 +442,15 @@ def build_experiment_service(session, arm: Arm, resolver):
             statement the text channel is scored over — so an arm cannot post a
             better recall by searching a wider corpus than the control.
             """
+            # The control is production, and production has had its own FTS
+            # channel since ABS-494 shipped. Short-circuiting it here would
+            # freeze the control at the pre-ship retriever and quietly recreate
+            # the exact staleness this matrix was re-derived to escape: a
+            # candidate would then be quoted against a program we no longer
+            # serve. A re-run after the ship therefore shows `current` and
+            # `fts_hybrid_50` agreeing, which is the correct steady state.
+            if arm.is_control:
+                return super()._fts_channel_scores(request)
             if not arm.uses_fts or self._dialect_name() != "postgresql":
                 return {}
 
@@ -801,11 +830,23 @@ def render_results_markdown(
     )
     lines.append("")
     lines.append(
-        "**Re-derived against post-ABS-492/ABS-500 dev.** The first run of this "
-        "matrix graded a control that scored Recall@10 = 0.1618; provision-in-"
-        "context scoring (ABS-492) and the table channel (ABS-500) have since "
-        "landed and the shipped retriever now scores 0.5588 unaided. Those "
-        "earlier numbers are not comparable to these and are not carried forward."
+        "**The `current` arm always tracks production.** It is not a frozen "
+        "historical control: it runs the shipped `search()` with nothing "
+        "overridden, so every delta here is quoted against the retriever we "
+        "actually serve. This matters because this matrix has already been "
+        "wrong once the other way — its first run (commit `702cb4c`) graded a "
+        "control scoring 0.1618 that ABS-492 and ABS-500 had already moved to "
+        "0.5588, and recommended arms dev had overtaken. Those numbers are not "
+        "comparable to these and are not carried forward."
+    )
+    lines.append("")
+    lines.append(
+        "ABS-494 shipped `fts_hybrid_50` "
+        "(`docs/decisions/ABS-494-SCORING-FUSION-DECISION.md`). A run made "
+        "*after* that ship should therefore show `current` and `fts_hybrid_50` "
+        "agreeing exactly — that agreement is the check that the arm which was "
+        "measured and the channel that is served are the same program, not a "
+        "redundant row."
     )
     lines.append("")
     lines.append(

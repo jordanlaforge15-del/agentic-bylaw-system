@@ -195,10 +195,20 @@ test.describe("ABS-494 scoring & fusion decision artifacts", () => {
     // committed evidence so that a later edit which quietly makes the shipped
     // configuration worse than the retriever it replaced cannot pass review by
     // pointing at a decision doc whose numbers no longer hold.
+    //
+    // Greater-than-or-equal, not strictly greater, and the difference is the
+    // whole subtlety of a post-ship matrix. `current` tracks production rather
+    // than being frozen at the pre-ship retriever — otherwise the control goes
+    // stale exactly the way this issue's first run did. The committed table
+    // was measured *before* the ship, so it records 0.5588 → 0.6618. Anyone
+    // re-running it now measures a control that already contains the hybrid,
+    // and the two rows coincide. Equality is the correct steady state; only a
+    // shipped arm scoring *below* the control is a defect.
     expect(
       shipped!.recall_at_k,
-      "the shipped arm no longer beats the control in the committed matrix",
-    ).toBeGreaterThan(control!.recall_at_k);
+      "the shipped arm now scores below the control — the configuration in " +
+        "RetrievalService has drifted from the one ABS-494 selected",
+    ).toBeGreaterThanOrEqual(control!.recall_at_k);
 
     // And it must still be the best arm measured. If a later run finds a
     // better one, that is a new decision to make deliberately — not something
