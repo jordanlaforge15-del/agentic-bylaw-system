@@ -1,0 +1,1044 @@
+{
+  "provenance": {
+    "tier": "agent-drafted, pending human spot-check",
+    "authored_by": "claude-opus (ABS-486), reading the ingested Regional Centre and Halifax Mainland Land Use By-laws in the dev corpus",
+    "authored_on": "2026-08-12",
+    "review_status": "unreviewed",
+    "what_this_is": "A retrieval-only eval set. Each entry pairs a question with the fragments that would let a competent reader answer it. It grades RANKING, not answers: a question 'passes' when the retriever surfaces an acceptable fragment, whatever the model would then say about it.",
+    "what_this_is_not": "This is NOT the attested golden tier (evals/golden/). Nothing here was authored or checked by a qualified human, so no number derived from it may be reported as evidence that an answer is correct under the by-law, and it must never be summed or averaged with a golden pass rate. It gates ranking work (scoring, fusion, chunking, citation paths) and nothing else.",
+    "how_to_spot_check": "For one entry, read the question, open every fragment named in 'acceptable', and ask only: could a competent reader answer this question from at least one of them, and is any obviously-better clause missing? Record the outcome in 'review_status'. See evals/retrieval/README.md.",
+    "label_identity": "Labels are content-addressed anchors (citation_path, or an exact text_prefix for the fragments the ingest leaves without a path), never raw ids. 'fragment_ids' is a snapshot of resolving those anchors against the corpus below; scripts/eval_retrieval_recall.py re-resolves and verifies it on every run.",
+    "corpus": "Halifax Regional Municipality — Regional Centre Land Use By-Law and Halifax Mainland Land Use By-law, as ingested in the dev database and published to retrieval."
+  },
+  "queries": [
+    {
+      "id": "RQ-D01",
+      "category": "dimensional",
+      "question": "What is the minimum required side setback for a main building in the ER-3 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 229"
+        }
+      ],
+      "fragment_ids": [
+        7339
+      ],
+      "notes": "Part V, Chapter 9 governs ER-3 / ER-2 / ER-1."
+    },
+    {
+      "id": "RQ-D02",
+      "category": "dimensional",
+      "question": "What is the minimum rear setback for a main building on an ER-2 lot?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 230"
+        }
+      ],
+      "fragment_ids": [
+        7349
+      ]
+    },
+    {
+      "id": "RQ-D03",
+      "category": "dimensional",
+      "question": "What is the maximum required lot coverage in the ER-1 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 231"
+        }
+      ],
+      "fragment_ids": [
+        7351
+      ]
+    },
+    {
+      "id": "RQ-D04",
+      "category": "dimensional",
+      "question": "How close to the side lot line may a main building be built in the CH-1 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 240"
+        }
+      ],
+      "fragment_ids": [
+        7399
+      ],
+      "notes": "Phrased without the words 'setback' or 'minimum' on purpose — the question a homeowner asks, not the heading the clause carries."
+    },
+    {
+      "id": "RQ-D05",
+      "category": "dimensional",
+      "question": "What is the maximum lot coverage allowed in a CH-2 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 243"
+        }
+      ],
+      "fragment_ids": [
+        7409
+      ]
+    },
+    {
+      "id": "RQ-D06",
+      "category": "dimensional",
+      "question": "What is the maximum required lot coverage in the LI zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 251"
+        }
+      ],
+      "fragment_ids": [
+        7436
+      ]
+    },
+    {
+      "id": "RQ-D07",
+      "category": "dimensional",
+      "question": "What is the maximum required lot coverage in the INS zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 262"
+        }
+      ],
+      "fragment_ids": [
+        7492
+      ],
+      "notes": "Sibling zones state lot coverage in near-identical language, so this pair (D06/D07) is where a zone-blind ranker shows up."
+    },
+    {
+      "id": "RQ-D08",
+      "category": "dimensional",
+      "question": "Is there a maximum lot coverage requirement in the UC-2 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 277"
+        }
+      ],
+      "fragment_ids": [
+        7602
+      ],
+      "notes": "The answer is a negative provision ('No maximum required lot coverage applies.'), repeated verbatim in several zone chapters. Only the chapter it sits in makes this one the right fragment."
+    },
+    {
+      "id": "RQ-D09",
+      "category": "dimensional",
+      "question": "What is the maximum required lot coverage in the PCF zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 310"
+        }
+      ],
+      "fragment_ids": [
+        7803
+      ]
+    },
+    {
+      "id": "RQ-D10",
+      "category": "dimensional",
+      "question": "What is the minimum required side setback in the WA zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 315"
+        }
+      ],
+      "fragment_ids": [
+        7816
+      ]
+    },
+    {
+      "id": "RQ-D11",
+      "category": "dimensional",
+      "question": "Does the WA zone require a rear setback?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 316"
+        }
+      ],
+      "fragment_ids": [
+        7819
+      ]
+    },
+    {
+      "id": "RQ-D12",
+      "category": "dimensional",
+      "question": "What is the maximum required lot coverage in the CDD-2 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 323"
+        }
+      ],
+      "fragment_ids": [
+        7840
+      ]
+    },
+    {
+      "id": "RQ-D13",
+      "category": "dimensional",
+      "question": "How tall can an accessory structure be under the Regional Centre by-law?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 331"
+        }
+      ],
+      "fragment_ids": [
+        7871
+      ]
+    },
+    {
+      "id": "RQ-D14",
+      "category": "dimensional",
+      "question": "Does the Regional Centre by-law impose a maximum rear setback anywhere?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 95"
+        }
+      ],
+      "fragment_ids": [
+        6400
+      ]
+    },
+    {
+      "id": "RQ-D15",
+      "category": "dimensional",
+      "question": "What is the minimum required side setback for a main building in the HR-2 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 198"
+        }
+      ],
+      "fragment_ids": [
+        7120
+      ],
+      "notes": "Part V, Chapter 7 governs HR-2 / HR-1. Paired with RQ-C01, which asks for the same clause by citation."
+    },
+    {
+      "id": "RQ-D16",
+      "category": "dimensional",
+      "question": "What is the minimum required side setback in the DND zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 301"
+        }
+      ],
+      "fragment_ids": [
+        7770
+      ]
+    },
+    {
+      "id": "RQ-D17",
+      "category": "dimensional",
+      "question": "What dimensional requirements apply to a building used for R-1 uses in an R-1 zone under the Halifax Mainland land use by-law?",
+      "acceptable": [
+        {
+          "bylaw": "Mainland",
+          "citation_path": "21"
+        }
+      ],
+      "fragment_ids": [
+        10441
+      ],
+      "notes": "Second corpus. The Mainland by-law numbers its sections bare ('21'), so this also exercises citation-path shapes the Regional Centre never produces."
+    },
+    {
+      "id": "RQ-D18",
+      "category": "dimensional",
+      "question": "How large must a required motor vehicle parking space be under the Halifax Mainland land use by-law?",
+      "acceptable": [
+        {
+          "bylaw": "Mainland",
+          "citation_path": "11A"
+        }
+      ],
+      "fragment_ids": [
+        10002
+      ],
+      "notes": "Mainland states dimensions in feet; the Regional Centre states everything in metres. A ranker tuned on metric strings should still find this."
+    },
+    {
+      "id": "RQ-P01",
+      "category": "permitted_use",
+      "question": "Which zones permit drive-throughs in the Regional Centre?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 98"
+        }
+      ],
+      "fragment_ids": [
+        6409
+      ]
+    },
+    {
+      "id": "RQ-P02",
+      "category": "permitted_use",
+      "question": "Are billboards allowed in the HRI zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > 467"
+        }
+      ],
+      "fragment_ids": [
+        8975
+      ]
+    },
+    {
+      "id": "RQ-P03",
+      "category": "permitted_use",
+      "question": "Can a wind energy facility be built in the RPK zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > 403"
+        }
+      ],
+      "fragment_ids": [
+        8470
+      ]
+    },
+    {
+      "id": "RQ-P04",
+      "category": "permitted_use",
+      "question": "In which zones are quonset huts prohibited?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 334"
+        }
+      ],
+      "fragment_ids": [
+        7885
+      ]
+    },
+    {
+      "id": "RQ-P05",
+      "category": "permitted_use",
+      "question": "Who is permitted to operate a cannabis retail sales use in the Regional Centre?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > 44"
+        }
+      ],
+      "fragment_ids": [
+        5933
+      ]
+    },
+    {
+      "id": "RQ-P06",
+      "category": "permitted_use",
+      "question": "Can I run a home office out of my apartment?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > 52"
+        }
+      ],
+      "fragment_ids": [
+        5996
+      ],
+      "notes": "Lay phrasing; the clause says 'Home office uses are permitted in all dwelling units.'"
+    },
+    {
+      "id": "RQ-P07",
+      "category": "permitted_use",
+      "question": "Are short-term rentals permitted in the Regional Centre, and on what condition?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > 53"
+        }
+      ],
+      "fragment_ids": [
+        6001
+      ]
+    },
+    {
+      "id": "RQ-P08",
+      "category": "permitted_use",
+      "question": "Which table lists the permitted uses for the DD and DH zones?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > [Table 1A]"
+        }
+      ],
+      "fragment_ids": [
+        5869
+      ]
+    },
+    {
+      "id": "RQ-P09",
+      "category": "permitted_use",
+      "question": "Where are the permitted uses for the ER-3, ER-2 and CH-1 zones set out?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > [Table 1B]"
+        }
+      ],
+      "fragment_ids": [
+        5878
+      ]
+    },
+    {
+      "id": "RQ-P10",
+      "category": "permitted_use",
+      "question": "Which table gives the permitted uses for the HCD-SV zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > [Table 1D]"
+        }
+      ],
+      "fragment_ids": [
+        5900
+      ],
+      "notes": "HCD-SV is named by no prose fragment in the corpus — only by the Table 1D caption and the matrix column headers (see ABS-409)."
+    },
+    {
+      "id": "RQ-P11",
+      "category": "permitted_use",
+      "question": "Am I allowed to keep egg-laying hens on my lot in the Regional Centre?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > 73"
+        }
+      ],
+      "fragment_ids": [
+        6186
+      ]
+    },
+    {
+      "id": "RQ-P12",
+      "category": "permitted_use",
+      "question": "Are pedways allowed within a heritage conservation district?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 338"
+        }
+      ],
+      "fragment_ids": [
+        7908
+      ]
+    },
+    {
+      "id": "RQ-P13",
+      "category": "permitted_use",
+      "question": "Does the Halifax Mainland land use by-law permit keeping hens on a residential property?",
+      "acceptable": [
+        {
+          "bylaw": "Mainland",
+          "citation_path": "14BB"
+        }
+      ],
+      "fragment_ids": [
+        10088
+      ],
+      "notes": "Deliberately near-identical to RQ-P11 so the pair shows whether municipality scoping actually separates the two corpora."
+    },
+    {
+      "id": "RQ-P14",
+      "category": "permitted_use",
+      "question": "In which zones are accessory parking lots permitted?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > 442"
+        }
+      ],
+      "fragment_ids": [
+        8736
+      ]
+    },
+    {
+      "id": "RQ-F01",
+      "category": "definition",
+      "question": "What does 'accessory use' mean in the Regional Centre by-law?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Accessory Use means a use that is subordinate"
+        }
+      ],
+      "fragment_ids": [
+        9163
+      ],
+      "notes": "Definitions are ingested as PROSE fragments with a NULL citation_path, so they can only be anchored by text. That is itself worth measuring: a fragment with no citation path is invisible to every path-based retrieval route."
+    },
+    {
+      "id": "RQ-F02",
+      "category": "definition",
+      "question": "How is amenity space defined?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Amenity Space means non-commercial"
+        }
+      ],
+      "fragment_ids": [
+        9168
+      ]
+    },
+    {
+      "id": "RQ-F03",
+      "category": "definition",
+      "question": "What is average finished grade?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Average Finished Grade means the elevation"
+        }
+      ],
+      "fragment_ids": [
+        9180
+      ]
+    },
+    {
+      "id": "RQ-F04",
+      "category": "definition",
+      "question": "What counts as a backyard suite use?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Backyard Suite Use means a dwelling unit"
+        }
+      ],
+      "fragment_ids": [
+        9183
+      ]
+    },
+    {
+      "id": "RQ-F05",
+      "category": "definition",
+      "question": "What is a billboard under the Regional Centre by-law?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Billboard means a sign that does not relate"
+        }
+      ],
+      "fragment_ids": [
+        9190
+      ],
+      "notes": "Competes with Section 467, which regulates billboards. Definition-vs-regulation confusion is a real failure mode."
+    },
+    {
+      "id": "RQ-F06",
+      "category": "definition",
+      "question": "How is building depth measured?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Building Depth means the distance"
+        }
+      ],
+      "fragment_ids": [
+        9204
+      ]
+    },
+    {
+      "id": "RQ-F07",
+      "category": "definition",
+      "question": "What is a cantilever?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Cantilever means an enclosed portion"
+        }
+      ],
+      "fragment_ids": [
+        9230
+      ]
+    },
+    {
+      "id": "RQ-F08",
+      "category": "definition",
+      "question": "What is the tower portion of a high-rise building?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > 499 > (258)"
+        }
+      ],
+      "fragment_ids": [
+        9601
+      ],
+      "notes": "A handful of definitions did keep a citation_path; anchoring those by path rather than text keeps the label as stable as the ingest allows."
+    },
+    {
+      "id": "RQ-F09",
+      "category": "definition",
+      "question": "What is a temporary use?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > 499 > (254)"
+        }
+      ],
+      "fragment_ids": [
+        9588
+      ]
+    },
+    {
+      "id": "RQ-F10",
+      "category": "definition",
+      "question": "What does 'zone' mean in the Regional Centre by-law?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > 499 > (287)"
+        }
+      ],
+      "fragment_ids": [
+        9643
+      ]
+    },
+    {
+      "id": "RQ-F11",
+      "category": "definition",
+      "question": "What is an accessory parking lot?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Accessory Parking Lot means a parking lot"
+        }
+      ],
+      "fragment_ids": [
+        9159
+      ]
+    },
+    {
+      "id": "RQ-F12",
+      "category": "definition",
+      "question": "What is a tall mid-rise typology?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > 499 > (252.5)"
+        }
+      ],
+      "fragment_ids": [
+        9573
+      ]
+    },
+    {
+      "id": "RQ-Z01",
+      "category": "zone_anchored",
+      "question": "Where are the built form and siting requirements for the DD zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Part V, Chapter 2: Built Form and Siting Requirements within the DD Zone"
+        }
+      ],
+      "fragment_ids": [
+        6485
+      ]
+    },
+    {
+      "id": "RQ-Z02",
+      "category": "zone_anchored",
+      "question": "Where are the built form and siting requirements for the COR zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Part V, Chapter 6: Built Form and Siting Requirements within the COR Zone"
+        }
+      ],
+      "fragment_ids": [
+        6979
+      ]
+    },
+    {
+      "id": "RQ-Z03",
+      "category": "zone_anchored",
+      "question": "Which chapter sets the built form requirements for the CLI zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Part V, Chapter 8: Built Form and Siting Requirements within the CLI Zone"
+        }
+      ],
+      "fragment_ids": [
+        7254
+      ]
+    },
+    {
+      "id": "RQ-Z04",
+      "category": "zone_anchored",
+      "question": "Which chapter sets the built form requirements for the INS zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Part V, Chapter 12: Built Form and Siting Requirements within the INS Zone"
+        }
+      ],
+      "fragment_ids": [
+        7440
+      ]
+    },
+    {
+      "id": "RQ-Z05",
+      "category": "zone_anchored",
+      "question": "Which chapter governs built form in the ER-3, ER-2 and ER-1 zones?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Part V, Chapter 9: Built Form and Siting Requirements within the ER3, ER-2, and ER-1 Zones"
+        }
+      ],
+      "fragment_ids": [
+        7330
+      ],
+      "notes": "The heading spells the first zone 'ER3' with no hyphen while the clauses spell it 'ER-3'. The question uses the by-law's own clause spelling, which is what a user would type."
+    },
+    {
+      "id": "RQ-Z06",
+      "category": "zone_anchored",
+      "question": "Which zones does the Regional Centre by-law establish?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > 30"
+        }
+      ],
+      "fragment_ids": [
+        5695
+      ]
+    },
+    {
+      "id": "RQ-Z07",
+      "category": "zone_anchored",
+      "question": "On a lot zoned ER-3 or ER-2, what is the maximum number of bedrooms permitted?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > 57"
+        }
+      ],
+      "fragment_ids": [
+        6040
+      ]
+    },
+    {
+      "id": "RQ-Z08",
+      "category": "zone_anchored",
+      "question": "Which zone regulates development inside the Schmidtville Heritage Conservation District?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 342"
+        }
+      ],
+      "fragment_ids": [
+        7921
+      ]
+    },
+    {
+      "id": "RQ-Z09",
+      "category": "zone_anchored",
+      "question": "Which chapter sets the built form requirements for the UC-1 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "text_prefix": "Part V, Chapter 14: Built Form and Siting Requirements within the UC- 1 Zone"
+        }
+      ],
+      "fragment_ids": [
+        7646
+      ],
+      "notes": "The extracted heading carries a stray space ('UC- 1'). The question spells it the way a user would; the label spells it the way the corpus holds it."
+    },
+    {
+      "id": "RQ-Z10",
+      "category": "zone_anchored",
+      "question": "What requirements apply to buildings used for R-2 uses in an R-2 zone under the Halifax Mainland by-law?",
+      "acceptable": [
+        {
+          "bylaw": "Mainland",
+          "citation_path": "Schedule A > 26"
+        }
+      ],
+      "fragment_ids": [
+        10529
+      ]
+    },
+    {
+      "id": "RQ-S01",
+      "category": "spatial",
+      "question": "What maximum building height applies at this location?",
+      "location": {
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -63.565721,
+            44.665466
+          ]
+        }
+      },
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "schedules.schedule_15"
+        }
+      ],
+      "fragment_ids": [
+        9751
+      ],
+      "notes": "Point lies inside a mapped height precinct (verified by ST_Intersects against halifax_height_precincts). A literal geometry is used instead of an address so the harness never calls a geocoder — a baseline that moved with a network round-trip would be worthless."
+    },
+    {
+      "id": "RQ-S02",
+      "category": "spatial",
+      "question": "What zone is this property in?",
+      "location": {
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -63.57424,
+            44.646514
+          ]
+        }
+      },
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "schedules.zoning"
+        }
+      ],
+      "fragment_ids": [
+        9752
+      ],
+      "notes": "Point falls in the DH zone polygon."
+    },
+    {
+      "id": "RQ-S03",
+      "category": "spatial",
+      "question": "Is this site inside a shadow impact assessment area?",
+      "location": {
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -63.565721,
+            44.665466
+          ]
+        }
+      },
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "schedules.schedule_51"
+        }
+      ],
+      "fragment_ids": [
+        9755
+      ],
+      "notes": "Same point as RQ-S01, different overlay: the spatial channel must rank the schedule the question is about, not merely some schedule that covers the point."
+    },
+    {
+      "id": "RQ-S04",
+      "category": "spatial",
+      "question": "Is this property in an incentive or bonus zoning district?",
+      "location": {
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -63.61753,
+            44.646979
+          ]
+        }
+      },
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "schedules.schedule_50"
+        }
+      ],
+      "fragment_ids": [
+        9754
+      ]
+    },
+    {
+      "id": "RQ-S05",
+      "category": "spatial",
+      "question": "Is this property inside a heritage conservation district?",
+      "location": {
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -63.594282,
+            44.657422
+          ]
+        }
+      },
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "schedules.schedule_22"
+        }
+      ],
+      "fragment_ids": [
+        9753
+      ]
+    },
+    {
+      "id": "RQ-S06",
+      "category": "spatial",
+      "question": "What floor area ratio applies to this site?",
+      "location": {
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -63.565721,
+            44.665466
+          ]
+        }
+      },
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Schedule 17"
+        }
+      ],
+      "fragment_ids": [
+        6496
+      ],
+      "notes": "halifax_far_precincts links to the Schedule 17 fragment rather than to a 'schedules.*' stub."
+    },
+    {
+      "id": "RQ-C01",
+      "category": "citation_lookup",
+      "question": "What does Section 198 of the Regional Centre Land Use By-law say?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 198"
+        }
+      ],
+      "fragment_ids": [
+        7120
+      ],
+      "notes": "Same target as RQ-D15. The pair measures whether a citation-shaped query reaches the clause a natural-language one reaches."
+    },
+    {
+      "id": "RQ-C02",
+      "category": "citation_lookup",
+      "question": "Show me Table 15 of the Regional Centre Land Use By-law.",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > [Table 15]"
+        }
+      ],
+      "fragment_ids": [
+        8706
+      ],
+      "notes": "The ingest stores 'Part X > [Table 15]'; users write 'Table 15'. That gap is the whole point of the category."
+    },
+    {
+      "id": "RQ-C03",
+      "category": "citation_lookup",
+      "question": "What is in Table 16 of the Regional Centre by-law?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > [Table 16]"
+        }
+      ],
+      "fragment_ids": [
+        8800
+      ]
+    },
+    {
+      "id": "RQ-C04",
+      "category": "citation_lookup",
+      "question": "What does Section 499 of the Regional Centre by-law contain?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > 499"
+        }
+      ],
+      "fragment_ids": [
+        9158
+      ]
+    },
+    {
+      "id": "RQ-C05",
+      "category": "citation_lookup",
+      "question": "What does Table 2 of the Regional Centre by-law set out?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > [Table 2]"
+        }
+      ],
+      "fragment_ids": [
+        6317
+      ]
+    },
+    {
+      "id": "RQ-C06",
+      "category": "citation_lookup",
+      "question": "What does Section 29 of the Regional Centre by-law list?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part I > 29"
+        }
+      ],
+      "fragment_ids": [
+        5626
+      ]
+    },
+    {
+      "id": "RQ-C07",
+      "category": "citation_lookup",
+      "question": "Table 14 landscaped buffer requirement",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part X > [Table 14]"
+        }
+      ],
+      "fragment_ids": [
+        8643
+      ],
+      "notes": "Keyword-shaped rather than a question, which is how citations actually arrive from an agent mid-tool-loop."
+    },
+    {
+      "id": "RQ-C08",
+      "category": "citation_lookup",
+      "question": "What does Section 331 of the Regional Centre by-law say?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 331"
+        }
+      ],
+      "fragment_ids": [
+        7871
+      ],
+      "notes": "Same target as RQ-D13, asked by citation rather than by subject."
+    }
+  ]
+}
