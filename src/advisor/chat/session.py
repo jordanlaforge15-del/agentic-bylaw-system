@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from advisor.billing.packs import TIERS as _BILLING_TIERS
+from advisor.chat.heading_consistency import apply_heading_consistency
 from advisor.chat.hedging import apply_hedge
 from advisor.chat.resolution_qualifier import apply_resolution_qualifier
 from advisor.chat.history_compaction import (
@@ -338,9 +339,18 @@ class ChatSession:
         # mapped boundary, and the answer doesn't already say so, append the
         # precision qualifier. Applied first so the two suffixes read in
         # that order and ``apply_hedge`` sees the combined text.
+        # ABS-519: third deterministic safety net, on the axis the other two
+        # don't touch — the answer's own headings. A section heading that
+        # asserts permission over a body that denies it ("Townhouse Use —
+        # Permitted in ER-2" above a paragraph saying it is permitted in ER-3
+        # and not in ER-2) is the most scannable element on the page and the
+        # part a homeowner acts on. Applied innermost, to the model's own text,
+        # so the appended qualifiers below are never re-parsed as sections.
+        # See ``advisor.chat.heading_consistency``.
         hedged_content = apply_hedge(
             apply_resolution_qualifier(
-                result.final_response.content, result.tool_calls
+                apply_heading_consistency(result.final_response.content),
+                result.tool_calls,
             )
         )
         if hedged_content is not result.final_response.content:

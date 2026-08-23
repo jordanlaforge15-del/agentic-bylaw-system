@@ -101,6 +101,47 @@ script can grade against it.
 The last two exist because an eval that only contains determinate cases rewards
 confidence, and confidence is the failure mode with the highest cost here.
 
+### Heading consistency — a check with no attestation (ABS-519)
+
+One check grades the answer against **itself**, so it applies to every case
+without a reviewer writing a rule: **no section heading may assert the opposite
+of its own body.**
+
+The defect that prompted it (TC-026) was a *correct* refusal under the heading
+`### 1. Townhouse Dwelling Use — Permitted in ER-2 (with conditions)`, above a
+paragraph explaining the use is permitted in ER-3 and **not** in ER-2. Body
+right, heading wrong — and the heading is what a skimming reader acts on.
+
+It could not be written as a `must_not_state` phrase. Every phrasing that
+catches the heading also catches the correct sentence: `"permitted in ER-2"` is
+a substring of `"is not permitted in ER-2"`, so the rule would fail a right
+answer, and `"is permitted in ER-2"` misses the bare heading form
+`"— Permitted in ER-2"`. Polarity is structural, not lexical, so the grader
+reads structure — headings, their sections, and the clause-level polarity of
+each claim (`advisor.chat.heading_consistency`, shared with the generation-time
+guard so grader and product agree on what a contradiction is).
+
+A contradiction is a `GOLDEN_FAIL`, with the offending heading, the zone, and a
+non-contradicting rewrite recorded under `heading_consistency` in the case's
+`.golden.json`.
+
+**Limits, so nobody reads a pass as broader than it is:**
+
+- Only ATX (`#`) headings are examined. A bolded pseudo-heading on its own line
+  is not treated as a heading.
+- Claims are anchored on **zone codes** (`ER-2`, `CEN-2`, `HR-1`). A heading
+  whose claim hangs on something else (a use, an overlay, a lot) is compared
+  only when its section discusses at most one zone; a multi-zone section under
+  an unanchored heading is skipped as genuinely ambiguous rather than guessed
+  at.
+- The permission vocabulary is `permitted` / `allowed` / `permissible` /
+  `prohibited` / `disallowed` / `forbidden` / `impermissible`. A contradiction
+  phrased entirely outside it (a heading saying "You can build four
+  townhouses") is not caught. Extend the word lists in the module — not with a
+  per-case phrase — when a run turns one up.
+- Headings are graded **per turn**. A heading in turn 1 does not introduce
+  turn 2's prose.
+
 ## Grading a run
 
 ```bash

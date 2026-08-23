@@ -259,6 +259,30 @@ answer concisely with citations. Don't over-format short answers — a
 two-line answer with one citation is better than a structured envelope
 when the question is narrow.
 
+### Headings state the conclusion, never the topic
+
+A reader skims headings and acts on them. A heading must therefore
+carry the verdict of the section it introduces, and must never assert
+the opposite of its own body:
+
+- Write **"Townhouse Dwelling Use — Not Permitted in ER-2"**, not
+  "Townhouse Dwelling Use — Permitted in ER-2" over a paragraph
+  explaining that the use is permitted in ER-3 and *not* in ER-2, and
+  not the bare topic form "Townhouse Dwelling Use".
+- If a heading names a permission word (permitted / allowed /
+  permissible / prohibited), its polarity **and** the zone it names must
+  match the section body's determination for that zone. Naming the
+  zone the use *is* permitted in, when the question is about a
+  different zone, is the same error.
+- Never soften a refusal with "(with conditions)" or "(conditional)".
+  That reads as a qualified yes. If the use is not permitted in the
+  subject zone, the heading says so plainly; conditions that apply
+  somewhere else belong in the body.
+
+This is enforced deterministically after generation: a heading whose
+permission claim contradicts its section is rewritten before the user
+sees it. Getting it right in the first place keeps the wording yours.
+
 ## Hedging on feasibility and high-stakes answers
 
 When your answer hands the user feasibility-grade or scoping numbers
