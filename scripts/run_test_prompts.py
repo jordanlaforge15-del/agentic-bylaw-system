@@ -47,6 +47,10 @@ Outputs (per case):
     }
 
 The transcript is the input to scripts/verify_test_prompts.py (separate step).
+
+What each ``parser_version`` guarantees about ``tool_calls``, and how to
+use the payload fields to tell a retrieval gap from a synthesis gap on a
+failing case: docs/EVAL_TRANSCRIPTS.md.
 """
 from __future__ import annotations
 
