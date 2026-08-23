@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from advisor.chat.session import _build_tool_call_metric
 from advisor.chat.tool_payloads import (
     bound_tool_input,
     extract_result_citations,
@@ -19,7 +20,6 @@ from advisor.chat.tool_payloads import (
     render_tool_result,
     result_excerpt_limit,
 )
-from advisor.chat.session import _build_tool_call_metric
 from advisor.llm import TextBlock
 from advisor.llm.tool_loop import ToolInvocation
 
