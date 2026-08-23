@@ -226,11 +226,46 @@ class ToolCallMetric(BaseModel):
     order the loop dispatched the calls; for an iteration that asked
     for multiple tools at once, they appear in the order returned by
     the model's response content.
+
+    ABS-517 — the payload fields. ABS-266 deliberately recorded only
+    name / error / latency, on the grounds that the event was for
+    cost-and-perf observability and payloads are large. That made
+    root-cause analysis of a failing eval case impossible: a transcript
+    could say ``search_bylaw_evidence`` ran 33 times but not what it was
+    asked or what came back, so a missing provision could not be
+    attributed to retrieval (never returned) versus synthesis (returned
+    and dropped) — two failures with opposite fixes. The fields below
+    close that gap under an explicit size bound.
+
+    ``input``
+        The arguments the model passed, with long string values
+        truncated. ``None`` means no input was recorded (a producer
+        predating this field); ``{}`` means the tool was genuinely
+        called with no arguments.
+    ``result_excerpt``
+        Head of the handler's serialized output, or the error text when
+        ``is_error``. ``None`` when capture is switched off.
+    ``result_chars``
+        Length of the full output before truncation, so a reader knows
+        how much ``result_excerpt`` is hiding.
+    ``result_truncated``
+        Whether ``result_excerpt`` is a prefix rather than the whole
+        output.
+    ``result_citations``
+        Citations present anywhere in a JSON result, in the order the
+        result listed them (i.e. retrieval rank). This is what answers
+        "was this provision retrieved?" outright when the head excerpt
+        stops short of it. Empty for non-JSON or citation-free results.
     """
 
     name: str
     is_error: bool = False
     latency_ms: int = 0
+    input: dict[str, Any] | None = None
+    result_excerpt: str | None = None
+    result_chars: int | None = None
+    result_truncated: bool = False
+    result_citations: list[str] = Field(default_factory=list)
 
 
 class IterationMetric(BaseModel):

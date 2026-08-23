@@ -27,7 +27,16 @@ Outputs (per case):
           "user_message": "...",
           "assistant_text": "...",
           "tool_calls": [
-            {"name": "search_bylaw_evidence", "input": {...}, "result_excerpt": "..."}
+            {
+              "name": "search_bylaw_evidence",
+              "input": {"query": "side yard setback", "limit": 10},
+              "result_excerpt": "{\\"total_matches\\": 12, \\"matches\\": [...",
+              "result_chars": 41233,
+              "result_truncated": true,
+              "result_citations": ["s. 198", "Table 1B", ...],
+              "is_error": false,
+              "latency_ms": 349
+            }
           ],
           "stop_reason": "end_turn",
           "usage": {"input_tokens": ..., "output_tokens": ...},
@@ -57,7 +66,7 @@ RUNS_ROOT = REPO_ROOT / "evals" / "runs"
 
 # ABS-459. Bump when a transcript field changes meaning. See the field note
 # in ``run_case`` for what each version guarantees about ``tool_calls``.
-TRANSCRIPT_PARSER_VERSION = 2
+TRANSCRIPT_PARSER_VERSION = 3
 
 
 def load_prompts() -> list[dict[str, Any]]:
@@ -114,7 +123,9 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
     to concatenating deltas if that's missing.
 
     ``tool_calls`` comes from ``tool_loop_metrics`` in practice, not from
-    the content stream — see the ABS-459 note below the event loop.
+    the content stream — see the ABS-459 note below the event loop. Since
+    ABS-517 those entries carry the call's input and a bounded excerpt of
+    its result, which is what makes a failing case diagnosable.
     """
     text_chunks: dict[int, str] = {}
     text_full: dict[int, str] = {}
@@ -176,6 +187,16 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
                     "name": tool_call_names[idx],
                     "id": tool_call_ids.get(idx),
                     "input": inp,
+                    # A tool_use block carries the request, never the
+                    # response — tool_result blocks are what the client
+                    # sends back, and the advisor never streams those.
+                    # Result fields are declared so every entry has one
+                    # shape regardless of which source produced it.
+                    "result_excerpt": None,
+                    "result_chars": None,
+                    "result_truncated": False,
+                    "result_citations": [],
+                    "source": "content_stream",
                 })
         elif et == "message_delta":
             stop_reason = data.get("stop_reason") or stop_reason
@@ -206,9 +227,15 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
     # is the only record of the loop's internals. Fall back to it.
     #
     # The content-stream harvest still wins whenever it has entries: those
-    # carry each call's ``input``, which ``ToolCallMetric`` does not. A
-    # backend that someday streams real ``tool_use`` blocks therefore keeps
-    # the richer data without changing this code.
+    # carry each call's real ``tool_use`` id alongside its input. A backend
+    # that someday streams real ``tool_use`` blocks therefore keeps the
+    # richer identity without changing this code.
+    #
+    # ABS-517: ``ToolCallMetric`` now also carries the call's arguments and
+    # a bounded excerpt of its result, so the fallback path is no longer
+    # name-and-latency-only. ``.get`` throughout, with the pre-ABS-517
+    # values as defaults, keeps the runner working against an advisor that
+    # predates the change — it just records nulls again, exactly as before.
     if not tool_calls and tool_loop_metrics:
         for metric in tool_loop_metrics.get("tool_calls") or []:
             if not isinstance(metric, dict):
@@ -216,12 +243,20 @@ def extract_turn_artifacts(events: list[dict[str, Any]]) -> dict[str, Any]:
             tool_calls.append({
                 "name": metric.get("name", ""),
                 "id": None,
-                # ToolCallMetric carries no arguments — only name, error
-                # state and latency. Null rather than {} so consumers can
-                # distinguish "no input recorded" from "called with {}".
-                "input": None,
+                # Null rather than {} so consumers can distinguish "no
+                # input recorded" (old advisor) from "called with {}".
+                "input": metric.get("input"),
                 "is_error": bool(metric.get("is_error", False)),
                 "latency_ms": metric.get("latency_ms"),
+                # Head of the tool's output, its full pre-truncation
+                # length, and every citation the result named. Together
+                # these answer the question the transcript could not
+                # answer before ABS-517: did this provision come back
+                # from the tool, or did the answer drop it?
+                "result_excerpt": metric.get("result_excerpt"),
+                "result_chars": metric.get("result_chars"),
+                "result_truncated": bool(metric.get("result_truncated", False)),
+                "result_citations": list(metric.get("result_citations") or []),
                 "source": "tool_loop_metrics",
             })
 
@@ -293,10 +328,21 @@ def summarise_case_result(
     ``error`` is reported only when the case produced no turns at all; a
     case that failed partway still has usable transcript data, and the
     per-turn ``error`` field carries the detail.
+
+    ABS-517 adds ``tool_calls_with_input``. A run against an advisor that
+    predates the payload fields still succeeds and still counts its calls,
+    but produces transcripts nobody can do RCA on — the failure ABS-517
+    exists to end. Counting the calls that actually carry an input lets
+    ``main`` say so at the end of the run instead of letting it be
+    discovered days later by whoever opens the transcript.
     """
     turns = result.get("turns") or []
     n_turns = len(turns)
-    n_tool = sum(len(t.get("tool_calls") or []) for t in turns)
+    calls = [c for t in turns for c in (t.get("tool_calls") or [])]
+    n_tool = len(calls)
+    n_with_input = sum(
+        1 for c in calls if isinstance(c, dict) and c.get("input") is not None
+    )
     return {
         "id": case["id"],
         "title": case["title"],
@@ -304,6 +350,7 @@ def summarise_case_result(
         "turns_completed": n_turns,
         "turns_expected": len(case["turns"]),
         "tool_calls": n_tool,
+        "tool_calls_with_input": n_with_input,
         "wall_s": wall,
         "error": result.get("error") if not n_turns else None,
     }
@@ -363,7 +410,34 @@ def run_case(
         #              tool_use blocks, so it reads [] no matter what the
         #              loop dispatched. Read ``tool_loop_metrics`` instead.
         #   2        — ``tool_calls`` falls back to ``tool_loop_metrics`` and
-        #              can be trusted.
+        #              can be trusted. Each entry names the tool and reports
+        #              its error state and latency, and NOTHING ELSE:
+        #              ``input`` is always null and there is no result. A
+        #              v2 transcript can say a tool ran but not what it was
+        #              asked or what came back, so it cannot distinguish a
+        #              retrieval gap from a synthesis gap (ABS-517).
+        #   3        — ABS-517. Each entry additionally guarantees:
+        #                ``input``            the arguments the model passed,
+        #                                     long string values truncated.
+        #                                     Null ONLY if the advisor
+        #                                     predates ABS-517.
+        #                ``result_excerpt``   head of the tool's output (or
+        #                                     its error text when
+        #                                     ``is_error``); null when the
+        #                                     advisor has result capture
+        #                                     switched off.
+        #                ``result_chars``     full output length before
+        #                                     truncation.
+        #                ``result_truncated`` whether the excerpt is a prefix.
+        #                ``result_citations`` every citation the result named,
+        #                                     in result (rank) order — the
+        #                                     field that settles "was this
+        #                                     provision retrieved?" even when
+        #                                     the excerpt stops short of it.
+        #
+        # Version 3 is a pure superset of 2: every v2 field keeps its
+        # meaning, so a v2-era consumer reads a v3 transcript unchanged and
+        # a v3-era consumer reads a v2 transcript as "payloads not recorded".
         #
         # Consumers that assert on tool_calls must gate on this rather than
         # allowlisting run directories, which would go stale on every run.
@@ -474,6 +548,24 @@ def main() -> None:
     with summary_path.open("w") as f:
         json.dump(summary, f, indent=2)
     print(f"\nRun complete: {len(summary)} cases, summary at {summary_path}", file=sys.stderr)
+
+    # ABS-517: a run whose transcripts carry no tool inputs is not
+    # diagnosable, and the run itself looks completely healthy — it
+    # reports its turns and its call counts as usual. Say so here rather
+    # than letting it surface when someone tries to RCA a failure days
+    # later and finds nulls where the payloads should be.
+    dispatched = sum(row.get("tool_calls", 0) for row in summary)
+    with_input = sum(row.get("tool_calls_with_input", 0) for row in summary)
+    if dispatched and not with_input:
+        print(
+            "\nWARNING: none of the "
+            f"{dispatched} recorded tool calls carry an input payload.\n"
+            "  The advisor at "
+            f"{args.base_url} predates ABS-517 (or has result capture off).\n"
+            "  These transcripts cannot distinguish a retrieval gap from a\n"
+            "  synthesis gap. Upgrade the advisor and re-run before doing RCA.",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":
