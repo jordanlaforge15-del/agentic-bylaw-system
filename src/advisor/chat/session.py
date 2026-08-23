@@ -43,6 +43,11 @@ from advisor.chat.history_compaction import (
     compact_history_for_submission,
     resolve_keep_recent,
 )
+from advisor.chat.tool_payloads import (
+    bound_tool_input,
+    extract_result_citations,
+    render_tool_result,
+)
 from advisor.llm import (
     CompletionRequest,
     CompletionResponse,
@@ -64,7 +69,7 @@ from advisor.llm.budget import (
     default_wallet_token_ceiling,
 )
 from advisor.llm.mock import MockGateway
-from advisor.llm.tool_loop import ToolHandler, run_tool_loop
+from advisor.llm.tool_loop import ToolHandler, ToolInvocation, run_tool_loop
 
 # Anthropic supports up to 4 cache breakpoints per request. The chat
 # session spends two on the request-level shared prefix (system,
@@ -99,6 +104,25 @@ def _default_max_iterations() -> int:
     except ValueError:
         return _DEFAULT_MAX_ITERATIONS
     return value if value > 0 else _DEFAULT_MAX_ITERATIONS
+
+
+def _build_tool_call_metric(inv: ToolInvocation) -> ToolCallMetric:
+    """Project one loop invocation onto its ABS-266/ABS-517 metric.
+
+    Split out of ``send_user_message_blocking`` so the payload-bounding
+    behaviour is testable without driving a whole turn.
+    """
+    excerpt, chars, truncated = render_tool_result(inv.output, inv.error)
+    return ToolCallMetric(
+        name=inv.tool_name,
+        is_error=inv.error is not None,
+        latency_ms=inv.latency_ms,
+        input=bound_tool_input(inv.input),
+        result_excerpt=excerpt,
+        result_chars=chars,
+        result_truncated=truncated,
+        result_citations=extract_result_citations(inv.output),
+    )
 
 
 @dataclass
@@ -351,22 +375,26 @@ class ChatSession:
         # ABS-266: build the observability event once, here, so both
         # the blocking and streaming entry points emit identical
         # metrics. The flat ``tool_calls`` list mirrors loop dispatch
-        # order; we deliberately drop tool arguments and outputs from
-        # the event because they can be large and contain user data —
-        # the event is for cost/perf observability, not transcript
-        # capture (transcripts live in ``self.messages``).
+        # order.
+        #
+        # ABS-517: that list now carries each call's arguments and a
+        # bounded excerpt of its result. ABS-266 dropped both, reasoning
+        # that the event was for cost/perf and that the real transcript
+        # lives in ``self.messages`` — but ``self.messages`` is
+        # server-side state, so an out-of-band consumer (the eval
+        # runner, a dev console) saw a turn's tool activity only as a
+        # list of names. That is unusable for diagnosing a wrong answer:
+        # "the provision was never retrieved" and "the provision was
+        # retrieved and the answer dropped it" look identical, and they
+        # are fixed in different layers. ``advisor.chat.tool_payloads``
+        # applies the size bounds; see that module for what each is for.
         self.last_tool_loop_metrics = ToolLoopMetricsEvent(
             iterations=result.iterations,
             terminated_reason=result.terminated_reason,
             total_usage=result.total_usage,
             per_iteration=list(result.per_iteration),
             tool_calls=[
-                ToolCallMetric(
-                    name=inv.tool_name,
-                    is_error=inv.error is not None,
-                    latency_ms=inv.latency_ms,
-                )
-                for inv in result.tool_calls
+                _build_tool_call_metric(inv) for inv in result.tool_calls
             ],
         )
         self.updated_at = datetime.now(timezone.utc)
