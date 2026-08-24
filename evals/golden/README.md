@@ -139,6 +139,13 @@ non-contradicting rewrite recorded under `heading_consistency` in the case's
   phrased entirely outside it (a heading saying "You can build four
   townhouses") is not caught. Extend the word lists in the module — not with a
   per-case phrase — when a run turns one up.
+- A permission word qualifying a noun — `Permitted Uses in ER-2`,
+  `prohibited structures` — names a **topic**, not a verdict, and is ignored,
+  so a legitimate "Permitted Uses in ER-2" heading is never rewritten over a
+  body that denies one particular use. The cost is a blind spot the other way:
+  `"townhouses are a prohibited use in ER-2"` reads as a topic too, so a
+  heading contradicting only that sentence goes unflagged. Negated forms are
+  exempt — `"is not a permitted use in ER-2"` is only ever a verdict.
 - Headings are graded **per turn**. A heading in turn 1 does not introduce
   turn 2's prose.
 

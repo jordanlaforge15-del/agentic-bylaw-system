@@ -59,6 +59,12 @@ Known limits (documented rather than papered over):
     ambiguous rather than guessed at.
   * A heading with no permission word is never touched. This guard is about
     permission polarity, not about headings in general.
+  * An un-negated permission word qualifying a noun ("Permitted Uses in ER-2",
+    "prohibited structures") names a topic, not a verdict, and is ignored. The
+    cost is a blind spot in the other direction: "townhouses are a prohibited
+    use in ER-2" is read as a topic too, so a heading contradicting *that*
+    sentence alone goes unflagged. Negated forms are exempt from the skip,
+    because "is not a permitted use in ER-2" is only ever a verdict.
 """
 from __future__ import annotations
 
@@ -91,8 +97,13 @@ _NEGATORS: tuple[str, ...] = ("not", "never", "no", "nor", "non", "cannot", "wit
 _WORD_ALTERNATION = "|".join(_POSITIVE_WORDS + _NEGATIVE_WORDS)
 _NEGATOR_ALTERNATION = "|".join(_NEGATORS)
 
+# The negator may be separated from the permission word by an article, which
+# is how the by-law's most common denial is written: "is **not a permitted
+# use** in ER-2". Without the article the negator is missed and the clause
+# reads as an assertion — the exact inversion this module exists to catch.
 _CLAIM_RE = re.compile(
-    rf"(?P<neg>\b(?:{_NEGATOR_ALTERNATION})\b[\s\-]+)?(?P<word>{_WORD_ALTERNATION})\b",
+    rf"(?P<neg>\b(?:{_NEGATOR_ALTERNATION})\b[\s\-]+(?:(?:an?|the)\s+)?)?"
+    rf"(?P<word>{_WORD_ALTERNATION})\b",
     re.IGNORECASE,
 )
 
@@ -117,6 +128,19 @@ _CLAUSE_SPLIT_RE = re.compile(
     r"(?:[.!?;:,]|\n|\|)+|\s+(?:but|however|whereas|while|although|though|except|"
     r"unless)\s+",
     re.IGNORECASE,
+)
+
+# A permission word used attributively — "Permitted Uses in ER-2", "prohibited
+# structures" — names a TOPIC, not a verdict. Treating it as a claim would let
+# the guard rewrite a perfectly good "Permitted Uses in ER-2" heading into
+# "Not Permitted Uses in ER-2" over a body that denies one particular use.
+_ATTRIBUTIVE_NOUNS = (
+    "use", "uses", "structure", "structures", "building", "buildings",
+    "dwelling", "dwellings", "development", "developments", "activity",
+    "activities", "list", "lists", "table", "tables", "zone", "zones",
+)
+_ATTRIBUTIVE_RE = re.compile(
+    rf"\s*\b(?:{'|'.join(_ATTRIBUTIVE_NOUNS)})\b", re.IGNORECASE
 )
 
 POSITIVE = "positive"
@@ -168,6 +192,22 @@ def _zone_for(segment: str) -> str | None:
     return unique[0] if len(unique) == 1 else None
 
 
+def _find_claim(text: str) -> re.Match[str] | None:
+    """The first permission word in ``text`` that states a verdict.
+
+    Un-negated attributive occurrences ("Permitted Uses in ER-2") are skipped:
+    they name what the section is about, not what it concludes. A *negated*
+    attributive is the opposite — "is not a permitted use in ER-2" is the
+    by-law's ordinary way of writing a denial, and nobody titles a section
+    "Not Permitted Uses" — so the negator settles it as a verdict.
+    """
+    for match in _CLAIM_RE.finditer(text):
+        if match.group("neg") is None and _ATTRIBUTIVE_RE.match(text[match.end():]):
+            continue
+        return match
+    return None
+
+
 def _claim_polarity(match: re.Match[str]) -> str:
     word = match.group("word").lower()
     base = NEGATIVE if word in _NEGATIVE_WORDS else POSITIVE
@@ -179,7 +219,7 @@ def _claim_polarity(match: re.Match[str]) -> str:
 def heading_claim(heading_text: str) -> PermissionClaim | None:
     """The permission claim a heading makes, if it makes one."""
     clean = _strip_emphasis(heading_text)
-    match = _CLAIM_RE.search(clean)
+    match = _find_claim(clean)
     if match is None:
         return None
     # The zone the claim is about is the one the claim word governs — look to
@@ -209,7 +249,7 @@ def body_claims(body: str) -> list[PermissionClaim]:
             if not clause or not clause.strip():
                 continue
             zone = _zone_for(clause)
-            match = _CLAIM_RE.search(clause)
+            match = _find_claim(clause)
             if match is not None:
                 claim = PermissionClaim(
                     word=match.group("word").lower(),
@@ -276,12 +316,12 @@ def _rewrite_heading(heading_text: str, target_polarity: str) -> str:
     positive neutralises instead ("Permission"), never asserting a permission
     the guard inferred rather than read.
     """
-    match = _CLAIM_RE.search(_strip_emphasis(heading_text))
+    match = _find_claim(_strip_emphasis(heading_text))
     if match is None:
         return heading_text
     # Locate the same claim in the ORIGINAL text (emphasis intact) so the
     # rewrite preserves surrounding markdown.
-    original_match = _CLAIM_RE.search(heading_text)
+    original_match = _find_claim(heading_text)
     if original_match is None:
         return heading_text
 
@@ -299,9 +339,15 @@ def _rewrite_heading(heading_text: str, target_polarity: str) -> str:
         return _CONDITION_PARENTHETICAL_RE.sub("", rewritten).rstrip()
 
     # The negator (if any) is inside the matched span, so replacing the span
-    # removes it along with the permission word.
+    # removes it along with the permission word. A noun the word was
+    # qualifying goes with it — "Not a Permitted Use in ER-3" neutralises to
+    # "Permission in ER-3", not "Permission Use in ER-3".
+    tail = heading_text[end:]
+    attributive = _ATTRIBUTIVE_RE.match(tail)
+    if attributive:
+        tail = tail[attributive.end():]
     replacement = _match_case(_NEUTRAL_FORM, word)
-    return (heading_text[:start] + replacement + heading_text[end:]).rstrip()
+    return (heading_text[:start] + replacement + tail).rstrip()
 
 
 def find_contradictions(text: str) -> list[HeadingContradiction]:

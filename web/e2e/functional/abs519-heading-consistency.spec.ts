@@ -124,6 +124,13 @@ test("a refusal's heading is repaired to agree with its body", async ({
   // The body — already correct — survived the rewrite unchanged.
   expect(text).toMatch(/permitted in the ER-3 zone/);
   expect(text).toMatch(/not in ER-2/);
+
+  // Section 2 carries the other shape a denial takes in by-law prose: the
+  // permission word qualifying a noun, "is not an allowed use in ER-2".
+  // Un-negated that is a topic ("Permitted Uses in ER-2") and the guard must
+  // leave it alone; negated it is a verdict, and the heading must follow.
+  expect(text).toMatch(/#+ .*Four-Unit Dwelling — Not Allowed in ER-2/);
+  expect(text).toMatch(/not an allowed use\** in ER-2/);
 });
 
 test("an answer whose headings already agree is passed through untouched", async ({

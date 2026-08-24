@@ -72,6 +72,51 @@ def test_body_claims_handle_inherently_negative_words():
 
 
 # --------------------------------------------------------------------------
+# Topic vs. verdict: a permission word qualifying a noun names what the
+# section is ABOUT, not what it concludes — unless it is negated.
+# --------------------------------------------------------------------------
+
+
+def test_attributive_heading_makes_no_claim():
+    # "Permitted Uses in ER-2" is a section title, not a verdict. Reading it
+    # as one would let the guard rewrite it to "Not Permitted Uses in ER-2"
+    # over a body that denies one particular use.
+    assert heading_claim("Permitted Uses in ER-2") is None
+    assert heading_claim("Prohibited Structures in ER-2") is None
+
+
+def test_attributive_heading_is_not_flagged():
+    text = (
+        "### Permitted Uses in ER-2\n\n"
+        "Townhouse dwelling use is not permitted in ER-2.\n"
+    )
+    assert find_contradictions(text) == []
+
+
+def test_attributive_body_sentence_states_no_verdict():
+    assert body_claims("Table 1B lists the permitted uses in ER-2.") == []
+
+
+def test_negated_attributive_is_a_verdict_not_a_topic():
+    # "is not a permitted use in ER-2" is the by-law's ordinary denial, and
+    # nobody titles a section "Not Permitted Uses" — the negator settles it.
+    claims = body_claims("Townhouse dwelling is not a permitted use in ER-2.")
+    assert [(c.zone, c.polarity) for c in claims] == [("ER-2", NEGATIVE)]
+    assert body_claims("A fourplex is not an allowed use in HR-1.")[0].polarity == NEGATIVE
+
+
+def test_heading_contradicting_a_negated_attributive_body_is_flagged():
+    text = (
+        "### Townhouse Use — Permitted in ER-2\n\n"
+        "Townhouse dwelling is not a permitted use in ER-2.\n"
+    )
+    found = find_contradictions(text)
+    assert len(found) == 1
+    assert found[0].heading_polarity == POSITIVE
+    assert found[0].suggested_heading == "Townhouse Use — Not Permitted in ER-2"
+
+
+# --------------------------------------------------------------------------
 # Contradiction detection
 # --------------------------------------------------------------------------
 
@@ -158,6 +203,15 @@ def test_repair_neutralises_rather_than_asserting_permission():
     heading = repaired.splitlines()[0]
     assert heading == "### Townhouse Use — Permission in ER-3"
     assert "Not Permitted" not in heading
+
+
+def test_neutralising_drops_the_noun_the_permission_word_qualified():
+    # "Not a Permitted Use" → "Permission", not "Permission Use".
+    text = (
+        "### Townhouse — Not a Permitted Use in ER-3\n\n"
+        "Townhouse dwelling use is permitted in ER-3.\n"
+    )
+    assert repair_headings(text).splitlines()[0] == "### Townhouse — Permission in ER-3"
 
 
 def test_repair_preserves_heading_level_and_trailing_newline():
