@@ -51,6 +51,7 @@ from bylaw_retrieval.retrieval.schemas import (
     LinkedDataset,
     LocationSlot,
     NeighbourZone,
+    OperativeClause,
     OverlayRef,
     PermittedUseQuery,
     PermittedUseResult,
@@ -71,6 +72,10 @@ from bylaw_retrieval.retrieval.schemas import (
 from bylaw_retrieval.retrieval.binding import ZoneScopeIndex, build_zone_scope_index
 from bylaw_retrieval.retrieval.channels import TextChannelScores
 from bylaw_retrieval.retrieval.context import AncestorIndex, split_citation_path
+from bylaw_retrieval.retrieval.provision import (
+    OPERATIVE_CLAUSE_LIMIT,
+    ProvisionLineage,
+)
 from bylaw_retrieval.retrieval.tables import (
     CHANNEL_THRESHOLD as TABLE_CHANNEL_THRESHOLD,
 )
@@ -2990,6 +2995,23 @@ class RetrievalService:
             self._zone_scope_index_cache = cached
         return cached[1]
 
+    def _provisions(self) -> ProvisionLineage:
+        """Path-addressed lineage and clause completion, cached per service.
+
+        Unlike ``_table_index`` / ``_zone_scope_index`` this is not keyed on the
+        document scope and is not built eagerly: it answers one path at a time
+        against the ``(document_id, citation_path)`` unique index and memoises
+        what it was asked, so a search that returns five matches from one
+        section resolves that section once. Nothing about it depends on which
+        documents are in scope — a citation path names one fragment in one
+        document by constraint.
+        """
+        lineage = getattr(self, "_provision_lineage_cache", None)
+        if lineage is None:
+            lineage = ProvisionLineage(self.session)
+            self._provision_lineage_cache = lineage
+        return lineage
+
     def _table_index(self) -> TableIndex:
         """Tables, cells, axis labels and anchors for the default scope, cached."""
         scope = self._resolve_default_document_ids()
@@ -3572,6 +3594,14 @@ class RetrievalService:
         resolved_location: ResolvedLocation | None = None,
     ) -> RetrievalMatch:
         document = self._get_document(fragment.document_id)
+        # ABS-521: unconditional, and deliberately not behind ``include_context``.
+        # The flag means "drop the containers this fragment sits under to save
+        # tokens", and dropping them costs a reader scope. An operative clause is
+        # not scope — it is the other half of the sentence. ``lookup_citation``
+        # defaults ``include_context`` to *False*, so gating here would leave the
+        # exact call the ticket reports ("lookup_citation Part V > 333") still
+        # returning a rule that ends on a colon.
+        clauses, omitted = self._provisions().operative_clauses(fragment)
         return RetrievalMatch(
             fragment_id=fragment.id,
             document_id=document.id,
@@ -3587,6 +3617,19 @@ class RetrievalService:
             text=fragment.text,
             score=score,
             ancestor_chain=self._ancestor_chain(fragment) if include_context else [],
+            operative_clauses=[
+                OperativeClause(
+                    id=clause.id,
+                    fragment_type=clause.fragment_type.value,
+                    citation_label=clause.citation_label,
+                    citation_path=clause.citation_path,
+                    page_start=clause.page_start,
+                    page_end=clause.page_end,
+                    text=clause.text,
+                )
+                for clause in clauses
+            ],
+            operative_clauses_omitted=omitted,
             cross_references=self._cross_references_for_fragment(fragment) if include_cross_references else [],
             related_tables=self._related_tables_for_fragment(fragment) if include_tables else [],
             linked_datasets=self._linked_datasets_for_fragment(fragment, resolved_location)
@@ -3679,23 +3722,28 @@ class RetrievalService:
         )
 
     def _ancestor_chain(self, fragment: SourceFragment) -> list[AncestorFragment]:
-        chain: list[AncestorFragment] = []
-        current = fragment.parent
-        while current is not None:
-            chain.append(
-                AncestorFragment(
-                    id=current.id,
-                    fragment_type=current.fragment_type.value,
-                    citation_label=current.citation_label,
-                    citation_path=current.citation_path,
-                    page_start=current.page_start,
-                    page_end=current.page_end,
-                    text=current.text,
-                )
+        """Containers above ``fragment``, root-first, by path *and* by tree.
+
+        Before ABS-521 this walked ``fragment.parent`` alone. For the 1,906
+        clauses whose ``parent_fragment_id`` points at the heading printed above
+        their section rather than at the section itself, that walk showed the
+        agent a chain that omitted the very sentence the clause finishes: the
+        chain over ``Part V > 333 > (a)`` named "Part V, Chapter 19: Accessory
+        Structures…" and "Accessory Structure Footprint and Area" and never
+        s.333. The union of both lineages is what a reader holding the page has.
+        """
+        return [
+            AncestorFragment(
+                id=ancestor.id,
+                fragment_type=ancestor.fragment_type.value,
+                citation_label=ancestor.citation_label,
+                citation_path=ancestor.citation_path,
+                page_start=ancestor.page_start,
+                page_end=ancestor.page_end,
+                text=ancestor.text,
             )
-            current = current.parent
-        chain.reverse()
-        return chain
+            for ancestor in self._provisions().lineage(fragment)
+        ]
 
     def _cross_references_for_fragment(self, fragment: SourceFragment) -> list[CrossReferenceSummary]:
         refs = self.session.execute(

@@ -30,6 +30,27 @@ class AncestorFragment(BaseModel):
     text: str
 
 
+class OperativeClause(BaseModel):
+    """A clause of the same provision as the match it hangs off (ABS-521).
+
+    Not context and not a near-miss: an operative clause is *part of the rule
+    the match states*. s.333(1) of the Regional Centre reads "Any new accessory
+    structure shall have no restriction on the maximum size of its footprint,
+    except:" and stops — the 60.0 m² cap is in ``333(1)(a)``, which contains no
+    word a question would use and never ranked. Returning the section without
+    its clauses hands a reader a sentence that ends on a colon; returning
+    ``(1.5)`` without its siblings hands them one of two caps that both bind.
+    """
+
+    id: int
+    fragment_type: str
+    citation_label: str | None = None
+    citation_path: str | None = None
+    page_start: int
+    page_end: int
+    text: str
+
+
 class CrossReferenceSummary(BaseModel):
     id: int
     raw_reference_text: str
@@ -181,6 +202,27 @@ class RetrievalMatch(BaseModel):
         ),
     )
     ancestor_chain: list[AncestorFragment] = Field(default_factory=list)
+    operative_clauses: list[OperativeClause] = Field(
+        default_factory=list,
+        description=(
+            "The other clauses of this match's own provision — its siblings "
+            "one path segment down from the section or subsection that governs "
+            "it, or its own clauses when the match is the provision. Populated "
+            "unconditionally, including when 'include_context' is false: an "
+            "operative clause is part of the rule, not context around it, and "
+            "a provision returned without it is incomplete rather than terse. "
+            "Empty when the match states its rule on its own."
+        ),
+    )
+    operative_clauses_omitted: int = Field(
+        default=0,
+        description=(
+            "How many further clauses of this provision were dropped by the "
+            "response cap. Non-zero means the provision is longer than what is "
+            "shown — re-read it with search_bylaw_evidence and "
+            "citation_path_prefix set to the provision's path."
+        ),
+    )
     cross_references: list[CrossReferenceSummary] = Field(default_factory=list)
     table_matches: list[TableCellMatch] = Field(
         default_factory=list,
