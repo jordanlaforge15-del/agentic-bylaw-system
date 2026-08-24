@@ -171,12 +171,13 @@ The fingerprint moved because the retrieval package did, which is exactly what
 
 ### What it costs
 
-`BASELINE.json` records p95 for one `search` call moving 531ms → 660ms. **Do
-not read that as this change's price.** It is the block the README already
-warns is "the one part of a report that moves between two runs over an
-unchanged corpus", and an A/B on the same process — 40 queries, completion
-enabled and disabled by monkeypatch, alternating, warm caches — puts the actual
-difference inside the noise:
+`BASELINE.json` records p95 for one `search` call moving 531ms → 1496.7ms, mean
+450.3 → 1015.4ms. **Do not read that as this change's price.** It is the block
+the README already warns is "the one part of a report that moves between two
+runs over an unchanged corpus", it was recorded on a host that had a 17-arm
+matrix run and a test suite competing for it, and an A/B on the same process —
+40 queries, completion enabled and disabled by monkeypatch, alternating, warm
+caches — puts the actual difference inside the noise:
 
 | | mean | p50 | p95 |
 |---|---|---|---|

@@ -395,10 +395,12 @@ number, and which scores 9 against its section's 21 on the very query it
 answers. Full write-up in
 [`docs/ABS-521-PROVISION-COMPLETION.md`](../../docs/ABS-521-PROVISION-COMPLETION.md).
 
-The recorded p95 for one `search` call moved 531ms -> 660ms, and that number is
-**not** this change's price: an A/B on the same process with completion enabled
-and disabled puts the difference inside the host's own run-to-run variance. The
-measurement is in the write-up's *What it costs* section.
+The recorded p95 for one `search` call moved 531ms -> 1496.7ms (mean 450.3 ->
+1015.4ms), and that number is **not** this change's price: it was recorded on a
+contended host, and an A/B on the same process with completion enabled and
+disabled puts the difference inside the host's own run-to-run variance. The
+measurement is in the write-up's *What it costs* section. This is the block this
+file warns about above — never used to fail a run, and this is why.
 
 The set gained `RQ-D21` / `RQ-D22` — the 60.0 m² footprint cap and the 93.0 m²
 floor-area cap of one provision, both binding, one answered alone by TC-024.
@@ -412,6 +414,15 @@ floor-area cap of one provision, both binding, one answered alone by TC-024.
 * `RQ-D22` (floor area) passes before and after. `(1.5)` states its rule in one
   self-contained sentence naming its own zones, so it ranks where its sibling
   cannot — the asymmetry the ticket is about, measured rather than asserted.
+
+**Adding a question re-bases the ABS-494 matrix too, and that is not optional.**
+`BASELINE.json` and `evals/retrieval/experiments/arms/*.json` read *this*
+`queries.json`, so a set that grows leaves the committed arms describing a
+question set that no longer exists — two recall tables over different questions,
+sitting in adjacent rows as though comparable. All 17 arms were therefore
+**re-derived**, not reconciled by hand; `abs494-scoring-fusion-decision.spec.ts`
+is what refuses the alternative. Both of ABS-494's decisions survive; see the
+*Re-measured under ABS-521* section of its decision doc.
 
 **Neither entry demonstrates the fix, and the labels say so.** The harness reads
 `fragment_id`s off a ranking, and completion delivers a clause the ranking does
