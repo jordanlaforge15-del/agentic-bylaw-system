@@ -189,6 +189,18 @@ lookup per distinct provision per request (~1ms each measured over 40 distinct
 paths, memoised for the life of the service), against a call that already scores
 every in-scope fragment in Python.
 
+**The payload is the real cost, and it is not free.** Over the eval's first 25
+questions at `limit=5`, `compact_search_response` grew from a mean of ~7.2kB to
+**7,922 bytes — 9.3% of it operative clauses**, mean 732 bytes and 3,922 on the
+worst query. `compact.py`'s own premise is that a tool_result is replayed on
+every subsequent turn, so 9% is billed N times over a multi-step conversation.
+It buys the difference between an answer that names one binding limit and an
+answer that names both, which is the difference between a wrong answer and a
+right one — but it is a real bill, and `_OPERATIVE_CLAUSE_CHARS` (320) and
+`OPERATIVE_CLAUSE_LIMIT` (12) are the two knobs to turn if it needs to come
+down. A match whose provision states its rule whole carries no key at all;
+that is pinned by `test_a_match_without_clauses_carries_no_empty_keys`.
+
 ## Where each guarantee is pinned
 
 | guarantee | pinned by |
