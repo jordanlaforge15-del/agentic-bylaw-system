@@ -342,3 +342,71 @@ def test_golden_verdicts_cannot_collide_with_generated_verdicts() -> None:
     golden = {"GOLDEN_PASS", "GOLDEN_PARTIAL", "GOLDEN_FAIL", "UNATTESTED",
               "NO_TRANSCRIPT"}
     assert generated & golden == set()
+
+
+# ---------------------------------------------------------------------------
+# Heading consistency (ABS-519)
+# ---------------------------------------------------------------------------
+
+
+def test_contradicting_heading_fails_a_case_the_substring_rules_pass(
+    corpus: JsonCorpus,
+) -> None:
+    """The TC-026 defect, in the shape no ``must_not_state`` phrase can catch.
+
+    The body is right, the number the reviewer asked for is present, the
+    provision is cited — so ``must_state``, ``must_not_state`` and the
+    provision check all pass. Only the structural heading check sees that the
+    most scannable line on the page says the opposite of the paragraph under
+    it.
+    """
+    result = grade_golden_case(
+        _attested_case(),
+        _transcript(
+            "Under Section 198 the side setback is 2.5 m.\n\n"
+            "### Townhouse Dwelling Use — Permitted in ER-2 (with conditions)\n\n"
+            "Table 1B confirms townhouse dwelling use is permitted in the ER-3 "
+            "zone, but not in ER-2.\n"
+        ),
+        corpus,
+    )
+    assert result["verdict"] == "GOLDEN_FAIL", result["reasons"]
+    assert any("contradicts its own section" in r for r in result["reasons"])
+    contradiction = result["heading_consistency"]["contradictions"][0]
+    assert contradiction["zone"] == "ER-2"
+    assert contradiction["suggested_heading"].endswith("Not Permitted in ER-2")
+
+
+def test_agreeing_heading_still_passes(corpus: JsonCorpus) -> None:
+    result = grade_golden_case(
+        _attested_case(),
+        _transcript(
+            "Under Section 198 the side setback is 2.5 m.\n\n"
+            "### Townhouse Dwelling Use — Not Permitted in ER-2\n\n"
+            "Table 1B confirms townhouse dwelling use is permitted in the ER-3 "
+            "zone, but not in ER-2.\n"
+        ),
+        corpus,
+    )
+    assert result["verdict"] == "GOLDEN_PASS", result["reasons"]
+    assert result["heading_consistency"]["ok"] is True
+
+
+def test_heading_check_does_not_bleed_across_turns(corpus: JsonCorpus) -> None:
+    """A heading in turn 1 does not introduce turn 2's prose.
+
+    Graded over the concatenation, the turn-1 heading would swallow turn 2's
+    denial and fail a perfectly coherent conversation.
+    """
+    result = grade_golden_case(
+        _attested_case(),
+        _transcript(
+            "### Townhouse Dwelling Use — Permitted in ER-3\n\n"
+            "Table 1B is the use table for the ER zones. Under Section 198 "
+            "the side setback is 2.5 m.",
+            "A different question: townhouse dwelling use is not permitted "
+            "in ER-3 where the lot has no public-street frontage.",
+        ),
+        corpus,
+    )
+    assert result["heading_consistency"]["ok"] is True

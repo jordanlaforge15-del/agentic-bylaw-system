@@ -56,6 +56,15 @@ Scenario keywords in the user message override the default rules:
   before the SSE stream is built, so tests can assert the hedge appears
   without depending on live-model phrasing.
 
+* ``"MOCK_CONTRADICTORY_HEADING"`` (ABS-519) — the final answer is a
+  correct refusal ("not permitted in ER-2") under two section headings
+  that assert the opposite: "Permitted in ER-2 (with conditions)" over
+  a "permitted in ER-3 ... but not in ER-2" body, and "Allowed in ER-2"
+  over an "is not an allowed use in ER-2" body. The ABS-519
+  heading-consistency guard in ``advisor.chat.session`` rewrites both
+  to agree with their bodies before the stream is built, so tests can
+  assert the repair without a live model.
+
 * ``"MOCK_ADJACENT_ZONING"`` (ABS-375) — round one calls the new
   ``get_adjacent_zoning`` tool (instead of ``search_bylaw_evidence``);
   round two answers with a DEFINITIVE side/rear setback verdict that
@@ -672,6 +681,35 @@ def _final_answer_response(user_text: str) -> CompletionResponse:
         return text_response(
             body,
             usage=TokenUsage(input_tokens=160, output_tokens=120),
+            stop_reason="end_turn",
+        )
+
+    if "MOCK_CONTRADICTORY_HEADING" in user_text:
+        # ABS-519: the TC-026 failure shape. The body is CORRECT (townhouse
+        # use is permitted in ER-3, not in ER-2) and so is the summary line;
+        # the heading asserts the opposite and is the most scannable element
+        # on the page. The ABS-519 guard in ``advisor.chat.session`` rewrites
+        # the heading to agree with the body before the SSE stream is built,
+        # so the e2e asserts product code rather than a mock string.
+        # Section 2 carries the OTHER shape a denial takes in by-law prose —
+        # "is not an allowed use in ER-2" — where the permission word
+        # qualifies a noun. Un-negated, that reads as a topic ("Permitted Uses
+        # in ER-2") and the guard leaves it alone; negated, it is a verdict.
+        # Both sections are repaired in one answer.
+        body = (
+            "**No** — townhouse dwelling use is not permitted in ER-2.\n\n"
+            "### 1. Townhouse Dwelling Use — Permitted in ER-2 (with conditions)\n\n"
+            "Table 1B confirms that **townhouse dwelling use is permitted in "
+            "the ER-3 zone** (marked with the conditional-use symbol), but "
+            "**not in ER-2**.\n\n"
+            "### 2. Four-Unit Dwelling — Allowed in ER-2\n\n"
+            "A four-unit dwelling is **not an allowed use** in ER-2 under "
+            "Table 1B.\n\n"
+            f"Source: {_DEFAULT_CITATION}"
+        )
+        return text_response(
+            body,
+            usage=TokenUsage(input_tokens=150, output_tokens=110),
             stop_reason="end_turn",
         )
 

@@ -38,6 +38,12 @@ Per attested case, over the union of every turn's assistant text:
 4. ``answer_shape`` — a ``depends`` case must answer conditionally and a
    ``refusal`` case must say the by-law does not settle the question. Without
    this an eval of determinate cases only ever rewards confidence.
+5. heading consistency (ABS-519) — no section heading may assert the opposite
+   of its own body. This one is structural rather than phrase-based, and has to
+   be: ``"permitted in ER-2"`` is a substring of ``"not permitted in ER-2"``,
+   so no ``must_not_state`` phrase can catch the heading without also failing
+   the correct sentence. Attestation-free — it grades the answer against
+   itself, so it applies to every case without a reviewer writing a rule.
 
 An entry whose ``attestation.status`` is not ``attested`` grades UNATTESTED. It
 is never counted as a pass and it holds the deploy gate closed.
@@ -61,7 +67,12 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+if str(REPO_ROOT / "src") not in sys.path:
+    # ABS-519: the heading check is product code (it also runs at generation
+    # time), so the grader imports it rather than re-implementing it.
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from advisor.chat.heading_consistency import find_contradictions
 from scripts.verify_test_prompts import (
     BYLAW_NAME,
     DEFAULT_DB_URL,
@@ -319,6 +330,42 @@ def grade_shape(answer_shape: str, case_text: str) -> dict[str, Any]:
     return {"shape": answer_shape, "ok": True, "markers": []}
 
 
+def grade_headings(turn_texts: list[str]) -> dict[str, Any]:
+    """Does every heading agree with the section it introduces? (ABS-519)
+
+    A structural check, not a substring rule, and that is the whole point. The
+    defect this catches — a heading reading "Permitted in ER-2" over a body
+    that says the use is permitted in ER-3 and *not* in ER-2 — cannot be
+    expressed as a ``must_not_state`` phrase: every phrasing that matches the
+    heading also matches the correct sentence, because ``"permitted in ER-2"``
+    is a substring of ``"is not permitted in ER-2"``. Polarity is a property of
+    the claim's structure, so the grader reads structure.
+
+    Graded per turn, never over the concatenation: a heading in turn 1 does not
+    introduce turn 2's prose.
+
+    Limits are the module's (see ``advisor.chat.heading_consistency``): ATX
+    headings only, zone codes as the anchor vocabulary, and a section that
+    compares several zones under an unanchored heading is skipped as ambiguous
+    rather than guessed at.
+    """
+    found = [c for text in turn_texts for c in find_contradictions(text)]
+    return {
+        "ok": not found,
+        "contradictions": [
+            {
+                "heading": c.heading,
+                "zone": c.zone,
+                "heading_polarity": c.heading_polarity,
+                "body_polarity": c.body_polarity,
+                "suggested_heading": c.suggested_heading,
+                "description": c.describe(),
+            }
+            for c in found
+        ],
+    }
+
+
 def grade_golden_case(
     case: dict[str, Any], transcript: dict[str, Any] | None, corpus: Corpus
 ) -> dict[str, Any]:
@@ -357,7 +404,8 @@ def grade_golden_case(
                 "reasons": [f"no {cid}.json transcript in the run directory"]}
 
     turns = transcript.get("turns") or []
-    case_text = "\n\n".join((t.get("assistant_text") or "") for t in turns).strip()
+    turn_texts = [(t.get("assistant_text") or "") for t in turns]
+    case_text = "\n\n".join(turn_texts).strip()
     if not case_text:
         return {**base, "verdict": "NO_TRANSCRIPT",
                 "reasons": [f"{cid} transcript has no assistant text"]}
@@ -366,6 +414,7 @@ def grade_golden_case(
     must_state = match_groups(case_text, att.get("must_state"))
     must_not_state = match_groups(case_text, att.get("must_not_state"))
     shape = grade_shape(case.get("answer_shape") or "determinate", case_text)
+    headings = grade_headings(turn_texts)
     hedging = detect_hedging(case_text)
 
     stated_misses = [g for g in must_state if not g["hit"]]
@@ -384,6 +433,11 @@ def grade_golden_case(
             f"the reviewer recorded the correct answer as a {shape['shape']}; the "
             "answer is unconditional"
         )
+    for c in headings["contradictions"]:
+        reasons.append(
+            "a heading contradicts its own section — the part a reader skims: "
+            + c["description"]
+        )
     if provisions["misses"]:
         reasons.append(
             "did not cite the governing provision(s): " + ", ".join(provisions["misses"])
@@ -395,7 +449,10 @@ def grade_golden_case(
             + " — an ingest gap or an attestation slip; resolve before trusting this grade"
         )
 
-    if violations or stated_misses or not shape["ok"]:
+    if violations or stated_misses or not shape["ok"] or not headings["ok"]:
+        # A contradicting heading fails the case outright. The body being right
+        # is not a defence: the heading is what a skimming reader acts on, and
+        # the answer as a whole says two incompatible things.
         verdict = "GOLDEN_FAIL"
     elif provisions["misses"]:
         # Right answer, wrong (or missing) authority. Distinct from a wrong
@@ -412,6 +469,7 @@ def grade_golden_case(
         "must_state": must_state,
         "must_not_state": must_not_state,
         "shape_check": shape,
+        "heading_consistency": headings,
         "hedging": hedging,
     }
 
