@@ -197,3 +197,13 @@ They fall into two groups:
 * **Questions whose zone is implied rather than named** ("Does the by-law
   impose a maximum rear setback anywhere?", "How tall can an accessory
   structure be?"), which no zone binding can help.
+
+A third gap, not visible in the Recall@10 numbers above, was found later and
+closed by ABS-518: crediting the *declaring* chapter says nothing about a
+clause sitting under a chapter that declares **other** zones, and since no
+built-form section names its own zone, that left the wrong-chapter comparison
+decided by nothing. See
+[ABS-518-ZONE-SCOPE-EXCLUSION.md](ABS-518-ZONE-SCOPE-EXCLUSION.md), which also
+documents how a table with no axis bindings at all — `Table 9`, the ER zones'
+side setback table — was addressed by an HR-1 question through the bare token
+`1` in the row label "North End Halifax 1 (NEH-1)".
