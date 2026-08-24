@@ -1,14 +1,15 @@
 # ABS-494 — scoring & fusion: SHIP the FTS hybrid, KEEP the max() fusion
 
-**Status:** decided, shipped · **re-measured 2026-08-23 (ABS-518), decision unchanged**
+**Status:** decided, shipped · **re-measured 2026-08-23 (ABS-518) and 2026-08-24 (ABS-521), decision unchanged both times**
 **Date:** 2026-08-13
-**Evidence:** [`evals/retrieval/experiments/RESULTS.md`](../../evals/retrieval/experiments/RESULTS.md) (17 arms, k=10, 70 labelled questions as re-measured; 68 when decided)
+**Evidence:** [`evals/retrieval/experiments/RESULTS.md`](../../evals/retrieval/experiments/RESULTS.md) (17 arms, k=10, 72 labelled questions as re-measured; 68 when decided)
 **Supersedes:** the first run of the same matrix (commit `702cb4c`), whose conclusion no longer holds — see *The matrix that expired* below.
 
-> **Reading the numbers in this doc.** Everything below the next section is the
-> evidence **as it stood on 2026-08-13**, quoted against a control scoring
-> 0.5588. That control no longer exists. See *Re-measured under ABS-518* for the
-> current figures; the two sets are not interchangeable, and the older ones are
+> **Reading the numbers in this doc.** Everything below the two re-measurement
+> sections is the evidence **as it stood on 2026-08-13**, quoted against a
+> control scoring 0.5588. That control no longer exists. See *Re-measured under
+> ABS-521* for the current figures and *Re-measured under ABS-518* for the
+> intermediate ones; the three sets are not interchangeable, and the oldest are
 > kept because they are what the decision was actually made on.
 
 ## Verdict
@@ -25,6 +26,72 @@ the defect. On the retriever we actually ship, fusion is not the defect: the
 text channel's *coverage* is. Replacing `max()` with Reciprocal Rank Fusion
 makes things slightly worse, and adding a full-text channel beside the ladder
 makes them substantially better.
+
+## Re-measured under ABS-521 (2026-08-24) — decision unchanged
+
+ABS-521 did not touch the scorer. It added two labelled questions — `RQ-D21` and
+`RQ-D22`, the footprint and floor-area caps of Regional Centre s.333 (see
+[`docs/ABS-521-PROVISION-COMPLETION.md`](../ABS-521-PROVISION-COMPLETION.md)) —
+taking the set from 70 to 72. That alone was enough to invalidate this matrix,
+and it is worth being precise about why, because the cause is different from
+ABS-518's.
+
+ABS-518 moved the *retriever* out from under a frozen table. ABS-521 moved the
+**grading instrument**: `BASELINE.json` and `arms/*.json` read the same
+`queries.json`, so adding a question re-bases every number in this file at once
+while the committed arms go on describing a 70-question set that no longer
+exists. Two tables of recall over different question sets are not comparable,
+and `abs494-scoring-fusion-decision.spec.ts` refused them — which is the
+assertion earning its keep on a failure mode nobody had anticipated in advance.
+**The whole matrix was re-derived** rather than reconciled by hand:
+
+```bash
+python scripts/eval_retrieval_experiment.py --database-url …   # all 17 arms, k=10, 72 questions
+```
+
+| | Recall@10 | SetRecall@10 | MRR@10 |
+|---|---|---|---|
+| `current` (production, the new control) | **0.6806** | 0.6736 | 0.3429 |
+| `fts_hybrid_50` (shipped) | **0.6806** | 0.6736 | 0.3429 |
+
+The two rows coincide to the digit again, and again that is the check rather
+than a tautology: `current` runs production untouched, so their agreement says
+the shipped blend and the measured arm are still the same program.
+
+**The headline fell 0.6857 → 0.6806 and nothing regressed.** That is worth
+stating carefully, because a matrix whose control drops is exactly the shape of
+a regression. Diffing the new `current.json` against the previous one
+question-by-question rather than by total: **0 of the 70 pre-existing questions
+changed their top-ten ranking, and 0 changed their hit flag.** The move is
+arithmetic — 48 hits over 70 became 49 over 72, and 48/70 > 49/72. MRR rose
+(0.3384 → 0.3429) for the same reason, `RQ-D22` landing at rank 1.
+
+`RQ-D21` is a **recorded miss, and expected to stay one**: the clause carrying
+the 60.0 m² footprint cap is a zone list and a number, scoring 9 against its own
+section's 21 on the very query it answers, and no weight lifts it without
+lifting every bare list item in the corpus with it. It is logged in `queries.json`
+as the standing record of a clause unreachable by rank, so a future change that
+flips it to a hit reads as a real improvement. It drags `dimensional` from 0.60
+(12/20) to 0.59 (13/22) — a harder set, not a worse retriever.
+
+**Both decisions survive.** `fts_hybrid_50` is still the best arm; RRF is still
+refuted, its best arm (`rrf_all_channels_ts_rank`) at 0.6389, −0.0417 behind.
+The sweep keeps its shape and its peak, with 0.40 and 0.50 still tied on recall
+and 0.50 still taking it on MRR (0.3429 vs 0.3219):
+
+| text / fts | Recall@10 (2026-08-23, control 0.6857) | Recall@10 (2026-08-24, control 0.6806) |
+|---|---|---|
+| 0.25 / 0.75 | 0.5714 | 0.5694 |
+| 0.35 / 0.65 | 0.6571 | 0.6528 |
+| **0.40 / 0.60** | **0.6857** | **0.6806** |
+| **0.50 / 0.50** ← shipped | **0.6857** | **0.6806** |
+| 0.60 / 0.40 | 0.6429 | 0.6389 |
+| 0.70 / 0.30 | 0.6143 | 0.6111 |
+| 0.85 / 0.15 | 0.5857 | 0.5833 |
+
+The ABS-518 observation still stands and is still not acted on:
+`rrf_all_channels_ts_rank` leads on dimensional recall (0.68 vs the shipped
+0.59) and on MRR (0.4146 vs 0.3429) while trailing on the headline.
 
 ## Re-measured under ABS-518 (2026-08-23) — decision unchanged
 
@@ -307,7 +374,8 @@ a joint bonus.
 
 Verified: the shipped implementation reproduces the `fts_hybrid_50` arm
 **exactly** — 0.6618 / 0.6618 / 0.3388 when decided, 0.6857 / 0.6857 / 0.3384 on
-the 2026-08-23 re-run, every category matching in both. That is the
+the 2026-08-23 re-run and 0.6806 / 0.6736 / 0.3429 on the 2026-08-24 one, every
+category matching in all three. That is the
 harness's design premise (each arm is production's `search()` with one seam
 swapped) discharged as a check rather than left as a hope, and
 `web/e2e/functional/abs494-scoring-fusion-decision.spec.ts` asserts it holds.
@@ -319,7 +387,7 @@ swapped) discharged as a check rather than left as a hope, and
   ready-made retreat: +0.0588 recall with MRR 0.4003 and dimensional MRR 0.307,
   above the control's 0.284. The sweep is in `RESULTS.md`; this is a re-decision,
   not a tuning knob.
-* **The label tier.** All 70 questions are `review_status: unreviewed`,
+* **The label tier.** All 72 questions are `review_status: unreviewed`,
   agent-drafted. These numbers grade **ranking, never correctness**, and are
   never averaged with a golden pass rate. A human spot-check could move +0.1030.
 * **`definition` is still the worst class at 0.33.** The hybrid helped it most

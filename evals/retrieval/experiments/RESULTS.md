@@ -14,67 +14,67 @@ ABS-494 shipped `fts_hybrid_50` (`docs/decisions/ABS-494-SCORING-FUSION-DECISION
 
 | Arm | Recall@10 | SetRecall@10 | MRR@10 | What changed |
 |---|---|---|---|---|
-| `current` | 0.6857 | 0.6857 | 0.3384 | Production as shipped, untouched. The control every delta is quoted against. |
-| `rrf_fusion_only` | 0.5714 (-0.1143) | 0.5714 (-0.1143) | 0.2964 (-0.0420) | Channels unchanged; RRF replaces max()+bonus across text/spatial/table. |
-| `fts_only` | 0.4571 (-0.2286) | 0.4571 (-0.2286) | 0.2292 (-0.1092) | Diagnostic: FTS body/label as the whole text side, shipped fusion. No ladder. |
-| `fts_only_ts_rank` | 0.5000 (-0.1857) | 0.5000 (-0.1857) | 0.3342 (-0.0042) | Diagnostic: as fts_only but ts_rank (term frequency) instead of ts_rank_cd. |
-| `fts_hybrid_50` | 0.6857 (=) | 0.6857 (=) | 0.3384 (=) | Text ladder + FTS, max-normalised 50/50 within the text side, shipped fusion. |
-| `fts_hybrid_25` | 0.5714 (-0.1143) | 0.5714 (-0.1143) | 0.2755 (-0.0629) | Text ladder + FTS, max-normalised 25/75 toward FTS, shipped fusion. |
-| `fts_hybrid_rrf_text` | 0.6143 (-0.0714) | 0.6143 (-0.0714) | 0.3588 (+0.0204) | Text ladder + FTS fused by RRF within the text side, shipped fusion. |
-| `fts_hybrid_35` | 0.6571 (-0.0286) | 0.6571 (-0.0286) | 0.2973 (-0.0411) | Sweep: text ladder + FTS, 35/65 toward FTS. |
-| `fts_hybrid_40` | 0.6857 (=) | 0.6857 (=) | 0.3263 (-0.0121) | Sweep: text ladder + FTS, 40/60 toward FTS. |
-| `fts_hybrid_60` | 0.6429 (-0.0428) | 0.6429 (-0.0428) | 0.3671 (+0.0287) | Sweep: text ladder + FTS, 60/40 toward the ladder. |
-| `fts_hybrid_70` | 0.6143 (-0.0714) | 0.6143 (-0.0714) | 0.3480 (+0.0096) | Sweep: text ladder + FTS, 70/30 toward the ladder. |
-| `fts_hybrid_85` | 0.5857 (-0.1000) | 0.5857 (-0.1000) | 0.3062 (-0.0322) | Sweep: text ladder + FTS, 85/15 toward the ladder. |
-| `rrf_all_channels` | 0.6286 (-0.0571) | 0.6286 (-0.0571) | 0.4005 (+0.0621) | RRF over all four ranked lists: text, FTS, spatial, table. |
-| `rrf_all_channels_ts_rank` | 0.6429 (-0.0428) | 0.6429 (-0.0428) | 0.4122 (+0.0738) | As rrf_all_channels but ts_rank (term frequency) for the FTS list. |
-| `rrf_all_channels_text_half` | 0.5714 (-0.1143) | 0.5714 (-0.1143) | 0.3744 (+0.0360) | Diagnostic: rrf_all_channels with the ladder list's vote halved. |
-| `rrf_all_channels_top50` | 0.6000 (-0.0857) | 0.6000 (-0.0857) | 0.3974 (+0.0590) | RRF over text/FTS/spatial/table, each list truncated to its top 50 first. |
-| `rrf_all_channels_top50_ts_rank` | 0.5571 (-0.1286) | 0.5571 (-0.1286) | 0.3743 (+0.0359) | As rrf_all_channels_top50 but ts_rank (term frequency) for the FTS list. |
+| `current` | 0.6806 | 0.6736 | 0.3429 | Production as shipped, untouched. The control every delta is quoted against. |
+| `rrf_fusion_only` | 0.5694 (-0.1112) | 0.5625 (-0.1111) | 0.2899 (-0.0530) | Channels unchanged; RRF replaces max()+bonus across text/spatial/table. |
+| `fts_only` | 0.4583 (-0.2223) | 0.4514 (-0.2222) | 0.2249 (-0.1180) | Diagnostic: FTS body/label as the whole text side, shipped fusion. No ladder. |
+| `fts_only_ts_rank` | 0.5139 (-0.1667) | 0.5000 (-0.1736) | 0.3458 (+0.0029) | Diagnostic: as fts_only but ts_rank (term frequency) instead of ts_rank_cd. |
+| `fts_hybrid_50` | 0.6806 (=) | 0.6736 (=) | 0.3429 (=) | Text ladder + FTS, max-normalised 50/50 within the text side, shipped fusion. |
+| `fts_hybrid_25` | 0.5694 (-0.1112) | 0.5625 (-0.1111) | 0.2707 (-0.0722) | Text ladder + FTS, max-normalised 25/75 toward FTS, shipped fusion. |
+| `fts_hybrid_rrf_text` | 0.6111 (-0.0695) | 0.6042 (-0.0694) | 0.3628 (+0.0199) | Text ladder + FTS fused by RRF within the text side, shipped fusion. |
+| `fts_hybrid_35` | 0.6528 (-0.0278) | 0.6458 (-0.0278) | 0.2937 (-0.0492) | Sweep: text ladder + FTS, 35/65 toward FTS. |
+| `fts_hybrid_40` | 0.6806 (=) | 0.6736 (=) | 0.3219 (-0.0210) | Sweep: text ladder + FTS, 40/60 toward FTS. |
+| `fts_hybrid_60` | 0.6389 (-0.0417) | 0.6319 (-0.0417) | 0.3708 (+0.0279) | Sweep: text ladder + FTS, 60/40 toward the ladder. |
+| `fts_hybrid_70` | 0.6111 (-0.0695) | 0.6042 (-0.0694) | 0.3522 (+0.0093) | Sweep: text ladder + FTS, 70/30 toward the ladder. |
+| `fts_hybrid_85` | 0.5833 (-0.0973) | 0.5764 (-0.0972) | 0.3116 (-0.0313) | Sweep: text ladder + FTS, 85/15 toward the ladder. |
+| `rrf_all_channels` | 0.6250 (-0.0556) | 0.6181 (-0.0555) | 0.4033 (+0.0604) | RRF over all four ranked lists: text, FTS, spatial, table. |
+| `rrf_all_channels_ts_rank` | 0.6389 (-0.0417) | 0.6319 (-0.0417) | 0.4146 (+0.0717) | As rrf_all_channels but ts_rank (term frequency) for the FTS list. |
+| `rrf_all_channels_text_half` | 0.5694 (-0.1112) | 0.5625 (-0.1111) | 0.3779 (+0.0350) | Diagnostic: rrf_all_channels with the ladder list's vote halved. |
+| `rrf_all_channels_top50` | 0.5972 (-0.0834) | 0.5903 (-0.0833) | 0.4003 (+0.0574) | RRF over text/FTS/spatial/table, each list truncated to its top 50 first. |
+| `rrf_all_channels_top50_ts_rank` | 0.5556 (-0.1250) | 0.5486 (-0.1250) | 0.3778 (+0.0349) | As rrf_all_channels_top50 but ts_rank (term frequency) for the FTS list. |
 
 ## Recall@10 by query class
 
 | Arm | citation_lookup | definition | dimensional | permitted_use | spatial | zone_anchored |
 |---|---|---|---|---|---|---|
-| `current` | 0.62 (5/8) | 0.42 (5/12) | 0.60 (12/20) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `rrf_fusion_only` | 0.50 (4/8) | 0.08 (1/12) | 0.60 (12/20) | 0.57 (8/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `fts_only` | 0.62 (5/8) | 0.33 (4/12) | 0.05 (1/20) | 0.64 (9/14) | 1.00 (6/6) | 0.70 (7/10) |
-| `fts_only_ts_rank` | 0.25 (2/8) | 0.42 (5/12) | 0.10 (2/20) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `fts_hybrid_50` | 0.62 (5/8) | 0.42 (5/12) | 0.60 (12/20) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `fts_hybrid_25` | 0.62 (5/8) | 0.42 (5/12) | 0.30 (6/20) | 0.71 (10/14) | 1.00 (6/6) | 0.80 (8/10) |
-| `fts_hybrid_rrf_text` | 0.50 (4/8) | 0.25 (3/12) | 0.55 (11/20) | 0.71 (10/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `fts_hybrid_35` | 0.62 (5/8) | 0.42 (5/12) | 0.50 (10/20) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `fts_hybrid_40` | 0.62 (5/8) | 0.42 (5/12) | 0.60 (12/20) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `fts_hybrid_60` | 0.38 (3/8) | 0.25 (3/12) | 0.65 (13/20) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `fts_hybrid_70` | 0.38 (3/8) | 0.17 (2/12) | 0.65 (13/20) | 0.71 (10/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `fts_hybrid_85` | 0.38 (3/8) | 0.08 (1/12) | 0.65 (13/20) | 0.64 (9/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `rrf_all_channels` | 0.62 (5/8) | 0.25 (3/12) | 0.55 (11/20) | 0.71 (10/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `rrf_all_channels_ts_rank` | 0.50 (4/8) | 0.17 (2/12) | 0.70 (14/20) | 0.71 (10/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `rrf_all_channels_text_half` | 0.62 (5/8) | 0.33 (4/12) | 0.25 (5/20) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `rrf_all_channels_top50` | 0.62 (5/8) | 0.25 (3/12) | 0.50 (10/20) | 0.64 (9/14) | 1.00 (6/6) | 0.90 (9/10) |
-| `rrf_all_channels_top50_ts_rank` | 0.50 (4/8) | 0.17 (2/12) | 0.45 (9/20) | 0.64 (9/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `current` | 0.62 (5/8) | 0.42 (5/12) | 0.59 (13/22) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `rrf_fusion_only` | 0.50 (4/8) | 0.08 (1/12) | 0.59 (13/22) | 0.57 (8/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `fts_only` | 0.62 (5/8) | 0.33 (4/12) | 0.09 (2/22) | 0.64 (9/14) | 1.00 (6/6) | 0.70 (7/10) |
+| `fts_only_ts_rank` | 0.25 (2/8) | 0.42 (5/12) | 0.18 (4/22) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `fts_hybrid_50` | 0.62 (5/8) | 0.42 (5/12) | 0.59 (13/22) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `fts_hybrid_25` | 0.62 (5/8) | 0.42 (5/12) | 0.32 (7/22) | 0.71 (10/14) | 1.00 (6/6) | 0.80 (8/10) |
+| `fts_hybrid_rrf_text` | 0.50 (4/8) | 0.25 (3/12) | 0.55 (12/22) | 0.71 (10/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `fts_hybrid_35` | 0.62 (5/8) | 0.42 (5/12) | 0.50 (11/22) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `fts_hybrid_40` | 0.62 (5/8) | 0.42 (5/12) | 0.59 (13/22) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `fts_hybrid_60` | 0.38 (3/8) | 0.25 (3/12) | 0.64 (14/22) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `fts_hybrid_70` | 0.38 (3/8) | 0.17 (2/12) | 0.64 (14/22) | 0.71 (10/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `fts_hybrid_85` | 0.38 (3/8) | 0.08 (1/12) | 0.64 (14/22) | 0.64 (9/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `rrf_all_channels` | 0.62 (5/8) | 0.25 (3/12) | 0.55 (12/22) | 0.71 (10/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `rrf_all_channels_ts_rank` | 0.50 (4/8) | 0.17 (2/12) | 0.68 (15/22) | 0.71 (10/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `rrf_all_channels_text_half` | 0.62 (5/8) | 0.33 (4/12) | 0.27 (6/22) | 0.79 (11/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `rrf_all_channels_top50` | 0.62 (5/8) | 0.25 (3/12) | 0.50 (11/22) | 0.64 (9/14) | 1.00 (6/6) | 0.90 (9/10) |
+| `rrf_all_channels_top50_ts_rank` | 0.50 (4/8) | 0.17 (2/12) | 0.45 (10/22) | 0.64 (9/14) | 1.00 (6/6) | 0.90 (9/10) |
 
 ## MRR@10 by query class
 
 | Arm | citation_lookup | definition | dimensional | permitted_use | spatial | zone_anchored |
 |---|---|---|---|---|---|---|
-| `current` | 0.351 | 0.218 | 0.146 | 0.377 | 0.597 | 0.648 |
-| `rrf_fusion_only` | 0.250 | 0.017 | 0.164 | 0.308 | 0.917 | 0.545 |
-| `fts_only` | 0.424 | 0.154 | 0.050 | 0.203 | 0.806 | 0.212 |
-| `fts_only_ts_rank` | 0.083 | 0.201 | 0.055 | 0.546 | 0.806 | 0.674 |
-| `fts_hybrid_50` | 0.351 | 0.218 | 0.146 | 0.377 | 0.597 | 0.648 |
-| `fts_hybrid_25` | 0.425 | 0.182 | 0.090 | 0.291 | 0.597 | 0.425 |
-| `fts_hybrid_rrf_text` | 0.325 | 0.208 | 0.168 | 0.452 | 0.597 | 0.675 |
-| `fts_hybrid_35` | 0.379 | 0.218 | 0.119 | 0.310 | 0.597 | 0.486 |
-| `fts_hybrid_40` | 0.358 | 0.244 | 0.121 | 0.364 | 0.597 | 0.594 |
-| `fts_hybrid_60` | 0.312 | 0.194 | 0.255 | 0.427 | 0.597 | 0.620 |
-| `fts_hybrid_70` | 0.250 | 0.167 | 0.253 | 0.455 | 0.597 | 0.533 |
-| `fts_hybrid_85` | 0.208 | 0.083 | 0.250 | 0.316 | 0.597 | 0.575 |
-| `rrf_all_channels` | 0.388 | 0.208 | 0.168 | 0.452 | 1.000 | 0.675 |
-| `rrf_all_channels_ts_rank` | 0.245 | 0.069 | 0.238 | 0.600 | 0.875 | 0.767 |
-| `rrf_all_channels_text_half` | 0.463 | 0.229 | 0.061 | 0.425 | 1.000 | 0.658 |
-| `rrf_all_channels_top50` | 0.451 | 0.208 | 0.140 | 0.441 | 1.000 | 0.675 |
-| `rrf_all_channels_top50_ts_rank` | 0.200 | 0.069 | 0.209 | 0.582 | 0.631 | 0.767 |
+| `current` | 0.351 | 0.218 | 0.178 | 0.377 | 0.597 | 0.648 |
+| `rrf_fusion_only` | 0.250 | 0.017 | 0.155 | 0.308 | 0.917 | 0.545 |
+| `fts_only` | 0.424 | 0.154 | 0.052 | 0.203 | 0.806 | 0.212 |
+| `fts_only_ts_rank` | 0.083 | 0.201 | 0.118 | 0.546 | 0.806 | 0.674 |
+| `fts_hybrid_50` | 0.351 | 0.218 | 0.178 | 0.377 | 0.597 | 0.648 |
+| `fts_hybrid_25` | 0.425 | 0.182 | 0.091 | 0.291 | 0.597 | 0.425 |
+| `fts_hybrid_rrf_text` | 0.325 | 0.208 | 0.198 | 0.452 | 0.597 | 0.675 |
+| `fts_hybrid_35` | 0.379 | 0.218 | 0.123 | 0.310 | 0.597 | 0.486 |
+| `fts_hybrid_40` | 0.358 | 0.244 | 0.125 | 0.364 | 0.597 | 0.594 |
+| `fts_hybrid_60` | 0.312 | 0.194 | 0.277 | 0.427 | 0.597 | 0.620 |
+| `fts_hybrid_70` | 0.250 | 0.167 | 0.276 | 0.455 | 0.597 | 0.533 |
+| `fts_hybrid_85` | 0.208 | 0.083 | 0.273 | 0.316 | 0.597 | 0.575 |
+| `rrf_all_channels` | 0.388 | 0.208 | 0.198 | 0.452 | 1.000 | 0.675 |
+| `rrf_all_channels_ts_rank` | 0.245 | 0.069 | 0.262 | 0.600 | 0.875 | 0.767 |
+| `rrf_all_channels_text_half` | 0.463 | 0.229 | 0.101 | 0.425 | 1.000 | 0.658 |
+| `rrf_all_channels_top50` | 0.451 | 0.208 | 0.172 | 0.441 | 1.000 | 0.675 |
+| `rrf_all_channels_top50_ts_rank` | 0.200 | 0.069 | 0.235 | 0.582 | 0.631 | 0.767 |
 
 ## Per-query movement against `current`
 
@@ -84,7 +84,7 @@ ABS-494 shipped `fts_hybrid_50` (`docs/decisions/ABS-494-SCORING-FUSION-DECISION
 |---|---|---|
 | `rrf_fusion_only` | RQ-D01, RQ-D18 | RQ-D11, RQ-D14, RQ-P03, RQ-P05, RQ-P09, RQ-F03, RQ-F07, RQ-F08, RQ-F09, RQ-C05 |
 | `fts_only` | RQ-F01 | RQ-D03, RQ-D06, RQ-D07, RQ-D09, RQ-D10, RQ-D11, RQ-D12, RQ-D15, RQ-D16, RQ-D19, RQ-D20, RQ-P09, RQ-P14, RQ-F07, RQ-F09, RQ-Z05, RQ-Z06 |
-| `fts_only_ts_rank` | RQ-P06, RQ-F02 | RQ-D03, RQ-D06, RQ-D07, RQ-D09, RQ-D10, RQ-D11, RQ-D15, RQ-D16, RQ-D19, RQ-D20, RQ-P09, RQ-F07, RQ-C03, RQ-C05, RQ-C06 |
+| `fts_only_ts_rank` | RQ-D21, RQ-P06, RQ-F02 | RQ-D03, RQ-D06, RQ-D07, RQ-D09, RQ-D10, RQ-D11, RQ-D15, RQ-D16, RQ-D19, RQ-D20, RQ-P09, RQ-F07, RQ-C03, RQ-C05, RQ-C06 |
 | `fts_hybrid_50` | — | — |
 | `fts_hybrid_25` | RQ-F06 | RQ-D03, RQ-D06, RQ-D07, RQ-D09, RQ-D10, RQ-D16, RQ-P14, RQ-F07, RQ-Z06 |
 | `fts_hybrid_rrf_text` | RQ-F06, RQ-C02 | RQ-D16, RQ-P05, RQ-F03, RQ-F07, RQ-F09, RQ-C03, RQ-C05 |

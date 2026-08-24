@@ -158,6 +158,15 @@ def create_mcp_server(db_url: str | None = None, *, all_documents: bool = False)
         key — a typed permission (permitted / conditional / not_permitted)
         plus any footnote condition, or a typed indeterminate result with a
         reason when the use or zone isn't in the matrix.
+
+        A hit carries ``operative_clauses`` (ABS-521): the other clauses of the
+        same provision — the section's own (a)/(b)/(1.5) limbs, or, when you
+        looked up a clause, its siblings. They are part of the rule, not
+        related reading. A section whose text ends on a colon states no
+        standard by itself; the numbers are in its clauses, and several of them
+        often bind at once. ``operative_clauses_omitted`` non-zero means the
+        provision is longer than what was returned — re-read it with
+        ``search_bylaw_evidence`` and ``citation_path_prefix``.
         """
         request = CitationLookupRequest(
             citation_path=citation_path,

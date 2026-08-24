@@ -10,13 +10,13 @@ them controls. Everything here measures the retriever alone: one
 
 | | |
 |---|---|
-| Question set | `queries.json` — 70 labelled questions |
+| Question set | `queries.json` — 72 labelled questions |
 | Harness | `scripts/eval_retrieval_recall.py` |
 | Baseline | `BASELINE.json` |
 | Regenerate | **`make eval-retrieval-baseline`** |
 | Freshness gate | `scripts/check_retrieval_baseline.py` / `make check-retrieval-baseline` |
 | Unit tests | `tests/scripts/test_eval_retrieval_recall.py`, `tests/scripts/test_check_retrieval_baseline.py` (no DB) |
-| Offline guards | `web/e2e/functional/abs486-retrieval-eval.spec.ts`, `web/e2e/functional/abs502-retrieval-baseline-freshness.spec.ts` |
+| Offline guards | `web/e2e/functional/abs486-retrieval-eval.spec.ts`, `web/e2e/functional/abs502-retrieval-baseline-freshness.spec.ts`, `web/e2e/functional/abs518-hr1-setback-retrieval.spec.ts`, `web/e2e/functional/abs521-accessory-structure-caps.spec.ts` |
 
 ## Tier: agent-drafted, pending human spot-check
 
@@ -76,12 +76,12 @@ host-dependent, it is never used to fail a run, and it is the one block of
 
 ## Coverage
 
-70 questions across six categories, all six required by the loader (a set that
+72 questions across six categories, all six required by the loader (a set that
 silently loses a category fails to load, which a count check would not catch):
 
 | Category | n | What it stresses |
 |---|---|---|
-| `dimensional` | 20 | Setbacks, lot coverage, heights. Sibling zones state these in near-identical language, so this is where a zone-blind ranker shows. |
+| `dimensional` | 22 | Setbacks, lot coverage, heights. Sibling zones state these in near-identical language, so this is where a zone-blind ranker shows. |
 | `permitted_use` | 14 | "Which zones permit X", the permission tables, and lay phrasings ("can I run a home office"). |
 | `definition` | 12 | Part XVII terms. Most are ingested as PROSE with a **NULL citation_path**, so they are invisible to every path-based route — worth measuring on its own. |
 | `zone_anchored` | 10 | Questions naming a zone but no dimension; targets are chapter headings and zone-scoped sections. |
@@ -229,8 +229,8 @@ ambiguous-anchor failure are all covered without a database.
 
 ## The baseline, and how to read it
 
-`BASELINE.json` currently records **Recall@10 = 0.6857, set-Recall@10 = 0.6857,
-MRR@10 = 0.3384** over 70 questions against the two-document dev corpus.
+`BASELINE.json` currently records **Recall@10 = 0.6806, set-Recall@10 = 0.6736,
+MRR@10 = 0.3429** over 72 questions against the two-document dev corpus.
 
 ### The floor it is measured against
 
@@ -351,7 +351,7 @@ window marginals — against nine gained. p95 for one `search` call went 484ms �
 ### What ABS-518 changed
 
 **0.6618 → 0.6765 on the original 68 questions** (MRR 0.3388 → 0.3398), and
-**0.6857 / 0.6857 / 0.3384 on the 70-question set this file now describes.**
+**0.6857 / 0.6857 / 0.3384 on the 70-question set as it stood at ABS-518.**
 Read the two the right way round: the first is the like-for-like effect of the
 scoring change, the second is the current baseline over a set that also gained
 two questions. They are not a before/after pair — the ablation behind the
@@ -377,10 +377,66 @@ left quoting a control that had moved — the failure mode ABS-502 exists to
 prevent. Both of ABS-494's decisions survive unchanged; see the
 *Re-measured under ABS-518* section of its decision doc.
 
+### What ABS-521 changed
+
+**Nothing about the ranking, and that is the claim being made.** 0.6857 →
+0.6806 Recall@10 and 0.3384 → 0.3429 MRR are entirely accounted for by the set
+gaining two questions: 48 hits over 70 became 49 over 72. Re-recording over the
+same corpus, **zero of the 70 pre-existing questions changed their top-ten
+ranking**, compared row by row rather than inferred from the totals. The
+fingerprint moved because `mcp/bylaw_retrieval/retrieval/` gained a module; the
+scorer did not move at all.
+
+What it changed is what a match *carries*. `RetrievalMatch.operative_clauses`
+delivers the other limbs of the match's own provision, because s.333(1) reads
+"…shall have no restriction on the maximum size of its footprint, except:" and
+stops — the 60.0 m² figure is in a clause whose own text is a zone list and a
+number, and which scores 9 against its section's 21 on the very query it
+answers. Full write-up in
+[`docs/ABS-521-PROVISION-COMPLETION.md`](../../docs/ABS-521-PROVISION-COMPLETION.md).
+
+The recorded p95 for one `search` call moved 531ms -> 1496.7ms (mean 450.3 ->
+1015.4ms), and that number is **not** this change's price: it was recorded on a
+contended host, and an A/B on the same process with completion enabled and
+disabled puts the difference inside the host's own run-to-run variance. The
+measurement is in the write-up's *What it costs* section. This is the block this
+file warns about above — never used to fail a run, and this is why.
+
+The set gained `RQ-D21` / `RQ-D22` — the 60.0 m² footprint cap and the 93.0 m²
+floor-area cap of one provision, both binding, one answered alone by TC-024.
+**Read them as a pair, and read `RQ-D21` as a miss on purpose:**
+
+* `RQ-D21` (footprint) **misses, and is expected to keep missing.** This harness
+  grades ranking; the clause carrying 60.0 is unreachable by rank and no weight
+  lifts it without lifting every bare list item in the corpus. The entry is the
+  standing record of that, so a future change that flips it to a hit reads as a
+  genuine improvement rather than a re-recording.
+* `RQ-D22` (floor area) passes before and after. `(1.5)` states its rule in one
+  self-contained sentence naming its own zones, so it ranks where its sibling
+  cannot — the asymmetry the ticket is about, measured rather than asserted.
+
+**Adding a question re-bases the ABS-494 matrix too, and that is not optional.**
+`BASELINE.json` and `evals/retrieval/experiments/arms/*.json` read *this*
+`queries.json`, so a set that grows leaves the committed arms describing a
+question set that no longer exists — two recall tables over different questions,
+sitting in adjacent rows as though comparable. All 17 arms were therefore
+**re-derived**, not reconciled by hand; `abs494-scoring-fusion-decision.spec.ts`
+is what refuses the alternative. Both of ABS-494's decisions survive; see the
+*Re-measured under ABS-521* section of its decision doc.
+
+**Neither entry demonstrates the fix, and the labels say so.** The harness reads
+`fragment_id`s off a ranking, and completion delivers a clause the ranking does
+not contain. Redefining "retrieved" to include attached clauses would have
+raised every historical number at once and broken comparability with every
+baseline since ABS-486 — a worse trade than leaving one honest miss on the
+board. The reproduction lives in
+`tests/bylaw_retrieval/test_operative_clauses.py`, which fails without the fix.
+
 ### What is still broken, and why it is not a ranking problem
 
-`definition` (12 questions) is still the worst class, and eight `dimensional`
-questions still miss. Neither is reachable from the scorer:
+`definition` (12 questions) is still the worst class, and nine `dimensional`
+questions still miss (`RQ-D21` is the ninth, and ABS-521 above explains why it
+is expected to). Neither is reachable from the scorer:
 
 * **`definition`** — Part XVII terms ingest as PROSE with a NULL `citation_path`
   *and* a parent pointing at an unrelated chapter, so there is no path to score

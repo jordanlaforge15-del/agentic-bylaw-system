@@ -30,10 +30,10 @@
     ]
   },
   "k": 10,
-  "query_count": 70,
-  "recall_at_k": 0.5571,
-  "set_recall_at_k": 0.5571,
-  "mrr": 0.3743,
+  "query_count": 72,
+  "recall_at_k": 0.5556,
+  "set_recall_at_k": 0.5486,
+  "mrr": 0.3778,
   "by_category": {
     "citation_lookup": {
       "query_count": 8,
@@ -48,10 +48,10 @@
       "mrr": 0.0694
     },
     "dimensional": {
-      "query_count": 20,
-      "recall_at_k": 0.45,
-      "set_recall_at_k": 0.45,
-      "mrr": 0.2088
+      "query_count": 22,
+      "recall_at_k": 0.4545,
+      "set_recall_at_k": 0.4318,
+      "mrr": 0.2353
     },
     "permitted_use": {
       "query_count": 14,
@@ -492,6 +492,50 @@
       ],
       "hit": true,
       "first_hit_rank": 2
+    },
+    {
+      "id": "RQ-D21",
+      "category": "dimensional",
+      "acceptable_fragment_ids": [
+        7875,
+        7876
+      ],
+      "ranked_fragment_ids": [
+        7358,
+        7878,
+        6064,
+        8621,
+        8604,
+        5597,
+        7375,
+        5601,
+        5605,
+        7867
+      ],
+      "hit": false,
+      "first_hit_rank": null
+    },
+    {
+      "id": "RQ-D22",
+      "category": "dimensional",
+      "acceptable_fragment_ids": [
+        7878,
+        7875
+      ],
+      "ranked_fragment_ids": [
+        7878,
+        7883,
+        6052,
+        10102,
+        7879,
+        11657,
+        8621,
+        6064,
+        8604,
+        7867
+      ],
+      "hit": true,
+      "first_hit_rank": 1
     },
     {
       "id": "RQ-P01",

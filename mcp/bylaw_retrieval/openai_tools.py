@@ -99,7 +99,12 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                 "Use this when the user or agent already knows the citation.\n\n"
                 "Provide exactly one of 'citation_path' or 'structured'. "
                 "Use 'structured' with kind='zone_attribute' to look up a zone's attribute rule "
-                "without guessing the canonical path format."
+                "without guessing the canonical path format.\n\n"
+                "A hit carries 'operative_clauses' — the other clauses of the same provision. "
+                "They are part of the rule, not related reading: a section whose text ends on a "
+                "colon states no standard by itself, and several of its clauses often bind at "
+                "once. 'operative_clauses_omitted' non-zero means the provision is longer than "
+                "what was returned; re-read it with search_bylaw_evidence and citation_path_prefix."
             ),
             "parameters": {
                 "type": "object",

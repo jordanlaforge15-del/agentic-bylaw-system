@@ -57,6 +57,7 @@ from bylaw_retrieval.retrieval.schemas import (
     DocumentOutlineResponse,
     DocumentSummary,
     LinkedDataset,
+    OperativeClause,
     PermittedUseResult,
     RetrievalMatch,
     RetrievalResponse,
@@ -69,6 +70,16 @@ from bylaw_retrieval.retrieval.schemas import (
 _ANCESTOR_TEXT_CHARS = 160
 _TABLE_PREVIEW_CHARS = 500
 _TABLE_PREVIEW_CELLS = 24
+
+#: Operative clauses are kept far longer than ancestor excerpts (ABS-521).
+#: An ancestor is quoted for scope, so 160 characters of it is plenty; an
+#: operative clause *is* the standard, and the number a reader needs sits at
+#: the end of it — "…in any DD, DH, CEN-2, CEN1, COR, HR-2, HR-1, ER-3, ER-2,
+#: ER-1, CH-2, or CH-1 zone: 60.0 square metres; or" is 116 characters of zone
+#: list before it says 60.0. Truncating at ancestor length would deliver the
+#: clause and drop its figure, which is worse than not delivering it. 320
+#: covers the corpus's p95 clause (281 characters).
+_OPERATIVE_CLAUSE_CHARS = 320
 
 
 def _compact_ceiling() -> int:
@@ -118,6 +129,23 @@ def compact_ancestor(ancestor: AncestorFragment) -> dict[str, Any]:
         out["citation_label"] = ancestor.citation_label
     if ancestor.text:
         out["text_excerpt"] = _truncate(ancestor.text, _ANCESTOR_TEXT_CHARS)
+    return out
+
+
+def compact_operative_clause(clause: OperativeClause) -> dict[str, Any]:
+    """Project one operative clause (ABS-521).
+
+    ``fragment_id`` rather than ``id`` so the key matches ``compact_match`` —
+    a clause is a fragment the model can go and read in full, and it should not
+    have to learn two names for the handle that lets it.
+    """
+    out: dict[str, Any] = {"fragment_id": clause.id}
+    if clause.citation_path:
+        out["citation_path"] = clause.citation_path
+    if clause.citation_label:
+        out["citation_label"] = clause.citation_label
+    if clause.text:
+        out["text"] = _truncate(clause.text, _OPERATIVE_CLAUSE_CHARS)
     return out
 
 
@@ -227,6 +255,21 @@ def compact_match(match: RetrievalMatch) -> dict[str, Any]:
         out["ancestor_chain"] = [
             compact_ancestor(a) for a in match.ancestor_chain
         ]
+    if match.operative_clauses:
+        out["operative_clauses"] = [
+            compact_operative_clause(c) for c in match.operative_clauses
+        ]
+    if match.operative_clauses_omitted:
+        # Said out loud, never swallowed. A provision shown short reads
+        # exactly like a provision that is short — which is the ABS-521
+        # defect with a different cause.
+        out["operative_clauses_omitted"] = match.operative_clauses_omitted
+        out["operative_clauses_note"] = (
+            f"{match.operative_clauses_omitted} further clause(s) of this "
+            "provision are not shown. Re-read the whole provision with "
+            "search_bylaw_evidence and citation_path_prefix set to the "
+            "provision's citation_path."
+        )
     if match.cross_references:
         out["cross_references"] = [
             compact_cross_reference(ref) for ref in match.cross_references
