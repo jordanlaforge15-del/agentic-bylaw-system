@@ -9,7 +9,7 @@ to say different things.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,7 +21,6 @@ from layer1.models.enums import ParseStatus
 from layer1.semantic.enrichment import enrich_document_semantics
 from layer1.semantic.permission_grid import GRID_FILL_KEY
 from layer1.semantic.permission_markers import PERMISSION_MATRIX_PROFILE
-
 from scripts.backfill_permission_grid import backfill, undetermined_counts
 from scripts.verify_permission_grid_integrity import (
     check_fillable_gaps,
@@ -71,7 +70,7 @@ def ragged_corpus(tmp_path: Path) -> str:
             source_path="rc.pdf",
             file_hash="abs520-guard",
             mime_type="application/pdf",
-            ingestion_timestamp=datetime.now(timezone.utc),
+            ingestion_timestamp=datetime.now(UTC),
             parser_version="test",
         )
         session.add(document)

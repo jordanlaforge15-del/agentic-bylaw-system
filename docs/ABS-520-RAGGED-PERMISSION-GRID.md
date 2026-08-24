@@ -127,10 +127,21 @@ Undetermined uses per zone, before → after:
 | COR | 14 | 5 |
 | CEN-1 | 21 | 12 |
 
-The residue is not noise to be driven to zero. HR-1 keeps 25 — 14 from Table
-1A's page-45 slice and 11 from page 46 — because both slices carry dropped rows
-and reprinted headers around their commercial sections. Those uses genuinely
-cannot be read, and must keep saying so.
+`get_zone_profile("ER-2")` goes from 72 undetermined uses — with
+"Townhouse dwelling use" among them — to three:
+
+```
+['Model suite use', 'Cannabis lounge use', 'Casino use']
+```
+
+and "Townhouse dwelling use" moves to `not_permitted` at the matrix confidence
+rung (0.9).
+
+The residue is not noise to be driven to zero. Those three ER-2 entries sit
+beside the dropped "Cluster housing use" row and the mangled commercial section
+header; HR-1 keeps 25 — 14 from Table 1A's page-45 slice and 11 from page 46 —
+for the same reason. Those uses genuinely cannot be read, and must keep saying
+so.
 
 ## The guard
 

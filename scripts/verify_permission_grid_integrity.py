@@ -50,16 +50,16 @@ for _path in (REPO_ROOT / "src", REPO_ROOT / "mcp", REPO_ROOT / "scripts"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from sqlalchemy.orm import Session  # noqa: E402
-
-from backfill_permission_grid import (  # noqa: E402
+from backfill_permission_grid import (
     permission_matrix_tables,
     table_cells,
     undetermined_counts,
 )
-from layer1.db.session import session_scope  # noqa: E402
-from layer1.semantic.enrichment import resolve_permission_cell  # noqa: E402
-from layer1.semantic.permission_grid import audit_permission_grid  # noqa: E402
+from sqlalchemy.orm import Session
+
+from layer1.db.session import session_scope
+from layer1.semantic.enrichment import resolve_permission_cell
+from layer1.semantic.permission_grid import audit_permission_grid
 
 
 @dataclass(frozen=True)
