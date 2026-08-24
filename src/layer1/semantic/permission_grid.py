@@ -299,7 +299,9 @@ def audit_permission_grid(
             values.append(cell)
 
     bands = _column_bands(values)
-    audit.column_indices = sorted(bands) if bands else []
+    # The observed columns are known even when their geometry is not, so a
+    # refused table can still report the size of the residue it is leaving.
+    audit.column_indices = sorted({cell.col_index for cell in values})
     audit.label_row_indices = sorted(labels)
 
     if bands is None:
@@ -328,9 +330,9 @@ def audit_permission_grid(
     for cell in values:
         y_band = _y_band(cell)
         is_marker = _is_marker_text(getattr(cell, "text", None), conventions)
-        if not is_marker:
-            unsound.setdefault(cell.row_index, REASON_FOREIGN_CONTENT)
         label_band = labels.get(cell.row_index)
+        if label_band is not None and not is_marker:
+            unsound.setdefault(cell.row_index, REASON_FOREIGN_CONTENT)
         if label_band is None:
             # A value cell on a row the parser gave no label. If it is a
             # permission marker, a use row was lost here and the neighbours may
