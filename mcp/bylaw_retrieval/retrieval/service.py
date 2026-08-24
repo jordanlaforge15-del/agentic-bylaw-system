@@ -72,10 +72,7 @@ from bylaw_retrieval.retrieval.schemas import (
 from bylaw_retrieval.retrieval.binding import ZoneScopeIndex, build_zone_scope_index
 from bylaw_retrieval.retrieval.channels import TextChannelScores
 from bylaw_retrieval.retrieval.context import AncestorIndex, split_citation_path
-from bylaw_retrieval.retrieval.provision import (
-    OPERATIVE_CLAUSE_LIMIT,
-    ProvisionLineage,
-)
+from bylaw_retrieval.retrieval.provision import ProvisionLineage
 from bylaw_retrieval.retrieval.tables import (
     CHANNEL_THRESHOLD as TABLE_CHANNEL_THRESHOLD,
 )

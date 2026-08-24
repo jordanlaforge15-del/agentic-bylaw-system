@@ -62,14 +62,14 @@ for extra in (REPO_ROOT, REPO_ROOT / "src", REPO_ROOT / "mcp" / "bylaw_retrieval
     if str(extra) not in sys.path:
         sys.path.insert(0, str(extra))
 
-from sqlalchemy import select  # noqa: E402
-
-from bylaw_retrieval.retrieval.provision import (  # noqa: E402
+from bylaw_retrieval.retrieval.provision import (
     normalise_citation_path,
     parent_citation_path,
 )
-from layer1.db.base import Document, SourceFragment  # noqa: E402
-from layer1.db.session import session_scope  # noqa: E402
+from sqlalchemy import select
+
+from layer1.db.base import Document, SourceFragment
+from layer1.db.session import session_scope
 
 
 def audit(session, *, example_limit: int) -> dict[str, Any]:

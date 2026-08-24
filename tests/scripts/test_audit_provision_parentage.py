@@ -23,12 +23,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from audit_provision_parentage import audit  # noqa: E402
+from audit_provision_parentage import audit
 
-from layer1.db.base import Document, SourceFragment  # noqa: E402
-from layer1.db.init_db import create_all  # noqa: E402
-from layer1.db.session import session_scope  # noqa: E402
-from layer1.models.enums import FragmentType, ParseStatus  # noqa: E402
+from layer1.db.base import Document, SourceFragment
+from layer1.db.init_db import create_all
+from layer1.db.session import session_scope
+from layer1.models.enums import FragmentType, ParseStatus
 
 
 def _fragment(
