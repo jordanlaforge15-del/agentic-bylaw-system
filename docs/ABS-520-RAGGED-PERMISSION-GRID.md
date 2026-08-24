@@ -73,6 +73,16 @@ label at all — and its two ● dots were absorbed into the following section
 header, where they sit in a y-band matching no row. Filling that region would
 fabricate prohibitions for a use the by-law permits.
 
+The diagnosis is checkable: the two orphaned dots are in the CH-2 and CH-1
+columns, and `Part I > 30 > (l)` names CH-1 "Cluster Housing 1". Cluster housing
+use permitted in the cluster housing zones is exactly the row that went missing.
+
+That same fact settles the other question the fills raise. Table 1B's columns
+are ER-3, ER-2, ER-1, CH-2, CH-1 — five *residential* zones, the CH pair being
+Cluster Housing, not anything commercial. So the long runs of empty commercial,
+institutional and industrial rows on pages 48–49 are what the by-law prints,
+not content the parser lost, and materializing them as prohibitions is right.
+
 So the repair is not "treat a missing cell as blank". It is "treat a missing
 cell as blank **where the geometry shows the row lost nothing**".
 
