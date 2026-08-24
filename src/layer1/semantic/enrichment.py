@@ -632,6 +632,11 @@ def _enrich_table(
             session, table, cells, apply=True, conventions=conventions
         )
         if audit.gaps:
+            # Keep ``rows`` faithful to the grid now on disk. The fact
+            # extractor below skips empty-text cells, so the materialized
+            # blanks add no ``permission`` facts either way — retrieval reads
+            # the cells, not the facts — but a stale ``rows`` is a trap for
+            # whoever changes that pass next.
             session.flush()
             cells = (
                 session.query(SourceTableCell)
