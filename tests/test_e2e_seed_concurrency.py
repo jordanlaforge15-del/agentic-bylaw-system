@@ -61,6 +61,9 @@ SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     "seed_e2e_page_break_split.py",
     "seed_e2e_parcels.py",
     "seed_e2e_permitted_use.py",
+    # ABS-520: the ragged, geometry-bearing matrix — a row the parser
+    # right-truncated beside a row it lost outright.
+    "seed_e2e_ragged_permission_grid.py",
     # ABS-433: the unified RC-LUB corpus seed — replaces the retired
     # seed_e2e_permission_tables / seed_e2e_address_profile / seed_e2e_pocs /
     # seed_e2e_zone_profile quartet.
