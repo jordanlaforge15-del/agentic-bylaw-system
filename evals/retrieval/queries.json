@@ -271,6 +271,36 @@
       "notes": "Mainland states dimensions in feet; the Regional Centre states everything in metres. A ranker tuned on metric strings should still find this."
     },
     {
+      "id": "RQ-D19",
+      "category": "dimensional",
+      "question": "What is the minimum required side setback for a main building in the HR-1 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 198"
+        }
+      ],
+      "fragment_ids": [
+        7120
+      ],
+      "notes": "ABS-518. Part V, Chapter 7 governs HR-2 / HR-1, and s.198 states the standard without ever naming its own zone. The near-identical ER counterpart is s.229 under Chapter 9, and the ER chapter additionally carries 'Table 9: Minimum required side setbacks for Established Residential Special Areas', whose caption echoes this question word for word — so this entry is the wrong-chapter-neighbour hazard, not a keyword lookup. Paired with RQ-D15, which asks for the same clause under HR-2: both zones are governed by the one chapter, and a ranker that found only the zone the chapter heading happens to list first would pass one and fail the other. The section is listed alone, as in RQ-D01/D02/D15; the number itself is in its child clause 198(1)(f), which the response carries as part of the section's subtree. HONEST LIMIT: this entry does NOT reproduce the ABS-518 defect at k=10 — s.198 ranked 5th before the fix and 3rd after, so it passed either way. It is here to stop a future ranking change from pushing the section out of the top ten, and the movement it does record is in MRR. The defect itself — an ER special-area number returned as an HR-1 answer — is reproduced in tests/bylaw_retrieval/test_zone_scope_exclusion.py, which fails without the fix."
+    },
+    {
+      "id": "RQ-D20",
+      "category": "dimensional",
+      "question": "What is the minimum required rear setback for a main building in the HR-1 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 199"
+        }
+      ],
+      "fragment_ids": [
+        7138
+      ],
+      "notes": "ABS-518. The other half of the pair TC-027 asked for and the advisor could not retrieve; it stated the gap rather than guessing, which is the behaviour a fix here must not regress. Same shape as RQ-D19 — s.199 states the HR rear setback and names no zone — and it sits next to the s.198 the same question also needs, so a ranking that surfaces one and buries the other still fails the question a reader actually asked. Same honest limit as RQ-D19: rank 5 before the fix, 4 after, so it passed at k=10 either way and is a regression guard rather than a reproduction."
+    },
+    {
       "id": "RQ-P01",
       "category": "permitted_use",
       "question": "Which zones permit drive-throughs in the Regional Centre?",
