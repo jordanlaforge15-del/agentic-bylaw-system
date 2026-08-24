@@ -737,3 +737,117 @@ async def test_search_bylaw_evidence_handler_respects_explicit_include_false():
     assert req.include_cross_references is False
     assert req.include_tables is False
     assert req.include_datasets is False
+
+
+def test_lookup_citation_description_says_what_a_section_returns():
+    """ABS-521 AC: ``lookup_citation`` on a section must return its operative
+    clauses, or document that it does not and say what to call instead.
+
+    It returns them, so the description has to say so — a payload the model is
+    not told to read is a payload it will skip past. The transcript that opened
+    ABS-521 shows exactly that failure mode one level up: the model called
+    ``lookup_citation {"citation_path": "Part V > 333"}``, got a sentence ending
+    "…except:", and answered from it without ever asking what came after the
+    colon.
+    """
+    from advisor.chat.tools import _DESC_LOOKUP_CITATION, _DESC_SEARCH_BYLAW_EVIDENCE
+
+    for description, where in (
+        (_DESC_LOOKUP_CITATION, "lookup_citation"),
+        (_DESC_SEARCH_BYLAW_EVIDENCE, "search_bylaw_evidence"),
+    ):
+        assert "operative_clauses" in description, (
+            f"{where} no longer tells the model the clauses are there"
+        )
+        assert "operative_clauses_omitted" in description, (
+            f"{where} no longer tells the model what to do when the provision "
+            "was truncated"
+        )
+        assert "citation_path_prefix" in description, (
+            f"{where} no longer names the call that reads the rest of a "
+            "truncated provision"
+        )
+
+
+def test_operative_clauses_survive_the_compact_projection():
+    """The clauses have to reach the model, not just the Pydantic model.
+
+    ``compact_match`` is the only projection the chat tool loop ships, and it
+    drops most of what ``RetrievalMatch`` carries. A clause added to the schema
+    but not to the projection is a fix that passes its own unit tests and
+    changes nothing about the answer the user gets.
+    """
+    from advisor.chat.compact import compact_match
+    from bylaw_retrieval.retrieval.schemas import OperativeClause, RetrievalMatch
+
+    match = RetrievalMatch(
+        fragment_id=1,
+        document_id=1,
+        municipality="HRM",
+        bylaw_name="Regional Centre Land Use By-Law",
+        fragment_type="section",
+        citation_path="Part V > 333",
+        page_start=238,
+        page_end=238,
+        parse_status="parsed",
+        text="333 (1) Any new accessory structure shall have no restriction "
+        "on the maximum size of its footprint, except:",
+        score=1.0,
+        operative_clauses=[
+            OperativeClause(
+                id=2,
+                fragment_type="clause",
+                citation_label="(a)",
+                citation_path="Part V > 333 > (a)",
+                page_start=238,
+                page_end=238,
+                text="(a) … in any DD, DH, CEN-2, CEN1, COR, HR-2, HR-1, "
+                "ER-3, ER-2, ER-1, CH-2, or CH-1 zone: 60.0 square metres; or",
+            )
+        ],
+        operative_clauses_omitted=2,
+    )
+
+    out = compact_match(match)
+    assert out["operative_clauses"] == [
+        {
+            "fragment_id": 2,
+            "citation_path": "Part V > 333 > (a)",
+            "citation_label": "(a)",
+            "text": match.operative_clauses[0].text,
+        }
+    ]
+    assert "60.0 square metres" in out["operative_clauses"][0]["text"]
+    assert out["operative_clauses_omitted"] == 2
+    assert "citation_path_prefix" in out["operative_clauses_note"]
+
+
+def test_a_match_without_clauses_carries_no_empty_keys():
+    """Byte stability: the common case must not grow.
+
+    Most fragments state their rule whole, and the module docstring's whole
+    argument is that a tool_result is replayed on every subsequent turn. An
+    always-present ``"operative_clauses": []`` would bill four bytes per match
+    per turn for saying nothing.
+    """
+    from advisor.chat.compact import compact_match
+    from bylaw_retrieval.retrieval.schemas import RetrievalMatch
+
+    match = RetrievalMatch(
+        fragment_id=1,
+        document_id=1,
+        municipality="HRM",
+        bylaw_name="Regional Centre Land Use By-Law",
+        fragment_type="section",
+        citation_path="Part V > 332",
+        page_start=238,
+        page_end=238,
+        parse_status="parsed",
+        text="332 One accessory structure per lot …",
+        score=1.0,
+    )
+
+    out = compact_match(match)
+    assert "operative_clauses" not in out
+    assert "operative_clauses_omitted" not in out
+    assert "operative_clauses_note" not in out
