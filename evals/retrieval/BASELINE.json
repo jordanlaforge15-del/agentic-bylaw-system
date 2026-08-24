@@ -30,17 +30,18 @@
   "retrieval_fingerprint": {
     "_comment": "Fingerprint of the files whose content can move a ranking, taken when this baseline was measured. Python is normalised by stripping comments, docstrings and blank lines; JSON is canonicalised. scripts/check_retrieval_baseline.py compares it against the working tree and fails the gate when they differ — run `make eval-retrieval-baseline`.",
     "algorithm": "significant-content-v1",
-    "measured_at_commit": "125c4d68d99cc478e417302d2d5b66377970e981",
-    "digest": "sha256:0bcfd6b916cba588377d54a93e853734881b0e04535fb90e6d0397ebd133d22f",
+    "measured_at_commit": "5d9391cdc81d0f9b491f0e3816d0c4c1aec4c434",
+    "digest": "sha256:2991af82bf36b2a71ade294707ab275f227782c06ca92789d2172f0651827f8d",
     "files": {
-      "evals/retrieval/queries.json": "sha256:efd73a1777d9655956500044eb52864a4638a8aeb0d5e4f86ff6b5965217e26c",
+      "evals/retrieval/queries.json": "sha256:3341226fbd554641ebcdbc96565e29ca9462268296cd50592e241ee096901761",
       "mcp/bylaw_retrieval/retrieval/__init__.py": "sha256:cf99f26c653fd6a40212e109d68a50fd9d91b0cc7bc6ad333e0aef6397cbd9c6",
       "mcp/bylaw_retrieval/retrieval/binding.py": "sha256:5a3442f2c5887027773e4a0e57d5cb506f2acbddda696c84afa258287ec1b346",
       "mcp/bylaw_retrieval/retrieval/channels.py": "sha256:5fa9c3fa397f2d6d51bc72c578088c4c5e775a5e4d691e12fa60dd562508125c",
       "mcp/bylaw_retrieval/retrieval/coherence_audit.py": "sha256:3c21a657b7eb3c84f70846272236abf6ac6daf405d1568d483efdb62e36e9cfa",
       "mcp/bylaw_retrieval/retrieval/context.py": "sha256:c147e8377215c1a2f1c9b3f86e0e1974b8337d59eaa7191ab2df3c8b14a7f74c",
-      "mcp/bylaw_retrieval/retrieval/schemas.py": "sha256:23d6b7a21583e941ab23c77e1a5bb95db4025bb3c07e463dd3b795478bd4bf53",
-      "mcp/bylaw_retrieval/retrieval/service.py": "sha256:8d9a18b4d67bba1c5f65d0de9934cc0a4eb988c8ad6ac0235d8157fe2f5917b1",
+      "mcp/bylaw_retrieval/retrieval/provision.py": "sha256:b884f162e8ebb0879a57760852e505091a1fc388a57b609dc35be45e9a7cf714",
+      "mcp/bylaw_retrieval/retrieval/schemas.py": "sha256:e6ffd355c7b74434aafae7045be4f5694641f8875e41ae77225cd704ab5f7ed3",
+      "mcp/bylaw_retrieval/retrieval/service.py": "sha256:22789f649320367c6b287d4a2756f819893c2648bd34c588d1f4d89f92b83732",
       "mcp/bylaw_retrieval/retrieval/tables.py": "sha256:254fef5a98ca233146f4cfdf70a4297d89325c60d0e511dd34ceab323fb36a45",
       "scripts/eval_retrieval_recall.py": "sha256:784c7a79fd63aeeaf8b198a33994b85ab639d1380b96bbee147a63605205d7e2",
       "scripts/repath_citation_paths.py": "sha256:6ec2c7cb28b4e7ba33a860da2d825e7b696a5efe3a4d9d2dfc710847f59163c7",
@@ -51,10 +52,10 @@
     "acknowledged_drift": null
   },
   "k": 10,
-  "query_count": 70,
-  "recall_at_k": 0.6857,
-  "set_recall_at_k": 0.6857,
-  "mrr": 0.3384,
+  "query_count": 72,
+  "recall_at_k": 0.6806,
+  "set_recall_at_k": 0.6736,
+  "mrr": 0.3429,
   "by_category": {
     "citation_lookup": {
       "query_count": 8,
@@ -69,10 +70,10 @@
       "mrr": 0.2176
     },
     "dimensional": {
-      "query_count": 20,
-      "recall_at_k": 0.6,
-      "set_recall_at_k": 0.6,
-      "mrr": 0.1463
+      "query_count": 22,
+      "recall_at_k": 0.5909,
+      "set_recall_at_k": 0.5682,
+      "mrr": 0.1785
     },
     "permitted_use": {
       "query_count": 14,
@@ -95,12 +96,12 @@
   },
   "latency_ms": {
     "_comment": "Wall-clock milliseconds for one RetrievalService.search call, measured on whatever host ran the harness. Host-dependent and not reproducible: this is the ONE block of this file that moves between two runs over an unchanged corpus. Reported so a ranking change that buys recall by scoring more per fragment can be read against what it costs to serve; never used to fail a run.",
-    "n": 70,
-    "mean": 450.3,
-    "p50": 446.3,
-    "p95": 531.3,
-    "p99": 689.9,
-    "max": 697.3
+    "n": 72,
+    "mean": 537.3,
+    "p50": 532.1,
+    "p95": 632.3,
+    "p99": 783.7,
+    "max": 784.5
   },
   "queries": [
     {
@@ -126,7 +127,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 689.9
+      "latency_ms": 784.5
     },
     {
       "id": "RQ-D02",
@@ -151,7 +152,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 482.6
+      "latency_ms": 561.2
     },
     {
       "id": "RQ-D03",
@@ -176,7 +177,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 435.6
+      "latency_ms": 537.9
     },
     {
       "id": "RQ-D04",
@@ -201,7 +202,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 504.3
+      "latency_ms": 606.7
     },
     {
       "id": "RQ-D05",
@@ -226,7 +227,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 486.5
+      "latency_ms": 545.8
     },
     {
       "id": "RQ-D06",
@@ -251,7 +252,7 @@
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 446.7
+      "latency_ms": 531.3
     },
     {
       "id": "RQ-D07",
@@ -276,7 +277,7 @@
       "first_hit_rank": 6,
       "reciprocal_rank": 0.1667,
       "set_recall": 1.0,
-      "latency_ms": 459.5
+      "latency_ms": 521.2
     },
     {
       "id": "RQ-D08",
@@ -301,7 +302,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 444.7
+      "latency_ms": 546.0
     },
     {
       "id": "RQ-D09",
@@ -326,7 +327,7 @@
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 443.2
+      "latency_ms": 602.0
     },
     {
       "id": "RQ-D10",
@@ -351,7 +352,7 @@
       "first_hit_rank": 5,
       "reciprocal_rank": 0.2,
       "set_recall": 1.0,
-      "latency_ms": 423.4
+      "latency_ms": 461.1
     },
     {
       "id": "RQ-D11",
@@ -376,7 +377,7 @@
       "first_hit_rank": 6,
       "reciprocal_rank": 0.1667,
       "set_recall": 1.0,
-      "latency_ms": 462.9
+      "latency_ms": 513.2
     },
     {
       "id": "RQ-D12",
@@ -401,7 +402,7 @@
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 440.0
+      "latency_ms": 553.2
     },
     {
       "id": "RQ-D13",
@@ -426,7 +427,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 438.9
+      "latency_ms": 608.0
     },
     {
       "id": "RQ-D14",
@@ -451,7 +452,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 489.1
+      "latency_ms": 463.5
     },
     {
       "id": "RQ-D15",
@@ -476,7 +477,7 @@
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 481.9
+      "latency_ms": 599.2
     },
     {
       "id": "RQ-D16",
@@ -501,7 +502,7 @@
       "first_hit_rank": 7,
       "reciprocal_rank": 0.1429,
       "set_recall": 1.0,
-      "latency_ms": 449.7
+      "latency_ms": 527.3
     },
     {
       "id": "RQ-D17",
@@ -526,7 +527,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 697.3
+      "latency_ms": 783.7
     },
     {
       "id": "RQ-D18",
@@ -551,7 +552,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 531.3
+      "latency_ms": 571.8
     },
     {
       "id": "RQ-D19",
@@ -576,7 +577,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 525.7
+      "latency_ms": 606.2
     },
     {
       "id": "RQ-D20",
@@ -601,7 +602,59 @@
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 519.1
+      "latency_ms": 599.3
+    },
+    {
+      "id": "RQ-D21",
+      "category": "dimensional",
+      "question": "What is the maximum footprint for a new accessory structure in the ER-2 zone?",
+      "acceptable_fragment_ids": [
+        7875,
+        7876
+      ],
+      "ranked_fragment_ids": [
+        5597,
+        5601,
+        5605,
+        12462,
+        12463,
+        7358,
+        7377,
+        8605,
+        7878,
+        8621
+      ],
+      "hit": false,
+      "first_hit_rank": null,
+      "reciprocal_rank": 0.0,
+      "set_recall": 0.0,
+      "latency_ms": 556.0
+    },
+    {
+      "id": "RQ-D22",
+      "category": "dimensional",
+      "question": "What is the maximum floor area for a new accessory structure in the ER-2 zone?",
+      "acceptable_fragment_ids": [
+        7878,
+        7875
+      ],
+      "ranked_fragment_ids": [
+        7878,
+        12462,
+        12463,
+        5597,
+        5601,
+        5605,
+        7883,
+        7377,
+        12405,
+        12461
+      ],
+      "hit": true,
+      "first_hit_rank": 1,
+      "reciprocal_rank": 1.0,
+      "set_recall": 0.5,
+      "latency_ms": 650.2
     },
     {
       "id": "RQ-P01",
@@ -626,7 +679,7 @@
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 419.8
+      "latency_ms": 439.1
     },
     {
       "id": "RQ-P02",
@@ -651,7 +704,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 417.1
+      "latency_ms": 468.9
     },
     {
       "id": "RQ-P03",
@@ -676,7 +729,7 @@
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 446.3
+      "latency_ms": 508.0
     },
     {
       "id": "RQ-P04",
@@ -701,7 +754,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 325.9
+      "latency_ms": 481.3
     },
     {
       "id": "RQ-P05",
@@ -726,7 +779,7 @@
       "first_hit_rank": 5,
       "reciprocal_rank": 0.2,
       "set_recall": 1.0,
-      "latency_ms": 471.2
+      "latency_ms": 545.3
     },
     {
       "id": "RQ-P06",
@@ -751,7 +804,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 380.8
+      "latency_ms": 568.7
     },
     {
       "id": "RQ-P07",
@@ -776,7 +829,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 471.4
+      "latency_ms": 469.3
     },
     {
       "id": "RQ-P08",
@@ -801,7 +854,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 463.8
+      "latency_ms": 542.7
     },
     {
       "id": "RQ-P09",
@@ -826,7 +879,7 @@
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 530.1
+      "latency_ms": 599.6
     },
     {
       "id": "RQ-P10",
@@ -851,7 +904,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 418.1
+      "latency_ms": 545.2
     },
     {
       "id": "RQ-P11",
@@ -876,7 +929,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 494.3
+      "latency_ms": 558.6
     },
     {
       "id": "RQ-P12",
@@ -901,7 +954,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 397.0
+      "latency_ms": 479.2
     },
     {
       "id": "RQ-P13",
@@ -926,7 +979,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 498.4
+      "latency_ms": 588.9
     },
     {
       "id": "RQ-P14",
@@ -951,7 +1004,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 427.5
+      "latency_ms": 508.3
     },
     {
       "id": "RQ-F01",
@@ -976,7 +1029,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 470.0
+      "latency_ms": 534.8
     },
     {
       "id": "RQ-F02",
@@ -1001,7 +1054,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 307.2
+      "latency_ms": 520.1
     },
     {
       "id": "RQ-F03",
@@ -1026,7 +1079,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 353.6
+      "latency_ms": 371.6
     },
     {
       "id": "RQ-F04",
@@ -1051,7 +1104,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 402.4
+      "latency_ms": 492.6
     },
     {
       "id": "RQ-F05",
@@ -1076,7 +1129,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 423.6
+      "latency_ms": 520.9
     },
     {
       "id": "RQ-F06",
@@ -1101,7 +1154,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 399.4
+      "latency_ms": 392.3
     },
     {
       "id": "RQ-F07",
@@ -1126,7 +1179,7 @@
       "first_hit_rank": 6,
       "reciprocal_rank": 0.1667,
       "set_recall": 1.0,
-      "latency_ms": 341.2
+      "latency_ms": 438.2
     },
     {
       "id": "RQ-F08",
@@ -1151,7 +1204,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 402.5
+      "latency_ms": 632.3
     },
     {
       "id": "RQ-F09",
@@ -1176,7 +1229,7 @@
       "first_hit_rank": 9,
       "reciprocal_rank": 0.1111,
       "set_recall": 1.0,
-      "latency_ms": 374.8
+      "latency_ms": 399.6
     },
     {
       "id": "RQ-F10",
@@ -1201,7 +1254,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 447.9
+      "latency_ms": 590.8
     },
     {
       "id": "RQ-F11",
@@ -1226,7 +1279,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 391.1
+      "latency_ms": 397.3
     },
     {
       "id": "RQ-F12",
@@ -1251,7 +1304,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 375.4
+      "latency_ms": 495.5
     },
     {
       "id": "RQ-Z01",
@@ -1276,7 +1329,7 @@
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
       "set_recall": 1.0,
-      "latency_ms": 461.8
+      "latency_ms": 529.3
     },
     {
       "id": "RQ-Z02",
@@ -1301,7 +1354,7 @@
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
       "set_recall": 1.0,
-      "latency_ms": 441.1
+      "latency_ms": 608.2
     },
     {
       "id": "RQ-Z03",
@@ -1326,7 +1379,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 450.1
+      "latency_ms": 519.5
     },
     {
       "id": "RQ-Z04",
@@ -1351,7 +1404,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 467.0
+      "latency_ms": 532.1
     },
     {
       "id": "RQ-Z05",
@@ -1376,7 +1429,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 464.9
+      "latency_ms": 559.5
     },
     {
       "id": "RQ-Z06",
@@ -1401,7 +1454,7 @@
       "first_hit_rank": 7,
       "reciprocal_rank": 0.1429,
       "set_recall": 1.0,
-      "latency_ms": 448.2
+      "latency_ms": 512.8
     },
     {
       "id": "RQ-Z07",
@@ -1426,7 +1479,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 548.6
+      "latency_ms": 604.8
     },
     {
       "id": "RQ-Z08",
@@ -1451,7 +1504,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 452.0
+      "latency_ms": 506.5
     },
     {
       "id": "RQ-Z09",
@@ -1476,7 +1529,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 429.3
+      "latency_ms": 547.5
     },
     {
       "id": "RQ-Z10",
@@ -1501,7 +1554,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 628.4
+      "latency_ms": 681.6
     },
     {
       "id": "RQ-S01",
@@ -1526,7 +1579,7 @@
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
       "set_recall": 1.0,
-      "latency_ms": 469.1
+      "latency_ms": 472.9
     },
     {
       "id": "RQ-S02",
@@ -1551,7 +1604,7 @@
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
       "set_recall": 1.0,
-      "latency_ms": 414.3
+      "latency_ms": 470.7
     },
     {
       "id": "RQ-S03",
@@ -1576,7 +1629,7 @@
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 380.8
+      "latency_ms": 582.6
     },
     {
       "id": "RQ-S04",
@@ -1601,7 +1654,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 431.9
+      "latency_ms": 457.3
     },
     {
       "id": "RQ-S05",
@@ -1626,7 +1679,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 400.1
+      "latency_ms": 495.7
     },
     {
       "id": "RQ-S06",
@@ -1651,7 +1704,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 415.3
+      "latency_ms": 507.9
     },
     {
       "id": "RQ-C01",
@@ -1676,7 +1729,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 472.2
+      "latency_ms": 593.9
     },
     {
       "id": "RQ-C02",
@@ -1701,7 +1754,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 461.5
+      "latency_ms": 502.1
     },
     {
       "id": "RQ-C03",
@@ -1726,7 +1779,7 @@
       "first_hit_rank": 5,
       "reciprocal_rank": 0.2,
       "set_recall": 1.0,
-      "latency_ms": 406.3
+      "latency_ms": 588.5
     },
     {
       "id": "RQ-C04",
@@ -1751,7 +1804,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 464.0
+      "latency_ms": 540.8
     },
     {
       "id": "RQ-C05",
@@ -1776,7 +1829,7 @@
       "first_hit_rank": 9,
       "reciprocal_rank": 0.1111,
       "set_recall": 1.0,
-      "latency_ms": 455.7
+      "latency_ms": 557.7
     },
     {
       "id": "RQ-C06",
@@ -1801,7 +1854,7 @@
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
       "set_recall": 1.0,
-      "latency_ms": 391.5
+      "latency_ms": 503.5
     },
     {
       "id": "RQ-C07",
@@ -1826,7 +1879,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 422.8
+      "latency_ms": 472.8
     },
     {
       "id": "RQ-C08",
@@ -1851,7 +1904,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 438.9
+      "latency_ms": 522.1
     }
   ]
 }

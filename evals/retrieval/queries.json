@@ -301,6 +301,46 @@
       "notes": "ABS-518. The other half of the pair TC-027 asked for and the advisor could not retrieve; it stated the gap rather than guessing, which is the behaviour a fix here must not regress. Same shape as RQ-D19 — s.199 states the HR rear setback and names no zone — and it sits next to the s.198 the same question also needs, so a ranking that surfaces one and buries the other still fails the question a reader actually asked. Same honest limit as RQ-D19: rank 5 before the fix, 4 after, so it passed at k=10 either way and is a regression guard rather than a reproduction — the defect is reproduced in tests/bylaw_retrieval/test_zone_scope_exclusion.py, which fails without the fix."
     },
     {
+      "id": "RQ-D21",
+      "category": "dimensional",
+      "question": "What is the maximum footprint for a new accessory structure in the ER-2 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 333"
+        },
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 333 > (a)"
+        }
+      ],
+      "fragment_ids": [
+        7875,
+        7876
+      ],
+      "notes": "ABS-521. The footprint half of the pair TC-024 needed, and a RECORDED MISS — read the miss, not the entry. s.333(1) announces the cap and stops on a colon (\"…shall have no restriction on the maximum size of its footprint, except:\"); the 60.0 m² figure is in its clause (a), whose own text is a zone list and a number. Every topical word a question would use — accessory, structure, footprint, maximum — lives in the stem, so (a) scores 9 against the section's 21 on the very query it answers and neither ranks here. That is not a scoring bug to be tuned out: no weight lifts (a) without lifting every bare list item in the corpus with it. HONEST LIMIT: this entry therefore measures nothing about whether the fix works. ABS-521 makes the 60.0 figure reach the agent as match.operative_clauses hanging off whichever limb of s.333 the ranker does return — a payload guarantee, not a ranking one, and this harness grades ranking only. The reproduction is tests/bylaw_retrieval/test_operative_clauses.py, which fails without the fix. What this entry is for: it is the standing record that the clause is unreachable by rank, and a future change that flips it to a hit is a genuine improvement rather than a re-recorded baseline."
+    },
+    {
+      "id": "RQ-D22",
+      "category": "dimensional",
+      "question": "What is the maximum floor area for a new accessory structure in the ER-2 zone?",
+      "acceptable": [
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 333 > (1.5)"
+        },
+        {
+          "bylaw": "Regional Centre",
+          "citation_path": "Part V > 333"
+        }
+      ],
+      "fragment_ids": [
+        7878,
+        7875
+      ],
+      "notes": "ABS-521, paired with RQ-D21 and deliberately the half that works. s.333(1.5) states the 93.0 m² floor-area cap in one self-contained sentence that names its own zones, so it ranks where its sibling (a) cannot — which is the whole asymmetry the ticket is about, measured rather than asserted. It is also the clause TC-024 answered from, and answered from ALONE: 93.0 and 60.0 both bind, and an owner told only 93.0 can design a structure that satisfies it and fails the footprint cap. REGRESSION GUARD, not a reproduction: it passed before the fix and passes after. Its job is to make the pair legible — two limits of one provision, one reachable by rank and one not — and to fail if a later ranking change buries the reachable one too."
+    },
+    {
       "id": "RQ-P01",
       "category": "permitted_use",
       "question": "Which zones permit drive-throughs in the Regional Centre?",
