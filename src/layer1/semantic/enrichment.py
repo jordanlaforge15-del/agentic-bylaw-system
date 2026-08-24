@@ -46,6 +46,7 @@ from layer1.semantic.extractors import (
     reset_profile_overlay,
     use_profile_overlay,
 )
+from layer1.semantic.permission_grid import densify_permission_matrix
 from layer1.semantic.permission_markers import (
     UNKNOWN,
     annotate_value_cells,
@@ -83,6 +84,10 @@ class SemanticEnrichmentReport:
     table_profiles: int = 0
     axis_bindings: int = 0
     provenance: int = 0
+    # ABS-520: blank permission-matrix cells the parser dropped and this run
+    # materialized, and the ones its geometry refused to vouch for.
+    permission_cells_filled: int = 0
+    permission_cells_unfilled: int = 0
     warnings: list[str] = field(default_factory=list)
 
     def model_dump(self) -> dict:
@@ -95,6 +100,8 @@ class SemanticEnrichmentReport:
             "table_profiles": self.table_profiles,
             "axis_bindings": self.axis_bindings,
             "provenance": self.provenance,
+            "permission_cells_filled": self.permission_cells_filled,
+            "permission_cells_unfilled": self.permission_cells_unfilled,
             "warnings": self.warnings,
         }
 
@@ -615,6 +622,26 @@ def _enrich_table(
         # ingest-time hook (which ran before this profile existed and gated on
         # captions that the corpus doesn't carry) is removed.
         annotate_value_cells(cells, apply=True, conventions=conventions)
+        # ABS-520: the parser emits a ragged grid — a cell with no glyph is
+        # dropped rather than stored — so the by-law's "blank means not
+        # permitted" convention arrives as a missing cell, which retrieval can
+        # only report as ``unknown``. Materialize the blanks the geometry can
+        # vouch for, before the axis bindings make those intersections
+        # addressable.
+        audit = densify_permission_matrix(
+            session, table, cells, apply=True, conventions=conventions
+        )
+        if audit.gaps:
+            session.flush()
+            cells = (
+                session.query(SourceTableCell)
+                .filter(SourceTableCell.table_id == table.id)
+                .order_by(SourceTableCell.row_index, SourceTableCell.col_index)
+                .all()
+            )
+            rows = _rows_by_index(cells)
+        report.permission_cells_filled += len(audit.gaps)
+        report.permission_cells_unfilled += len(audit.refused)
         _extract_permission_table_facts(session, report, cache, table, rows)
     elif profile_type == "parking_matrix":
         _extract_parking_table_facts(session, report, cache, table, rows)
