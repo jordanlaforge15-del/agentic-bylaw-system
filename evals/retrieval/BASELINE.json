@@ -30,63 +30,55 @@
   "retrieval_fingerprint": {
     "_comment": "Fingerprint of the files whose content can move a ranking, taken when this baseline was measured. Python is normalised by stripping comments, docstrings and blank lines; JSON is canonicalised. scripts/check_retrieval_baseline.py compares it against the working tree and fails the gate when they differ — run `make eval-retrieval-baseline`.",
     "algorithm": "significant-content-v1",
-    "measured_at_commit": "5e16b8d225b3b8b434b8ae72db5a4bca45e48df8",
-    "digest": "sha256:bbbafcd0c44330d85757eeaef94a307d49523a7e359fc2ec3fca4a8ef4e875d9",
+    "measured_at_commit": "125c4d68d99cc478e417302d2d5b66377970e981",
+    "digest": "sha256:0bcfd6b916cba588377d54a93e853734881b0e04535fb90e6d0397ebd133d22f",
     "files": {
-      "evals/retrieval/queries.json": "sha256:a5e15e84ca07d534ddb1b3a7b6e358dcc384e960c2a9a7a473bf0193f8cd727f",
+      "evals/retrieval/queries.json": "sha256:efd73a1777d9655956500044eb52864a4638a8aeb0d5e4f86ff6b5965217e26c",
       "mcp/bylaw_retrieval/retrieval/__init__.py": "sha256:cf99f26c653fd6a40212e109d68a50fd9d91b0cc7bc6ad333e0aef6397cbd9c6",
-      "mcp/bylaw_retrieval/retrieval/binding.py": "sha256:40eea9a43ec69da82d192f737d9da6e0950b92c426c9ee35378b49ca06291a6c",
+      "mcp/bylaw_retrieval/retrieval/binding.py": "sha256:5a3442f2c5887027773e4a0e57d5cb506f2acbddda696c84afa258287ec1b346",
       "mcp/bylaw_retrieval/retrieval/channels.py": "sha256:5fa9c3fa397f2d6d51bc72c578088c4c5e775a5e4d691e12fa60dd562508125c",
       "mcp/bylaw_retrieval/retrieval/coherence_audit.py": "sha256:3c21a657b7eb3c84f70846272236abf6ac6daf405d1568d483efdb62e36e9cfa",
       "mcp/bylaw_retrieval/retrieval/context.py": "sha256:c147e8377215c1a2f1c9b3f86e0e1974b8337d59eaa7191ab2df3c8b14a7f74c",
       "mcp/bylaw_retrieval/retrieval/schemas.py": "sha256:23d6b7a21583e941ab23c77e1a5bb95db4025bb3c07e463dd3b795478bd4bf53",
-      "mcp/bylaw_retrieval/retrieval/service.py": "sha256:692c32ce5365a5663175db24a28470ecaf331d1cacc1300e5ece55d821889dc9",
+      "mcp/bylaw_retrieval/retrieval/service.py": "sha256:8d9a18b4d67bba1c5f65d0de9934cc0a4eb988c8ad6ac0235d8157fe2f5917b1",
       "mcp/bylaw_retrieval/retrieval/tables.py": "sha256:254fef5a98ca233146f4cfdf70a4297d89325c60d0e511dd34ceab323fb36a45",
       "scripts/eval_retrieval_recall.py": "sha256:784c7a79fd63aeeaf8b198a33994b85ab639d1380b96bbee147a63605205d7e2",
-      "scripts/repath_citation_paths.py": "sha256:f7688e32135623973149275a6055726ef3b4e43bd0d4150368e9544023b1f8ae",
+      "scripts/repath_citation_paths.py": "sha256:6ec2c7cb28b4e7ba33a860da2d825e7b696a5efe3a4d9d2dfc710847f59163c7",
       "src/layer1/pipeline/citation_repath.py": "sha256:a35509da2c9bf620df99e291ae12a0a0f694190a269ff8f023faf4f83b017643",
       "src/layer1/pipeline/corpus_repath.py": "sha256:2f62324c41d765e5f4fdfd6365dec52d342001c3f2b599fc177912924a086fb8",
       "src/layer1/pipeline/hierarchy.py": "sha256:bfc82920c948677e294b9343e91916dc45ee9da92a11b42c37df10929e4cbc6c"
     },
-    "acknowledged_drift": {
-      "_comment": "A deliberate decision to keep a baseline measured against slightly older retrieval code. Valid only for the exact digest below; the next change to any watched file fails the gate again.",
-      "digest": "sha256:e7fdf7ae8547ed6f6abd418957053bef7860d4f7809dc529d51d3d2f1321fecb",
-      "reason": "ABS-499 added a pre-write snapshot fence to scripts/repath_citation_paths.py: an import plus two fence_or_abort() calls in main(), guarding the apply and --revert paths. Nothing in the repath algorithm, the retrieval ladder, or any scoring input changed, so the recorded numbers still describe the code that produces them.",
-      "acknowledged_commit": "897c673617aacef3ae30e85ee84bf409ffdf890a",
-      "drifted_files": [
-        "scripts/repath_citation_paths.py"
-      ]
-    }
+    "acknowledged_drift": null
   },
   "k": 10,
-  "query_count": 68,
-  "recall_at_k": 0.6618,
-  "set_recall_at_k": 0.6618,
-  "mrr": 0.3388,
+  "query_count": 70,
+  "recall_at_k": 0.6857,
+  "set_recall_at_k": 0.6857,
+  "mrr": 0.3384,
   "by_category": {
     "citation_lookup": {
       "query_count": 8,
       "recall_at_k": 0.625,
       "set_recall_at_k": 0.625,
-      "mrr": 0.3531
+      "mrr": 0.3514
     },
     "definition": {
       "query_count": 12,
-      "recall_at_k": 0.3333,
-      "set_recall_at_k": 0.3333,
-      "mrr": 0.2063
+      "recall_at_k": 0.4167,
+      "set_recall_at_k": 0.4167,
+      "mrr": 0.2176
     },
     "dimensional": {
-      "query_count": 18,
-      "recall_at_k": 0.5556,
-      "set_recall_at_k": 0.5556,
-      "mrr": 0.1297
+      "query_count": 20,
+      "recall_at_k": 0.6,
+      "set_recall_at_k": 0.6,
+      "mrr": 0.1463
     },
     "permitted_use": {
       "query_count": 14,
       "recall_at_k": 0.7857,
       "set_recall_at_k": 0.7857,
-      "mrr": 0.3816
+      "mrr": 0.3774
     },
     "spatial": {
       "query_count": 6,
@@ -103,12 +95,12 @@
   },
   "latency_ms": {
     "_comment": "Wall-clock milliseconds for one RetrievalService.search call, measured on whatever host ran the harness. Host-dependent and not reproducible: this is the ONE block of this file that moves between two runs over an unchanged corpus. Reported so a ranking change that buys recall by scoring more per fragment can be read against what it costs to serve; never used to fail a run.",
-    "n": 68,
-    "mean": 442.5,
-    "p50": 440.2,
-    "p95": 595.0,
-    "p99": 605.6,
-    "max": 684.0
+    "n": 70,
+    "mean": 450.3,
+    "p50": 446.3,
+    "p95": 531.3,
+    "p99": 689.9,
+    "max": 697.3
   },
   "queries": [
     {
@@ -119,22 +111,22 @@
         7339
       ],
       "ranked_fragment_ids": [
-        7087,
         6612,
-        7320,
-        7216,
-        11200,
         7340,
-        7514,
         7622,
         7732,
-        6942
+        8605,
+        7867,
+        11537,
+        11551,
+        11498,
+        7087
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 684.0
+      "latency_ms": 689.9
     },
     {
       "id": "RQ-D02",
@@ -144,22 +136,22 @@
         7349
       ],
       "ranked_fragment_ids": [
-        7216,
-        7087,
         6612,
-        10643,
-        7514,
         7622,
         7732,
-        7320,
-        10719,
-        6688
+        7376,
+        6539,
+        10095,
+        7332,
+        6533,
+        7567,
+        7668
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 480.4
+      "latency_ms": 482.6
     },
     {
       "id": "RQ-D03",
@@ -169,22 +161,22 @@
         7351
       ],
       "ranked_fragment_ids": [
-        12303,
-        6942,
-        8658,
-        7320,
+        7358,
+        7356,
         7351,
-        7087,
         6612,
         8621,
-        7358,
-        12462
+        12462,
+        12463,
+        12303,
+        7622,
+        7732
       ],
       "hit": true,
-      "first_hit_rank": 5,
-      "reciprocal_rank": 0.2,
+      "first_hit_rank": 3,
+      "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 468.2
+      "latency_ms": 435.6
     },
     {
       "id": "RQ-D04",
@@ -194,22 +186,22 @@
         7399
       ],
       "ranked_fragment_ids": [
-        12303,
         11537,
         11551,
-        7087,
-        7216,
-        11191,
-        7003,
-        6676,
-        7320,
-        7514
+        12303,
+        7622,
+        7732,
+        7388,
+        6612,
+        12462,
+        12463,
+        6524
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 487.3
+      "latency_ms": 504.3
     },
     {
       "id": "RQ-D05",
@@ -219,22 +211,22 @@
         7409
       ],
       "ranked_fragment_ids": [
-        7426,
-        7432,
-        7771,
-        7778,
-        7832,
-        7837,
         9245,
         6524,
-        6673,
-        7015
+        7665,
+        6533,
+        7562,
+        12462,
+        12463,
+        7553,
+        7656,
+        7426
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 441.3
+      "latency_ms": 486.5
     },
     {
       "id": "RQ-D06",
@@ -251,15 +243,15 @@
         7426,
         7432,
         7435,
-        7358,
-        7410,
-        7493
+        7712,
+        6534,
+        6313
       ],
       "hit": true,
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 474.6
+      "latency_ms": 446.7
     },
     {
       "id": "RQ-D07",
@@ -278,13 +270,13 @@
         7491,
         7450,
         7457,
-        7358
+        7712
       ],
       "hit": true,
       "first_hit_rank": 6,
       "reciprocal_rank": 0.1667,
       "set_recall": 1.0,
-      "latency_ms": 367.4
+      "latency_ms": 459.5
     },
     {
       "id": "RQ-D08",
@@ -296,20 +288,20 @@
       "ranked_fragment_ids": [
         12462,
         12463,
-        10741,
         6534,
-        6865,
+        11537,
         11551,
-        10169,
         8540,
-        10643,
-        11537
+        6333,
+        8330,
+        8364,
+        6351
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 460.9
+      "latency_ms": 444.7
     },
     {
       "id": "RQ-D09",
@@ -324,17 +316,17 @@
         12463,
         7803,
         7802,
-        6942,
-        6688,
-        7514,
         7622,
-        7732
+        7732,
+        6612,
+        7712,
+        8621
       ],
       "hit": true,
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 430.9
+      "latency_ms": 443.2
     },
     {
       "id": "RQ-D10",
@@ -359,7 +351,7 @@
       "first_hit_rank": 5,
       "reciprocal_rank": 0.2,
       "set_recall": 1.0,
-      "latency_ms": 422.8
+      "latency_ms": 423.4
     },
     {
       "id": "RQ-D11",
@@ -372,19 +364,19 @@
         9752,
         12462,
         12463,
-        11200,
         7818,
         11498,
-        10539,
         7819,
         7812,
-        11306
+        12405,
+        12461,
+        6299
       ],
       "hit": true,
-      "first_hit_rank": 8,
-      "reciprocal_rank": 0.125,
+      "first_hit_rank": 6,
+      "reciprocal_rank": 0.1667,
       "set_recall": 1.0,
-      "latency_ms": 446.3
+      "latency_ms": 462.9
     },
     {
       "id": "RQ-D12",
@@ -394,22 +386,22 @@
         7840
       ],
       "ranked_fragment_ids": [
+        7841,
         12462,
         12463,
         7840,
-        7841,
         7832,
         7837,
-        10169,
+        7839,
         6534,
-        6865,
-        10741
+        9124,
+        7712
       ],
       "hit": true,
-      "first_hit_rank": 3,
-      "reciprocal_rank": 0.3333,
+      "first_hit_rank": 4,
+      "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 473.5
+      "latency_ms": 440.0
     },
     {
       "id": "RQ-D13",
@@ -434,7 +426,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 440.2
+      "latency_ms": 438.9
     },
     {
       "id": "RQ-D14",
@@ -450,16 +442,16 @@
         5627,
         5417,
         6352,
-        10912,
-        11294,
         9752,
-        5416
+        5416,
+        9747,
+        9751
       ],
       "hit": true,
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 455.4
+      "latency_ms": 489.1
     },
     {
       "id": "RQ-D15",
@@ -469,22 +461,22 @@
         7120
       ],
       "ranked_fragment_ids": [
+        7135,
         7216,
         7222,
         7120,
-        7135,
-        11551,
-        12462,
-        12463,
-        7867,
         11537,
-        11498
+        11551,
+        11498,
+        7867,
+        12462,
+        12463
       ],
       "hit": true,
-      "first_hit_rank": 3,
-      "reciprocal_rank": 0.3333,
+      "first_hit_rank": 4,
+      "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 489.3
+      "latency_ms": 481.9
     },
     {
       "id": "RQ-D16",
@@ -509,7 +501,7 @@
       "first_hit_rank": 7,
       "reciprocal_rank": 0.1429,
       "set_recall": 1.0,
-      "latency_ms": 514.3
+      "latency_ms": 449.7
     },
     {
       "id": "RQ-D17",
@@ -523,18 +515,18 @@
         12463,
         11537,
         11551,
-        10611,
-        10638,
-        10737,
-        10689,
         12405,
-        12461
+        12461,
+        11642,
+        10401,
+        10611,
+        10638
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 595.0
+      "latency_ms": 697.3
     },
     {
       "id": "RQ-D18",
@@ -553,13 +545,63 @@
         10030,
         10190,
         8724,
-        11642
+        10198
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 599.7
+      "latency_ms": 531.3
+    },
+    {
+      "id": "RQ-D19",
+      "category": "dimensional",
+      "question": "What is the minimum required side setback for a main building in the HR-1 zone?",
+      "acceptable_fragment_ids": [
+        7120
+      ],
+      "ranked_fragment_ids": [
+        7135,
+        7222,
+        7120,
+        11537,
+        7216,
+        11498,
+        11551,
+        7143,
+        7867,
+        7227
+      ],
+      "hit": true,
+      "first_hit_rank": 3,
+      "reciprocal_rank": 0.3333,
+      "set_recall": 1.0,
+      "latency_ms": 525.7
+    },
+    {
+      "id": "RQ-D20",
+      "category": "dimensional",
+      "question": "What is the minimum required rear setback for a main building in the HR-1 zone?",
+      "acceptable_fragment_ids": [
+        7138
+      ],
+      "ranked_fragment_ids": [
+        7143,
+        7222,
+        7142,
+        7138,
+        11498,
+        7135,
+        7216,
+        7867,
+        7227,
+        7113
+      ],
+      "hit": true,
+      "first_hit_rank": 4,
+      "reciprocal_rank": 0.25,
+      "set_recall": 1.0,
+      "latency_ms": 519.1
     },
     {
       "id": "RQ-P01",
@@ -584,7 +626,7 @@
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 423.5
+      "latency_ms": 419.8
     },
     {
       "id": "RQ-P02",
@@ -601,15 +643,15 @@
         7432,
         8607,
         8952,
-        9752,
         7417,
-        12405
+        12405,
+        12461
       ],
       "hit": true,
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 345.5
+      "latency_ms": 417.1
     },
     {
       "id": "RQ-P03",
@@ -623,18 +665,18 @@
         9656,
         8486,
         8470,
-        10310,
         9654,
-        10336,
-        10317,
         10363,
-        10339
+        10339,
+        12462,
+        12463,
+        10303
       ],
       "hit": true,
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 446.2
+      "latency_ms": 446.3
     },
     {
       "id": "RQ-P04",
@@ -659,7 +701,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 390.8
+      "latency_ms": 325.9
     },
     {
       "id": "RQ-P05",
@@ -674,17 +716,17 @@
         9220,
         9464,
         5933,
-        11825,
-        11511,
-        11801,
         5868,
-        10280
+        10280,
+        5934,
+        5985,
+        9814
       ],
       "hit": true,
       "first_hit_rank": 5,
       "reciprocal_rank": 0.2,
       "set_recall": 1.0,
-      "latency_ms": 486.8
+      "latency_ms": 471.2
     },
     {
       "id": "RQ-P06",
@@ -694,22 +736,22 @@
         5996
       ],
       "ranked_fragment_ids": [
+        10280,
         11163,
         11265,
-        10280,
-        5456,
-        5962,
-        11203,
-        11097,
         5999,
-        11322,
-        11464
+        11576,
+        9354,
+        9444,
+        5997,
+        9867,
+        5995
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 362.6
+      "latency_ms": 380.8
     },
     {
       "id": "RQ-P07",
@@ -734,7 +776,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 454.5
+      "latency_ms": 471.4
     },
     {
       "id": "RQ-P08",
@@ -759,7 +801,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 440.7
+      "latency_ms": 463.8
     },
     {
       "id": "RQ-P09",
@@ -769,22 +811,22 @@
         5878
       ],
       "ranked_fragment_ids": [
-        12303,
         8986,
         9137,
-        7890,
         6010,
-        11511,
         5878,
-        8658,
-        11548,
-        10981
+        8906,
+        5961,
+        12303,
+        7890,
+        6612,
+        6052
       ],
       "hit": true,
-      "first_hit_rank": 7,
-      "reciprocal_rank": 0.1429,
+      "first_hit_rank": 4,
+      "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 579.1
+      "latency_ms": 530.1
     },
     {
       "id": "RQ-P10",
@@ -796,10 +838,10 @@
       "ranked_fragment_ids": [
         5900,
         5906,
-        9752,
         7919,
         7920,
         11511,
+        9752,
         11835,
         5878,
         11551,
@@ -809,7 +851,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 419.4
+      "latency_ms": 418.1
     },
     {
       "id": "RQ-P11",
@@ -819,22 +861,22 @@
         6186
       ],
       "ranked_fragment_ids": [
-        5466,
-        6186,
         10857,
         10758,
+        6186,
         9613,
+        5466,
+        6187,
         9397,
         6185,
-        6187,
-        5610,
-        9116
+        9116,
+        5610
       ],
       "hit": true,
-      "first_hit_rank": 2,
-      "reciprocal_rank": 0.5,
+      "first_hit_rank": 3,
+      "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 430.3
+      "latency_ms": 494.3
     },
     {
       "id": "RQ-P12",
@@ -847,19 +889,19 @@
         9753,
         8241,
         9073,
-        11988,
-        11990,
         9071,
         8853,
         8267,
-        11999,
-        8234
+        8234,
+        6296,
+        5471,
+        8386
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 406.5
+      "latency_ms": 397.0
     },
     {
       "id": "RQ-P13",
@@ -871,20 +913,20 @@
       "ranked_fragment_ids": [
         12462,
         12463,
-        12125,
         12405,
         12461,
         10286,
-        12120,
-        9780,
         9114,
-        11642
+        9780,
+        10107,
+        10364,
+        12120
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 493.7
+      "latency_ms": 498.4
     },
     {
       "id": "RQ-P14",
@@ -909,7 +951,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 379.9
+      "latency_ms": 427.5
     },
     {
       "id": "RQ-F01",
@@ -934,7 +976,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 486.4
+      "latency_ms": 470.0
     },
     {
       "id": "RQ-F02",
@@ -959,7 +1001,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 300.3
+      "latency_ms": 307.2
     },
     {
       "id": "RQ-F03",
@@ -984,7 +1026,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 355.5
+      "latency_ms": 353.6
     },
     {
       "id": "RQ-F04",
@@ -1009,7 +1051,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 393.2
+      "latency_ms": 402.4
     },
     {
       "id": "RQ-F05",
@@ -1025,16 +1067,16 @@
         5417,
         9752,
         6352,
+        9111,
         5416,
         9747,
-        9111,
-        9748
+        9684
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 379.6
+      "latency_ms": 423.6
     },
     {
       "id": "RQ-F06",
@@ -1059,7 +1101,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 401.7
+      "latency_ms": 399.4
     },
     {
       "id": "RQ-F07",
@@ -1072,19 +1114,19 @@
         8165,
         8062,
         8791,
-        12130,
         6372,
         6373,
         9230,
         6569,
         6729,
-        6898
+        6898,
+        7044
       ],
       "hit": true,
-      "first_hit_rank": 7,
-      "reciprocal_rank": 0.1429,
+      "first_hit_rank": 6,
+      "reciprocal_rank": 0.1667,
       "set_recall": 1.0,
-      "latency_ms": 287.2
+      "latency_ms": 341.2
     },
     {
       "id": "RQ-F08",
@@ -1109,7 +1151,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 430.4
+      "latency_ms": 402.5
     },
     {
       "id": "RQ-F09",
@@ -1120,21 +1162,21 @@
       ],
       "ranked_fragment_ids": [
         9454,
-        12130,
         10280,
         6012,
         9268,
         9928,
         5918,
         7900,
-        11825,
-        11801
+        9567,
+        9588,
+        5934
       ],
-      "hit": false,
-      "first_hit_rank": null,
-      "reciprocal_rank": 0.0,
-      "set_recall": 0.0,
-      "latency_ms": 415.7
+      "hit": true,
+      "first_hit_rank": 9,
+      "reciprocal_rank": 0.1111,
+      "set_recall": 1.0,
+      "latency_ms": 374.8
     },
     {
       "id": "RQ-F10",
@@ -1159,7 +1201,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 408.5
+      "latency_ms": 447.9
     },
     {
       "id": "RQ-F11",
@@ -1184,7 +1226,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 378.6
+      "latency_ms": 391.1
     },
     {
       "id": "RQ-F12",
@@ -1209,7 +1251,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 352.8
+      "latency_ms": 375.4
     },
     {
       "id": "RQ-Z01",
@@ -1227,14 +1269,14 @@
         12462,
         12463,
         6488,
-        7919,
-        6641
+        7543,
+        7646
       ],
       "hit": true,
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
       "set_recall": 1.0,
-      "latency_ms": 450.5
+      "latency_ms": 461.8
     },
     {
       "id": "RQ-Z02",
@@ -1249,17 +1291,17 @@
         6981,
         12462,
         12463,
-        7919,
-        6485,
-        6641,
-        7254,
-        7440
+        7543,
+        7646,
+        7545,
+        7648,
+        7087
       ],
       "hit": true,
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
       "set_recall": 1.0,
-      "latency_ms": 450.4
+      "latency_ms": 441.1
     },
     {
       "id": "RQ-Z03",
@@ -1271,20 +1313,20 @@
       "ranked_fragment_ids": [
         7254,
         7256,
-        6485,
-        6641,
-        6979,
-        7440,
-        7810,
-        7415,
+        12462,
+        12463,
         7543,
-        7646
+        7646,
+        8952,
+        7320,
+        6786,
+        7545
       ],
       "hit": true,
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 440.7
+      "latency_ms": 450.1
     },
     {
       "id": "RQ-Z04",
@@ -1297,19 +1339,19 @@
         7440,
         9752,
         7442,
-        6485,
-        6641,
-        6979,
-        7254,
-        7810,
-        7415,
-        7543
+        12462,
+        12463,
+        7543,
+        7646,
+        8952,
+        7514,
+        6786
       ],
       "hit": true,
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 487.1
+      "latency_ms": 467.0
     },
     {
       "id": "RQ-Z05",
@@ -1320,21 +1362,21 @@
       ],
       "ranked_fragment_ids": [
         7330,
-        12303,
-        8986,
         7332,
-        7087,
-        7320,
-        6942,
-        12304,
-        6485,
-        6641
+        8986,
+        12303,
+        7375,
+        6010,
+        7377,
+        7622,
+        7732,
+        9137
       ],
       "hit": true,
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 482.9
+      "latency_ms": 464.9
     },
     {
       "id": "RQ-Z06",
@@ -1359,7 +1401,7 @@
       "first_hit_rank": 7,
       "reciprocal_rank": 0.1429,
       "set_recall": 1.0,
-      "latency_ms": 411.7
+      "latency_ms": 448.2
     },
     {
       "id": "RQ-Z07",
@@ -1373,18 +1415,18 @@
         6052,
         6064,
         6061,
-        7087,
         6612,
         6524,
         6533,
         6039,
-        6673
+        7665,
+        7562
       ],
       "hit": true,
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 516.2
+      "latency_ms": 548.6
     },
     {
       "id": "RQ-Z08",
@@ -1409,7 +1451,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 459.9
+      "latency_ms": 452.0
     },
     {
       "id": "RQ-Z09",
@@ -1420,21 +1462,21 @@
       ],
       "ranked_fragment_ids": [
         7646,
-        6341,
-        12303,
         7543,
-        12304,
         8952,
+        12303,
+        12462,
+        12463,
+        6341,
+        12304,
         9752,
-        6819,
-        7111,
-        7386
+        7545
       ],
       "hit": true,
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 447.1
+      "latency_ms": 429.3
     },
     {
       "id": "RQ-Z10",
@@ -1446,20 +1488,20 @@
       "ranked_fragment_ids": [
         12462,
         12463,
-        11551,
         11537,
+        11551,
+        11642,
         11694,
         10694,
-        10401,
-        11178,
         12405,
-        12461
+        12461,
+        10401
       ],
       "hit": false,
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 605.6
+      "latency_ms": 628.4
     },
     {
       "id": "RQ-S01",
@@ -1484,7 +1526,7 @@
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
       "set_recall": 1.0,
-      "latency_ms": 423.2
+      "latency_ms": 469.1
     },
     {
       "id": "RQ-S02",
@@ -1509,7 +1551,7 @@
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
       "set_recall": 1.0,
-      "latency_ms": 382.8
+      "latency_ms": 414.3
     },
     {
       "id": "RQ-S03",
@@ -1526,15 +1568,15 @@
         9754,
         9652,
         9656,
-        11774,
         9684,
-        11743
+        11352,
+        9714
       ],
       "hit": true,
       "first_hit_rank": 4,
       "reciprocal_rank": 0.25,
       "set_recall": 1.0,
-      "latency_ms": 449.3
+      "latency_ms": 380.8
     },
     {
       "id": "RQ-S04",
@@ -1559,7 +1601,7 @@
       "first_hit_rank": 3,
       "reciprocal_rank": 0.3333,
       "set_recall": 1.0,
-      "latency_ms": 398.9
+      "latency_ms": 431.9
     },
     {
       "id": "RQ-S05",
@@ -1576,15 +1618,15 @@
         6292,
         9075,
         8241,
-        11988,
         7906,
-        8383
+        8383,
+        8222
       ],
       "hit": true,
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 370.8
+      "latency_ms": 400.1
     },
     {
       "id": "RQ-S06",
@@ -1609,7 +1651,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 404.7
+      "latency_ms": 415.3
     },
     {
       "id": "RQ-C01",
@@ -1634,7 +1676,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 507.0
+      "latency_ms": 472.2
     },
     {
       "id": "RQ-C02",
@@ -1659,7 +1701,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 439.5
+      "latency_ms": 461.5
     },
     {
       "id": "RQ-C03",
@@ -1684,7 +1726,7 @@
       "first_hit_rank": 5,
       "reciprocal_rank": 0.2,
       "set_recall": 1.0,
-      "latency_ms": 455.1
+      "latency_ms": 406.3
     },
     {
       "id": "RQ-C04",
@@ -1709,7 +1751,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 399.2
+      "latency_ms": 464.0
     },
     {
       "id": "RQ-C05",
@@ -1720,6 +1762,7 @@
       ],
       "ranked_fragment_ids": [
         5429,
+        8706,
         9777,
         10107,
         11651,
@@ -1727,14 +1770,13 @@
         6556,
         10606,
         6317,
-        9123,
-        11844
+        9123
       ],
       "hit": true,
-      "first_hit_rank": 8,
-      "reciprocal_rank": 0.125,
+      "first_hit_rank": 9,
+      "reciprocal_rank": 0.1111,
       "set_recall": 1.0,
-      "latency_ms": 438.2
+      "latency_ms": 455.7
     },
     {
       "id": "RQ-C06",
@@ -1759,7 +1801,7 @@
       "first_hit_rank": 2,
       "reciprocal_rank": 0.5,
       "set_recall": 1.0,
-      "latency_ms": 423.3
+      "latency_ms": 391.5
     },
     {
       "id": "RQ-C07",
@@ -1784,7 +1826,7 @@
       "first_hit_rank": 1,
       "reciprocal_rank": 1.0,
       "set_recall": 1.0,
-      "latency_ms": 424.5
+      "latency_ms": 422.8
     },
     {
       "id": "RQ-C08",
@@ -1809,7 +1851,7 @@
       "first_hit_rank": null,
       "reciprocal_rank": 0.0,
       "set_recall": 0.0,
-      "latency_ms": 443.1
+      "latency_ms": 438.9
     }
   ]
 }

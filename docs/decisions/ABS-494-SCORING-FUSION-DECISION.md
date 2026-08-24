@@ -1,9 +1,15 @@
 # ABS-494 — scoring & fusion: SHIP the FTS hybrid, KEEP the max() fusion
 
-**Status:** decided, shipped
+**Status:** decided, shipped · **re-measured 2026-08-23 (ABS-518), decision unchanged**
 **Date:** 2026-08-13
-**Evidence:** [`evals/retrieval/experiments/RESULTS.md`](../../evals/retrieval/experiments/RESULTS.md) (17 arms, k=10, 68 labelled questions)
+**Evidence:** [`evals/retrieval/experiments/RESULTS.md`](../../evals/retrieval/experiments/RESULTS.md) (17 arms, k=10, 70 labelled questions as re-measured; 68 when decided)
 **Supersedes:** the first run of the same matrix (commit `702cb4c`), whose conclusion no longer holds — see *The matrix that expired* below.
+
+> **Reading the numbers in this doc.** Everything below the next section is the
+> evidence **as it stood on 2026-08-13**, quoted against a control scoring
+> 0.5588. That control no longer exists. See *Re-measured under ABS-518* for the
+> current figures; the two sets are not interchangeable, and the older ones are
+> kept because they are what the decision was actually made on.
 
 ## Verdict
 
@@ -19,6 +25,64 @@ the defect. On the retriever we actually ship, fusion is not the defect: the
 text channel's *coverage* is. Replacing `max()` with Reciprocal Rank Fusion
 makes things slightly worse, and adding a full-text channel beside the ladder
 makes them substantially better.
+
+## Re-measured under ABS-518 (2026-08-23) — decision unchanged
+
+ABS-518 changed the text ladder (zone-scope exclusion, a locator-segment rule on
+the citation-path rung, and a tokenizer fix — see
+[`docs/ABS-518-ZONE-SCOPE-EXCLUSION.md`](../ABS-518-ZONE-SCOPE-EXCLUSION.md))
+and added two labelled questions, taking the set from 68 to 70. Both moves put
+the retriever past the control this matrix was quoted against, which is exactly
+the staleness `abs494-scoring-fusion-decision.spec.ts` exists to catch — and it
+caught it. **The whole matrix was re-derived** rather than reconciled by hand:
+
+```bash
+python scripts/eval_retrieval_experiment.py --database-url …   # all 17 arms, k=10, 70 questions
+```
+
+| | Recall@10 | SetRecall@10 | MRR@10 |
+|---|---|---|---|
+| `current` (production, the new control) | **0.6857** | 0.6857 | 0.3384 |
+| `fts_hybrid_50` (shipped) | **0.6857** | 0.6857 | 0.3384 |
+
+The two rows coincide to the digit — zero questions gained, zero lost — which is
+the steady state the spec describes: `current` tracks production, and production
+*is* the shipped blend, so re-running the matrix after a ship measures it against
+itself. That agreement is the check, not a tautology: it is the harness's design
+premise (each arm is production's `search()` with one seam swapped) still
+holding after the ladder underneath it moved.
+
+**Both decisions survive the re-measurement.** `fts_hybrid_50` is still the best
+arm; RRF is still refuted, with its best arm (`rrf_all_channels_ts_rank`) at
+0.6429, −0.0428 behind.
+
+The weight sweep still peaks where it did, though the plateau has narrowed —
+worth knowing before quoting the old one:
+
+| text / fts | Recall@10 (2026-08-13, control 0.5588) | Recall@10 (2026-08-23, control 0.6857) |
+|---|---|---|
+| 0.25 / 0.75 | 0.5441 | 0.5714 |
+| 0.35 / 0.65 | 0.6324 | 0.6571 |
+| **0.40 / 0.60** | **0.6618** | **0.6857** |
+| **0.50 / 0.50** ← shipped | **0.6618** | **0.6857** |
+| 0.60 / 0.40 | 0.6176 | 0.6429 |
+| 0.70 / 0.30 | 0.5882 | 0.6143 |
+| 0.85 / 0.15 | 0.5294 | 0.5857 |
+
+Same shape, same peak, and 0.50 still posts the better MRR of the two settings
+tied for best recall. What changed is that "every weight in [0.35, 0.70] beats
+the control" is no longer a meaningful sentence post-ship — the control *is*
+0.50 — so read the curve for its shape, not for a sign.
+
+Two things the re-run surfaces that were not visible in August, recorded rather
+than acted on:
+
+* **`rrf_all_channels_ts_rank` now leads on dimensional recall (0.70 vs the
+  shipped 0.60) and on MRR (0.4122 vs 0.3384)**, while trailing on headline
+  recall. If the dimensional-MRR concern in *What to watch* ever becomes
+  load-bearing, that arm — not weight 0.60 — is the first place to look.
+* **Latency drifted with the ladder change**: mean 444.2 → 450.3 ms, p95 575.8 →
+  531.3 ms. Host-dependent, recorded in `BASELINE.json`, never used to fail a run.
 
 ## The matrix that expired
 
@@ -242,7 +306,8 @@ standard. This is the same argument ABS-500 made for not paying text and table
 a joint bonus.
 
 Verified: the shipped implementation reproduces the `fts_hybrid_50` arm
-**exactly** — 0.6618 / 0.6618 / 0.3388, every category matching. That is the
+**exactly** — 0.6618 / 0.6618 / 0.3388 when decided, 0.6857 / 0.6857 / 0.3384 on
+the 2026-08-23 re-run, every category matching in both. That is the
 harness's design premise (each arm is production's `search()` with one seam
 swapped) discharged as a check rather than left as a hope, and
 `web/e2e/functional/abs494-scoring-fusion-decision.spec.ts` asserts it holds.
@@ -254,7 +319,7 @@ swapped) discharged as a check rather than left as a hope, and
   ready-made retreat: +0.0588 recall with MRR 0.4003 and dimensional MRR 0.307,
   above the control's 0.284. The sweep is in `RESULTS.md`; this is a re-decision,
   not a tuning knob.
-* **The label tier.** All 68 questions are `review_status: unreviewed`,
+* **The label tier.** All 70 questions are `review_status: unreviewed`,
   agent-drafted. These numbers grade **ranking, never correctness**, and are
   never averaged with a golden pass rate. A human spot-check could move +0.1030.
 * **`definition` is still the worst class at 0.33.** The hybrid helped it most

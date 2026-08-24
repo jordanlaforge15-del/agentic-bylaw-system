@@ -10,7 +10,7 @@ them controls. Everything here measures the retriever alone: one
 
 | | |
 |---|---|
-| Question set | `queries.json` — 68 labelled questions |
+| Question set | `queries.json` — 70 labelled questions |
 | Harness | `scripts/eval_retrieval_recall.py` |
 | Baseline | `BASELINE.json` |
 | Regenerate | **`make eval-retrieval-baseline`** |
@@ -76,12 +76,12 @@ host-dependent, it is never used to fail a run, and it is the one block of
 
 ## Coverage
 
-68 questions across six categories, all six required by the loader (a set that
+70 questions across six categories, all six required by the loader (a set that
 silently loses a category fails to load, which a count check would not catch):
 
 | Category | n | What it stresses |
 |---|---|---|
-| `dimensional` | 18 | Setbacks, lot coverage, heights. Sibling zones state these in near-identical language, so this is where a zone-blind ranker shows. |
+| `dimensional` | 20 | Setbacks, lot coverage, heights. Sibling zones state these in near-identical language, so this is where a zone-blind ranker shows. |
 | `permitted_use` | 14 | "Which zones permit X", the permission tables, and lay phrasings ("can I run a home office"). |
 | `definition` | 12 | Part XVII terms. Most are ingested as PROSE with a **NULL citation_path**, so they are invisible to every path-based route — worth measuring on its own. |
 | `zone_anchored` | 10 | Questions naming a zone but no dimension; targets are chapter headings and zone-scoped sections. |
@@ -229,8 +229,8 @@ ambiguous-anchor failure are all covered without a database.
 
 ## The baseline, and how to read it
 
-`BASELINE.json` currently records **Recall@10 = 0.6618, set-Recall@10 = 0.6618,
-MRR@10 = 0.3388** over 68 questions against the two-document dev corpus.
+`BASELINE.json` currently records **Recall@10 = 0.6857, set-Recall@10 = 0.6857,
+MRR@10 = 0.3384** over 70 questions against the two-document dev corpus.
 
 ### The floor it is measured against
 
@@ -348,10 +348,39 @@ questions were lost, both of which the control ranked 8th and 9th — bottom-of-
 window marginals — against nine gained. p95 for one `search` call went 484ms →
 576ms from the extra index-eligible query.
 
+### What ABS-518 changed
+
+**0.6618 → 0.6765 on the original 68 questions** (MRR 0.3388 → 0.3398), and
+**0.6857 / 0.6857 / 0.3384 on the 70-question set this file now describes.**
+Read the two the right way round: the first is the like-for-like effect of the
+scoring change, the second is the current baseline over a set that also gained
+two questions. They are not a before/after pair — the ablation behind the
+first is in
+[`docs/ABS-518-ZONE-SCOPE-EXCLUSION.md`](../../docs/ABS-518-ZONE-SCOPE-EXCLUSION.md).
+
+Three ladder changes, each paying at a different rung: a chapter that declares
+*other* zones than the query's is now debited rather than left neutral; the
+citation-path rung scores only a path's structural segments, so the `a` in
+every Halifax Mainland `Schedule A > …` path stopped banking a citation-strength
+hit; and a hyphenated code's numeric tail (`HR-1` → `1`) no longer matches as a
+free-standing token, which is what let an Eastern Residential table row labelled
+`North End Halifax 1` answer an HR-1 question.
+
+The set gained `RQ-D19`/`RQ-D20` (HR-1 side and rear setback). **Both already
+passed at k=10 before the fix** — ranks 5 → 3 and 5 → 4. They are regression
+guards, not reproductions of the defect, and their labels say so; a green
+`RQ-D19` is not evidence the bug was caught. The reproduction lives in
+`tests/bylaw_retrieval/test_zone_scope_exclusion.py`.
+
+The 17-arm ABS-494 matrix was **re-derived** against this retriever rather than
+left quoting a control that had moved — the failure mode ABS-502 exists to
+prevent. Both of ABS-494's decisions survive unchanged; see the
+*Re-measured under ABS-518* section of its decision doc.
+
 ### What is still broken, and why it is not a ranking problem
 
-`definition` (12 questions) remains near zero, and nine `dimensional` questions
-still miss. Neither is reachable from the scorer:
+`definition` (12 questions) is still the worst class, and eight `dimensional`
+questions still miss. Neither is reachable from the scorer:
 
 * **`definition`** — Part XVII terms ingest as PROSE with a NULL `citation_path`
   *and* a parent pointing at an unrelated chapter, so there is no path to score

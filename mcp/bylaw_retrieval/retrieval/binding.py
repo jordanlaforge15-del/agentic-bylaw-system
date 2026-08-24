@@ -118,6 +118,34 @@ class ZoneScopeIndex:
             if declared & zones
         )
 
+    def containers_excluding(self, zones: frozenset[str]) -> frozenset[int]:
+        """Container fragment ids that declare zones, but none of ``zones``.
+
+        The complement of :meth:`containers_declaring` over the *declaring*
+        containers only — a container that names no zone at all (``Part V,
+        Chapter 1: General Built Form and Siting Requirements``) is silent on
+        the question, not adverse to it, and is deliberately absent from both
+        sets.
+
+        This is the half of zone-scope binding ABS-500 left out and ABS-518
+        needed. Crediting the right chapter is not enough when the by-law
+        states the *same rule shape* over different numbers in a dozen
+        chapters: "Table 9: Minimum required side setbacks …" sits under
+        ``Part V, Chapter 9 … within the ER3, ER-2, and ER-1 Zones`` and its
+        caption matches an HR-1 side-setback question word for word, so on
+        caption tokens alone it outranks ``s.198``, which states the HR-1
+        standard and never spells out its own zone. A chapter heading that
+        names ER and not HR is a positive statement that its sections do not
+        govern HR-1, and the ranking has to read it as one.
+        """
+        if not zones:
+            return frozenset()
+        return frozenset(
+            container_id
+            for container_id, declared in self.declared_by_container.items()
+            if declared and not (declared & zones)
+        )
+
 
 def build_zone_scope_index(session, document_ids) -> ZoneScopeIndex:
     """Read the zone vocabulary and the containers that declare each zone.
