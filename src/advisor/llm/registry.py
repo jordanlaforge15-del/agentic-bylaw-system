@@ -1,20 +1,38 @@
-"""Factory for constructing the configured LLMGateway.
+"""Factory for constructing the advisor's LLMGateway.
 
-Callers ask ``build_gateway()`` and get back the right backend per
-deployment. Production picks Anthropic; tests pick Mock; future
-deployments can pick OpenAI / Bedrock / on-prem by adding a branch.
+Callers ask ``build_gateway()`` and get back the Anthropic Messages API
+gateway. There is exactly one provider; the factory reads
+``AdvisorLLMSettings`` so model selection and credentials happen via env
+vars without code changes.
 
-The factory reads ``AdvisorLLMSettings`` so deployment changes happen via
-env vars without code changes.
+One provider (ABS-522)
+----------------------
+A second provider used to live here — ``claude_code``, which drove the
+``claude -p`` CLI so turns billed against an operator's Claude Code
+subscription instead of per token. It was removed because a controlled
+experiment (``evals/runs/zone-typology-v3`` vs
+``evals/runs/zone-typology-all8``, same code, same corpus, same attested
+expectations, only ``ADVISOR_LLM_PROVIDER`` differing) showed it did not
+just cost less, it *answered worse*: 0/8 golden passes against 3/8, with
+the CLI backend stopping its research roughly four times sooner and
+omitting figures the by-law requires. Production was always pinned to
+``anthropic``, so it shipped nothing while making evals unreadable and
+keeping a live metered-billing hazard on the boot path.
 
-Providers
----------
-``anthropic``
-    The metered Messages API. Requires ``ANTHROPIC_API_KEY``.
-``claude_code``
-    The ``claude -p`` CLI, billed against an operator's Claude Code
-    subscription rather than per token. Requires the *absence* of
-    ``ANTHROPIC_API_KEY`` — see :func:`build_gateway`.
+``ADVISOR_LLM_PROVIDER`` survives the removal as a *validated pin*, not a
+selector: ``build_gateway`` has no branch, and any value other than
+``anthropic`` is a hard startup failure. Silently coercing a stale
+``claude_code`` to ``anthropic`` would flip a deployment from
+subscription billing to metered billing without saying so, which is the
+exact class of surprise this issue was opened to end.
+
+Note on scope: ``claude -p`` is still used by the layer1/layer2 ingest and
+enrichment subsystems (``src/layer1/_claude_code_client.py``,
+``src/layer1/pipeline/audit.py``, ``src/layer1/learn_city_cmd.py``,
+``src/layer2/llm/clients.py``, ``src/layer2/cli.py``). Those are not the
+advisor's chat provider and nothing above says anything about their
+quality — they were deliberately left alone. See
+``tests/advisor/llm/test_registry.py`` for the test that records this.
 
 Two-model split
 ---------------
@@ -33,7 +51,6 @@ attributes; callers pass them to ``CompletionRequest``.
 """
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 
 from pydantic import Field
@@ -42,20 +59,35 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from advisor.llm.anthropic_backend import AnthropicGateway
 from advisor.llm.base import LLMGateway
 
+#: The only accepted value of ``ADVISOR_LLM_PROVIDER``.
+SUPPORTED_PROVIDER = "anthropic"
+
+#: Providers this repo used to support, mapped to the issue that removed
+#: them. A deployment still carrying one of these values gets told what
+#: happened rather than a bare "unknown provider".
+REMOVED_PROVIDERS = {
+    "claude_code": (
+        "removed in ABS-522 — the `claude -p` CLI backend answered worse "
+        "than the API backend (0/8 vs 3/8 golden passes on an otherwise "
+        "identical run) and was never on the production boot path"
+    ),
+}
+
 
 class AdvisorLLMSettings(BaseSettings):
     """LLM-related settings for the advisor app.
 
-    Values come from environment variables (or .env). The provider
-    string drives the factory's branch; provider-specific keys live
-    on this same model so deployment is one section of env.
+    Values come from environment variables (or .env).
     """
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    provider: str = Field(default="anthropic", alias="ADVISOR_LLM_PROVIDER")
+    # Not a selector — a pin. ``build_gateway`` rejects anything but
+    # ``anthropic``; see the module docstring for why the var survives
+    # the removal of the second provider instead of being deleted.
+    provider: str = Field(default=SUPPORTED_PROVIDER, alias="ADVISOR_LLM_PROVIDER")
     # Main research agent — drives the chat tool loop. Sized for the
     # depth of legal/zoning research the product targets.
     advisor_llm_main_model: str = Field(
@@ -71,37 +103,6 @@ class AdvisorLLMSettings(BaseSettings):
     )
     anthropic_api_key: str | None = Field(
         default=None, alias="ANTHROPIC_API_KEY"
-    )
-
-    # ------------------------------------------------------------------
-    # ``claude_code`` provider knobs. Only read when
-    # ``ADVISOR_LLM_PROVIDER=claude_code``; harmless on the Anthropic
-    # path. The defaults are literals rather than imports from
-    # ``advisor.llm.claude_code_backend`` on purpose — importing that
-    # module here would defeat the lazy import in ``build_gateway`` and
-    # pull the CLI backend into every production boot. They are pinned
-    # to the backend's ``DEFAULT_TIMEOUT_S`` / ``DEFAULT_MAX_RETRIES``
-    # by a test so the two can't drift.
-    # ------------------------------------------------------------------
-
-    # Path to the ``claude`` binary. ``None`` means "resolve ``claude``
-    # on PATH", which is what a normal Claude Code install gives you;
-    # set it when the CLI lives somewhere the service's PATH misses
-    # (e.g. a container that installs it under /opt).
-    claude_code_cli_path: str | None = Field(
-        default=None, alias="ADVISOR_CLAUDE_CODE_CLI_PATH"
-    )
-    # Per-subprocess wall-clock budget, seconds. A research turn through
-    # the CLI runs 5-30s typically; 300 leaves room for a long one
-    # without letting a wedged process pin a worker indefinitely.
-    claude_code_timeout_s: int = Field(
-        default=300, alias="ADVISOR_CLAUDE_CODE_TIMEOUT_S"
-    )
-    # Total attempts, not retries-after-the-first: 3 means at most three
-    # subprocess invocations, so worst-case latency for one turn is
-    # ``max_retries * timeout_s``.
-    claude_code_max_retries: int = Field(
-        default=3, alias="ADVISOR_CLAUDE_CODE_MAX_RETRIES"
     )
 
     # ------------------------------------------------------------------
@@ -138,7 +139,7 @@ def get_settings() -> AdvisorLLMSettings:
 
 
 def build_gateway(settings: AdvisorLLMSettings | None = None) -> LLMGateway:
-    """Construct the configured gateway.
+    """Construct the advisor's gateway.
 
     Tests usually skip this and instantiate ``MockGateway`` directly so
     they can script responses without env-var setup. Production callers
@@ -147,58 +148,36 @@ def build_gateway(settings: AdvisorLLMSettings | None = None) -> LLMGateway:
     The same gateway serves both the main model and the classifier —
     model selection is per-``CompletionRequest``, not per-gateway.
 
-    Raises ``RuntimeError`` when the provider is selected but its
-    environment is wrong: no key for ``anthropic``, a key present for
-    ``claude_code`` (see :func:`_assert_no_api_key_billing`).
+    Raises ``ValueError`` when ``ADVISOR_LLM_PROVIDER`` names anything
+    other than ``anthropic``, and ``RuntimeError`` when the key it needs
+    is missing.
     """
     s = settings or get_settings()
-    if s.provider == "anthropic":
-        if not s.anthropic_api_key:
-            raise RuntimeError(
-                "ANTHROPIC_API_KEY is required when ADVISOR_LLM_PROVIDER=anthropic"
-            )
-        return AnthropicGateway(api_key=s.anthropic_api_key)
-    if s.provider == "claude_code":
-        _assert_no_api_key_billing()
-        # Imported here, not at module scope. Production pins
-        # ``ADVISOR_LLM_PROVIDER=anthropic`` and never takes this
-        # branch, so the CLI backend and its imports must not be able
-        # to break a production boot. A top-level import would run this
-        # module's code on every start for no benefit.
-        from advisor.llm.claude_code_backend import ClaudeCodeGateway
-
-        return ClaudeCodeGateway(
-            cli_path=s.claude_code_cli_path,
-            timeout_s=s.claude_code_timeout_s,
-            max_retries=s.claude_code_max_retries,
-        )
-    raise ValueError(
-        f"unknown ADVISOR_LLM_PROVIDER {s.provider!r}; "
-        "supported: 'anthropic', 'claude_code'. "
-        "Add a branch in registry.build_gateway."
-    )
-
-
-def _assert_no_api_key_billing() -> None:
-    """Refuse to boot the CLI backend with an API key in the environment.
-
-    ``claude -p`` in headless mode has a known defect
-    (anthropics/claude-code#43333 and related) where the presence of
-    ``ANTHROPIC_API_KEY`` silently routes the turn to **API billing**
-    instead of the operator's subscription — one report cited >$1,800 of
-    unexpected charges over two days. Avoiding metered spend is the
-    entire reason this backend exists, so an environment that would
-    silently meter is a startup failure, not a runbook note.
-
-    ``os.environ`` rather than ``settings.anthropic_api_key`` is
-    deliberate: the check has to match what the CLI subprocess actually
-    inherits. ``AdvisorLLMSettings`` also reads ``.env``, and a value
-    that only lives in a ``.env`` file never reaches the subprocess —
-    failing on it would block boots that were never at risk, while
-    passing on a real process-env key would miss the one case that is.
-    """
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if s.provider != SUPPORTED_PROVIDER:
+        raise ValueError(_unsupported_provider_message(s.provider))
+    if not s.anthropic_api_key:
         raise RuntimeError(
-            "ANTHROPIC_API_KEY is set with ADVISOR_LLM_PROVIDER=claude_code — "
-            "refusing to start; the CLI would bill API rates (see GH #43333)."
+            "ANTHROPIC_API_KEY is required when ADVISOR_LLM_PROVIDER=anthropic"
         )
+    return AnthropicGateway(api_key=s.anthropic_api_key)
+
+
+def _unsupported_provider_message(provider: str) -> str:
+    """Explain a rejected ``ADVISOR_LLM_PROVIDER`` value.
+
+    A removed provider gets its removal reason, because the operator who
+    set it did so on purpose and the useful answer is "that backend is
+    gone and here is why", not "unknown".
+    """
+    head = f"unsupported ADVISOR_LLM_PROVIDER {provider!r}; "
+    removal = REMOVED_PROVIDERS.get(provider)
+    if removal is not None:
+        return (
+            f"{head}that provider was {removal}. "
+            f"Set ADVISOR_LLM_PROVIDER={SUPPORTED_PROVIDER!r} (or unset it) — "
+            "note that this switches billing to the metered Messages API."
+        )
+    return (
+        f"{head}{SUPPORTED_PROVIDER!r} is the only supported provider. "
+        "Add a branch in registry.build_gateway to support another."
+    )

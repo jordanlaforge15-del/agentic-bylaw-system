@@ -2122,216 +2122,24 @@ def _mount_advisor_search_attribute_tag_filter_endpoint(app: FastAPI) -> None:
         return {"ok": True, "result": json.loads(raw)}
 
 
-class _ClaudeCodeEnvelopeBody(BaseModel):
-    """ABS-454: an envelope (+ optional CLI payload) to translate."""
-
-    structured_output: dict[str, Any] = Field(default_factory=dict)
-    payload: dict[str, Any] | None = None
-    model: str = Field(default="claude-code-e2e", min_length=1, max_length=128)
-
-
-def _mount_claude_code_translation_endpoints(app: FastAPI) -> None:
-    """ABS-454: drive the ``claude -p`` translation layer through the stack.
-
-    The unit suite
-    (``tests/advisor/llm/test_claude_code_translation.py``) pins the
-    contract at the function boundary. These endpoints pin it against
-    the *real advisor tool menu* inside the running FastAPI process, so
-    the Playwright spec catches two things unit tests structurally
-    cannot:
-
-    * the module is importable in a deployed advisor image — it now
-      needs ``jsonschema``, which was a ``[dev]``-only dependency before
-      this issue and would ``ImportError`` at request time in prod;
-    * the envelope schema and the tool-name enum are built from the
-      tools ``advisor.chat.tools.build_bylaw_tools`` actually ships, so
-      renaming or adding a bylaw tool without re-deriving the envelope
-      shows up here rather than at runtime.
-
-    ``GET  …/schema``  → envelope schema + rendered prompt for a canned
-    request (called twice by the spec to prove determinism).
-    ``POST …``         → translation result, or the typed error name for
-    a rejected envelope. Rejections come back ``200`` with
-    ``ok: false``: the error *type* is the contract the transport in
-    ABS-455 dispatches on, so the spec has to read it, not an HTTP code.
-    """
-    from advisor.chat.tools import build_bylaw_tools  # noqa: PLC0415
-    from advisor.llm.base import (  # noqa: PLC0415
-        CompletionRequest,
-        LLMRole,
-        Message,
-        TextBlock,
-        ToolResultBlock,
-        ToolUseBlock,
-    )
-    from advisor.llm.claude_code_translation import (  # noqa: PLC0415
-        ClaudeCodeTranslationError,
-        build_envelope_schema,
-        envelope_to_response,
-        render_prompt,
-    )
-
-    def _no_service() -> RetrievalService:  # pragma: no cover — never invoked
-        # Only the tool *definitions* are under test here; no handler is
-        # ever dispatched, so the factory must never resolve. Raising
-        # (rather than returning a stub) makes an accidental handler
-        # call loud instead of silently exercising a fake.
-        raise RuntimeError("ABS-454 translation endpoints never run tool handlers")
-
-    def _tools() -> list[Any]:
-        tools, _handlers = build_bylaw_tools(_no_service)
-        return tools
-
-    def _canned_request(tools: list[Any]) -> CompletionRequest:
-        # Exercises every branch of the conversation renderer: a plain
-        # user turn, an assistant tool_use turn, and the user-role
-        # tool_result that answers it.
-        return CompletionRequest(
-            model="claude-code-e2e",
-            system="ABS-454 system persona under test.",
-            messages=[
-                Message(role=LLMRole.USER, content="What is the max height in R-1?"),
-                Message(
-                    role=LLMRole.ASSISTANT,
-                    content=[
-                        TextBlock(text="Checking the bylaw."),
-                        ToolUseBlock(
-                            id="toolu_abs454",
-                            name="search_bylaw_evidence",
-                            input={"query": "R-1 maximum height"},
-                        ),
-                    ],
-                ),
-                Message(
-                    role=LLMRole.USER,
-                    content=[
-                        ToolResultBlock(
-                            tool_use_id="toolu_abs454",
-                            content="Section 4.2: 10 m.",
-                        )
-                    ],
-                ),
-            ],
-            tools=tools,
-        )
-
-    @app.get("/v1/_test/claude-code-translation/schema")
-    async def claude_code_translation_schema() -> dict[str, object]:
-        tools = _tools()
-        return {
-            "tool_names": [tool.name for tool in tools],
-            "schema": build_envelope_schema(tools),
-            "prompt": render_prompt(_canned_request(tools)),
-        }
-
-    @app.post("/v1/_test/claude-code-translation")
-    async def claude_code_translation(
-        body: _ClaudeCodeEnvelopeBody,
-    ) -> dict[str, object]:
-        try:
-            response = envelope_to_response(
-                body.structured_output,
-                body.payload,
-                body.model,
-                tools=_tools(),
-            )
-        except ClaudeCodeTranslationError as exc:
-            return {
-                "ok": False,
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-            }
-        return {
-            "ok": True,
-            "id": response.id,
-            "model": response.model,
-            "stop_reason": response.stop_reason,
-            "content": [block.model_dump(mode="json") for block in response.content],
-            "usage": response.usage.model_dump(mode="json") if response.usage else None,
-        }
-
-
-def _mount_claude_code_transport_endpoint(app: FastAPI) -> None:
-    """ABS-455: expose the command line the ``claude -p`` gateway builds.
-
-    Nothing here spawns the CLI — the endpoint asks the gateway what it
-    *would* run for a canned request against the real advisor tool menu.
-    Two failure modes survive the unit suite and land here:
-
-    * the transport module has to import inside a deployed advisor image
-      (it pulls in the translation layer and therefore ``jsonschema``,
-      an extra that moved out of ``[dev]`` only in ABS-454) — mounting
-      this endpoint at startup is itself the assertion;
-    * ``--disallowedTools`` and ``--autocompact`` are the two flags that
-      keep the agentic loop, and with it the per-turn charge and the
-      cost breakers, on our side. A refactor that drops one still passes
-      a unit test built from fixtures if the fixture drifts too; this
-      reads the flags off the live gateway.
-
-    ``GET`` only, no body: the gateway is constructed with an explicit
-    ``cli_path`` so the answer doesn't depend on whether a ``claude``
-    binary happens to exist in the e2e container.
-    """
-    from advisor.chat.tools import build_bylaw_tools  # noqa: PLC0415
-    from advisor.llm.base import (  # noqa: PLC0415
-        CompletionRequest,
-        LLMGateway,
-        LLMRole,
-        Message,
-    )
-    from advisor.llm.claude_code_backend import (  # noqa: PLC0415
-        AUTOCOMPACT_THRESHOLD,
-        DISALLOWED_TOOLS,
-        ClaudeCodeGateway,
-    )
-
-    def _no_service() -> RetrievalService:  # pragma: no cover — never invoked
-        # Same contract as the ABS-454 endpoints above: definitions only,
-        # never a dispatched handler.
-        raise RuntimeError("ABS-455 transport endpoint never runs tool handlers")
-
-    _SYSTEM = "ABS-455 system persona under test."
-
-    @app.get("/v1/_test/claude-code-transport")
-    async def claude_code_transport() -> dict[str, object]:
-        tools, _handlers = build_bylaw_tools(_no_service)
-        gateway = ClaudeCodeGateway(cli_path="/nonexistent/claude")
-        request = CompletionRequest(
-            model="claude-code-e2e",
-            system=_SYSTEM,
-            messages=[
-                Message(role=LLMRole.USER, content="What is the max height in R-1?")
-            ],
-            tools=tools,
-        )
-        argv = gateway.build_argv(request)
-        return {
-            "name": gateway.name,
-            "is_llm_gateway": isinstance(gateway, LLMGateway),
-            "argv": argv,
-            "system": _SYSTEM,
-            "tool_names": [tool.name for tool in tools],
-            "disallowed_tools": list(DISALLOWED_TOOLS),
-            "autocompact_threshold": AUTOCOMPACT_THRESHOLD,
-        }
-
-
 # ---------------------------------------------------------------------------
-# ABS-456: provider selection + the API-key billing guard, probed in a real
-# process.
+# ABS-456 / ABS-522: provider resolution, probed in a real process.
 #
 # ``build_gateway()`` runs exactly once per deployment — at boot, against the
 # process environment the service actually inherits. The unit suite reaches it
-# with a hand-built ``AdvisorLLMSettings`` and a monkeypatched ``os.environ``,
-# which is the right shape for pinning the branch logic but cannot see the two
-# things that decide whether a deployment boots:
+# with a hand-built ``AdvisorLLMSettings``, which is the right shape for
+# pinning the resolution logic but cannot see the two things that decide
+# whether a deployment boots:
 #
-#   * whether ``ADVISOR_*`` env vars are read at all (an alias typo, a settings
-#     field renamed out from under its alias, a stray ``.env`` shadowing the
-#     process env — all invisible to ``monkeypatch.setenv`` + a constructed
-#     settings object);
-#   * whether the guard fires on the *real* ``os.environ`` of a freshly-started
-#     interpreter, before anything is constructed.
+#   * whether ``ADVISOR_LLM_PROVIDER`` is read at all (an alias typo, a
+#     settings field renamed out from under its alias, a stray ``.env``
+#     shadowing the process env — all invisible to a constructed settings
+#     object);
+#   * whether a *stale* value in a real environment is rejected rather than
+#     coerced. ABS-522 removed the second provider (``claude_code``, the
+#     ``claude -p`` CLI). A deployment still carrying that value must fail
+#     loudly: silently building the Anthropic gateway would move it from
+#     subscription billing to metered billing without a word.
 #
 # So the probe below spawns one. The child gets an env assembled from scratch —
 # never a copy of this server's — runs ``build_gateway()``, and reports what it
@@ -2341,29 +2149,25 @@ def _mount_claude_code_transport_endpoint(app: FastAPI) -> None:
 
 # Env vars the probe will forward. An allowlist, not a passthrough: this
 # endpoint hands attacker-controllable strings to a subprocess environment, and
-# the e2e server is deliberately unauthenticated. These four are the only ones
-# ABS-456 gives meaning to.
-_REGISTRY_PROBE_ENV_ALLOWLIST = frozenset(
-    {
-        "ANTHROPIC_API_KEY",
-        "ADVISOR_CLAUDE_CODE_CLI_PATH",
-        "ADVISOR_CLAUDE_CODE_TIMEOUT_S",
-        "ADVISOR_CLAUDE_CODE_MAX_RETRIES",
-    }
-)
+# the e2e server is deliberately unauthenticated. The key is the only one
+# ``build_gateway`` gives meaning to now that there is one provider.
+_REGISTRY_PROBE_ENV_ALLOWLIST = frozenset({"ANTHROPIC_API_KEY"})
 
-# Fixed program — never assembled from request data. Reads the private
-# ``_cli_path`` / ``_timeout_s`` / ``_max_retries`` attributes deliberately:
-# the assertion is that configuration reached the *constructed* gateway, and a
-# public mirror of them would exist only to be asserted on.
+# Fixed program — never assembled from request data. It also reports whether
+# the removed CLI backend is importable at all: the removal is only real if the
+# module is gone from the installed package, not merely unreferenced.
 _REGISTRY_PROBE_SOURCE = """
-import json, sys
+import importlib.util, json
 
-_CLI = "advisor.llm.claude_code_backend"
 out = {}
+out["cli_backend_importable"] = (
+    importlib.util.find_spec("advisor.llm.claude_code_backend") is not None
+)
+out["cli_translation_importable"] = (
+    importlib.util.find_spec("advisor.llm.claude_code_translation") is not None
+)
 try:
     from advisor.llm.registry import build_gateway
-    out["cli_backend_imported_on_registry_import"] = _CLI in sys.modules
     gateway = build_gateway()
 except BaseException as exc:
     out["ok"] = False
@@ -2373,18 +2177,16 @@ else:
     out["ok"] = True
     out["gateway_name"] = getattr(gateway, "name", None)
     out["gateway_class"] = type(gateway).__name__
-    out["cli_path"] = getattr(gateway, "_cli_path", None)
-    out["timeout_s"] = getattr(gateway, "_timeout_s", None)
-    out["max_retries"] = getattr(gateway, "_max_retries", None)
-out["cli_backend_imported_after_build"] = _CLI in sys.modules
 print(json.dumps(out))
 """
 
 
 class _LlmRegistryProbeBody(BaseModel):
-    """Body for ``POST /v1/_test/llm-registry-probe`` (ABS-456)."""
+    """Body for ``POST /v1/_test/llm-registry-probe`` (ABS-456/522)."""
 
-    provider: str = Field(min_length=1, max_length=64)
+    # Optional so the spec can probe the "operator sets nothing" case,
+    # which is what a container with no ADVISOR_LLM_PROVIDER inherits.
+    provider: str | None = Field(default=None, min_length=1, max_length=64)
     env: dict[str, str] = Field(
         default_factory=dict,
         description=(
@@ -2395,7 +2197,7 @@ class _LlmRegistryProbeBody(BaseModel):
 
 
 def _mount_llm_registry_probe_endpoint(app: FastAPI) -> None:
-    """ABS-456: run ``build_gateway()`` in a fresh process and report back."""
+    """ABS-456/522: run ``build_gateway()`` in a fresh process and report back."""
 
     @app.post("/v1/_test/llm-registry-probe")
     async def llm_registry_probe(body: _LlmRegistryProbeBody) -> dict[str, object]:
@@ -2420,11 +2222,11 @@ def _mount_llm_registry_probe_endpoint(app: FastAPI) -> None:
         env = {
             "PATH": os.environ.get("PATH", ""),
             "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
-            "ADVISOR_LLM_PROVIDER": body.provider,
+            **({} if body.provider is None else {"ADVISOR_LLM_PROVIDER": body.provider}),
             **body.env,
         }
 
-        with tempfile.TemporaryDirectory(prefix="abs456-probe-") as cwd:
+        with tempfile.TemporaryDirectory(prefix="llm-registry-probe-") as cwd:
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-c",
@@ -3045,8 +2847,6 @@ _mount_spatial_candidate_text_endpoint(app)
 _mount_openai_tool_search_endpoint(app)
 _mount_advisor_search_include_flags_endpoint(app)
 _mount_advisor_search_attribute_tag_filter_endpoint(app)
-_mount_claude_code_translation_endpoints(app)
-_mount_claude_code_transport_endpoint(app)
 _mount_llm_registry_probe_endpoint(app)
 _mount_buy_answer_test_router(app)
 
