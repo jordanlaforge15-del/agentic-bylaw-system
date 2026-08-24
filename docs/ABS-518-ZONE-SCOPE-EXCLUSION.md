@@ -163,6 +163,26 @@ On the failing question itself, s.198 moved from rank 5 to 3 and s.199 from 20
 to 14; on tighter phrasings ("HR-1 side setback and rear setback main
 building") the pair now sits at 2 and 3.
 
+### The ABS-494 matrix was re-derived, not reconciled
+
+Moving the ladder moves the control that
+[`docs/decisions/ABS-494-SCORING-FUSION-DECISION.md`](decisions/ABS-494-SCORING-FUSION-DECISION.md)
+was argued against, and
+`web/e2e/functional/abs494-scoring-fusion-decision.spec.ts` fails the moment it
+does — by design. That spec exists because ABS-494's *first* run shipped a
+conclusion measured against a retriever `dev` had already overtaken, and the
+only honest answer to it is to re-measure, never to edit the numbers into
+agreement.
+
+So all 17 arms were re-run over the 70-question set against this retriever
+(`python scripts/eval_retrieval_experiment.py --database-url …`), rewriting
+`evals/retrieval/experiments/RESULTS.md` and every `arms/*.json`. **Both of
+ABS-494's decisions survive**: `fts_hybrid_50` is still the best arm (0.6857,
+reproducing `BASELINE.json` to the digit and to every category), and RRF is
+still refuted, its best arm 0.0428 behind. The weight sweep keeps its shape and
+its peak. Details and the two findings the re-run surfaced are in that doc's
+*Re-measured under ABS-518* section.
+
 ## Coverage
 
 * `tests/bylaw_retrieval/test_zone_scope_exclusion.py` — the reproduction. It
