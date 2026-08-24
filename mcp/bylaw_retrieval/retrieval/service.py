@@ -72,6 +72,9 @@ from bylaw_retrieval.retrieval.binding import ZoneScopeIndex, build_zone_scope_i
 from bylaw_retrieval.retrieval.channels import TextChannelScores
 from bylaw_retrieval.retrieval.context import AncestorIndex, split_citation_path
 from bylaw_retrieval.retrieval.tables import (
+    CHANNEL_THRESHOLD as TABLE_CHANNEL_THRESHOLD,
+)
+from bylaw_retrieval.retrieval.tables import (
     TableCellHit,
     TableIndex,
     table_channel_scores,
@@ -2957,6 +2960,21 @@ class RetrievalService:
     # states the ER-1 standard. See bylaw_retrieval.retrieval.binding.
     _ZONE_SCOPE_BINDING_SCORE = 12.0
 
+    # Zone-scope exclusion (ABS-518). The mirror of the binding above, and the
+    # half that was missing: a clause governed by a container that declares
+    # zones and *not* the query's is off-chapter, and the by-law says so in the
+    # heading. It matters because the chapters are near-identical prose over
+    # different numbers — ER Chapter 9 and HR Chapter 7 both say "the minimum
+    # required side setback for any main building shall be" — so an HR-1
+    # question matches the ER chapter's words just as well as the HR chapter's
+    # and, when the ER side carries a captioned table, better. Symmetric with
+    # the binding (-12 against +12) so an off-chapter clause lands a full
+    # structural rung below an on-chapter one rather than merely losing a
+    # tie-break. Applies to both the text channel and the table channel's
+    # anchors: "Table 9" is off-chapter for HR-1 for exactly the reason
+    # s.229 is.
+    _ZONE_SCOPE_EXCLUSION_PENALTY = 12.0
+
     def _zone_scope_index(self) -> ZoneScopeIndex:
         """The corpus's zone vocabulary and zone-declaring containers, cached.
 
@@ -3019,9 +3037,10 @@ class RetrievalService:
         # *is* one of them (so "where are the COR built-form requirements?"
         # still ranks the chapter heading above the sections it scopes) or when
         # one of them is an ancestor.
-        declaring = self._zone_scope_index().containers_declaring(
-            self._zones_named(request.query)
-        )
+        zones_named = self._zones_named(request.query)
+        zone_index = self._zone_scope_index()
+        declaring = zone_index.containers_declaring(zones_named)
+        excluding = zone_index.containers_excluding(zones_named)
 
         scored = TextChannelScores(discriminating=discriminating)
         for fragment in fragments:
@@ -3033,14 +3052,42 @@ class RetrievalService:
             # ancestor repeating the clause's own words is not new evidence.
             inherited = (context & discriminating) - detail.matched_tokens
             score = detail.score + self._CONTEXT_TOKEN_SCORE * len(inherited)
-            if declaring and (
-                fragment.id in declaring
-                or any(ancestor in declaring for ancestor in index.chain(fragment.id))
-            ):
-                score += self._ZONE_SCOPE_BINDING_SCORE
+            score += self._zone_scope_adjustment(
+                fragment.id, index.chain(fragment.id), declaring, excluding
+            )
             if score > self._TEXT_CHANNEL_THRESHOLD:
                 scored[fragment.id] = score
         return scored
+
+    def _zone_scope_adjustment(
+        self,
+        fragment_id: int,
+        chain: tuple[int, ...],
+        declaring: frozenset[int],
+        excluding: frozenset[int],
+    ) -> float:
+        """The zone-scope credit or debit one fragment earns for its chapter.
+
+        A fragment is on-chapter when it *is* a container declaring the query's
+        zone or descends from one, and off-chapter when the nearest zone-
+        declaring container above it names other zones only. Binding wins any
+        conflict: nesting puts an HR clause under both ``Part V, Chapter 7 …
+        HR-2 and HR-1`` and, sometimes, a broader heading that lists a
+        different set, and a container that does declare the zone is the
+        specific statement.
+
+        Containers naming no zone at all are in neither set — they are silent
+        on the question, so they neither credit nor debit.
+        """
+        if declaring and (
+            fragment_id in declaring or any(a in declaring for a in chain)
+        ):
+            return self._ZONE_SCOPE_BINDING_SCORE
+        if excluding and (
+            fragment_id in excluding or any(a in excluding for a in chain)
+        ):
+            return -self._ZONE_SCOPE_EXCLUSION_PENALTY
+        return 0.0
 
     def _fts_channel_scores(self, request: RetrievalRequest) -> dict[int, float]:
         """Rank the in-scope corpus by Postgres full-text search (ABS-494).
@@ -3204,14 +3251,62 @@ class RetrievalService:
         if allowed is not None and not allowed:
             return {}, {}
 
+        zones_named = self._zones_named(request.query)
         result = table_channel_scores(
             self._table_index(),
             token_patterns=query_token_patterns(request.query.strip().lower()),
-            zones_named=self._zones_named(request.query),
+            zones_named=zones_named,
             discriminating=discriminating,
             document_ids=allowed,
         )
-        return result.scores, result.hits
+        scores = self._apply_zone_scope_to_anchors(result.scores, zones_named)
+        return scores, {fid: hits for fid, hits in result.hits.items() if fid in scores}
+
+    def _apply_zone_scope_to_anchors(
+        self, scores: dict[int, float], zones_named: frozenset[str]
+    ) -> dict[int, float]:
+        """Re-score table hits by the chapter their anchor fragment sits in.
+
+        A table is cited through the provision that introduces it, and that
+        provision sits in a chapter like any other — so ``Table 9: Minimum
+        required side setbacks …`` is a clause of ``Part V, Chapter 9 … within
+        the ER3, ER-2, and ER-1 Zones`` and does not govern HR-1, no matter how
+        exactly its caption echoes an HR-1 side-setback question (ABS-518).
+
+        The table channel already binds an *axis* to a named zone; this binds
+        the *table* to a chapter, which is the only signal available for a
+        table whose axes are Established Residential Special Area names rather
+        than zone codes — precisely the table that mis-ranked.
+
+        Anchors are one fragment per table (tens, not thousands), so the extra
+        ancestor closure is cheap next to the text channel's.
+        """
+        if not zones_named or not scores:
+            return scores
+        zone_index = self._zone_scope_index()
+        declaring = zone_index.containers_declaring(zones_named)
+        excluding = zone_index.containers_excluding(zones_named)
+        if not declaring and not excluding:
+            return scores
+        anchors = (
+            self.session.execute(
+                select(SourceFragment).where(SourceFragment.id.in_(scores))
+            )
+            .scalars()
+            .all()
+        )
+        index = AncestorIndex.build(self.session, anchors)
+        adjusted: dict[int, float] = {}
+        for fragment_id, score in scores.items():
+            score += self._zone_scope_adjustment(
+                fragment_id, index.chain(fragment_id), declaring, excluding
+            )
+            # Below the channel's own admission bar the hit is no longer
+            # evidence, and keeping it would leave a demoted off-chapter table
+            # attached to a match it no longer earned.
+            if score >= TABLE_CHANNEL_THRESHOLD:
+                adjusted[fragment_id] = score
+        return adjusted
 
     def _discriminating_tokens(
         self,
@@ -3730,6 +3825,29 @@ class RetrievalService:
         return score_fragment_detail(fragment, query).score
 
 
+#: A citation-path segment that locates a fragment rather than citing it.
+#: Deliberately the same shape as ``_NON_STRUCTURAL_SEGMENT_RE``'s Part/
+#: Schedule/Appendix arm, minus the bracketed arm ``split_citation_path``
+#: already removed.
+_LOCATOR_SEGMENT_RE = re.compile(r"^(?:part|schedule|appendix)\b", re.IGNORECASE)
+
+
+@lru_cache(maxsize=8192)
+def _locator_free_citation_path(structural: str) -> str:
+    """``"schedule a > 31 > 38bi(1)"`` -> ``"31 > 38bi(1)"``.
+
+    Cached on the already-split structural path, which is stable for the life
+    of an ingest and shared by every fragment beneath a container.
+    """
+    if not structural:
+        return ""
+    return " > ".join(
+        segment
+        for segment in (part.strip() for part in structural.split(">"))
+        if segment and not _LOCATOR_SEGMENT_RE.match(segment)
+    )
+
+
 def score_fragment_detail(fragment: SourceFragment, query: str) -> FragmentScore:
     """Score a fragment on its own citable identity, and say which query tokens
     it accounted for.
@@ -3763,6 +3881,17 @@ def score_fragment_detail(fragment: SourceFragment, query: str) -> FragmentScore
     citation_path, _descriptive = split_citation_path(fragment.citation_path)
     citation_label = (fragment.citation_label or "").lower()
     text = fragment.text.lower()
+    # The per-token rung goes one step further than the phrase rungs below and
+    # drops the *locator* segments too — "Part V", "Schedule A", "Appendix B"
+    # (ABS-518). They say where the fragment sits, not how it is cited, and
+    # they are written in ordinary words a question is full of: "a" in an
+    # HR-1 setback question matched "Schedule A" and banked +12, three times
+    # what the section stating the standard earns for its own text, on every
+    # one of the 4,000-odd Halifax Mainland fragments whose path begins that
+    # way. A whole by-law outranking another on the word "a" is the citation
+    # rung paying for a coincidence of prose. The phrase rungs keep the full
+    # path: "Part V > 198" is a citation someone would type.
+    structural_path = _locator_free_citation_path(citation_path)
 
     score = 0.0
     # An exact echo of the path, in either the form the ingest stores or the
@@ -3777,7 +3906,7 @@ def score_fragment_detail(fragment: SourceFragment, query: str) -> FragmentScore
 
     matched: set[str] = set()
     for token, pattern in token_patterns:
-        if citation_path and pattern.search(citation_path):
+        if structural_path and pattern.search(structural_path):
             score += 12.0
         elif citation_label and pattern.search(citation_label):
             score += 8.0
@@ -3937,6 +4066,23 @@ def fts_or_query(query: str) -> str:
     return " | ".join(dict.fromkeys(terms))
 
 
+def _is_compound_artefact(part: str) -> bool:
+    """True when a hyphen-compound's part is not a word of the query alone.
+
+    "single-family" splits into two terms a by-law might write apart, and both
+    are worth matching. "HR-1" and "R-2" split into a stem and a bare ordinal
+    that means nothing on its own: "1" is a whole-word match against
+    "38BI(1)", "Table 1", "Subsection (1)" and several thousand other places,
+    and at the citation-path rung each of those is worth +12 — three times
+    what the section stating the standard earns for its own text (ABS-518).
+    The code stays addressable as the compound; only the artefact goes, along
+    with a single-letter stem ("R-1" -> "r") for the same reason. The length
+    floor mirrors ``binding._MIN_ZONE_CODE_LENGTH``, which drops those codes
+    from the zone vocabulary on the identical argument.
+    """
+    return part.isdigit() or len(part) < 2
+
+
 def _tokenize(text: str) -> list[str]:
     """Query tokens: every hyphenated compound, plus its parts.
 
@@ -3958,7 +4104,11 @@ def _tokenize(text: str) -> list[str]:
     for match in TOKEN_RE.findall(text):
         tokens.append(match.lower())
         if "-" in match:
-            tokens.extend(part.lower() for part in match.split("-") if part)
+            tokens.extend(
+                part.lower()
+                for part in match.split("-")
+                if part and not _is_compound_artefact(part)
+            )
     return tokens
 
 
