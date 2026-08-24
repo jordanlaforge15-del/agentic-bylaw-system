@@ -16,7 +16,7 @@ them controls. Everything here measures the retriever alone: one
 | Regenerate | **`make eval-retrieval-baseline`** |
 | Freshness gate | `scripts/check_retrieval_baseline.py` / `make check-retrieval-baseline` |
 | Unit tests | `tests/scripts/test_eval_retrieval_recall.py`, `tests/scripts/test_check_retrieval_baseline.py` (no DB) |
-| Offline guards | `web/e2e/functional/abs486-retrieval-eval.spec.ts`, `web/e2e/functional/abs502-retrieval-baseline-freshness.spec.ts` |
+| Offline guards | `web/e2e/functional/abs486-retrieval-eval.spec.ts`, `web/e2e/functional/abs502-retrieval-baseline-freshness.spec.ts`, `web/e2e/functional/abs518-hr1-setback-retrieval.spec.ts`, `web/e2e/functional/abs521-accessory-structure-caps.spec.ts` |
 
 ## Tier: agent-drafted, pending human spot-check
 
@@ -394,6 +394,11 @@ stops — the 60.0 m² figure is in a clause whose own text is a zone list and a
 number, and which scores 9 against its section's 21 on the very query it
 answers. Full write-up in
 [`docs/ABS-521-PROVISION-COMPLETION.md`](../../docs/ABS-521-PROVISION-COMPLETION.md).
+
+The recorded p95 for one `search` call moved 531ms -> 660ms, and that number is
+**not** this change's price: an A/B on the same process with completion enabled
+and disabled puts the difference inside the host's own run-to-run variance. The
+measurement is in the write-up's *What it costs* section.
 
 The set gained `RQ-D21` / `RQ-D22` — the 60.0 m² footprint cap and the 93.0 m²
 floor-area cap of one provision, both binding, one answered alone by TC-024.

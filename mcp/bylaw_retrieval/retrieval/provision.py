@@ -314,41 +314,42 @@ class ProvisionLineage:
         return siblings[:limit], len(siblings) - limit
 
     def lineage(self, fragment: SourceFragment) -> list[SourceFragment]:
-        """Strict ancestors of ``fragment``, root-first, by path *and* by tree.
+        """Strict ancestors of ``fragment`` in document order, by path *and* tree.
 
         The union rather than either alone. The tree parent of s.333's clauses
         is the heading "Accessory Structure Footprint and Area", which is real
         context about what the clauses are for; the path parent is s.333, which
         is the sentence they finish. A reader needs both, and before ABS-521 the
         agent was shown only the first.
+
+        Ordered by ``reading_order_start`` rather than by how the walk happened
+        to reach each node. A container is printed before what it contains, so
+        for a well-formed document that *is* root-first — and unlike "the order
+        the ascent produced" it stays stable when the two lineages disagree
+        about the shape of the tree, which is precisely the case this method
+        exists for.
         """
-        ordered: list[SourceFragment] = []
-        seen_in_result: set[int] = set()
-
-        def walk(current: SourceFragment, visiting: frozenset[int], depth: int) -> None:
-            if depth >= _MAX_PATH_DEPTH:
-                return
-            parents: list[SourceFragment] = []
-            tree_parent = current.parent
-            if tree_parent is not None:
-                parents.append(tree_parent)
-            path_parent = self.path_parent(current)
-            if path_parent is not None and all(
-                path_parent.id != parent.id for parent in parents
-            ):
-                parents.append(path_parent)
-            for parent in parents:
-                if parent.id in visiting:
-                    # A cycle in the tree, or a path that names its own
-                    # ancestor. Missing scope, never an error.
-                    continue
-                walk(parent, visiting | {parent.id}, depth + 1)
-                if parent.id not in seen_in_result:
-                    seen_in_result.add(parent.id)
-                    ordered.append(parent)
-
-        walk(fragment, frozenset({fragment.id}), 0)
-        return ordered
+        collected: dict[int, SourceFragment] = {}
+        frontier: list[SourceFragment] = [fragment]
+        depth = 0
+        while frontier and depth < _MAX_PATH_DEPTH:
+            parents: dict[int, SourceFragment] = {}
+            for current in frontier:
+                for parent in (current.parent, self.path_parent(current)):
+                    if parent is None or parent.id == fragment.id:
+                        # A parent pointing back at the fragment itself is a
+                        # malformed tree, or a path naming its own descendant.
+                        # Missing scope, never an error.
+                        continue
+                    if parent.id in collected or parent.id in parents:
+                        continue
+                    parents[parent.id] = parent
+            collected.update(parents)
+            frontier = list(parents.values())
+            depth += 1
+        return sorted(
+            collected.values(), key=lambda node: (node.reading_order_start, node.id)
+        )
 
     # ------------------------------------------------------------------
 

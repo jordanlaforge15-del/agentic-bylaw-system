@@ -386,6 +386,25 @@ def test_lineage_is_a_union_and_holds_no_duplicates(corpus):
         assert clause_a.id not in ids
 
 
+def test_lineage_is_in_document_order(corpus):
+    """The chain reads top-down, not in whatever order the ascent produced.
+
+    Two lineages that disagree about the shape of the tree can be walked in
+    several defensible orders, and the walk's own order is the one that changes
+    when the disagreement does. Reading order is a property of the by-law: a
+    container is printed before what it contains, so for a well-formed document
+    this is root-first and it stays root-first.
+    """
+    with session_scope(corpus.db_url) as session:
+        clause_a = session.get(SourceFragment, corpus.clause_a_id)
+        chain = _service(session)._ancestor_chain(clause_a)
+        assert [ancestor.id for ancestor in chain] == [
+            corpus.chapter_id,
+            corpus.heading_id,
+            corpus.section_333_id,
+        ]
+
+
 # ----------------------------------------------------------------------
 # What completion must NOT do
 # ----------------------------------------------------------------------

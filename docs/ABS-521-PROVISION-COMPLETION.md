@@ -169,6 +169,26 @@ gained two questions: 48 hits over 70 became 49 over 72.
 The fingerprint moved because the retrieval package did, which is exactly what
 [ABS-502](../scripts/check_retrieval_baseline.py) exists to force.
 
+### What it costs
+
+`BASELINE.json` records p95 for one `search` call moving 531ms → 660ms. **Do
+not read that as this change's price.** It is the block the README already
+warns is "the one part of a report that moves between two runs over an
+unchanged corpus", and an A/B on the same process — 40 queries, completion
+enabled and disabled by monkeypatch, alternating, warm caches — puts the actual
+difference inside the noise:
+
+| | mean | p50 | p95 |
+|---|---|---|---|
+| with completion | 553.4 / 546.5 ms | 547.2 / 547.6 | 675.1 / 671.4 |
+| without | 518.4 / 542.6 ms | 521.0 / 540.0 | 632.4 / 676.6 |
+
+The two "without" runs differ from each other by more than either differs from
+"with". That is what the shape of the work predicts: completion adds one indexed
+lookup per distinct provision per request (~1ms each measured over 40 distinct
+paths, memoised for the life of the service), against a call that already scores
+every in-scope fragment in Python.
+
 ## Where each guarantee is pinned
 
 | guarantee | pinned by |
