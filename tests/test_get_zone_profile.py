@@ -929,3 +929,66 @@ def test_abs493_matrix_uses_report_the_bound_table_cell_rung(tmp_path: Path):
         EVIDENCE_CLASS_CONFIDENCE[EvidenceClass.BOUND_TABLE_CELL]
         > EVIDENCE_CLASS_CONFIDENCE[EvidenceClass.PATH_ANCHORED]
     )
+
+
+def _parent_the_matrix_table(session, document_id: int) -> None:
+    """Give the seeded matrix a caption fragment, the way a backfilled corpus
+    has one — which is what gives its citation a ``citation_path`` (ABS-524).
+
+    Every other matrix fixture here leaves the table unparented, so its
+    citation comes back path-less and exercises the ABS-409 label+pages
+    fallback. The live Regional Centre corpus is the other shape: Table 1B has
+    a parent, so its citation carries a path *and* a label — and the projection
+    used to drop the label whenever the path was there.
+    """
+    from layer1.db.base import SourceTable
+
+    fragment = SourceFragment(
+        document_id=document_id,
+        fragment_type=FragmentType.SECTION,
+        citation_label="Table 1A",
+        citation_path="Part I > [Table 1A]",
+        page_start=45,
+        page_end=45,
+        reading_order_start=800,
+        reading_order_end=800,
+        text="Part I — Table 1A: uses permitted in each zone.",
+        parse_status=ParseStatus.PARSED,
+        confidence=1.0,
+    )
+    session.add(fragment)
+    session.flush()
+    table = (
+        session.query(SourceTable).filter(SourceTable.document_id == document_id).first()
+    )
+    table.parent_fragment_id = fragment.id
+    session.flush()
+
+
+def test_abs524_parented_table_citation_keeps_both_path_and_label(tmp_path: Path):
+    """A use permission has to arrive quotable.
+
+    ``compact_zone_profile`` emitted the path alone when one was present, so
+    the model had to recover "Table 1A" by parsing "Part I > [Table 1A]" — and
+    in 2 of 5 recorded TC-022 runs it stated the permission and named no table
+    at all. Both fields now travel, and the permission table is bound to the
+    ``uses`` block rather than only to the citations list at the payload tail.
+    """
+    from advisor.chat.compact import compact_zone_profile
+
+    db_url = f"sqlite:///{tmp_path / 'parented_matrix.db'}"
+    document_id = _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        _parent_the_matrix_table(session, document_id)
+    with session_scope(db_url) as session:
+        profile = _service(db_url, session).get_zone_profile("DH")
+        compact = compact_zone_profile(profile)
+
+    uses_refs = [c for c in compact["citations"] if "uses" in (c.get("backs") or [])]
+    assert uses_refs, "the permission must be citable"
+    assert uses_refs[0]["citation_path"] == "Part I > [Table 1A]"
+    assert uses_refs[0]["citation_label"] == "Table 1A"
+
+    cite_as = compact["uses"]["cite_as"]
+    assert [c["citation_label"] for c in cite_as] == ["Table 1A"]
+    assert compact["uses"]["citation_instruction"]

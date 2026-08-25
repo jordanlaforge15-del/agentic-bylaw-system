@@ -115,13 +115,13 @@ def test_undetermined_only_uses_still_project():
 
 
 def _table_1b(**overrides) -> CitationRef:
-    base = dict(
-        citation_path="Part I > [Table 1B]",
-        citation_label="Table 1B",
-        page_start=48,
-        page_end=48,
-        backs=["uses"],
-    )
+    base = {
+        "citation_path": "Part I > [Table 1B]",
+        "citation_label": "Table 1B",
+        "page_start": 48,
+        "page_end": 48,
+        "backs": ["uses"],
+    }
     base.update(overrides)
     return CitationRef(**base)
 
