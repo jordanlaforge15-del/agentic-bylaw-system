@@ -31,10 +31,10 @@
 // branch and blind to the two things that decide a real run: whether the
 // runner actually *calls* /healthz before spending, and whether a refusal
 // exits non-zero instead of printing a warning and carrying on. Both are
-// only observable from outside the process, so this drives the real CLI
-// through spawnSync against a stub advisor — no stack, no API key, no spend.
+// only observable from outside the process, so this drives the real CLI as a
+// child process against a stub advisor — no stack, no API key, no spend.
 
-import { spawnSync } from "child_process";
+import { spawn } from "child_process";
 import * as http from "http";
 import type { AddressInfo } from "net";
 import * as fs from "fs";
@@ -87,8 +87,19 @@ async function stubAdvisor(health: Health): Promise<{
   };
 }
 
-function runRunner(baseUrl: string, extraArgs: string[], outDir: string) {
-  const result = spawnSync(
+/**
+ * Run the CLI to completion. Async on purpose: spawnSync would block this
+ * process's event loop, and the stub advisor lives on it — the runner's
+ * /healthz call would hang until the timeout and every case would "pass"
+ * for the wrong reason (a pre-flight that aborted on an unreachable
+ * advisor, not on its billing).
+ */
+async function runRunner(
+  baseUrl: string,
+  extraArgs: string[],
+  outDir: string,
+): Promise<{ status: number; stderr: string; stdout: string }> {
+  const child = spawn(
     VENV_PYTHON,
     [
       RUNNER,
@@ -102,13 +113,21 @@ function runRunner(baseUrl: string, extraArgs: string[], outDir: string) {
       "5",
       ...extraArgs,
     ],
-    { cwd: REPO_ROOT, encoding: "utf-8", timeout: 90_000 },
+    { cwd: REPO_ROOT },
   );
-  return {
-    status: result.status ?? -1,
-    stderr: result.stderr ?? "",
-    stdout: result.stdout ?? "",
-  };
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+  const status = await new Promise<number>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => resolve(code ?? -1));
+  });
+  return { status, stderr, stdout };
 }
 
 function tmpOutDir(): string {
@@ -138,7 +157,7 @@ test.describe("ABS-515 eval-run billing pre-flight", () => {
     const advisor = await stubAdvisor(METERED);
     const outDir = tmpOutDir();
     try {
-      const run = runRunner(advisor.baseUrl, [], outDir);
+      const run = await runRunner(advisor.baseUrl, [], outDir);
 
       expect(run.status, run.stderr).not.toBe(0);
       expect(run.stderr).toContain("billing precondition");
@@ -162,7 +181,7 @@ test.describe("ABS-515 eval-run billing pre-flight", () => {
     // exists — the flag is the answer, and it has to be in the message.
     const advisor = await stubAdvisor(METERED);
     try {
-      const run = runRunner(advisor.baseUrl, [], tmpOutDir());
+      const run = await runRunner(advisor.baseUrl, [], tmpOutDir());
 
       expect(run.stderr).toContain("ABS-522");
       expect(run.stderr).toContain("consent gate");
@@ -175,7 +194,7 @@ test.describe("ABS-515 eval-run billing pre-flight", () => {
     const advisor = await stubAdvisor(METERED);
     const outDir = tmpOutDir();
     try {
-      const run = runRunner(advisor.baseUrl, ["--allow-metered"], outDir);
+      const run = await runRunner(advisor.baseUrl, ["--allow-metered"], outDir);
 
       expect(run.status, run.stderr).toBe(0);
       expect(run.stderr).toContain("billing precondition OK");
@@ -192,7 +211,7 @@ test.describe("ABS-515 eval-run billing pre-flight", () => {
     const advisor = await stubAdvisor(UNMETERED);
     const outDir = tmpOutDir();
     try {
-      const run = runRunner(advisor.baseUrl, [], outDir);
+      const run = await runRunner(advisor.baseUrl, [], outDir);
 
       expect(run.status, run.stderr).toBe(0);
       expect(run.stderr).toContain("provider='mock'");
@@ -213,7 +232,7 @@ test.describe("ABS-515 eval-run billing pre-flight", () => {
       llm: { main_model: "claude-opus-4-5" },
     });
     try {
-      const run = runRunner(advisor.baseUrl, [], tmpOutDir());
+      const run = await runRunner(advisor.baseUrl, [], tmpOutDir());
 
       expect(run.status, run.stderr).not.toBe(0);
       expect(run.stderr).toContain("predates");
@@ -225,7 +244,7 @@ test.describe("ABS-515 eval-run billing pre-flight", () => {
 
   test("an unreachable advisor aborts with the command that starts one", async () => {
     // Port 1 is reserved and nothing listens there.
-    const run = runRunner("http://127.0.0.1:1", [], tmpOutDir());
+    const run = await runRunner("http://127.0.0.1:1", [], tmpOutDir());
 
     expect(run.status).not.toBe(0);
     expect(run.stderr).toContain("pre-flight");
@@ -237,7 +256,7 @@ test.describe("ABS-515 eval-run billing pre-flight", () => {
     // now read one /healthz response; neither may have lost its teeth.
     const advisor = await stubAdvisor(METERED);
     try {
-      const run = runRunner(
+      const run = await runRunner(
         advisor.baseUrl,
         ["--allow-metered", "--model", "claude-haiku-4-5"],
         tmpOutDir(),
@@ -300,7 +319,14 @@ test.describe("ABS-515 the documented way to start an eval advisor", () => {
     // file-scoped value into an inheritable process-environment one.
     // scripts/dev-up.sh may keep doing it — that is the manual-testing
     // stack, and it is not what an eval runner is pointed at.
-    expect(launcher()).not.toMatch(/set\s+-a/);
+    // Comment lines are exempt — the launcher explains the trap at length,
+    // and that prose is the point. What must not exist is an executable
+    // line that does it.
+    const executableLines = launcher()
+      .split("\n")
+      .filter((line) => !/^\s*(#|$)/.test(line));
+
+    expect(executableLines.join("\n")).not.toMatch(/set\s+-a\b/);
     expect(launcher()).toContain("env -i");
   });
 
