@@ -50,6 +50,7 @@ from layer1.semantic.permission_grid import densify_permission_matrix
 from layer1.semantic.permission_markers import (
     UNKNOWN,
     annotate_value_cells,
+    cell_footnotes,
     classify_permission_marker,
 )
 from layer1.semantic.use_matching import match_use
@@ -1959,17 +1960,22 @@ def resolve_permission_cell(
         .first()
     )
     meta = (cell.metadata_json or {}) if cell is not None else {}
+    cell_text = cell.text if cell is not None else None
     return {
         "table_id": table_id,
         "row_index": row_binding.index,
         "col_index": col_binding.index,
         "use": use_norm,
         "zone": zone_norm,
-        "cell_text": cell.text if cell is not None else None,
+        "cell_text": cell_text,
         "permission_marker": (
             meta.get("permission_marker") if cell is not None else UNKNOWN
         ),
         "footnote": meta.get("footnote"),
+        # ABS-523: a cell may print several markers ("⑮ ㉒") and every one of
+        # them binds. ``footnote`` is the first and is kept only for callers
+        # that predate the list.
+        "footnotes": cell_footnotes(meta, cell_text),
     }
 
 
@@ -1987,7 +1993,10 @@ def enumerate_permission_column(
 
     Returns ``None`` when the zone doesn't bind a column on ``table_id``
     (caller falls through to the next table), else a list of
-    ``{"use_label", "permission", "footnote_ordinal"}`` dicts in row order.
+    ``{"use_label", "permission", "footnote_ordinal", "footnote_ordinals"}``
+    dicts in row order. ``footnote_ordinals`` is every marker in the cell
+    (ABS-523); ``footnote_ordinal`` is the first of them, lossy, retained for
+    callers that predate the list.
     ``permission`` is ``permitted`` / ``conditional`` / ``not_permitted``, or
     ``unknown`` when the bound row has no cell in this column at all (ABS-483 —
     an extraction gap, reported as such instead of as a prohibition).
@@ -2067,6 +2076,7 @@ def enumerate_permission_column(
         seen_labels.add(label)
         cell = cells_by_row.get(binding.index)
         meta = (cell.metadata_json or {}) if cell is not None else {}
+        cell_text = cell.text if cell is not None else None
         marker = meta.get("permission_marker")
         footnote = meta.get("footnote")
         if marker is None:
@@ -2074,14 +2084,18 @@ def enumerate_permission_column(
             # ``unknown`` (pass None, not ""), so a row extraction dropped is
             # never reported as the bylaw prohibiting the use. A cell that is
             # present and blank still classifies as ``not_permitted``.
-            classified = classify_permission_marker(cell.text if cell is not None else None)
+            classified = classify_permission_marker(cell_text)
             marker = classified.get("permission_marker")
             footnote = classified.get("footnote", footnote)
+        # ABS-523: every marker in the cell, not just the one that happened to
+        # print first — see ``cell_footnotes``.
+        footnotes = cell_footnotes(meta, cell_text) if marker == "conditional" else []
         results.append(
             {
                 "use_label": label,
                 "permission": marker,
                 "footnote_ordinal": footnote,
+                "footnote_ordinals": footnotes,
             }
         )
     return results

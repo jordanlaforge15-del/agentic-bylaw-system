@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
+from collections.abc import Sequence
 from typing import Any, Callable
 
 from sqlalchemy import (
@@ -48,6 +49,7 @@ from bylaw_retrieval.retrieval.schemas import (
     DocumentOutlineResponse,
     DocumentSummary,
     EvidenceClass,
+    FootnoteCondition,
     LinkedDataset,
     LocationSlot,
     NeighbourZone,
@@ -989,12 +991,17 @@ class RetrievalService:
         if marker == UNKNOWN:
             return None
 
-        footnote_ordinal: int | None = None
-        condition_text: str | None = None
+        footnotes: list[FootnoteCondition] = []
         if marker == "conditional":
-            footnote_ordinal = footnote
-            condition_text = self._footnote_condition_text(
-                document_id=table.document_id, ordinal=footnote
+            # ABS-523: every marker in the cell, not just the first. The ER-3
+            # multi-unit cell prints "⑮ ㉒"; keeping ⑮ alone reported a grain
+            # elevator carve-out and dropped the footnote that authorises the
+            # units, and the advisor sent a developer to an unneeded rezoning.
+            ordinals = resolved.get("footnotes") or (
+                [footnote] if footnote is not None else []
+            )
+            footnotes = self._footnote_conditions(
+                document_id=table.document_id, ordinals=ordinals
             )
 
         return PermittedUseResult(
@@ -1002,12 +1009,41 @@ class RetrievalService:
             zone=zone,
             indeterminate=False,
             permission=marker,
-            footnote_ordinal=footnote_ordinal,
-            condition_text=condition_text,
+            footnotes=footnotes,
+            footnote_ordinal=footnotes[0].ordinal if footnotes else None,
+            condition_text=footnotes[0].text if footnotes else None,
             citation=self._table_citation(table),
             document_id=table.document_id,
             table_id=table.id,
         )
+
+    def _footnote_conditions(
+        self, *, document_id: int, ordinals: Sequence[int]
+    ) -> list[FootnoteCondition]:
+        """Resolve each of a cell's footnote ordinals to its legend (ABS-523).
+
+        Order is the cell's own print order — the by-law prints ⑮ before ㉒ and
+        a reader comparing the answer against the table should find them the
+        same way round. Duplicates are collapsed; an ordinal whose legend does
+        not resolve is still returned, with ``text=None``, because "condition
+        ㉒ applies and we could not read it" is a materially different thing to
+        tell a reader than silence.
+        """
+        conditions: list[FootnoteCondition] = []
+        seen: set[int] = set()
+        for ordinal in ordinals:
+            if ordinal is None or ordinal in seen:
+                continue
+            seen.add(ordinal)
+            conditions.append(
+                FootnoteCondition(
+                    ordinal=ordinal,
+                    text=self._footnote_condition_text(
+                        document_id=document_id, ordinal=ordinal
+                    ),
+                )
+            )
+        return conditions
 
     def _footnote_condition_text(
         self, *, document_id: int, ordinal: int | None
@@ -1547,18 +1583,34 @@ class RetrievalService:
                 elif permission == "permitted":
                     uses.permitted.append(label)
                 elif permission == "conditional":
-                    ordinal = row.get("footnote_ordinal")
-                    condition: str | None = None
-                    if ordinal is not None:
+                    # ABS-523: the whole cell's markers. ``get_zone_profile`` is
+                    # the case-open shortcut the server instructions tell the
+                    # agent to call first, so a condition dropped here is the
+                    # first thing the agent learns about the zone and the last
+                    # thing it will think to re-check.
+                    ordinals = row.get("footnote_ordinals") or []
+                    if not ordinals and row.get("footnote_ordinal") is not None:
+                        ordinals = [row["footnote_ordinal"]]
+                    footnotes: list[FootnoteCondition] = []
+                    for ordinal in ordinals:
                         cache_key = (table.document_id, ordinal)
                         if cache_key not in condition_cache:
                             condition_cache[cache_key] = self._footnote_condition_text(
                                 document_id=table.document_id, ordinal=ordinal
                             )
-                        condition = condition_cache[cache_key]
+                        footnotes.append(
+                            FootnoteCondition(
+                                ordinal=ordinal, text=condition_cache[cache_key]
+                            )
+                        )
                     uses.conditional.append(
                         ConditionalUse(
-                            use=label, footnote_ordinal=ordinal, condition=condition
+                            use=label,
+                            footnotes=footnotes,
+                            footnote_ordinal=(
+                                footnotes[0].ordinal if footnotes else None
+                            ),
+                            condition=footnotes[0].text if footnotes else None,
                         )
                     )
                 elif permission == "not_permitted":
