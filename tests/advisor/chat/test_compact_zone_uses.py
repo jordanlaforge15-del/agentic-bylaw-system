@@ -100,3 +100,91 @@ def test_undetermined_only_uses_still_project():
     assert out["uses"]["undetermined"] == ["Restaurant use"]
     assert "permitted" not in out["uses"]
     assert "not_permitted" not in out["uses"]
+
+
+# ---------------------------------------------------------------------------
+# ABS-524 — the permission table travels with the permission it grants
+# ---------------------------------------------------------------------------
+#
+# The failing TC-022 runs had Table 1B in context the whole time: the profile's
+# citations tail carried it with a path, a label and pages, keyed to the uses
+# block by ``backs: ["uses"]``. The answer stated the permission and never
+# named it. Two things were missing at the point of use — the quotable label
+# (suppressed whenever a path was present) and any statement that the fact and
+# the citation belong together.
+
+
+def _table_1b(**overrides) -> CitationRef:
+    base = dict(
+        citation_path="Part I > [Table 1B]",
+        citation_label="Table 1B",
+        page_start=48,
+        page_end=48,
+        backs=["uses"],
+    )
+    base.update(overrides)
+    return CitationRef(**base)
+
+
+def test_path_bearing_table_citation_keeps_its_label_and_pages():
+    """The label is what the answer prints; the path is what lookup_citation
+    takes. Emitting only the path made the model derive "Table 1B" by parsing
+    "Part I > [Table 1B]" — a step it was observed to skip."""
+    profile = _profile(uses=ZoneUses(permitted=["Townhouse dwelling use"]),
+                       citations=[_table_1b()])
+    ref = compact_zone_profile(profile)["citations"][0]
+
+    assert ref["citation_path"] == "Part I > [Table 1B]"
+    assert ref["citation_label"] == "Table 1B"
+    assert ref["pages"] == [48, 48]
+    assert ref["backs"] == ["uses"]
+
+
+def test_uses_block_carries_the_table_that_grants_it():
+    profile = _profile(
+        uses=ZoneUses(permitted=["Townhouse dwelling use"]),
+        citations=[_table_1b()],
+    )
+    uses = compact_zone_profile(profile)["uses"]
+
+    assert uses["cite_as"] == [
+        {
+            "citation_path": "Part I > [Table 1B]",
+            "citation_label": "Table 1B",
+            "pages": [48, 48],
+        }
+    ]
+    instruction = uses["citation_instruction"]
+    assert "citation_label" in instruction
+    assert "heading" in instruction
+
+
+def test_only_uses_backing_citations_are_bound_to_the_uses_block():
+    """Section 233 backs the unit-count cap, not the permission. Binding it to
+    the uses block would invite exactly the substitution ABS-524 is about —
+    citing the cap and calling the permission cited."""
+    profile = _profile(
+        uses=ZoneUses(permitted=["Townhouse dwelling use"]),
+        citations=[
+            _table_1b(),
+            CitationRef(
+                citation_path="Part V > 233 > (b)",
+                citation_label="233",
+                backs=["max_units"],
+            ),
+        ],
+    )
+    uses = compact_zone_profile(profile)["uses"]
+
+    assert [c["citation_label"] for c in uses["cite_as"]] == ["Table 1B"]
+
+
+def test_uses_block_without_a_citation_makes_no_attribution_claim():
+    """ABS-484's all-holes column cites nothing for uses on purpose. An empty
+    ``cite_as`` — or an instruction to cite a source that isn't there — would
+    push the model to invent one."""
+    profile = _profile(uses=ZoneUses(undetermined=["Restaurant use"]), citations=[])
+    uses = compact_zone_profile(profile)["uses"]
+
+    assert "cite_as" not in uses
+    assert "citation_instruction" not in uses
