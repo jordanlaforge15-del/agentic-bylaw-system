@@ -36,8 +36,10 @@ from advisor.llm.anthropic_backend import AnthropicGateway
 from advisor.llm.registry import (
     REMOVED_PROVIDERS,
     SUPPORTED_PROVIDER,
+    UNMETERED_PROVIDERS,
     AdvisorLLMSettings,
     build_gateway,
+    is_metered,
 )
 
 
@@ -161,6 +163,47 @@ def test_registry_module_imports_cleanly_in_a_fresh_interpreter() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+# -- production stays metered, on purpose (ABS-515) ----------------------------
+
+
+def test_production_compose_still_defaults_to_anthropic() -> None:
+    """ABS-515 changed the *eval* default, not the production one.
+
+    The issue asked for test/eval runs to stop billing metered credits by
+    default. Production is the opposite case: it must keep the provider that
+    answers best (0/8 vs 3/8 on the run that condemned the CLI backend), and
+    a container started with no ``ADVISOR_LLM_PROVIDER`` at all must still
+    land on it rather than on an "unsupported ''" boot failure.
+    """
+    compose = (_REPO_ROOT / "docker-compose.production.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert f"ADVISOR_LLM_PROVIDER: ${{ADVISOR_LLM_PROVIDER:-{SUPPORTED_PROVIDER}}}" in (
+        compose
+    ), "production compose no longer defaults the provider to anthropic"
+
+
+def test_the_supported_provider_is_metered() -> None:
+    """The one provider that ships bills per token, and says so.
+
+    ``is_metered`` is what ``GET /healthz`` reports and what
+    ``scripts/run_test_prompts.py`` gates an eval run on. If the only real
+    provider ever read as unmetered, the runner's consent gate would open
+    silently for every run — the exact failure ABS-515 closed.
+    """
+    assert is_metered(SUPPORTED_PROVIDER) is True
+    assert SUPPORTED_PROVIDER not in UNMETERED_PROVIDERS
+
+
+def test_unknown_and_removed_providers_are_treated_as_metered() -> None:
+    """Fail closed: only a name we know to be free reads as free."""
+    assert is_metered("claude_code") is True
+    assert is_metered("bedrock") is True
+    assert is_metered(None) is True
+    assert is_metered("mock") is False
 
 
 # -- deliberately out of scope: layer1 / layer2 --------------------------------

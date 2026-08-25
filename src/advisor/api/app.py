@@ -298,6 +298,16 @@ def create_app(
     # decides whether a turn bills against the metered Messages API.
     _anthropic_key_present = bool(_llm_settings.anthropic_api_key)
 
+    # ABS-515: key presence says a turn *could* be billed; it does not say
+    # this advisor's gateway bills at all. Derive that from the same
+    # ``gateway.name`` ABS-514 reports, so the runner's consent gate and
+    # the human-readable provider can never disagree. ``is_metered`` fails
+    # closed, which is also what makes the ``"unknown"`` fallback above
+    # safe: a gateway we cannot name is assumed to spend money.
+    from advisor.llm.registry import is_metered as _is_metered  # noqa: PLC0415
+
+    _chat_metered = _is_metered(_gateway_provider)
+
     app = FastAPI(title="Halifax Bylaw Advisor", version="0.1.0")
 
     # Stash dependencies on app.state so route handlers can grab them
@@ -616,10 +626,16 @@ def create_app(
             "status": "ok",
             "checks": checks,
             "sli": sli,
+            #
+            # ABS-515: ``metered`` states the billing consequence outright
+            # instead of leaving each caller to infer it from the provider
+            # name. ``scripts/run_test_prompts.py`` gates its
+            # ``--allow-metered`` consent check on this field.
             "llm": {
                 "provider": _gateway_provider,
                 "main_model": _chat_main_model,
                 "anthropic_api_key_present": _anthropic_key_present,
+                "metered": _chat_metered,
             },
         }
 

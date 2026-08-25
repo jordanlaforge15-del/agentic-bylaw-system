@@ -74,6 +74,32 @@ REMOVED_PROVIDERS = {
 }
 
 
+#: Gateway names (``LLMGateway.name``) whose turns cost nothing per
+#: token. Everything else is treated as metered — see ``is_metered``.
+UNMETERED_PROVIDERS = frozenset({"mock"})
+
+
+def is_metered(provider: str | None) -> bool:
+    """Does a turn on this gateway bill per token? (ABS-515)
+
+    Fail-closed on purpose: an unrecognised or missing provider name
+    counts as metered. This answer is consumed by ``GET /healthz`` and,
+    through it, by ``scripts/run_test_prompts.py``, which refuses to
+    start an eval run against a metered advisor without an explicit
+    ``--allow-metered``. Guessing "free" for something we cannot
+    identify would spend the operator's money on the strength of a
+    guess; guessing "metered" costs one flag.
+
+    Since ABS-522 there is exactly one real provider and it is metered,
+    so in practice this returns ``True`` for every advisor that can
+    actually answer a question, and ``False`` only for the mock gateway
+    the e2e stack runs on. That is the honest state of the world, not a
+    degenerate case: the point of the check is that the runner can no
+    longer *fail to notice* which one it is talking to.
+    """
+    return provider not in UNMETERED_PROVIDERS
+
+
 class AdvisorLLMSettings(BaseSettings):
     """LLM-related settings for the advisor app.
 
