@@ -487,6 +487,30 @@ def main() -> None:
         if not cases:
             parser.error(f"No cases matched IDs: {args.ids}")
 
+    # ABS-514: announce the billing mode before any spend. A run that
+    # resolves to the metered Messages API looks exactly like any other
+    # run in the console output — the incident this came from burned
+    # ~$1.70 across 8 cases before anyone noticed. Best-effort: a
+    # missing/older advisor just prints less, it never blocks the run.
+    try:
+        _llm = (
+            httpx.get(f"{args.base_url}/healthz", timeout=10.0).json().get("llm")
+            or {}
+        )
+    except Exception:  # noqa: BLE001 — banner must never fail a run
+        _llm = {}
+    if _llm.get("provider"):
+        metered = (
+            "METERED (per-token API billing)"
+            if _llm.get("anthropic_api_key_present")
+            else "no ANTHROPIC_API_KEY in the advisor's environment"
+        )
+        print(
+            f"llm: provider={_llm['provider']} "
+            f"main_model={_llm.get('main_model')} — {metered}",
+            file=sys.stderr,
+        )
+
     # ABS-267: model-precondition check. We assert against /healthz
     # BEFORE spending money on a run that would otherwise hit the
     # wrong model (e.g. a Haiku-baseline command accidentally exercising

@@ -282,7 +282,21 @@ def create_app(
         get_settings as _get_llm_settings,
     )
 
-    _chat_main_model = _get_llm_settings().main_model
+    _llm_settings = _get_llm_settings()
+    _chat_main_model = _llm_settings.main_model
+
+    # ABS-514: the provider that is actually serving traffic, taken off
+    # the gateway instance we were handed rather than by re-reading
+    # ``ADVISOR_LLM_PROVIDER``. The env var describes intent; the
+    # gateway's ``name`` describes reality, and the two can disagree
+    # (a test wiring ``MockGateway``, a caller passing an explicitly
+    # constructed backend). ``/healthz`` should report reality — the
+    # whole point of the field is to answer "is this run being
+    # metered?" without trusting configuration.
+    _gateway_provider = getattr(gateway, "name", "unknown")
+    # Presence only, never the value. This single boolean is what
+    # decides whether a turn bills against the metered Messages API.
+    _anthropic_key_present = bool(_llm_settings.anthropic_api_key)
 
     app = FastAPI(title="Halifax Bylaw Advisor", version="0.1.0")
 
@@ -593,11 +607,20 @@ def create_app(
         # ABS-267: surface the active chat model so out-of-band runners
         # can verify they're hitting the model they expected before
         # spending money on an Opus run when they meant Haiku, etc.
+        #
+        # ABS-514: the model alone doesn't say whether a run is billed.
+        # ``provider`` comes off the constructed gateway, and
+        # ``anthropic_api_key_present`` reports the one fact that
+        # decides metering — as a boolean, never the key itself.
         body: dict[str, Any] = {
             "status": "ok",
             "checks": checks,
             "sli": sli,
-            "llm": {"main_model": _chat_main_model},
+            "llm": {
+                "provider": _gateway_provider,
+                "main_model": _chat_main_model,
+                "anthropic_api_key_present": _anthropic_key_present,
+            },
         }
 
         if db_status == "unreachable":

@@ -64,12 +64,24 @@ and threaded down to `ChatSession.model` at session-create time. The
 legacy `ADVISOR_LLM_MODEL` env var is also honoured for backwards
 compatibility (see `src/advisor/llm/registry.py`).
 
-### Verify the model before spending money
+### Verify the model — and the billing mode — before spending money
 
 ```bash
-curl -s http://127.0.0.1:8000/healthz | jq '.llm.main_model'
-# expected: "claude-haiku-4-5"
+curl -s http://127.0.0.1:8000/healthz | jq '.llm'
+# {
+#   "provider": "anthropic",            <- metered Messages API
+#   "main_model": "claude-haiku-4-5",
+#   "anthropic_api_key_present": true   <- presence only, never the key
+# }
 ```
+
+ABS-514: `provider` is read off the gateway the advisor actually
+constructed, not from `ADVISOR_LLM_PROVIDER`, so it cannot drift from
+what is serving traffic. `provider: "anthropic"` with
+`anthropic_api_key_present: true` means **every turn of this run is
+billed per token**. A `mock` provider is the e2e stack and spends
+nothing. `run_test_prompts.py` prints the same three facts to stderr
+before it sends any traffic.
 
 ### Run the case with the precondition check on
 
