@@ -7,10 +7,15 @@ conversation through ``POST /v1/chat`` (SSE), and persists structured
 transcripts under ``evals/runs/<timestamp>/TC-NNN.json``.
 
 Usage:
-  python scripts/run_test_prompts.py
-  python scripts/run_test_prompts.py --ids TC-001 TC-005
-  python scripts/run_test_prompts.py --base-url http://127.0.0.1:8000 \
-    --user-id demo-user-1 --turn-timeout 120
+  python scripts/run_test_prompts.py --allow-metered
+  python scripts/run_test_prompts.py --allow-metered --ids TC-001 TC-005
+  python scripts/run_test_prompts.py --allow-metered \
+    --base-url http://127.0.0.1:8000 --user-id demo-user-1 --turn-timeout 120
+
+``--allow-metered`` is not optional in practice (ABS-515): the runner
+reads ``/healthz`` before the first turn and refuses to start against a
+per-token-billed advisor without it. Bring one up with ``make
+advisor-eval``, which prints the exact command to paste.
 
 Outputs (per case):
   evals/runs/<ts>/TC-NNN.json
@@ -461,6 +466,84 @@ def run_case(
     }
 
 
+def check_model_precondition(
+    health: dict[str, Any], expected: str
+) -> str | None:
+    """Return an abort message if the live advisor isn't on ``expected``.
+
+    ABS-267. Split out of ``main`` (ABS-515) so both pre-flights are
+    testable without a running advisor.
+    """
+    live_model = (health.get("llm") or {}).get("main_model")
+    if live_model == expected:
+        return None
+    return (
+        f"--model precondition: advisor reports main_model={live_model!r}, "
+        f"but --model={expected!r} was requested. Set ADVISOR_LLM_MAIN_MODEL "
+        "on the advisor process and restart before re-running."
+    )
+
+
+def check_billing_precondition(
+    health: dict[str, Any], base_url: str, allow_metered: bool
+) -> str | None:
+    """Return an abort message when a run would spend money unasked.
+
+    ABS-515. The runner used to drive whatever advisor happened to be
+    listening with no idea how it was configured, which is how an
+    eight-case sweep quietly billed ~$1.70 against the metered Messages
+    API. ``/healthz`` now reports the gateway the advisor actually built
+    and whether it bills per token, so the decision to spend can be made
+    *before* the first turn instead of discovered on an invoice.
+
+    Fail-closed in both unknown cases:
+
+    * ``llm.metered`` absent — the advisor predates this change. It is
+      overwhelmingly likely to be a real, metered one (the mock gateway
+      only runs inside the e2e stack, which is always current), so
+      treating "I don't know" as "free" would be the expensive guess.
+    * ``llm.provider`` unrecognised — same reasoning, applied by
+      ``advisor.llm.registry.is_metered`` on the server side.
+
+    An unmetered advisor (the mock gateway) needs no flag: there is
+    nothing to consent to.
+    """
+    llm = health.get("llm") or {}
+    provider = llm.get("provider")
+    if "metered" in llm:
+        metered = bool(llm["metered"])
+        unknown_advisor = False
+    else:
+        metered = True
+        unknown_advisor = True
+
+    if not metered or allow_metered:
+        return None
+
+    if unknown_advisor:
+        detail = (
+            f"The advisor at {base_url} does not report llm.metered, so it "
+            "predates ABS-515 and its billing cannot be confirmed. Assuming "
+            "metered."
+        )
+    else:
+        detail = (
+            f"The advisor at {base_url} is serving the {provider!r} gateway, "
+            "which bills per token against the Anthropic Messages API."
+        )
+
+    return (
+        "billing precondition: this run would spend metered API credits.\n"
+        f"  {detail}\n"
+        "  Re-run with --allow-metered to spend deliberately, or point "
+        "--base-url at an unmetered advisor.\n"
+        "  Note: the `claude_code` subscription backend was removed in "
+        "ABS-522 (it answered worse), so every advisor that can actually "
+        "answer a question is metered. This flag is a consent gate, not a "
+        "cheaper alternative — see docs/TEST_PROMPT_GENERATION.md."
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Regional Centre test prompts against the local dev advisor.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -478,6 +561,18 @@ def main() -> None:
             "switch the model — this flag only verifies."
         ),
     )
+    parser.add_argument(
+        "--allow-metered",
+        action="store_true",
+        help=(
+            "Consent to spending metered API credits. The runner pings "
+            "/healthz before any spend and aborts when the live advisor "
+            "reports a per-token-billed gateway (ABS-515). Required for "
+            "every real run — the subscription-billed backend was removed "
+            "in ABS-522, so 'metered' is the only way a run can produce "
+            "real answers."
+        ),
+    )
     args = parser.parse_args()
 
     cases = load_prompts()
@@ -487,54 +582,74 @@ def main() -> None:
         if not cases:
             parser.error(f"No cases matched IDs: {args.ids}")
 
-    # ABS-514: announce the billing mode before any spend. A run that
-    # resolves to the metered Messages API looks exactly like any other
-    # run in the console output — the incident this came from burned
-    # ~$1.70 across 8 cases before anyone noticed. Best-effort: a
-    # missing/older advisor just prints less, it never blocks the run.
+    # Pre-flight. Both checks read /healthz BEFORE the first turn goes
+    # out, because both of them are about money already spent by the time
+    # anyone would otherwise notice: the wrong model (ABS-267 — a Haiku
+    # baseline command silently exercising the still-configured Opus
+    # stack) and the wrong billing mode (ABS-515). Healthz is
+    # unauthenticated, so this works even when Clerk is on.
     try:
-        _llm = (
-            httpx.get(f"{args.base_url}/healthz", timeout=10.0).json().get("llm")
-            or {}
+        r = httpx.get(f"{args.base_url}/healthz", timeout=10.0)
+        r.raise_for_status()
+        health = r.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        parser.error(
+            f"pre-flight: could not read /healthz from {args.base_url}: {exc}. "
+            "Start an advisor (make advisor-eval) or point --base-url at one."
         )
-    except Exception:  # noqa: BLE001 — banner must never fail a run
-        _llm = {}
-    if _llm.get("provider"):
-        metered = (
-            "METERED (per-token API billing)"
-            if _llm.get("anthropic_api_key_present")
-            else "no ANTHROPIC_API_KEY in the advisor's environment"
-        )
+
+    live = health.get("llm") or {}
+
+    # ABS-514: announce the advisor's billing mode before any spend. A
+    # run that resolves to the metered Messages API looks exactly like
+    # any other run in the console output — the incident this came from
+    # burned ~$1.70 across 8 cases before anyone noticed. ABS-515 made
+    # the /healthz read mandatory above, so this no longer needs its own
+    # best-effort request; printing it stays non-fatal, and an advisor
+    # too old to report a provider simply prints less.
+    if live.get("provider"):
+        if "metered" in live:
+            # ABS-515: the advisor states the billing consequence itself.
+            billing = (
+                "METERED (per-token API billing)"
+                if live["metered"]
+                else "unmetered — this run spends nothing"
+            )
+        else:
+            # Older advisor: infer from key presence, as ABS-514 did.
+            billing = (
+                "METERED (per-token API billing)"
+                if live.get("anthropic_api_key_present")
+                else "no ANTHROPIC_API_KEY in the advisor's environment"
+            )
         print(
-            f"llm: provider={_llm['provider']} "
-            f"main_model={_llm.get('main_model')} — {metered}",
+            f"llm: provider={live['provider']} "
+            f"main_model={live.get('main_model')} — {billing}",
             file=sys.stderr,
         )
 
-    # ABS-267: model-precondition check. We assert against /healthz
-    # BEFORE spending money on a run that would otherwise hit the
-    # wrong model (e.g. a Haiku-baseline command accidentally exercising
-    # the still-configured Opus stack). Healthz is unauthenticated, so
-    # this works even when CLERK is on.
+    billing_error = check_billing_precondition(
+        health, args.base_url, args.allow_metered
+    )
+    if billing_error:
+        parser.error(billing_error)
+
+    print(
+        f"billing precondition OK: {args.base_url} is serving "
+        f"provider={live.get('provider')!r} "
+        f"(metered={live.get('metered')}, --allow-metered="
+        f"{args.allow_metered})",
+        file=sys.stderr,
+    )
+
+
     if args.model:
-        try:
-            r = httpx.get(f"{args.base_url}/healthz", timeout=10.0)
-            r.raise_for_status()
-            live_model = (r.json().get("llm") or {}).get("main_model")
-        except httpx.HTTPError as exc:
-            parser.error(
-                f"--model precondition: could not read /healthz from "
-                f"{args.base_url}: {exc}"
-            )
-        if live_model != args.model:
-            parser.error(
-                f"--model precondition: advisor reports main_model="
-                f"{live_model!r}, but --model={args.model!r} was requested. "
-                "Set ADVISOR_LLM_MAIN_MODEL on the advisor process and "
-                "restart before re-running."
-            )
+        model_error = check_model_precondition(health, args.model)
+        if model_error:
+            parser.error(model_error)
         print(
-            f"model precondition OK: {args.base_url} is serving {live_model}",
+            f"model precondition OK: {args.base_url} is serving "
+            f"{live.get('main_model')}",
             file=sys.stderr,
         )
 

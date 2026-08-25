@@ -153,6 +153,33 @@ def test_healthz_reports_no_api_key_when_unset(monkeypatch):
     assert body["llm"]["anthropic_api_key_present"] is False
 
 
+def test_healthz_reports_the_gateway_it_built_and_its_billing(monkeypatch):
+    """ABS-515: /healthz answers "is this run going to cost money?".
+
+    Two properties, and the second is the one that matters.
+
+    ``provider`` reports the gateway the process actually built, NOT
+    ``ADVISOR_LLM_PROVIDER``. This app is holding a MockGateway; the env var
+    is set to ``anthropic`` here to prove the report follows the object, not
+    the intent. An advisor that answered from the env var would tell the eval
+    runner it was about to bill an app that cannot bill anything — and, run
+    the other way, would wave a metered advisor through as free.
+
+    ``metered`` is what ``scripts/run_test_prompts.py`` gates its
+    ``--allow-metered`` consent check on.
+    """
+    monkeypatch.setenv("ADVISOR_LLM_PROVIDER", "anthropic")
+
+    app = _make_app()
+    with TestClient(app) as client:
+        body = client.get("/healthz").json()
+
+    assert body["llm"]["provider"] == "mock"
+    assert body["llm"]["metered"] is False
+    # ABS-267's field is untouched — the runner still reads both.
+    assert "main_model" in body["llm"]
+
+
 def test_healthz_reports_submission_storage_ok_when_writable(tmp_path, monkeypatch):
     """ABS-87: /healthz surfaces whether uploads can be staged on disk, so a
     missing prod volume is caught by a curl instead of by the first user."""

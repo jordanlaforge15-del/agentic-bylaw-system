@@ -1,4 +1,4 @@
-.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate check-migration-drift init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland eval-retrieval-baseline check-retrieval-baseline
+.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate check-migration-drift init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland eval-retrieval-baseline check-retrieval-baseline advisor-eval
 
 DB_URL ?= postgresql+psycopg://layer1:layer1@localhost:5432/layer1
 
@@ -110,6 +110,16 @@ PYTHON ?= $(shell test -x .venv/bin/python && echo .venv/bin/python || echo pyth
 
 eval-retrieval-baseline:
 	$(PYTHON) scripts/eval_retrieval_recall.py --database-url "$(EVAL_DB_URL)"
+
+# The one documented way to bring up an advisor for a prompt-corpus eval
+# run (ABS-515). Pins the provider and model explicitly instead of
+# inheriting them from .env, states the billing mode in a banner, and
+# prints the run_test_prompts.py command — with its --allow-metered
+# consent flag — to paste in a second shell. Foreground; Ctrl+C stops it.
+#   make advisor-eval
+#   make advisor-eval ADVISOR_EVAL_MODEL=claude-haiku-4-5 ADVISOR_EVAL_PORT=8010
+advisor-eval:
+	./scripts/advisor-eval.sh
 
 check-retrieval-baseline:
 	$(PYTHON) scripts/check_retrieval_baseline.py

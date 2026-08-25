@@ -360,6 +360,69 @@ Run the validation snippet from the skill doc to check programmatically.
 
 ---
 
+## Running the corpus: every eval run bills real money (ABS-515)
+
+There is no free way to run this corpus. The `claude_code` provider — the
+CLI backend that billed an operator's Claude Code subscription instead of
+API credits — was removed in ABS-522 because on an otherwise identical
+eight-case run it scored **0/8 golden passes against the API backend's
+3/8**, stopping its research roughly four times sooner. Every advisor that
+can answer a question is metered.
+
+So the gate is *consent*, not provider selection. Two commands:
+
+```bash
+# shell 1 — one documented way to start an eval advisor
+make advisor-eval
+# or: make advisor-eval ADVISOR_EVAL_MODEL=claude-haiku-4-5 ADVISOR_EVAL_PORT=8010
+
+# shell 2 — the runner, with the consent flag
+.venv/bin/python scripts/run_test_prompts.py \
+  --base-url http://127.0.0.1:8000 \
+  --model claude-opus-4-5 \
+  --allow-metered --ids TC-001
+```
+
+`make advisor-eval` pins `ADVISOR_LLM_PROVIDER` and `ADVISOR_LLM_MAIN_MODEL`
+explicitly, prints the billing banner, and echoes the runner command to
+paste. `run_test_prompts.py` reads `GET /healthz` **before the first turn**
+and aborts unless either the advisor reports an unmetered gateway
+(`llm.metered: false` — only the mock gateway the e2e stack runs) or you
+passed `--allow-metered`. An advisor too old to report `llm.metered` is
+treated as metered: the expensive guess is the one that has to be wrong on
+purpose.
+
+**Probe with one case first.** A single case, then multiply. A full eight-case
+Opus sweep runs roughly $1.50–$2.00.
+
+### The `.env`-sourcing trap
+
+The ~$1.70 nobody agreed to spend started here:
+
+```bash
+set -a; . ./.env; set +a       # ← do not do this to start an eval advisor
+.venv/bin/uvicorn advisor.api.dev:app
+```
+
+`set -a` marks every name in `.env` for export, which does two things at
+once:
+
+1. It leaves `ADVISOR_LLM_PROVIDER` at its default. `.env` almost never
+   sets it, so the advisor comes up metered and nothing in the boot log
+   says so.
+2. It promotes `ANTHROPIC_API_KEY` from a file-scoped value to an
+   **inheritable process-environment** one. A key that lives only in
+   `.env` is read by the settings loader and goes no further; an exported
+   one is inherited by every subprocess the advisor spawns.
+
+`scripts/advisor-eval.sh` reads `.env` in an `env -i` subshell and
+re-exports only the handful of names the advisor needs, so nothing else in
+that file leaks into the process environment. `scripts/dev-up.sh` still
+uses `set -a` — that is the manual-testing stack, which needs the whole
+file, and it is not what you point an eval runner at.
+
+---
+
 ## Test Execution
 
 The Playwright spec at `web/e2e/functional/abs203-test-prompts.spec.ts` provides automated coverage for this feature. It:
@@ -385,6 +448,7 @@ against the committed corpus snapshot — no stack, no database:
 | `web/e2e/functional/abs516-single-eval-entry-point.spec.ts` | `verify_run.py`: both tiers from one call, golden printed first, exit status from the golden tier alone, unattested announced, no summed numbers, advisory-only warning |
 | `web/e2e/functional/abs468-golden-subset.spec.ts` | the golden subset itself and the separation of the two artifacts |
 | `web/e2e/functional/abs462-eval-grader.spec.ts` | the generated grader's applicability check |
+| `web/e2e/functional/abs515-eval-billing-preflight.spec.ts` | `run_test_prompts.py`'s billing pre-flight, and the live advisor's `/healthz` billing report |
 
 ---
 

@@ -241,6 +241,41 @@ The specs use unique synthetic identities (`auth-<slug>@e2e.test`) per run, so t
 
 Tests that need a particular failure mode at the proxy boundary use Playwright's `page.route()` to synthesize the response (see `e2e/functional/error-state.spec.ts`).
 
+### The e2e stack costs nothing; a hand-started advisor does (ABS-515)
+
+The mock gateway in that first row is the only reason `make e2e` is free.
+It is also, since ABS-522 removed the `claude_code` CLI backend, the only
+unmetered gateway that exists — a hand-started advisor bills per token,
+every turn, whether or not anyone meant it to.
+
+`GET /healthz` reports which one is live:
+
+```bash
+curl -s http://127.0.0.1:8001/healthz | jq '.llm'
+# { "main_model": "claude-opus-4-5", "provider": "mock", "metered": false }
+```
+
+`provider` is the gateway the process actually built, not the env var
+that was supposed to select it — the e2e stack runs the mock gateway
+regardless of what the environment claims. `scripts/run_test_prompts.py`
+reads this before its first turn and refuses to run against
+`"metered": true` without `--allow-metered`.
+
+**The trap that made a metered advisor look free.** Starting one by hand
+with
+
+```bash
+set -a; . ./.env; set +a       # ← don't
+```
+
+exports every name in `.env`: it leaves `ADVISOR_LLM_PROVIDER` at its
+metered default *and* promotes `ANTHROPIC_API_KEY` from a file-scoped
+value the settings loader reads into an inheritable process-environment
+one every subprocess sees. Use `make advisor-eval` instead — it reads
+`.env` in an isolated subshell, re-exports only what the advisor needs,
+and prints the billing banner. Full write-up in
+[TEST_PROMPT_GENERATION.md](TEST_PROMPT_GENERATION.md).
+
 ## Catching regressions before you do
 
 Two recommended trigger points:

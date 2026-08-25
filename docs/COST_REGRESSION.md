@@ -88,13 +88,21 @@ before it sends any traffic.
 ```bash
 .venv/bin/python scripts/run_test_prompts.py \
   --ids TC-005 \
-  --model claude-haiku-4-5
+  --model claude-haiku-4-5 \
+  --allow-metered
 ```
 
 `--model` pings `/healthz` before any chat traffic and aborts if the
 live advisor reports a different `main_model`. This is the
 spend-protection trip — without it, a stale Opus stack will quietly
 serve a $4+ run when you meant a $0.50 one.
+
+`--allow-metered` is the second half of that pre-flight (ABS-515): the
+same `/healthz` read reports whether the live advisor's gateway bills per
+token, and the runner refuses to start against a metered one until you
+say so. It is required for every real run — see
+[TEST_PROMPT_GENERATION.md](TEST_PROMPT_GENERATION.md), including the
+`set -a; . ./.env` trap that made a metered advisor look free.
 
 ### Inspect the results
 
@@ -125,8 +133,8 @@ hits and case complexity).
 ```bash
 export ANTHROPIC_API_KEY="..."
 unset ADVISOR_LLM_MAIN_MODEL  # Opus is the default
-./scripts/dev-up.sh &
-.venv/bin/python scripts/run_test_prompts.py --model claude-opus-4-5
+make advisor-eval &
+.venv/bin/python scripts/run_test_prompts.py --model claude-opus-4-5 --allow-metered
 ```
 
 Verify `iterations` and `total_usage` on `tool_loop_metrics` look
@@ -192,7 +200,7 @@ curl -s http://127.0.0.1:8000/healthz | jq '.llm.main_model'
 
 TS_OPUS=$(date -u +%Y%m%dT%H%M%SZ)
 .venv/bin/python scripts/run_test_prompts.py \
-  --model claude-opus-4-5 \
+  --model claude-opus-4-5 --allow-metered \
   --out-dir "evals/runs/${TS_OPUS}-opus-baseline"
 ```
 
@@ -213,7 +221,7 @@ curl -s http://127.0.0.1:8000/healthz | jq '.llm.main_model'
 
 TS_SONNET=$(date -u +%Y%m%dT%H%M%SZ)
 .venv/bin/python scripts/run_test_prompts.py \
-  --model claude-sonnet-4-6 \
+  --model claude-sonnet-4-6 --allow-metered \
   --out-dir "evals/runs/${TS_SONNET}-sonnet-candidate"
 ```
 
