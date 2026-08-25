@@ -41,6 +41,10 @@ SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     # ABS-492: the provision-in-context probe tree (chapter > section > list
     # item, plus the repathed decoy the fix demotes).
     "seed_e2e_abs492_provision_context.py",
+    # ABS-524: the parented permission matrix — the only matrix fixture whose
+    # citation carries a path, which is the shape that used to suppress the
+    # label the answer has to quote.
+    "seed_e2e_abs524_use_attribution.py",
     # ABS-500: the dimensional-retrieval probe — a height matrix bound to its
     # zone rows, a parentless table, and a zone-declaring chapter.
     "seed_e2e_abs500_table_channel.py",

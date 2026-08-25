@@ -53,6 +53,7 @@ from bylaw_retrieval.retrieval.schemas import (
     AncestorFragment,
     BylawQueryResponse,
     CitationLookupResponse,
+    CitationRef,
     CrossReferenceSummary,
     DocumentOutlineResponse,
     DocumentSummary,
@@ -469,6 +470,44 @@ def _capped_list(items: list[Any]) -> list[Any]:
     return items[:_USE_LIST_CAP] + [f"+{len(items) - _USE_LIST_CAP} more"]
 
 
+def _zone_citation_ref(citation: CitationRef) -> dict[str, Any]:
+    """Project one zone-profile citation for the model to quote (ABS-524).
+
+    ``citation_label`` is emitted **alongside** ``citation_path``, not as a
+    fallback for a missing one. The label is the quotable string — "Table 1B" —
+    and the path is the argument ``lookup_citation`` takes. Projecting only the
+    path made the model recover the label by parsing ``"Part I > [Table 1B]"``,
+    and a use permission read out of that table reached the user unattributed
+    in 2 of 5 recorded TC-022 runs. Section citations, which the model reads
+    straight off a ``lookup_citation`` result, were cited in every run.
+    """
+    out: dict[str, Any] = {}
+    if citation.citation_path:
+        out["citation_path"] = citation.citation_path
+    if citation.citation_label:
+        out["citation_label"] = citation.citation_label
+    if citation.page_start:
+        out["pages"] = [citation.page_start, citation.page_end]
+    return out
+
+
+#: What the model must do with the permission table bound to a ``uses`` block.
+#: The evidence was never the problem — ``get_zone_profile`` carried Table 1B
+#: with full provenance in every TC-022 run, passing and failing alike. What
+#: varied was whether the answer's layout gave the citation somewhere to land.
+#: This states the obligation at the point the facts are delivered, so it does
+#: not depend on the shape the answer happens to take.
+_USE_CITATION_INSTRUCTION = (
+    "Every use listed above as permitted, not permitted, or conditional is "
+    "granted or withheld by the source(s) in 'cite_as' — that table IS the "
+    "provision. Name it (quote the citation_label, e.g. 'Table 1B') in the "
+    "answer wherever the determination appears, including in a heading or "
+    "summary line that states the permission. Citing only the dimensional "
+    "standards that follow from a use leaves the use determination itself "
+    "unattributed. Pass citation_path to lookup_citation to read the table."
+)
+
+
 def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
     """Project a ``ZoneProfile`` to its LLM-essential fields.
 
@@ -553,6 +592,23 @@ def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
                 "permitted, as prohibited, or as absent from the zone, and do "
                 "not cite anything as support for them."
             )
+        # ABS-524: bind the permission table to the block whose facts it
+        # grants. The citation was already in context — at the payload tail,
+        # keyed to this block only by ``backs: ["uses"]`` — and a use
+        # permission still reached the user with nothing behind it. An
+        # attribution obligation delivered a hundred lines away from the fact
+        # it governs is one the writer can lose track of; this one travels
+        # with the fact.
+        cite_as = [
+            projected
+            for projected in (
+                _zone_citation_ref(c) for c in profile.citations if "uses" in c.backs
+            )
+            if projected
+        ]
+        if cite_as:
+            uses["cite_as"] = cite_as
+            uses["citation_instruction"] = _USE_CITATION_INSTRUCTION
         out["uses"] = uses
 
     if profile.parking is not None:
@@ -566,18 +622,15 @@ def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
 
     if profile.citations:
         # ABS-409: table-backed citations may lack a citation_path on corpora
-        # whose captions haven't been backfilled — fall back to label + pages
-        # so the model can still ground and page-scope its follow-ups.
+        # whose captions haven't been backfilled — label + pages still reach
+        # the model so it can ground and page-scope its follow-ups.
+        # ABS-524: those two fields are no longer a fallback for a missing
+        # path. A path-bearing table citation needs its label just as much:
+        # "Table 1B" is what the answer prints, and deriving it from the path
+        # is a step the model was observed to skip.
         out["citations"] = [
             {
-                **(
-                    {"citation_path": c.citation_path}
-                    if c.citation_path
-                    else {
-                        **({"citation_label": c.citation_label} if c.citation_label else {}),
-                        **({"pages": [c.page_start, c.page_end]} if c.page_start else {}),
-                    }
-                ),
+                **_zone_citation_ref(c),
                 **({"backs": list(c.backs)} if c.backs else {}),
             }
             for c in profile.citations

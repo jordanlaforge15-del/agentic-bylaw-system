@@ -193,4 +193,33 @@ python scripts/verify_golden_cases.py --check
 python scripts/verify_golden_cases.py evals/runs/<ts> --gate
 ```
 
+## One run is not a verdict (ABS-524)
+
+A case that grades PASS on one run and PARTIAL on the next has told you
+nothing yet. TC-022 did exactly that: five recorded transcripts, three citing
+Table 1B and two stating the same permission bare, over an evidence channel
+that was **byte-identical** across all five. The retrieval payload did not
+change; the answer's layout did.
+
+That matters because the first read of the two failures blamed a code change
+that had landed hours earlier — a permission-grid backfill that never touched
+the cell in question. Fisher's exact on the pre/post partition came out at
+p = 0.40. A single-run comparison would have shipped a revert for a defect
+that predated it by 34 hours.
+
+So, before a case's verdict drives work:
+
+- **Don't diff two single runs.** A flip between adjacent runs is the null
+  hypothesis, not a signal. Establish the rate on each side first.
+- **N ≥ 5 per side** before calling a case fixed or regressed, and say the N
+  out loud when reporting it.
+- **Diff the evidence, not just the verdicts.** The transcripts carry the tool
+  payloads (ABS-517). If the payload backing the failing claim is identical to
+  the passing run's, the defect is in synthesis and no retrieval change will
+  move it.
+- **Prefer a deterministic guard to a rerun.** Where a property can be checked
+  in the payload or after generation — the ABS-519 heading rule,
+  ABS-524's `cite_as` binding — that check runs every time and does not need
+  a sample size. Reruns cost metered API spend; a guard costs nothing.
+
 Selection rationale and the gating decision: [docs/ABS-468-EVAL-GROUND-TRUTH.md](../../docs/ABS-468-EVAL-GROUND-TRUTH.md).

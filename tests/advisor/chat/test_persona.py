@@ -89,6 +89,21 @@ def test_load_persona_includes_high_liability_hedging_clause():
     assert "proportionate" in text
 
 
+def test_load_persona_requires_a_use_determination_to_cite_its_table():
+    """ABS-524: the citation rule used to enumerate "section, schedule, and
+    the linked dataset" — table was absent from both places it is stated, and
+    the one governing provision of kind ``table`` is the one that dropped out
+    of TC-022's answers. The rule now names tables, and says plainly that the
+    permission itself needs the citation, not just what follows from it."""
+    text = load_persona().lower()
+    # Both enumerations name a table, not just sections and schedules.
+    assert "section, table, and schedule numbers used" in text
+    assert "section, table, schedule, and the linked" in text
+    # And the standalone rule the payload's cite_as block points at.
+    assert "a use determination names the table that grants it" in text
+    assert "cite_as" in text
+
+
 def test_load_persona_no_divider_returns_full_text(tmp_path: Path):
     """If a freshly-written persona forgets the divider, we fall
     back to returning the entire file rather than producing an

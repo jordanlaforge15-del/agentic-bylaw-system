@@ -289,6 +289,49 @@ def test_provision_absent_from_the_corpus_is_surfaced(corpus: JsonCorpus) -> Non
     assert any("absent from the ingested corpus" in r for r in result["reasons"])
 
 
+def test_a_table_counts_as_cited_in_either_form_it_is_written(
+    corpus: JsonCorpus,
+) -> None:
+    """ABS-524: a table-kind governing provision reaches the answer two ways.
+
+    The model may write the label the way the by-law prints it ("Table 1B") or
+    quote the citation_path ``get_zone_profile`` handed it
+    ("Part I > [Table 1B]"). Both are the same provision and both must grade as
+    cited — otherwise the grader manufactures a miss on a correctly attributed
+    answer, which is the opposite of the defect it exists to catch.
+    """
+    case = _attested_case()
+    case["attestation"]["governing_provisions"] = [
+        {"reference": "Table 1B", "holding": "grants townhouse dwelling use in ER-3"}
+    ]
+    for form in ("Table 1B", "Part I > [Table 1B]", "table 1b"):
+        result = grade_golden_case(
+            case,
+            _transcript(f"The use is permitted under {form}; the side setback is 2.5 m."),
+            corpus,
+        )
+        assert result["provisions"]["misses"] == [], f"{form!r} should count as cited"
+
+
+def test_a_permission_stated_without_its_table_is_partial(corpus: JsonCorpus) -> None:
+    """The TC-022 shape: right holding, no attribution. A right answer whose
+    authority is missing is never a pass, table-kind provisions included."""
+    case = _attested_case()
+    case["attestation"]["governing_provisions"] = [
+        {"reference": "Table 1B", "holding": "grants townhouse dwelling use in ER-3"}
+    ]
+    result = grade_golden_case(
+        case,
+        _transcript(
+            "Townhouse dwelling use is permitted in ER-3. Under Section 233 you "
+            "may build up to four units; the side setback is 2.5 m."
+        ),
+        corpus,
+    )
+    assert result["verdict"] == "GOLDEN_PARTIAL"
+    assert result["provisions"]["misses"] == ["Table 1B"]
+
+
 def test_match_groups_reports_which_phrase_hit() -> None:
     groups = [{"id": "g", "description": "d", "any_of": ["2.5 metres", "2.5 m"]}]
     hit = match_groups("the setback is 2.5 metres", groups)[0]
