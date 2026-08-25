@@ -100,10 +100,15 @@ Writes:
   evals/runs/<ts>/verification/TC-NNN.verify.json
   evals/runs/<ts>/verification/SUMMARY.json
 
-Usage:
-  python scripts/verify_test_prompts.py evals/runs/20260602T120000Z
-  python scripts/verify_test_prompts.py evals/runs/latest  # symlink
-  # Grade offline against a corpus snapshot instead of the dev DB:
+Usage (ABS-516: this is the advisory half of a grade, not a grade)
+------------------------------------------------------------------
+``scripts/verify_run.py`` is the one documented way to answer "did this run
+pass?" — it grades both tiers, prints the gating one first, and takes its exit
+code from the golden tier alone. This script remains runnable on its own for
+iterating on the generated grader, and says so loudly when it is::
+
+  python scripts/verify_run.py evals/runs/20260602T120000Z   # both tiers
+  python scripts/verify_test_prompts.py evals/runs/20260602T120000Z  # advisory only
   python scripts/verify_test_prompts.py <run_dir> --corpus-json corpus.json
 """
 from __future__ import annotations
@@ -1114,6 +1119,113 @@ def resolve_spec(
     return embedded, "transcript"
 
 
+def open_corpus(
+    corpus_json: str | Path | None, db_url: str, *, log: Any = sys.stderr
+) -> tuple[Corpus, Any]:
+    """Open the by-law corpus both graders resolve citations against (ABS-516).
+
+    Returns ``(corpus, connection_or_None)``; the caller closes the connection.
+    Shared so ``verify_run.py`` opens one database connection for both tiers,
+    and so the two tiers can never end up graded against different corpora.
+    """
+    if corpus_json:
+        print(f"Verifying against corpus snapshot {corpus_json}", file=log)
+        return JsonCorpus.from_file(Path(corpus_json)), None
+    conn = db_connect(db_url)
+    doc_id = resolve_document_id(conn)
+    print(f"Verifying against document_id={doc_id} ({BYLAW_NAME})", file=log)
+    return PostgresCorpus(conn, doc_id), conn
+
+
+def grade_run(
+    run_dir: Path,
+    corpus: Corpus,
+    *,
+    prompts_file: Path | None = DEFAULT_PROMPTS_FILE,
+    spec_source: str = "prompts",
+    log: Any = sys.stderr,
+) -> list[dict[str, Any]]:
+    """Grade every transcript in ``run_dir``; write the artifacts; return rows.
+
+    Split out of :func:`main` for ABS-516 so ``verify_run.py`` can drive this
+    tier in-process rather than shelling out to it. Raises ``FileNotFoundError``
+    when the run holds no transcripts — the caller decides whether that is a
+    usage error or an empty tier.
+    """
+    transcripts = sorted(Path(run_dir).glob("TC-*.json"))
+    if not transcripts:
+        raise FileNotFoundError(f"No TC-*.json transcripts in {run_dir}")
+
+    verify_dir = Path(run_dir) / "verification"
+    verify_dir.mkdir(exist_ok=True)
+    live_specs = load_case_specs(prompts_file)
+
+    summary: list[dict[str, Any]] = []
+    for tp in transcripts:
+        transcript = json.loads(tp.read_text())
+        spec, resolved_source = resolve_spec(transcript, live_specs, spec_source)
+        print(
+            f"==> {transcript['id']} ({spec.get('complexity')}, "
+            f"liability={spec.get('liability')}, spec={resolved_source})",
+            file=log,
+        )
+        out = verify_case(corpus, transcript, spec)
+        out["spec_source"] = resolved_source
+        grade = out["grade"]
+        (verify_dir / f"{transcript['id']}.verify.json").write_text(json.dumps(out, indent=2))
+        summary.append({
+            "id": transcript["id"],
+            # ABS-468: the expectations behind this verdict were authored by
+            # a model of the family under test. Stamped on every row so a
+            # downstream reader cannot mistake it for a correctness measure
+            # or add it to the golden tier.
+            "evidence_tier": "generated",
+            "title": transcript.get("title"),
+            "zone": transcript.get("zone"),
+            "complexity": out["complexity"],
+            "liability": out["liability"],
+            "verdict": grade.get("verdict"),
+            "kw_rate": grade.get("keyword_rate"),
+            "reference_rate": grade.get("reference_rate"),
+            "topic_rate": grade.get("topic_rate"),
+            "citation_found": grade.get("citation_found"),
+            "citation_total": grade.get("citation_total"),
+            "hallucinated": grade.get("citation_hallucinated"),
+            "inapplicable": len(grade.get("applicability_findings") or []),
+            "reasons": grade.get("reasons"),
+        })
+        print(
+            f"    {grade.get('verdict')}  kw={grade.get('keyword_rate')}  "
+            f"refs={grade.get('reference_rate')}  topics={grade.get('topic_rate')}  "
+            f"cites {grade.get('citation_found')}/{grade.get('citation_total')}  "
+            f"hallu={grade.get('citation_hallucinated')}  "
+            f"inapplicable={len(grade.get('applicability_findings') or [])}",
+            file=log,
+        )
+
+    summary_path = verify_dir / "SUMMARY.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    print(f"\nVerification summary written to {summary_path}", file=log)
+    return summary
+
+
+# The banner an operator sees when they run this tier by itself. ABS-516: the
+# default failure is not a subtle one — it is running the advisory grader,
+# reading "0 FAIL", and calling the run passing. That happened in
+# the zone-typology-all8 run (docs/zone-typology-test-questions branch).
+# Nothing in this script's old output said the
+# gating tier existed, so nothing stopped it.
+ADVISORY_ONLY_BANNER = """\
+================================================================================
+  ADVISORY TIER ONLY — this does not answer "did this run pass?"
+  Every expectation graded here was authored by `claude -p`, and the system
+  under test is a Claude model. These verdicts gate nothing and cannot open or
+  close the deploy gate.
+  The gating tier is the human-attested golden subset. To grade a run:
+      python scripts/verify_run.py <run_dir>
+================================================================================"""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", help="Path to evals/runs/<ts>/")
@@ -1141,77 +1253,26 @@ def main() -> None:
     run_dir = Path(args.run_dir).resolve()
     if not run_dir.exists():
         parser.error(f"Run dir not found: {run_dir}")
-    transcripts = sorted(run_dir.glob("TC-*.json"))
-    if not transcripts:
-        parser.error(f"No TC-*.json transcripts in {run_dir}")
 
-    verify_dir = run_dir / "verification"
-    verify_dir.mkdir(exist_ok=True)
+    # Printed before any grading, so it is visible even when the operator only
+    # reads the head of the output, and again at the end for the tail-readers.
+    print(ADVISORY_ONLY_BANNER, file=sys.stderr)
 
-    live_specs = load_case_specs(Path(args.prompts) if args.prompts else None)
-
-    conn = None
-    if args.corpus_json:
-        corpus: Corpus = JsonCorpus.from_file(Path(args.corpus_json))
-        print(f"Verifying against corpus snapshot {args.corpus_json}", file=sys.stderr)
-    else:
-        conn = db_connect(args.db_url)
-        doc_id = resolve_document_id(conn)
-        corpus = PostgresCorpus(conn, doc_id)
-        print(f"Verifying against document_id={doc_id} ({BYLAW_NAME})", file=sys.stderr)
-
+    corpus, conn = open_corpus(args.corpus_json, args.db_url)
     try:
-        summary: list[dict[str, Any]] = []
-        for tp in transcripts:
-            transcript = json.loads(tp.read_text())
-            spec, spec_source = resolve_spec(transcript, live_specs, args.spec_source)
-            print(
-                f"==> {transcript['id']} ({spec.get('complexity')}, "
-                f"liability={spec.get('liability')}, spec={spec_source})",
-                file=sys.stderr,
-            )
-            out = verify_case(corpus, transcript, spec)
-            out["spec_source"] = spec_source
-            grade = out["grade"]
-            (verify_dir / f"{transcript['id']}.verify.json").write_text(
-                json.dumps(out, indent=2)
-            )
-            summary.append({
-                "id": transcript["id"],
-                # ABS-468: the expectations behind this verdict were authored by
-                # a model of the family under test. Stamped on every row so a
-                # downstream reader cannot mistake it for a correctness measure
-                # or add it to the golden tier.
-                "evidence_tier": "generated",
-                "title": transcript.get("title"),
-                "zone": transcript.get("zone"),
-                "complexity": out["complexity"],
-                "liability": out["liability"],
-                "verdict": grade.get("verdict"),
-                "kw_rate": grade.get("keyword_rate"),
-                "reference_rate": grade.get("reference_rate"),
-                "topic_rate": grade.get("topic_rate"),
-                "citation_found": grade.get("citation_found"),
-                "citation_total": grade.get("citation_total"),
-                "hallucinated": grade.get("citation_hallucinated"),
-                "inapplicable": len(grade.get("applicability_findings") or []),
-                "reasons": grade.get("reasons"),
-            })
-            print(
-                f"    {grade.get('verdict')}  kw={grade.get('keyword_rate')}  "
-                f"refs={grade.get('reference_rate')}  topics={grade.get('topic_rate')}  "
-                f"cites {grade.get('citation_found')}/{grade.get('citation_total')}  "
-                f"hallu={grade.get('citation_hallucinated')}  "
-                f"inapplicable={len(grade.get('applicability_findings') or [])}",
-                file=sys.stderr,
-            )
+        grade_run(
+            run_dir,
+            corpus,
+            prompts_file=Path(args.prompts) if args.prompts else None,
+            spec_source=args.spec_source,
+        )
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
     finally:
         if conn is not None:
             conn.close()
 
-    summary_path = verify_dir / "SUMMARY.json"
-    summary_path.write_text(json.dumps(summary, indent=2))
-    print(f"\nVerification summary written to {summary_path}", file=sys.stderr)
+    print(ADVISORY_ONLY_BANNER, file=sys.stderr)
 
 
 if __name__ == "__main__":
