@@ -80,6 +80,79 @@ def test_healthz_returns_ok_without_db():
     assert body["checks"]["database"] == "not_configured"
 
 
+def test_healthz_reports_the_gateway_provider_not_the_env_var():
+    """ABS-514: ``llm.provider`` is read off the constructed gateway.
+
+    The incident: an eval run was driven against an advisor that had
+    silently resolved to the metered ``anthropic`` provider, and
+    ``/healthz`` looked identical to a non-metered boot because it only
+    reported ``main_model``. The field has to come from the gateway
+    that is actually serving traffic — an env var can be set to one
+    thing while ``create_app`` was handed another.
+    """
+    from advisor.llm.anthropic_backend import AnthropicGateway
+
+    mock_app = _make_app()
+    with TestClient(mock_app) as client:
+        mock_llm = client.get("/healthz").json()["llm"]
+
+    anthropic_app = create_app(
+        gateway=AnthropicGateway(api_key="sk-ant-not-a-real-key"),
+        retrieval_service_factory=lambda: None,
+        session_store=InMemorySessionStore(),
+        persona_text="You are a senior urban planner.",
+    )
+    with TestClient(anthropic_app) as client:
+        anthropic_llm = client.get("/healthz").json()["llm"]
+
+    assert mock_llm["provider"] == "mock"
+    assert anthropic_llm["provider"] == "anthropic"
+    # Same env, same model — the provider is the only thing that
+    # distinguishes a metered boot from a non-metered one.
+    assert mock_llm["main_model"] == anthropic_llm["main_model"]
+
+
+def test_healthz_reports_api_key_presence_without_leaking_it(monkeypatch):
+    """ABS-514: presence boolean only — never the key itself.
+
+    Key presence is the single fact that decides whether a turn meters,
+    so it belongs in the health payload; the value never does.
+    """
+    from advisor.llm import registry
+
+    secret = "sk-ant-abs514-sentinel"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
+    registry.get_settings.cache_clear()
+    try:
+        app = _make_app()
+        with TestClient(app) as client:
+            response = client.get("/healthz")
+    finally:
+        registry.get_settings.cache_clear()
+
+    assert response.json()["llm"]["anthropic_api_key_present"] is True
+    assert secret not in response.text
+
+
+def test_healthz_reports_no_api_key_when_unset(monkeypatch):
+    """ABS-514: an advisor with no key in its environment says so."""
+    from advisor.llm import registry
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # ``AdvisorLLMSettings`` also reads ``.env``, so pin the settings
+    # object rather than the env alone — a developer's local .env key
+    # must not be able to make this test lie.
+    settings = registry.AdvisorLLMSettings(_env_file=None)
+    assert settings.anthropic_api_key is None
+    monkeypatch.setattr(registry, "get_settings", lambda: settings)
+
+    app = _make_app()
+    with TestClient(app) as client:
+        body = client.get("/healthz").json()
+
+    assert body["llm"]["anthropic_api_key_present"] is False
+
+
 def test_healthz_reports_submission_storage_ok_when_writable(tmp_path, monkeypatch):
     """ABS-87: /healthz surfaces whether uploads can be staged on disk, so a
     missing prod volume is caught by a curl instead of by the first user."""
