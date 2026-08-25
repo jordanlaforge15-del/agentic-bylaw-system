@@ -2,9 +2,11 @@
 
 `scripts/run_test_prompts.py` drives the Regional Centre prompt corpus
 through `POST /v1/chat` and writes one JSON transcript per case under
-`evals/runs/<run>/TC-NNN.json`. `scripts/verify_test_prompts.py` grades
-them. This doc covers the part that matters when a case *fails*: what the
-transcript promises about the advisor's tool activity, and how to read it.
+`evals/runs/<run>/TC-NNN.json`. `scripts/verify_run.py` grades them —
+one command, golden tier (gating) first and generated tier (advisory)
+second. This doc covers the part that matters when a case *fails*: what
+the transcript promises about the advisor's tool activity, and how to
+read it.
 
 ## The version ladder
 

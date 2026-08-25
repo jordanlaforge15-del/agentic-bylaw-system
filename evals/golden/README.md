@@ -14,13 +14,20 @@ This directory exists so the two kinds of evidence cannot be confused.
 |---|---|---|
 | Authored by | `claude -p` | a qualified human |
 | Lives in | `evals/regional_centre_test_prompts.json` | `evals/golden/golden_cases.json` |
-| Graded by | `scripts/verify_test_prompts.py` | `scripts/verify_golden_cases.py` |
+| Graded by | `scripts/verify_test_prompts.py` (internal) | `scripts/verify_golden_cases.py` (internal) |
 | Written to | `verification/SUMMARY.json` | `verification/GOLDEN_SUMMARY.json` |
 | What it gates | nothing — advisory | a production deploy |
 
 The two are never summed, averaged, or reported as one pass rate. A run with
 19/20 generated cases passing and an unattested golden subset has demonstrated
 nothing about correctness.
+
+**Both graders run from one command** — `python scripts/verify_run.py <run_dir>`
+(ABS-516). Two entry points meant a caller could run the advisory one, read
+"0 FAIL", and report the run as passing; that is exactly what happened in
+the `zone-typology-all8` run on the
+`docs/zone-typology-test-questions` branch. Separation of *evidence* is the point here;
+separation of *entry points* was the bug. See [Grading a run](#grading-a-run).
 
 ## Filling in an attestation
 
@@ -151,15 +158,38 @@ non-contradicting rewrite recorded under `heading_consistency` in the case's
 
 ## Grading a run
 
+**One command grades a run.** It prints the gating tier first, the advisory tier
+second, never adds them, and takes its exit status from the golden tier alone:
+
 ```bash
-# Validate the file without a run or a database
+python scripts/verify_run.py evals/runs/<ts>
+
+# …or offline, against a committed corpus slice instead of the dev DB:
+python scripts/verify_run.py evals/runs/<ts> \
+  --corpus-json evals/fixtures/abs462_corpus_snapshot.json
+```
+
+```
+GOLDEN (human-attested, gates deploy)     3 PASS  1 PARTIAL  4 FAIL   [GATE: CLOSED]
+GENERATED (model-authored, advisory)      5 PASS  3 PARTIAL  0 FAIL   [gates nothing]
+```
+
+Exit `0` = the deploy gate is open, `1` = closed, `2` = the run could not be
+graded (bad path, malformed golden file). A perfect advisory sweep cannot open
+the gate and a failing one cannot close it. Artifacts: `GOLDEN_SUMMARY.json`,
+`SUMMARY.json`, `TC-NNN.golden.json`, `TC-NNN.verify.json`, and
+`RUN_SUMMARY.json` — which keeps the two tiers under separate keys with no
+total.
+
+The two graders remain runnable on their own for iterating on a grader; neither
+answers "did this run pass?", and `verify_test_prompts.py` prints a banner
+saying so.
+
+```bash
+# Validate the golden file — no run, no database
 python scripts/verify_golden_cases.py --check
 
-# Grade a run; writes verification/GOLDEN_SUMMARY.json + TC-NNN.golden.json
-python scripts/verify_golden_cases.py evals/runs/<ts> \
-  --corpus-json evals/fixtures/abs462_corpus_snapshot.json
-
-# Deploy gate — exit 0 only if every entry is attested and passes
+# The gating tier alone (verify_run.py runs this for you)
 python scripts/verify_golden_cases.py evals/runs/<ts> --gate
 ```
 

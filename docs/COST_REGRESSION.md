@@ -221,9 +221,10 @@ against a committed corpus slice instead (ABS-462), which is how the graded
 provisions are checked in CI and in worktrees without the Halifax ingest:
 
 ```bash
-.venv/bin/python scripts/verify_test_prompts.py \
+# One entry point per run: golden tier (gating) then generated tier (advisory).
+.venv/bin/python scripts/verify_run.py \
   "evals/runs/${TS_OPUS}-opus-baseline"
-.venv/bin/python scripts/verify_test_prompts.py \
+.venv/bin/python scripts/verify_run.py \
   "evals/runs/${TS_SONNET}-sonnet-candidate"
 # Re-run compare to incorporate quality scores:
 .venv/bin/python scripts/compare_ab_runs.py \

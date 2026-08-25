@@ -41,11 +41,30 @@ correct.
 The independent tier is the golden subset at
 [`evals/golden/golden_cases.json`](../evals/golden/golden_cases.json): six cases
 whose correct answers and governing provisions a qualified human records, graded
-by `scripts/verify_golden_cases.py` into `verification/GOLDEN_SUMMARY.json`. It
-is the only evidence in the project that does not originate from a model, it is
-what blocks a production deploy, and its results are **never** summed with the
-generated ones. Rationale and the gating decision:
-[ABS-468-EVAL-GROUND-TRUTH.md](ABS-468-EVAL-GROUND-TRUTH.md).
+into `verification/GOLDEN_SUMMARY.json`. It is the only evidence in the project
+that does not originate from a model, it is what blocks a production deploy, and
+its results are **never** summed with the generated ones. Rationale and the
+gating decision: [ABS-468-EVAL-GROUND-TRUTH.md](ABS-468-EVAL-GROUND-TRUTH.md).
+
+**Grade a run with one command** (ABS-516):
+
+```bash
+python scripts/verify_run.py evals/runs/<ts>
+```
+
+```
+GOLDEN (human-attested, gates deploy)     3 PASS  1 PARTIAL  4 FAIL   [GATE: CLOSED]
+GENERATED (model-authored, advisory)      5 PASS  3 PARTIAL  0 FAIL   [gates nothing]
+```
+
+Golden first because it is the tier that gates; the exit status comes from it
+alone. `scripts/verify_test_prompts.py` and `scripts/verify_golden_cases.py` are
+still there as internals, but neither on its own answers "did this run pass?" —
+running the generated grader alone and reporting no failures is the mistake this
+entry point exists to prevent, and it is what happened in
+the `zone-typology-all8` run on the `docs/zone-typology-test-questions`
+branch. Details in
+[`evals/golden/README.md`](../evals/golden/README.md#grading-a-run).
 
 What the generated suite is genuinely good for: regression detection (did an
 answer that used to cite Section 198 stop doing so?), hallucination and
@@ -357,6 +376,15 @@ export PG_PORT=5433 E2E_FASTAPI_PORT=8002 E2E_WEB_PORT=3002
 export E2E_API_URL=http://127.0.0.1:8002 E2E_BASE_URL=http://localhost:3002
 cd web && npx playwright test e2e/functional/abs203-test-prompts.spec.ts
 ```
+
+Grading is CLI-only, so its coverage drives the scripts through `spawnSync`
+against the committed corpus snapshot — no stack, no database:
+
+| Spec | Covers |
+|---|---|
+| `web/e2e/functional/abs516-single-eval-entry-point.spec.ts` | `verify_run.py`: both tiers from one call, golden printed first, exit status from the golden tier alone, unattested announced, no summed numbers, advisory-only warning |
+| `web/e2e/functional/abs468-golden-subset.spec.ts` | the golden subset itself and the separation of the two artifacts |
+| `web/e2e/functional/abs462-eval-grader.spec.ts` | the generated grader's applicability check |
 
 ---
 
