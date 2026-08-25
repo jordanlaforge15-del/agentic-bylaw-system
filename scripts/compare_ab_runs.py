@@ -346,8 +346,10 @@ def build_report(
     else:
         ln("## 4. Quality Comparison")
         ln()
-        ln("*No verification data found. Run `scripts/verify_test_prompts.py` on both")
-        ln("run directories (requires the dev DB) to populate quality scores.*")
+        ln("*No verification data found. Run `scripts/verify_run.py` on both")
+        ln("run directories (requires the dev DB, or pass `--corpus-json`) to")
+        ln("populate quality scores. The scores below are the advisory tier only;")
+        ln("the golden tier is what gates a deploy.*")
         ln()
 
     # --- Verdict ---
@@ -382,7 +384,7 @@ def build_report(
                 ln("**Recommendation: MARGINAL** — cost difference does not justify a model switch.")
         else:
             ln()
-            ln("*Run `scripts/verify_test_prompts.py` on both dirs to get quality scores before "
+            ln("*Run `scripts/verify_run.py` on both dirs to get quality scores before "
                "making a recommendation.*")
     ln()
     ln("---")

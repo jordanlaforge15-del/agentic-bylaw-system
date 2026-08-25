@@ -46,7 +46,9 @@ Outputs (per case):
       "spec": {<full test case for downstream verification>}
     }
 
-The transcript is the input to scripts/verify_test_prompts.py (separate step).
+The transcript is the input to scripts/verify_run.py (separate step), which
+grades it against both the human-attested golden tier and the advisory
+generated tier.
 
 What each ``parser_version`` guarantees about ``tool_calls``, and how to
 use the payload fields to tell a retrieval gap from a synthesis gap on a

@@ -48,7 +48,13 @@ Per attested case, over the union of every turn's assistant text:
 An entry whose ``attestation.status`` is not ``attested`` grades UNATTESTED. It
 is never counted as a pass and it holds the deploy gate closed.
 
-Usage:
+Usage
+-----
+``scripts/verify_run.py`` (ABS-516) is the documented way to grade a run: it
+prints this tier first, the advisory generated tier second, and exits on this
+tier alone. This script stays runnable for validating the file and for
+iterating on the golden grader.
+
   python scripts/verify_golden_cases.py --check                 # validate the file
   python scripts/verify_golden_cases.py evals/runs/<ts>
   python scripts/verify_golden_cases.py evals/runs/<ts> --corpus-json snapshot.json
@@ -74,16 +80,12 @@ if str(REPO_ROOT / "src") not in sys.path:
 
 from advisor.chat.heading_consistency import find_contradictions
 from scripts.verify_test_prompts import (
-    BYLAW_NAME,
     DEFAULT_DB_URL,
     Corpus,
-    JsonCorpus,
-    PostgresCorpus,
-    db_connect,
     detect_hedging,
     extract_citations,
     extract_clause_citations,
-    resolve_document_id,
+    open_corpus,
 )
 
 DEFAULT_GOLDEN_FILE = REPO_ROOT / "evals" / "golden" / "golden_cases.json"
@@ -517,82 +519,29 @@ def _load_transcripts(run_dir: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    parser.add_argument("run_dir", nargs="?", help="Path to evals/runs/<ts>/")
-    parser.add_argument("--golden", default=str(DEFAULT_GOLDEN_FILE))
-    parser.add_argument("--db-url", default=os.environ.get("DATABASE_URL_PLAIN", DEFAULT_DB_URL))
-    parser.add_argument("--corpus-json", help="Grade against a corpus snapshot, no database.")
-    parser.add_argument(
-        "--check", action="store_true",
-        help="Validate the golden file and exit; no run or database needed.",
-    )
-    parser.add_argument(
-        "--gate", action="store_true",
-        help="Exit non-zero unless every golden case is attested and passes.",
-    )
-    parser.add_argument(
-        "--prompts", default=str(REPO_ROOT / "evals" / "regional_centre_test_prompts.json"),
-        help="Generated eval file, used only to confirm each golden case_id exists.",
-    )
-    args = parser.parse_args()
+def grade_run(
+    run_dir: Path,
+    corpus: Corpus,
+    payload: dict[str, Any],
+    *,
+    golden_path: Path = DEFAULT_GOLDEN_FILE,
+    log: Any = sys.stderr,
+) -> dict[str, Any]:
+    """Grade a run against the golden subset; write the artifacts; return the summary.
 
-    golden_path = Path(args.golden)
-    if not golden_path.exists():
-        print(f"Golden file not found: {golden_path}", file=sys.stderr)
-        return 2
-    payload = load_golden(golden_path)
-
-    known: set[str] | None = None
-    prompts_path = Path(args.prompts)
-    if prompts_path.exists():
-        known = {c["id"] for c in json.loads(prompts_path.read_text()) if c.get("id")}
-
-    problems = validate_golden(payload, known)
-    if problems:
-        print(f"{golden_path} has {len(problems)} problem(s):", file=sys.stderr)
-        for p in problems:
-            print(f"  - {p}", file=sys.stderr)
-        return 2
-    if args.check:
-        cases = payload["cases"]
-        attested = sum(
-            1 for c in cases if (c.get("attestation") or {}).get("status") == "attested"
-        )
-        print(
-            f"{golden_path}: {len(cases)} case(s), {attested} attested, "
-            f"{len(cases) - attested} awaiting a qualified human.",
-            file=sys.stderr,
-        )
-        return 0
-
-    if not args.run_dir:
-        parser.error("run_dir is required unless --check is given")
-    run_dir = Path(args.run_dir).resolve()
-    if not run_dir.exists():
-        parser.error(f"Run dir not found: {run_dir}")
-
-    conn = None
-    if args.corpus_json:
-        corpus: Corpus = JsonCorpus.from_file(Path(args.corpus_json))
-        print(f"Grading against corpus snapshot {args.corpus_json}", file=sys.stderr)
-    else:
-        conn = db_connect(args.db_url)
-        doc_id = resolve_document_id(conn)
-        corpus = PostgresCorpus(conn, doc_id)
-        print(f"Grading against document_id={doc_id} ({BYLAW_NAME})", file=sys.stderr)
-
-    try:
-        transcripts = _load_transcripts(run_dir)
-        verify_dir = run_dir / "verification"
-        verify_dir.mkdir(exist_ok=True)
-        results = [
-            grade_golden_case(case, transcripts.get(case["case_id"]), corpus)
-            for case in payload["cases"]
-        ]
-    finally:
-        if conn is not None:
-            conn.close()
+    Split out of :func:`main` for ABS-516 so ``verify_run.py`` drives this tier
+    in-process and prints it first, rather than an operator remembering to run a
+    second script. The returned dict is exactly what lands in
+    ``GOLDEN_SUMMARY.json``.
+    """
+    run_dir = Path(run_dir)
+    transcripts = _load_transcripts(run_dir)
+    verify_dir = run_dir / "verification"
+    verify_dir.mkdir(exist_ok=True)
+    results = [
+        grade_golden_case(case, transcripts.get(case["case_id"]), corpus)
+        for case in payload["cases"]
+    ]
 
     for result in results:
         (verify_dir / f"{result['case_id']}.golden.json").write_text(
@@ -601,7 +550,7 @@ def main() -> int:
         print(
             f"==> {result['case_id']}  {result['verdict']}"
             + ("  " + "; ".join(result.get("reasons") or []) if result.get("reasons") else ""),
-            file=sys.stderr,
+            file=log,
         )
 
     gate = gate_status(results)
@@ -626,13 +575,96 @@ def main() -> int:
     }
     summary_path = verify_dir / "GOLDEN_SUMMARY.json"
     summary_path.write_text(json.dumps(summary, indent=2))
-    print(f"\nGolden summary written to {summary_path}", file=sys.stderr)
+    print(f"\nGolden summary written to {summary_path}", file=log)
     print(
         "Gate: " + ("OPEN" if gate["open"] else "CLOSED — " + "; ".join(gate["blockers"])),
+        file=log,
+    )
+    return summary
+
+
+def load_and_validate(
+    golden_path: Path, prompts_path: Path | None, *, log: Any = sys.stderr
+) -> dict[str, Any]:
+    """Load the golden file and refuse to grade against a malformed one.
+
+    Raises ``ValueError`` listing every structural problem. ``verify_run.py``
+    turns that into a usage error rather than half-grading a run.
+    """
+    payload = load_golden(golden_path)
+    known: set[str] | None = None
+    if prompts_path is not None and prompts_path.exists():
+        known = {c["id"] for c in json.loads(prompts_path.read_text()) if c.get("id")}
+    problems = validate_golden(payload, known)
+    if problems:
+        raise ValueError(
+            f"{golden_path} has {len(problems)} problem(s):\n"
+            + "\n".join(f"  - {p}" for p in problems)
+        )
+    return payload
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    parser.add_argument("run_dir", nargs="?", help="Path to evals/runs/<ts>/")
+    parser.add_argument("--golden", default=str(DEFAULT_GOLDEN_FILE))
+    parser.add_argument("--db-url", default=os.environ.get("DATABASE_URL_PLAIN", DEFAULT_DB_URL))
+    parser.add_argument("--corpus-json", help="Grade against a corpus snapshot, no database.")
+    parser.add_argument(
+        "--check", action="store_true",
+        help="Validate the golden file and exit; no run or database needed.",
+    )
+    parser.add_argument(
+        "--gate", action="store_true",
+        help="Exit non-zero unless every golden case is attested and passes.",
+    )
+    parser.add_argument(
+        "--prompts", default=str(REPO_ROOT / "evals" / "regional_centre_test_prompts.json"),
+        help="Generated eval file, used only to confirm each golden case_id exists.",
+    )
+    args = parser.parse_args()
+
+    golden_path = Path(args.golden)
+    if not golden_path.exists():
+        print(f"Golden file not found: {golden_path}", file=sys.stderr)
+        return 2
+    try:
+        payload = load_and_validate(golden_path, Path(args.prompts))
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.check:
+        cases = payload["cases"]
+        attested = sum(
+            1 for c in cases if (c.get("attestation") or {}).get("status") == "attested"
+        )
+        print(
+            f"{golden_path}: {len(cases)} case(s), {attested} attested, "
+            f"{len(cases) - attested} awaiting a qualified human.",
+            file=sys.stderr,
+        )
+        return 0
+
+    if not args.run_dir:
+        parser.error("run_dir is required unless --check is given")
+    run_dir = Path(args.run_dir).resolve()
+    if not run_dir.exists():
+        parser.error(f"Run dir not found: {run_dir}")
+
+    corpus, conn = open_corpus(args.corpus_json, args.db_url)
+    try:
+        summary = grade_run(run_dir, corpus, payload, golden_path=golden_path)
+    finally:
+        if conn is not None:
+            conn.close()
+
+    print(
+        "This is the gating tier only. `python scripts/verify_run.py "
+        f"{args.run_dir}` prints it alongside the advisory generated tier.",
         file=sys.stderr,
     )
 
-    if args.gate and not gate["open"]:
+    if args.gate and not summary["gate"]["open"]:
         return 1
     return 0
 

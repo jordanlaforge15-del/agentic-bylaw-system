@@ -38,7 +38,8 @@ artifacts, using disjoint verdict vocabularies.
 | -- | -- | -- |
 | Cases | `evals/regional_centre_test_prompts.json` (20) | `evals/golden/golden_cases.json` (6) |
 | Authored by | `claude -p` | a qualified human |
-| Grader | `scripts/verify_test_prompts.py` | `scripts/verify_golden_cases.py` |
+| Graded by | `scripts/verify_test_prompts.py` (internal) | `scripts/verify_golden_cases.py` (internal) |
+| Entry point | `scripts/verify_run.py` (ABS-516) | the same command, golden printed first |
 | Artifact | `verification/SUMMARY.json` | `verification/GOLDEN_SUMMARY.json` |
 | Verdicts | `PASS` / `PARTIAL` / `FAIL*` / `NO_DATA` | `GOLDEN_PASS` / `GOLDEN_PARTIAL` / `GOLDEN_FAIL` / `UNATTESTED` / `NO_TRANSCRIPT` |
 | Gates | nothing | a production deploy |
@@ -102,8 +103,14 @@ and gate nothing.**
 Concretely:
 
 ```bash
-python scripts/verify_golden_cases.py evals/runs/<ts> --gate   # exit 1 = do not ship
+python scripts/verify_run.py evals/runs/<ts>   # exit 1 = do not ship
 ```
+
+ABS-516 folded the two graders behind that one command: it prints the golden
+tier first, the generated tier second, and its exit status is the golden gate's
+alone. `verify_golden_cases.py … --gate` still exists and still gates, but a
+caller who runs only `verify_test_prompts.py` now gets a banner telling them
+they have not graded the run.
 
 The gate is open only when **every** entry is attested and grades
 `GOLDEN_PASS`. `GOLDEN_PARTIAL` — right answer, missing authority — does not
