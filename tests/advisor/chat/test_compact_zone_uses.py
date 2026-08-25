@@ -10,6 +10,7 @@ from advisor.chat.compact import _USE_LIST_CAP, compact_zone_profile
 from bylaw_retrieval.retrieval.schemas import (
     CitationRef,
     ConditionalUse,
+    FootnoteCondition,
     ZoneProfile,
     ZoneUses,
 )
@@ -26,7 +27,10 @@ def test_conditional_uses_project_with_footnote_and_capped_condition():
         uses=ZoneUses(
             permitted=["Office use"],
             conditional=[
-                ConditionalUse(use="Restaurant use", footnote_ordinal=3, condition="x" * 500)
+                ConditionalUse(
+                    use="Restaurant use",
+                    footnotes=[FootnoteCondition(ordinal=3, text="x" * 500)],
+                )
             ],
         )
     )
@@ -34,8 +38,46 @@ def test_conditional_uses_project_with_footnote_and_capped_condition():
     assert out["uses"]["permitted"] == ["Office use"]
     conditional = out["uses"]["conditional"]
     assert conditional[0]["use"] == "Restaurant use"
-    assert conditional[0]["footnote"] == 3
-    assert len(conditional[0]["condition"]) <= 160
+    assert conditional[0]["conditions"][0]["footnote"] == 3
+    assert len(conditional[0]["conditions"][0]["text"]) <= 160
+
+
+def test_every_footnote_on_a_conditional_cell_survives_projection():
+    """ABS-523: a cell reading '⑮ ㉒' reaches the model as two conditions.
+
+    ``get_zone_profile`` is the case-open shortcut the agent calls first, so a
+    condition dropped here is the agent's first impression of the zone. On
+    TC-023 the survivor was ⑮ — a Halifax Grain Elevator carve-out irrelevant
+    to the address — and the dropped ㉒ was the footnote authorising more than
+    8 units in ER-3.
+    """
+    profile = _profile(
+        zone="ER-3",
+        uses=ZoneUses(
+            conditional=[
+                ConditionalUse(
+                    use="Multi-unit dwelling use",
+                    footnotes=[
+                        FootnoteCondition(
+                            ordinal=15,
+                            text="⑮ Use is permitted, except within the Halifax "
+                            "Grain Elevator (HGE) Special Area.",
+                        ),
+                        FootnoteCondition(
+                            ordinal=22,
+                            text="㉒ A multi-unit dwelling use that contains more "
+                            "than 8 units is permitted in the ER-3 zone in "
+                            "accordance with Section 63 or Subsection 233(3).",
+                        ),
+                    ],
+                )
+            ],
+        ),
+    )
+    out = compact_zone_profile(profile)
+    conditions = out["uses"]["conditional"][0]["conditions"]
+    assert [c["footnote"] for c in conditions] == [15, 22]
+    assert "Section 63" in conditions[1]["text"]
 
 
 def test_long_use_lists_are_capped_with_more_marker():

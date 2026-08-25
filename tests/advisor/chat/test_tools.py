@@ -534,25 +534,29 @@ def test_coerce_stringified_object_arg():
 
 def test_compact_permitted_use_conditional_carries_instruction():
     """ABS-280 AC2: a conditional permitted_use result must carry an inline
-    instruction telling the writer to quote the footnote condition_text, so the
+    instruction telling the writer to quote the footnote conditions, so the
     Table 1A carve-out isn't dropped in favour of the use's operating standards.
     """
     from advisor.chat.compact import compact_permitted_use
-    from bylaw_retrieval.retrieval.schemas import PermittedUseResult
+    from bylaw_retrieval.retrieval.schemas import FootnoteCondition, PermittedUseResult
 
     conditional = PermittedUseResult(
         use="home occupation use",
         zone="HR-2",
         indeterminate=False,
         permission="conditional",
-        footnote_ordinal=15,
-        condition_text="⑮ Use is permitted, except within the Halifax Grain Elevator.",
+        footnotes=[
+            FootnoteCondition(
+                ordinal=15,
+                text="⑮ Use is permitted, except within the Halifax Grain Elevator.",
+            )
+        ],
     )
     out = compact_permitted_use(conditional)
     assert out["permission"] == "conditional"
-    assert out["condition_text"].startswith("⑮")
+    assert out["conditions"][0]["text"].startswith("⑮")
     assert "instruction" in out
-    assert "condition_text" in out["instruction"]
+    assert "conditions" in out["instruction"]
     assert "15" in out["instruction"]
 
     # A plain permitted result carries NO such instruction.
