@@ -30,8 +30,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from bylaw_retrieval.retrieval import RetrievalService
+
 from layer1.db.base import Document, SourceTable, SourceTableCell
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
