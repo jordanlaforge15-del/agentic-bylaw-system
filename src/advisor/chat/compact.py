@@ -469,7 +469,34 @@ def compact_search_response(
 # marker tells the model the list is truncated (drill down via
 # lookup_citation on the table's citation, or a permitted_use cell query).
 _USE_LIST_CAP = 40
-_CONDITION_TEXT_CAP = 160
+# ABS-523: 160 cut more than half of the corpus's footnote legends (20 of 38 in
+# documents 4-5), and it cut them mid-sentence — a legend states the rule first
+# and the escape route second, so the half that survived was systematically the
+# restrictive half. TC-023's ㉒ is 281 characters and lost "in accordance with
+# Section 63 or Subsection 233(3)" at the knife. 320 clears the longest legend
+# in the corpus (301); anything longer is marked, never silently shortened.
+_CONDITION_TEXT_CAP = 320
+
+
+def _capped_condition(condition: Any) -> dict[str, Any]:
+    """Project one footnote condition, marking any text the cap shortens.
+
+    ABS-523: a legend cut at the cap reads to the model as a legend that ended
+    there. On TC-023 the cut fell one clause before the two routes that made
+    twelve units achievable, and the model answered from the sentence it was
+    handed. The marker is the difference between "this is the condition" and
+    "this is the start of the condition" — the second sends it to
+    lookup_citation for the rest.
+    """
+    out: dict[str, Any] = {"footnote": condition.ordinal}
+    if not condition.text:
+        return out
+    if len(condition.text) <= _CONDITION_TEXT_CAP:
+        out["text"] = condition.text
+        return out
+    out["text"] = condition.text[:_CONDITION_TEXT_CAP] + "…"
+    out["text_truncated"] = True
+    return out
 
 
 def _capped_list(items: list[Any]) -> list[Any]:
@@ -578,15 +605,7 @@ def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
             for item in profile.uses.conditional:
                 entry: dict[str, Any] = {"use": item.use}
                 conditions = [
-                    {
-                        "footnote": condition.ordinal,
-                        **(
-                            {"text": condition.text[:_CONDITION_TEXT_CAP]}
-                            if condition.text
-                            else {}
-                        ),
-                    }
-                    for condition in item.footnotes
+                    _capped_condition(condition) for condition in item.footnotes
                 ]
                 if conditions:
                     entry["conditions"] = conditions

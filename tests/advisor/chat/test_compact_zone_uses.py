@@ -6,7 +6,11 @@ fallback must all survive projection.
 """
 from __future__ import annotations
 
-from advisor.chat.compact import _USE_LIST_CAP, compact_zone_profile
+from advisor.chat.compact import (
+    _CONDITION_TEXT_CAP,
+    _USE_LIST_CAP,
+    compact_zone_profile,
+)
 from bylaw_retrieval.retrieval.schemas import (
     CitationRef,
     ConditionalUse,
@@ -38,8 +42,32 @@ def test_conditional_uses_project_with_footnote_and_capped_condition():
     assert out["uses"]["permitted"] == ["Office use"]
     conditional = out["uses"]["conditional"]
     assert conditional[0]["use"] == "Restaurant use"
-    assert conditional[0]["conditions"][0]["footnote"] == 3
-    assert len(conditional[0]["conditions"][0]["text"]) <= 160
+    condition = conditional[0]["conditions"][0]
+    assert condition["footnote"] == 3
+    assert len(condition["text"]) == _CONDITION_TEXT_CAP + 1  # + the marker
+    # ABS-523: shortened, and *said* to be shortened. A legend cut at the cap
+    # reads as a legend that ended there, and the model answers from it.
+    assert condition["text"].endswith("…")
+    assert condition["text_truncated"] is True
+
+
+def test_a_condition_within_the_cap_is_not_marked_as_shortened():
+    """The marker has to mean something. If it rode along on every condition
+    the model would treat every legend as partial and drill down on all of
+    them — the cost the cap exists to avoid."""
+    profile = _profile(
+        uses=ZoneUses(
+            conditional=[
+                ConditionalUse(
+                    use="Restaurant use",
+                    footnotes=[FootnoteCondition(ordinal=3, text="y" * 40)],
+                )
+            ],
+        )
+    )
+    condition = compact_zone_profile(profile)["uses"]["conditional"][0]["conditions"][0]
+    assert condition["text"] == "y" * 40
+    assert "text_truncated" not in condition
 
 
 def test_every_footnote_on_a_conditional_cell_survives_projection():
@@ -50,6 +78,12 @@ def test_every_footnote_on_a_conditional_cell_survives_projection():
     TC-023 the survivor was ⑮ — a Halifax Grain Elevator carve-out irrelevant
     to the address — and the dropped ㉒ was the footnote authorising more than
     8 units in ER-3.
+
+    ㉒ is quoted at its real corpus length (281 characters) on purpose. An
+    abridged legend fits inside any plausible cap, so a test written against
+    one grades the cap as harmless no matter where it sits — which is how the
+    first pass at this shipped a 160-character cap that severed ㉒ one clause
+    before it named the routes.
     """
     profile = _profile(
         zone="ER-3",
@@ -65,9 +99,12 @@ def test_every_footnote_on_a_conditional_cell_survives_projection():
                         ),
                         FootnoteCondition(
                             ordinal=22,
-                            text="㉒ A multi-unit dwelling use that contains more "
-                            "than 8 units is permitted in the ER-3 zone in "
-                            "accordance with Section 63 or Subsection 233(3).",
+                            text="㉒ A multi-unit dwelling use that contains up to "
+                            "8 dwelling units is permitted in the ER-3 zone, in "
+                            "accordance with Section 231.3, and a multi-unit "
+                            "dwelling use that contains more than 8 units is "
+                            "permitted in the ER-3 zone in accordance with "
+                            "Section 63 or Subsection 233(3).",
                         ),
                     ],
                 )
@@ -77,7 +114,11 @@ def test_every_footnote_on_a_conditional_cell_survives_projection():
     out = compact_zone_profile(profile)
     conditions = out["uses"]["conditional"][0]["conditions"]
     assert [c["footnote"] for c in conditions] == [15, 22]
+    # The operative half of the legend is the second half: the cap has to clear
+    # the whole sentence, not the part that states the restriction.
     assert "Section 63" in conditions[1]["text"]
+    assert "233(3)" in conditions[1]["text"]
+    assert "text_truncated" not in conditions[1]
 
 
 def test_long_use_lists_are_capped_with_more_marker():
