@@ -140,6 +140,21 @@ _MAX_PATH_DEPTH = 32
 STEM_SEARCH_WINDOW = 128
 
 
+def _is_bracketed_segment(citation_path: str | None) -> bool:
+    """True when a path's last segment is quoted container prose, ``[like this]``.
+
+    ABS-488 puts a context container's own words into the path when it has no
+    enumerator of its own. Those are the segments that can name a fragment the
+    ingest never pathed; a plain ``233`` or ``(a)`` that resolves to nothing is
+    a missing fragment, not a recoverable one.
+    """
+    normalised = normalise_citation_path(citation_path)
+    if normalised is None:
+        return False
+    segment = normalised.split(f" {_PATH_SEPARATOR} ")[-1]
+    return segment.startswith("[") and segment.endswith("]")
+
+
 def normalise_citation_path(citation_path: str | None) -> str | None:
     """Canonicalise separator spacing so two spellings of one path compare equal.
 
@@ -314,7 +329,7 @@ class ProvisionLineage:
         if normalised is None:
             return None
         segment = normalised.split(f" {_PATH_SEPARATOR} ")[-1]
-        if not (segment.startswith("[") and segment.endswith("]")):
+        if not _is_bracketed_segment(normalised):
             return None
         if self.fragment_at_path(document_id, normalised) is not None:
             return None  # the path resolves; nothing is dangling
@@ -521,11 +536,28 @@ class ProvisionLineage:
             return _ProvisionRef(
                 fragment=direct, children_path=parent_path, through_container=False
             )
-        stem = self.stem_of_container(fragment.document_id, parent_path)
-        if stem is None:
+        if not _is_bracketed_segment(parent_path):
+            # A parent path naming a section that was never extracted (203 such
+            # fragments across docs 4 and 5). There is nothing to recover by
+            # content, and guessing would invent lineage rather than find it.
             return None
+        stem = self.stem_of_container(fragment.document_id, parent_path)
+        if stem is None and not self._has_sibling(fragment, parent_path):
+            return None
+        # The stem may be absent and the siblings still belong together: they
+        # are limbs of one list, addressed under one segment. ``fragment`` is
+        # then None and ``governing_provision`` says so, but completion still
+        # runs sideways.
         return _ProvisionRef(
             fragment=stem, children_path=parent_path, through_container=True
+        )
+
+    def _has_sibling(self, fragment: SourceFragment, container_path: str) -> bool:
+        return any(
+            child.id != fragment.id
+            for child in self.direct_path_children(
+                fragment.document_id, container_path
+            )
         )
 
     def lineage(self, fragment: SourceFragment) -> list[SourceFragment]:
@@ -581,7 +613,9 @@ class ProvisionLineage:
 class _ProvisionRef:
     """A governing provision and where its remaining limbs are addressed."""
 
-    fragment: SourceFragment
+    #: None when the provision was reached through a bracketed segment whose
+    #: stem is not in the corpus — the limbs are still each other's completion.
+    fragment: SourceFragment | None
     children_path: str
     #: True when the provision was reached through a bracketed path segment that
     #: names no fragment — the ABS-523 population. The stem is then part of the
