@@ -382,20 +382,10 @@ def compact_permitted_use(result: PermittedUseResult) -> dict[str, Any]:
         return out
 
     out["permission"] = result.permission
-    # ABS-523: project the whole list, never the lossy scalars. A cell carrying
-    # two markers used to reach the model as one, and the model answered from
-    # the one it was given — on TC-023 that was a grain-elevator carve-out
-    # instead of the footnote authorising the units, and the answer sent a
-    # developer to a rezoning the by-law did not require.
-    conditions = [
-        {
-            "footnote": condition.ordinal,
-            **({"text": condition.text} if condition.text else {}),
-        }
-        for condition in result.footnotes
-    ]
-    if conditions:
-        out["conditions"] = conditions
+    if result.footnote_ordinal is not None:
+        out["footnote_ordinal"] = result.footnote_ordinal
+    if result.condition_text is not None:
+        out["condition_text"] = result.condition_text
     # A conditional cell's verdict hinges on the Table 1A footnote, not on the
     # use's general operating standards. Without this nudge the writer commits
     # to "conditional" but paraphrases unrelated operating requirements and
@@ -403,15 +393,17 @@ def compact_permitted_use(result: PermittedUseResult) -> dict[str, Any]:
     # inline instruction is the same writer-steering pattern ABS-261 uses for
     # citation-lookup misses.
     if result.permission == "conditional":
-        ordinals = ", ".join(str(c["footnote"]) for c in conditions)
-        footnote_ref = f" ({len(conditions)} footnote(s): {ordinals})" if conditions else ""
+        footnote_ref = (
+            f" (footnote {result.footnote_ordinal})"
+            if result.footnote_ordinal is not None
+            else ""
+        )
         out["instruction"] = (
             "This use is CONDITIONALLY permitted in this zone. State the verdict "
-            "as conditional — not a plain 'permitted' — and quote EVERY entry in "
-            f"'conditions' verbatim{footnote_ref} as governing conditions on "
-            "permission; they bind together, so answering from one of them "
-            "states a narrower rule than the by-law does. Do not substitute the "
-            "use's general operating standards for these footnote conditions."
+            "as conditional — not a plain 'permitted' — and quote the "
+            f"'condition_text' footnote verbatim{footnote_ref} as the governing "
+            "condition on permission. Do not substitute the use's general "
+            "operating standards for this footnote condition."
         )
     if result.citation is not None:
         citation: dict[str, Any] = {}
@@ -469,34 +461,7 @@ def compact_search_response(
 # marker tells the model the list is truncated (drill down via
 # lookup_citation on the table's citation, or a permitted_use cell query).
 _USE_LIST_CAP = 40
-# ABS-523: 160 cut more than half of the corpus's footnote legends (20 of 38 in
-# documents 4-5), and it cut them mid-sentence — a legend states the rule first
-# and the escape route second, so the half that survived was systematically the
-# restrictive half. TC-023's ㉒ is 281 characters and lost "in accordance with
-# Section 63 or Subsection 233(3)" at the knife. 320 clears the longest legend
-# in the corpus (301); anything longer is marked, never silently shortened.
-_CONDITION_TEXT_CAP = 320
-
-
-def _capped_condition(condition: Any) -> dict[str, Any]:
-    """Project one footnote condition, marking any text the cap shortens.
-
-    ABS-523: a legend cut at the cap reads to the model as a legend that ended
-    there. On TC-023 the cut fell one clause before the two routes that made
-    twelve units achievable, and the model answered from the sentence it was
-    handed. The marker is the difference between "this is the condition" and
-    "this is the start of the condition" — the second sends it to
-    lookup_citation for the rest.
-    """
-    out: dict[str, Any] = {"footnote": condition.ordinal}
-    if not condition.text:
-        return out
-    if len(condition.text) <= _CONDITION_TEXT_CAP:
-        out["text"] = condition.text
-        return out
-    out["text"] = condition.text[:_CONDITION_TEXT_CAP] + "…"
-    out["text_truncated"] = True
-    return out
+_CONDITION_TEXT_CAP = 160
 
 
 def _capped_list(items: list[Any]) -> list[Any]:
@@ -596,20 +561,22 @@ def compact_zone_profile(profile: ZoneProfile) -> dict[str, Any]:
             # ABS-409: matrix-enumerated conditional uses. Condition text is
             # capped per item — footnote legends run long and repeat across
             # items; the model can lookup_citation the table for full text.
-            # ABS-523: every footnote on the cell, not the first one. This is
-            # the case-open shortcut the agent is told to call first, so a
-            # condition dropped here is the agent's first impression of the
-            # zone — and on TC-023 it was a grain-elevator carve-out standing in
-            # for the footnote that authorised the units.
-            conditional = []
-            for item in profile.uses.conditional:
-                entry: dict[str, Any] = {"use": item.use}
-                conditions = [
-                    _capped_condition(condition) for condition in item.footnotes
-                ]
-                if conditions:
-                    entry["conditions"] = conditions
-                conditional.append(entry)
+            conditional = [
+                {
+                    "use": item.use,
+                    **(
+                        {"footnote": item.footnote_ordinal}
+                        if item.footnote_ordinal is not None
+                        else {}
+                    ),
+                    **(
+                        {"condition": item.condition[:_CONDITION_TEXT_CAP]}
+                        if item.condition
+                        else {}
+                    ),
+                }
+                for item in profile.uses.conditional
+            ]
             uses["conditional"] = _capped_list(conditional)
         if profile.uses.undetermined:
             # ABS-484: the UNKNOWN list. Without the inline instruction the

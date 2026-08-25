@@ -533,8 +533,5 @@ async def test_ac5_tool_dispatch_resolves_permitted_use_end_to_end(matrix_db):
     parsed = json.loads(output)
     assert "permitted_use" in parsed
     assert parsed["permitted_use"]["permission"] == "conditional"
-    # ABS-523: the compact projection carries the whole condition list, never
-    # the lossy first-only scalars.
-    conditions = parsed["permitted_use"]["conditions"]
-    assert [c["footnote"] for c in conditions] == [3]
-    assert "text" in conditions[0]
+    assert parsed["permitted_use"]["footnote_ordinal"] == 3
+    assert "condition_text" in parsed["permitted_use"]
