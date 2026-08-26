@@ -59,6 +59,7 @@ def test_circled_three_normalizes_to_conditional_with_footnote():
     assert classify_permission_marker("③") == {
         "permission_marker": "conditional",
         "footnote": 3,
+        "footnotes": [3],
     }
 
 
@@ -103,6 +104,7 @@ def test_abs483_recognised_marker_beats_an_unmapped_glyph_in_the_same_cell():
     assert classify_permission_marker(unmapped + "③") == {
         "permission_marker": "conditional",
         "footnote": 3,
+        "footnotes": [3],
     }
 
 
@@ -123,6 +125,7 @@ def test_high_circled_number_block():
     assert classify_permission_marker("㉓") == {
         "permission_marker": "conditional",
         "footnote": 23,
+        "footnotes": [23],
     }
 
 
