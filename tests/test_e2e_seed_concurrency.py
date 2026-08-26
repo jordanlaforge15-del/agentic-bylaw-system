@@ -41,6 +41,9 @@ SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     # ABS-492: the provision-in-context probe tree (chapter > section > list
     # item, plus the repathed decoy the fix demotes).
     "seed_e2e_abs492_provision_context.py",
+    # ABS-523: the multi-marker permission cell ("⑮ ㉒") plus s.233's stemless
+    # rear-addition limb — the only fixture carrying either shape.
+    "seed_e2e_abs523_footnote_retention.py",
     # ABS-524: the parented permission matrix — the only matrix fixture whose
     # citation carries a path, which is the shape that used to suppress the
     # label the answer has to quote.

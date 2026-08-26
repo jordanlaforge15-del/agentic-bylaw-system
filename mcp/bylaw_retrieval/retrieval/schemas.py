@@ -765,6 +765,29 @@ class AdjacentZoningProfile(BaseModel):
     )
 
 
+class FootnoteCondition(BaseModel):
+    """One footnote marker in a permission-matrix cell, with its legend text.
+
+    ABS-523. A cell may print several markers — Table 1B's (ER-3, Multi-unit
+    dwelling use) cell reads ``⑮ ㉒`` — and each is a separate condition on the
+    same permission. They are carried as a list of these rather than as a
+    scalar because keeping only the first stated a different rule than the
+    by-law: ⑮ is a Halifax Grain Elevator carve-out, and ㉒ is the footnote
+    that authorises more than 8 units in ER-3 under Section 63 or Subsection
+    233(3).
+    """
+
+    ordinal: int = Field(description="The circled-number ordinal, e.g. 22 for ㉒.")
+    text: str | None = Field(
+        default=None,
+        description=(
+            "The footnote legend's condition text, when the legend fragment "
+            "resolves. Null means the legend was not found — not that the "
+            "condition is absent."
+        ),
+    )
+
+
 class PermittedUseResult(BaseModel):
     """Resolved permitted-use matrix cell for a single ``(use, zone)`` pair.
 
@@ -773,9 +796,9 @@ class PermittedUseResult(BaseModel):
     caller dispatches on:
 
     * **Resolved** — ``indeterminate=False``, ``permission`` is one of
-      ``permitted`` / ``conditional`` / ``not_permitted``. ``footnote_ordinal``
-      and ``condition_text`` are populated only when ``conditional``.
-      ``citation`` traces the answer to the source table.
+      ``permitted`` / ``conditional`` / ``not_permitted``. ``footnotes``
+      is populated only when ``conditional``, and carries every condition on
+      the cell (ABS-523). ``citation`` traces the answer to the source table.
     * **Indeterminate** — ``indeterminate=True``, ``permission`` is null, and
       ``reason`` / ``reason_code`` explain why the cell could not be addressed
       (unknown use, unknown zone, no permission matrix in scope, an unbound
@@ -819,15 +842,29 @@ class PermittedUseResult(BaseModel):
         default=None,
         description="The resolved permission; null when indeterminate.",
     )
+    footnotes: list[FootnoteCondition] = Field(
+        default_factory=list,
+        description=(
+            "EVERY footnote condition on this cell, in the order the table "
+            "prints them (ABS-523). A conditional cell frequently carries more "
+            "than one — they bind together, and answering from one of them "
+            "states a narrower rule than the by-law does. Empty unless "
+            "permission is 'conditional'."
+        ),
+    )
     footnote_ordinal: int | None = Field(
         default=None,
-        description="Footnote ordinal (e.g. 3 for ③) when permission is 'conditional'.",
+        description=(
+            "First footnote ordinal (e.g. 3 for ③) when permission is "
+            "'conditional'. LOSSY — the cell may carry more. Read 'footnotes'."
+        ),
     )
     condition_text: str | None = Field(
         default=None,
         description=(
-            "The footnote's condition text, joined from the table's footnote "
-            "fragments, when permission is 'conditional'."
+            "The first footnote's condition text, joined from the table's "
+            "footnote fragments, when permission is 'conditional'. LOSSY for "
+            "the same reason as 'footnote_ordinal' — read 'footnotes'."
         ),
     )
     citation: CitationRef | None = Field(
@@ -1244,12 +1281,26 @@ class ConditionalUse(BaseModel):
     """
 
     use: str = Field(description="The use name as the bylaw prints it.")
+    footnotes: list[FootnoteCondition] = Field(
+        default_factory=list,
+        description=(
+            "EVERY footnote condition on the cell, in print order (ABS-523). "
+            "A cell reading '⑮ ㉒' is subject to both."
+        ),
+    )
     footnote_ordinal: int | None = Field(
-        default=None, description="The circled-number footnote ordinal, e.g. 3 for ③."
+        default=None,
+        description=(
+            "The first circled-number footnote ordinal, e.g. 3 for ③. LOSSY — "
+            "read 'footnotes'."
+        ),
     )
     condition: str | None = Field(
         default=None,
-        description="The footnote legend's condition text, when resolvable.",
+        description=(
+            "The first footnote legend's condition text, when resolvable. "
+            "LOSSY — read 'footnotes'."
+        ),
     )
 
 

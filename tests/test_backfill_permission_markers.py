@@ -164,9 +164,17 @@ def test_backfill_recovers_permitted_count(tmp_path):
     # Spot-check the value grid.
     assert markers[(1, 1)] == {"permission_marker": "permitted"}
     assert markers[(1, 3)] == {"permission_marker": "not_permitted"}
-    assert markers[(2, 2)] == {"permission_marker": "conditional", "footnote": 3}
+    assert markers[(2, 2)] == {
+        "permission_marker": "conditional",
+        "footnote": 3,
+        "footnotes": [3],
+    }
     assert markers[(2, 3)] == {"permission_marker": "not_permitted"}
-    assert markers[(3, 2)] == {"permission_marker": "conditional", "footnote": 15}
+    assert markers[(3, 2)] == {
+        "permission_marker": "conditional",
+        "footnote": 15,
+        "footnotes": [15],
+    }
 
 
 def test_backfill_is_idempotent(tmp_path):

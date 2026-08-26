@@ -638,6 +638,10 @@ def _mount_test_router(app: FastAPI) -> None:
                             "col_header_path": cell.col_header_path,
                             "permission_marker": meta.get("permission_marker"),
                             "footnote": meta.get("footnote"),
+                            # ABS-523: every marker in the cell. ``footnote`` is
+                            # the first of these and is lossy — a cell reading
+                            # "⑮ ㉒" carries two conditions and both bind.
+                            "footnotes": meta.get("footnotes") or [],
                         }
                     )
 
