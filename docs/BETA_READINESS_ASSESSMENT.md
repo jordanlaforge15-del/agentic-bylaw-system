@@ -433,13 +433,17 @@ in Linear, team **ABS**.
   queries covering setbacks, zones, overlays, and common interpretive
   questions for the Halifax Regional Centre LUB.
 
-### Issue 13 — Automate database backups to offsite storage
+### Issue 13 — Automate database backups to offsite storage — RESOLVED (ABS-131)
 - **Priority:** Medium
-- **Description:** Database backups are manual pg_dump only — no cron, no
-  cloud storage, no verification. Set up automated hourly (or daily)
-  backups to Hetzner Storage Box with: (a) cron-based pg_dump,
-  (b) offsite transfer, (c) backup verification/restore test,
-  (d) retention policy (7 days daily, 4 weeks weekly).
+- **Description:** Database backups were manual pg_dump only — no cron, no
+  cloud storage, no verification.
+- **Resolution:** `scripts/backup-prod-db.sh` dumps nightly at 02:30,
+  verifies the archive before accepting it, encrypts with gpg, rotates
+  7 daily + 4 weekly slots, and mirrors that set to a Hetzner Storage Box.
+  `scripts/verify-prod-backup.sh --restore` runs weekly on cron and
+  restores into a throwaway Postgres. Runbook: `docs/PROD_DB_BACKUP.md`.
+  Remaining operator step before this is live: the one-time Storage Box
+  and passphrase setup in that doc.
 
 ### Issue 14 — Set up basic CI/CD pipeline
 - **Priority:** Medium

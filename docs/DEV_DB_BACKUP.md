@@ -1,5 +1,9 @@
 # Local dev database backup
 
+> Looking for **production**? That's a different story with different
+> stakes — verified, encrypted and mirrored to a Hetzner Storage Box. See
+> [PROD_DB_BACKUP.md](PROD_DB_BACKUP.md). This page covers the laptop.
+
 The local dev database is the `layer1` Postgres in the
 `agentic-bylaw-system-postgres-1` container (named volume `layer1-postgres`).
 Two scripts back it up nightly, on a daily / weekly / monthly rotation
