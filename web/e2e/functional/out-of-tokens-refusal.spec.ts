@@ -6,9 +6,12 @@
 // "Backend error (402)" toast appears. Copy is turns-based.
 //
 // Two payment postures:
-//   * payments OFF (the DORMANT e2e stack, driven for real): a kind dead-end —
-//     no purchase CTA, reassurance that the case + history stay saved. Driven
-//     by MOCK_BURN_ALL, which overdraws the signup grant in one turn.
+//   * payments OFF (the DORMANT e2e stack, driven for real): no purchase CTA,
+//     and the self-serve refill claim instead (ABS-405 — a fresh account
+//     still holds its refill allowance). Driven by MOCK_BURN_ALL, which
+//     overdraws the signup grant in one turn. The refill's own behaviour
+//     (claiming, cooldown) lives in abs405-beta-refill.spec.ts; here we only
+//     pin that the refusal itself is clean.
 //   * payments ON: a purchase CTA ("Top up →"). The e2e stack can't run
 //     payments-on, so the wallet read the strip seeds from is stubbed.
 
@@ -70,9 +73,11 @@ test("payments off: draining the wallet shows the out-of-turns dead-end and disa
   await expect(prompt).toBeVisible({ timeout: 10_000 });
   await expect(prompt).toContainText(/out of turns/i);
 
-  // Payments off → dead-end reassurance, NO purchase CTA.
-  await expect(page.getByTestId("top-up-deadend")).toBeVisible();
+  // Payments off → NO purchase CTA. A first-time exhaustion still has its
+  // refill allowance, so the prompt offers the self-serve claim (ABS-405)
+  // rather than the old flat dead-end.
   await expect(page.getByTestId("top-up-btn")).toHaveCount(0);
+  await expect(page.getByTestId("beta-refill-btn")).toBeVisible();
 
   // Composer disabled with the top-up placeholder.
   await expect(page.getByPlaceholder(/Top up to continue/i)).toBeDisabled();
