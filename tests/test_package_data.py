@@ -44,10 +44,12 @@ REQUIRED_WHEEL_DATA_FILES = [
     "layer1/semantic/taxonomy.json",
     "layer2/prompts/assets/system_v1.txt",
     "layer2/compliance/attributes/taxonomy.yaml",
-    # ABS-420: the corpus-coherence audit's declaration set. One entry is
-    # named literally so a rename of the directory fails here; the whole set
-    # is checked by test_wheel_contains_every_dataset_config below.
+    # ABS-420: the corpus-coherence audit's declaration set. Two entries are
+    # named literally — a config, and the shared lookup table two configs
+    # pull in with `lookups_from:` — so a rename of either directory fails
+    # here; the whole set is checked by the two tests below.
     "layer1/datasets/halifax_zoning.yaml",
+    "layer1/datasets/lookups/hrm_bylaw_areas.yaml",
 ]
 
 DATASET_CONFIG_DIR = REPO_ROOT / "src" / "layer1" / "datasets"
@@ -121,6 +123,58 @@ def test_wheel_contains_every_dataset_config(built_wheel: Path) -> None:
         f"wheel is missing dataset configs: {missing} — /v1/monitoring/"
         "corpus-coherence would stop checking those overlay roles in the "
         "deployed image while still reporting green (ABS-420)"
+    )
+
+
+def test_declarations_load_from_an_installed_wheel(
+    built_wheel: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Install the wheel and load the declarations out of it, as the image does.
+
+    File-presence checks are not enough. The configs are shipped *and*
+    unreadable if a file they reference is not: two of them pull a shared
+    by-law-area table with ``lookups_from: lookups/hrm_bylaw_areas.yaml``,
+    which a ``*.yaml`` package-data glob does not cover, and the audit then
+    raises a ValueError one directory deeper than the check would look
+    (ABS-420). Only an install proves the deployed advisor can read them.
+    """
+    target = tmp_path_factory.mktemp("install")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--no-deps", "--target", str(target), str(built_wheel)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.fail(f"pip install --target failed:\n{result.stdout}\n{result.stderr}")
+
+    probe = (
+        "import sys; sys.path.insert(0, sys.argv[1]);"
+        "from bylaw_retrieval.retrieval.coherence_audit import "
+        "DEFAULT_DATASET_CONFIG_DIR as d, load_overlay_declarations as load;"
+        "assert str(d).startswith(sys.argv[1]), d;"
+        "print(len(load()))"
+    )
+    loaded = subprocess.run(
+        [sys.executable, "-c", probe, str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert loaded.returncode == 0, (
+        "the installed wheel cannot load its overlay declarations — the deployed "
+        f"advisor's corpus-coherence audit would fail the same way:\n{loaded.stderr}"
+    )
+    expected = len(list(DATASET_CONFIG_DIR.glob("*.yaml"))) - _role_bearing_config_count()
+    assert int(loaded.stdout.strip()) == expected
+
+
+def _role_bearing_config_count() -> int:
+    """Configs the audit skips: those with a ``role`` instead of a ``links_to``."""
+    return sum(
+        1
+        for path in DATASET_CONFIG_DIR.glob("*.yaml")
+        if any(line.startswith("role:") for line in path.read_text().splitlines())
     )
 
 

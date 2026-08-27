@@ -23,6 +23,14 @@
 #      ABS-409-heal class of bug. The smoke command loads each one
 #      explicitly.
 #
+#   4. A corpus-coherence audit that cannot read its declaration set. This
+#      one is worse than a crash: with the layer1 dataset configs missing,
+#      /v1/monitoring/corpus-coherence answered {"status":"ok"} while
+#      checking zero overlay roles, for the whole life of the endpoint
+#      (ABS-420). The smoke command loads the declarations and requires a
+#      non-empty set, so a packaging regression fails the deploy instead of
+#      quietly disarming the tripwire.
+#
 # Usage (run on the production server via SSH before container swap):
 #   ./scripts/preflight_advisor_image.sh <tag>
 #   e.g.:  ./scripts/preflight_advisor_image.sh v1.2.3
@@ -80,6 +88,10 @@ from layer2.compliance.taxonomy import load_taxonomy as load_l2_taxonomy
 assert load_l2_taxonomy().attributes
 from layer2.prompts.builder import load_system_prompt
 assert load_system_prompt()
+from bylaw_retrieval.retrieval.coherence_audit import load_overlay_declarations
+declarations = load_overlay_declarations()
+assert declarations, 'corpus-coherence audit loaded zero overlay declarations'
+print('[preflight] overlay declarations:', len(declarations))
 print('[preflight] app import + package data OK')
 "
 
