@@ -29,11 +29,12 @@
 import { useState } from "react";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
-import type {
-  BetaRefillState,
-  WalletRefillResponse,
-  WalletResponse,
-} from "@/lib/cases";
+import {
+  BetaRefillClaim,
+  refillTurnsLabel,
+  refillUnlockLabel,
+} from "@/components/product/beta-refill";
+import type { BetaRefillState, WalletResponse } from "@/lib/cases";
 
 type Props = {
   paymentsEnabled: boolean;
@@ -49,22 +50,6 @@ type Props = {
   onRefilled?: (wallet: WalletResponse) => void;
 };
 
-/** "in 4 hours" / "in 25 minutes" for a cooldown unlock instant.
- *
- * Deliberately coarse: the exact second is noise, and rounding up means we
- * never tell someone to come back before the claim would actually succeed. */
-function untilLabel(iso: string): string | null {
-  const target = new Date(iso).getTime();
-  if (Number.isNaN(target)) return null;
-  const minutes = Math.ceil((target - Date.now()) / 60_000);
-  if (minutes <= 0) return null;
-  if (minutes < 60) {
-    return `in ${minutes} minute${minutes === 1 ? "" : "s"}`;
-  }
-  const hours = Math.ceil(minutes / 60);
-  return `in ${hours} hour${hours === 1 ? "" : "s"}`;
-}
-
 export function TopUpPrompt({
   paymentsEnabled,
   sku = "small",
@@ -73,10 +58,6 @@ export function TopUpPrompt({
 }: Props) {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Set when a claim comes back refused — the server is the authority on the
-  // cooldown, so a stale "available" in our props gets corrected here rather
-  // than leaving the button looking live.
-  const [refusal, setRefusal] = useState<string | null>(null);
 
   async function startTopUp() {
     if (working) return;
@@ -105,43 +86,10 @@ export function TopUpPrompt({
     }
   }
 
-  async function claimRefill() {
-    if (working) return;
-    setWorking(true);
-    setError(null);
-    setRefusal(null);
-    try {
-      const r = await fetch("/api/billing/wallet/refill", { method: "POST" });
-      if (!r.ok) {
-        setError("Couldn't add turns right now. Please try again shortly.");
-        return;
-      }
-      const data = (await r.json()) as WalletRefillResponse;
-      if (data.status === "granted") {
-        // The response carries the post-claim wallet, so the shell flips out
-        // of the out-of-turns state without a second read.
-        onRefilled?.(data.wallet);
-        return;
-      }
-      // Refused after the fact — usually a second click that raced the first.
-      const next = data.wallet?.beta_refill?.next_available_at;
-      const when = next ? untilLabel(next) : null;
-      setRefusal(
-        data.status === "cooldown" && when
-          ? `More turns unlock ${when}.`
-          : "No more turns are available on this account right now.",
-      );
-    } catch {
-      setError("Couldn't add turns right now. Please try again shortly.");
-    } finally {
-      setWorking(false);
-    }
-  }
-
   const refillAvailable = !paymentsEnabled && betaRefill?.available === true;
   const cooldownUntil =
     !paymentsEnabled && betaRefill?.status === "cooldown"
-      ? untilLabel(betaRefill.next_available_at ?? "")
+      ? refillUnlockLabel(betaRefill.next_available_at)
       : null;
 
   return (
@@ -183,39 +131,14 @@ export function TopUpPrompt({
             </div>
           )}
         </>
-      ) : refillAvailable ? (
+      ) : refillAvailable && betaRefill ? (
         <>
           <div className="text-[14px]" data-testid="beta-refill-offer">
             You&rsquo;re out of turns. Paid top-ups are coming soon — until
-            then you can add {betaRefill.approx_turns === 1
-              ? "another turn"
-              : `${betaRefill.approx_turns} more turns`}{" "}
-            to this account yourself.
+            then you can add {refillTurnsLabel(betaRefill)} to this account
+            yourself.
           </div>
-          <div>
-            <Btn
-              variant="accent"
-              size="sm"
-              onClick={claimRefill}
-              disabled={working}
-              data-testid="beta-refill-btn"
-            >
-              {working ? "Adding turns…" : "Add more turns →"}
-            </Btn>
-          </div>
-          {refusal && (
-            <div
-              className="text-[12.5px] text-text-muted"
-              data-testid="beta-refill-refusal"
-            >
-              {refusal}
-            </div>
-          )}
-          {error && (
-            <div className="text-[12.5px] text-brick" data-testid="top-up-error">
-              {error}
-            </div>
-          )}
+          <BetaRefillClaim onRefilled={(w) => onRefilled?.(w)} />
         </>
       ) : (
         <div

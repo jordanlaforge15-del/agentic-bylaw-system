@@ -208,3 +208,73 @@ def test_schema_refuses_a_second_signup_grant_without_the_app_lock() -> None:
         # The balance moved exactly once: a rejected insert must not leave
         # its half of the read-modify-write behind.
         assert user.token_balance == 25_000
+
+
+@pg_only
+def test_concurrent_beta_refill_claims_grant_exactly_one(monkeypatch) -> None:
+    """A double-tapped "Add more turns" button claims once, not twice
+    (ABS-405).
+
+    The refill's cooldown and lifetime cap are counted from the ledger, so
+    a check-then-grant that isn't serialised is the classic race: two
+    requests both count zero prior claims, both grant, and the cap the
+    whole feature's cost control rests on is worth nothing. This is the
+    exact shape that shipped two signup grants to production on 2026-07-17
+    (ABS-404).
+
+    ``claim_beta_refill`` re-evaluates the policy under the user row's
+    write lock, so the losers block until the winner commits, then see its
+    ledger row and correctly report cooldown. Ten threads, one grant.
+    """
+    from advisor.db.wallet import REASON_BETA_REFILL, claim_beta_refill
+
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_ENABLED", "true")
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_TOKENS", "1000")
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_MAX_GRANTS", "3")
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_COOLDOWN_HOURS", "6")
+
+    suffix = uuid.uuid4().hex[:12]
+    with session_scope(_DB_URL) as db:
+        user = User(
+            clerk_user_id=f"abs405-refill-{suffix}",
+            email=f"abs405-refill-{suffix}@test.local",
+            token_balance=0,
+        )
+        db.add(user)
+        db.flush()
+        uid = user.id
+
+    start = threading.Barrier(10)
+    statuses: list[str] = []
+    lock = threading.Lock()
+
+    def _claim() -> None:
+        start.wait()
+        with session_scope(_DB_URL) as db:
+            state = claim_beta_refill(db, user=db.get(User, uid))
+            db.commit()
+        with lock:
+            statuses.append(state.status)
+
+    threads = [threading.Thread(target=_claim) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert statuses.count("granted") == 1, (
+        f"{statuses.count('granted')} of 10 concurrent claims granted; "
+        "the refill check-and-grant is not serialised on the user row"
+    )
+    with session_scope(_DB_URL) as db:
+        user = db.get(User, uid)
+        rows = (
+            db.query(TokenTransaction)
+            .filter(
+                TokenTransaction.user_id == uid,
+                TokenTransaction.reason == REASON_BETA_REFILL,
+            )
+            .all()
+        )
+        assert len(rows) == 1
+        assert user.token_balance == 1_000

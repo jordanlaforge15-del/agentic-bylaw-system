@@ -30,6 +30,12 @@ import Link from "next/link";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 import {
+  BetaRefillClaim,
+  canClaimRefill,
+  refillTurnsLabel,
+  refillUnlockLabel,
+} from "@/components/product/beta-refill";
+import {
   CaseListResponse,
   CaseRow,
   TopupCatalogResponse,
@@ -185,7 +191,7 @@ export function BillingContent({ signInHref }: Props) {
 
   return (
     <div className="flex flex-col gap-9 sm:gap-12">
-      <BalanceCard wallet={wallet} topups={topups} />
+      <BalanceCard wallet={wallet} topups={topups} onRefilled={setWallet} />
       <TransactionsCard
         transactions={transactions}
         tokensPerTurn={wallet.tokens_per_turn}
@@ -218,14 +224,22 @@ function UnauthorizedCard({ signInHref }: { signInHref: string }) {
 function BalanceCard({
   wallet,
   topups,
+  onRefilled,
 }: {
   wallet: WalletResponse;
+  onRefilled: (wallet: WalletResponse) => void;
   topups: TopupCatalogResponse | null;
 }) {
   const turns = wallet.approx_turns_remaining;
   const turnWord = turns === 1 ? "turn" : "turns";
   const low = wallet.low_balance;
   const paymentsOn = wallet.payments_enabled;
+  // ABS-405 — the self-serve claim, offered on the payments-off beta only.
+  const refill = canClaimRefill(wallet) ? wallet.beta_refill : undefined;
+  const cooldownUntil =
+    !paymentsOn && wallet.beta_refill?.status === "cooldown"
+      ? refillUnlockLabel(wallet.beta_refill.next_available_at)
+      : null;
 
   return (
     <section data-testid="billing-balance">
@@ -273,10 +287,27 @@ function BalanceCard({
         ) : (
           <div
             data-testid="billing-beta-banner"
-            className="border border-hair bg-surface p-4 mt-6 text-[13px] text-text-muted max-w-[520px]"
+            className="border border-hair bg-surface p-4 mt-6 text-[13px] text-text-muted max-w-[520px] flex flex-col gap-3 items-start"
           >
-            These are free trial turns. Paid top-ups open soon — your balance
-            and full history stay saved in the meantime.
+            <div>
+              These are free trial turns. Paid top-ups open soon — your balance
+              and full history stay saved in the meantime.
+              {/* ABS-405: this page is where a stuck user comes looking for a
+                  way to pay. While there is nothing to sell them, it is also
+                  where the self-serve claim belongs — and where the wait is
+                  worth naming, so "open soon" isn't the only answer. */}
+              {refill
+                ? ` You can add ${refillTurnsLabel(refill)} to this account right now.`
+                : cooldownUntil
+                  ? ` More turns unlock ${cooldownUntil}.`
+                  : ""}
+            </div>
+            {refill && (
+              <BetaRefillClaim
+                onRefilled={onRefilled}
+                testId="billing-beta-refill-btn"
+              />
+            )}
           </div>
         )}
       </div>
