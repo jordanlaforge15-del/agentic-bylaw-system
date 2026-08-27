@@ -21,6 +21,13 @@
 //   2. clause 198(1)(a) carries the complete zone list, not a text ending "ER-"
 //   3. a compact citation ("198(1)(f)") reaches the catch-all clause via the
 //      ABS-261 suggestion round trip, which is DoD 4
+//
+// ABS-465: the same bylaw carries a *second* break, on pages 104/105, which
+// forged a phantom "Part V > 3" over subsection 94.5's permitted-encroachment
+// clauses -- the provisions a deck or balcony question turns on. Production was
+// found carrying both phantoms; only the 198 one had coverage here, because
+// only it had surfaced in an eval case. The second describe block below closes
+// that gap, against its own seeded document.
 
 import { execSync } from "node:child_process";
 import * as path from "node:path";
@@ -29,6 +36,7 @@ import { test, expect, E2E_API_URL, DEMO_USER_ID } from "../fixtures/test-env";
 import { resolveDatabaseUrl } from "../helpers/database-url";
 
 let documentId: number;
+let encroachmentDocumentId: number;
 
 test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
@@ -45,9 +53,19 @@ test.beforeAll(() => {
     `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_page_break_split.py")}"`,
     { env, encoding: "utf-8" },
   );
-  const match = /document_id=(\d+)/.exec(stdout);
-  expect(match, `seed did not report a document_id; stdout: ${stdout}`).not.toBeNull();
-  documentId = Number(match![1]);
+  // Read each id by its label, not by position: the seed prints one line per
+  // break and a third one added later must not silently repoint these.
+  const idFor = (label: string) => {
+    const match = new RegExp(`\\b${label}=(\\d+)`).exec(stdout);
+    expect(match, `seed did not report ${label}; stdout: ${stdout}`).not.toBeNull();
+    return Number(match![1]);
+  };
+  encroachmentDocumentId = idFor("encroachment_document_id");
+  // "document_id" is a substring of "encroachment_document_id", but the \b
+  // above will not match between "_" and "d" (both word characters), so this
+  // cannot pick up the encroachment line.
+  documentId = idFor("document_id");
+  expect(documentId).not.toBe(encroachmentDocumentId);
 });
 
 type CitationHit = { citation_path?: string; text?: string };
@@ -56,12 +74,28 @@ type CitationMiss = { detail?: { message?: string; suggestions?: string[] } };
 async function fetchCitation(
   request: import("@playwright/test").APIRequestContext,
   citationPath: string,
+  docId?: number,
 ) {
   return await request.get(
     `${E2E_API_URL}/v1/citation?citation_path=${encodeURIComponent(citationPath)}` +
-      `&document_id=${documentId}`,
+      `&document_id=${docId ?? documentId}`,
     { headers: { "X-Test-User-Id": DEMO_USER_ID } },
   );
+}
+
+/** The 404 body's suggestion list, asserting the miss really was a miss. */
+async function suggestionsFor(
+  request: import("@playwright/test").APIRequestContext,
+  citationPath: string,
+  docId: number,
+): Promise<string[]> {
+  const res = await fetchCitation(request, citationPath, docId);
+  expect(
+    res.status(),
+    `${citationPath} resolved; it names a section that does not exist`,
+  ).toBe(404);
+  const body = (await res.json()) as CitationMiss;
+  return body.detail?.suggestions ?? [];
 }
 
 /** Resolve a citation the way the tool description tells the agent to: try the
@@ -138,5 +172,80 @@ test.describe("ABS-461: a page break must not forge a section number", () => {
       (citationPath ?? "").split(" > ").slice(0, -1).join(" > ");
     expect(parentOf(conditional.citation_path)).toBe(parentOf(catchAll.citation_path));
     expect(parentOf(catchAll.citation_path)).not.toBe("");
+  });
+});
+
+// ABS-465. The paths below are copied verbatim from production's document 4 —
+// they are what the defective parser actually stored, not an invention of this
+// spec — so these tests fail the moment the guard stops preventing them.
+const ENCROACHMENT_PHANTOM_PREFIX = "Part V > 3";
+const ENCROACHMENT_PHANTOM_CLAUSES = ["(a)", "(b)", "(c)"].map(
+  (clause) =>
+    `${ENCROACHMENT_PHANTOM_PREFIX} > [General Requirement: Permitted ` +
+    `Encroachments into Setbacks, Stepbacks, or Separation Distances] > ${clause}`,
+);
+
+const underPhantom = (path: string) =>
+  path === ENCROACHMENT_PHANTOM_PREFIX ||
+  path.startsWith(`${ENCROACHMENT_PHANTOM_PREFIX} > `);
+
+test.describe("ABS-465: the encroachment break forges no section either", () => {
+  test("nothing resolves or is suggested under the encroachment phantom", async ({
+    request,
+  }) => {
+    // The production verification query for this issue counts rows under
+    // 'Part V > 3 >%' and expects 0. This is that query, asked of the API.
+    for (const path of [ENCROACHMENT_PHANTOM_PREFIX, ...ENCROACHMENT_PHANTOM_CLAUSES]) {
+      const suggestions = await suggestionsFor(request, path, encroachmentDocumentId);
+      expect(
+        suggestions.filter(underPhantom),
+        `phantom paths survived for ${path}: ${JSON.stringify(suggestions)}`,
+      ).toEqual([]);
+    }
+  });
+
+  test("the permitted-encroachment clauses hang off the real subsection 94.5", async ({
+    request,
+  }) => {
+    // Missing the phantom is not enough — the clauses have to have landed
+    // somewhere a reader can find them. 94.5 is the subsection that actually
+    // governs balconies and unenclosed porches.
+    const suggestions = await suggestionsFor(
+      request,
+      ENCROACHMENT_PHANTOM_CLAUSES[0],
+      encroachmentDocumentId,
+    );
+    expect(suggestions.length).toBeGreaterThan(0);
+    expect(
+      suggestions.filter((s) => !s.startsWith("Part V > 94.5")),
+      `clauses landed outside subsection 94.5: ${JSON.stringify(suggestions)}`,
+    ).toEqual([]);
+
+    const hit = await fetchCitation(request, suggestions[0], encroachmentDocumentId);
+    expect(
+      hit.status(),
+      `suggested ${suggestions[0]} did not resolve; body: ${await hit.text()}`,
+    ).toBe(200);
+  });
+
+  test("subsection 94.5 reads across the page break, not up to it", async ({
+    request,
+  }) => {
+    // The break fell inside "ER-3". Pre-fix, the stored provision stopped at
+    // "...abuts a lot containing an ER-" and the rest of the zone list — the
+    // part that decides whether a balcony may encroach at all — was filed
+    // under the phantom.
+    const res = await fetchCitation(request, "Part V > 94.5", encroachmentDocumentId);
+    expect(res.status(), `body: ${await res.text()}`).toBe(200);
+    const body = (await res.json()) as {
+      operative_clauses?: { text?: string }[];
+    };
+    const clauses = (body.operative_clauses ?? []).map((c) => c.text ?? "");
+    const joined = clauses.join("\n");
+    expect(
+      joined,
+      `subsection 94.5 clause texts: ${JSON.stringify(clauses)}`,
+    ).toContain("abuts a lot containing an ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK zone.");
+    expect(clauses.filter((t) => t.trimEnd().endsWith("ER-"))).toEqual([]);
   });
 });
