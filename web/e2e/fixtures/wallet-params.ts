@@ -25,6 +25,20 @@ export const CHAT_MIN_BALANCE = 0;
 /** Turns a brand-new wallet is worth: floor(grant / per-turn) == 3 (ABS-404). */
 export const SIGNUP_GRANT_TURNS = Math.floor(SIGNUP_GRANT / TOKENS_PER_TURN);
 
+/** ADVISOR_BETA_REFILL_TOKENS — one self-serve refill claim (ABS-405). */
+export const BETA_REFILL_TOKENS = 175_000;
+
+/** ADVISOR_BETA_REFILL_MAX_GRANTS — lifetime cap on refill claims. */
+export const BETA_REFILL_MAX_GRANTS = 3;
+
+/** ADVISOR_BETA_REFILL_COOLDOWN_HOURS — wait between claims. */
+export const BETA_REFILL_COOLDOWN_HOURS = 6;
+
+/** Turns one claim buys: floor(refill / per-turn) == 1. */
+export const BETA_REFILL_TURNS = Math.floor(
+  BETA_REFILL_TOKENS / TOKENS_PER_TURN,
+);
+
 /**
  * ADVISOR_TURN_MAX_WALLET_TOKENS (ABS-404) — the per-turn ceiling on
  * MEASURED wallet tokens (input + output), above which `run_tool_loop`

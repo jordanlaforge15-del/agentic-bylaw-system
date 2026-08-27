@@ -107,6 +107,13 @@ services:
       ADVISOR_SIGNUP_TOKEN_GRANT: ${ADVISOR_SIGNUP_TOKEN_GRANT:-525000}
       ADVISOR_CHAT_MIN_BALANCE_TOKENS: ${ADVISOR_CHAT_MIN_BALANCE_TOKENS:-0}
       ADVISOR_LOW_BALANCE_WARN_TOKENS: ${ADVISOR_LOW_BALANCE_WARN_TOKENS:-175000}
+      # ABS-405: the payments-off self-serve refill — the way out of an
+      # overdrawn wallet without an operator running grant_tokens by hand.
+      # Capped at MAX_GRANTS claims for the life of an account.
+      ADVISOR_BETA_REFILL_ENABLED: ${ADVISOR_BETA_REFILL_ENABLED:-true}
+      ADVISOR_BETA_REFILL_TOKENS: ${ADVISOR_BETA_REFILL_TOKENS:-175000}
+      ADVISOR_BETA_REFILL_COOLDOWN_HOURS: ${ADVISOR_BETA_REFILL_COOLDOWN_HOURS:-6}
+      ADVISOR_BETA_REFILL_MAX_GRANTS: ${ADVISOR_BETA_REFILL_MAX_GRANTS:-3}
       ADVISOR_CHAT_MAX_ITERATIONS: ${ADVISOR_CHAT_MAX_ITERATIONS:-20}
       # ABS-404: per-turn ceiling on MEASURED wallet tokens (input + output).
       # The only breaker in the unit the wallet charges — the ABS-291/305 ones

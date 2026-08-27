@@ -221,6 +221,13 @@ ADVISOR_TOKENS_PER_TURN=175000          # display divisor (backend-owned "~N tur
 ADVISOR_SIGNUP_TOKEN_GRANT=525000       # one-time new-user wallet grant (3 turns)
 ADVISOR_CHAT_MIN_BALANCE_TOKENS=0       # pre-flight floor: chat 402s at balance <= floor
 ADVISOR_LOW_BALANCE_WARN_TOKENS=175000  # "low balance" at <= warn (1 turn)
+# ABS-405 self-serve beta refill: the payments-off way out of an overdrawn
+# wallet. Without it an exhausted tester needs a manual grant_tokens by an
+# operator. Ignored once ADVISOR_PAYMENTS_ENABLED is true.
+ADVISOR_BETA_REFILL_ENABLED=true         # off => back to the manual-grant dead-end
+ADVISOR_BETA_REFILL_TOKENS=175000        # per claim (1 turn)
+ADVISOR_BETA_REFILL_COOLDOWN_HOURS=6     # 0 = no cooldown; the cap still applies
+ADVISOR_BETA_REFILL_MAX_GRANTS=3         # lifetime cap per account; 0 disables
 ADVISOR_CHAT_MAX_ITERATIONS=20          # tool-loop cap per chat turn
 ADVISOR_TURN_MAX_WALLET_TOKENS=350000   # per-turn ceiling on MEASURED burn (2 turns)
 

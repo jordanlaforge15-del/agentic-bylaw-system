@@ -38,6 +38,12 @@ import {
 } from "@/lib/cases";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
+import {
+  BetaRefillClaim,
+  canClaimRefill,
+  refillTurnsLabel,
+  refillUnlockLabel,
+} from "@/components/product/beta-refill";
 import { cn } from "@/lib/cn";
 import { TURN_APPROX_SHORT } from "@/lib/turn-copy";
 
@@ -533,7 +539,7 @@ export function OpenCaseForm({
             )}
           </div>
         </div>
-        <BalanceNotice wallet={wallet} />
+        <BalanceNotice wallet={wallet} onRefilled={setWallet} />
       </section>
 
       {/* Secondary: released report SKUs. Rendered only when ≥1 slug is
@@ -667,21 +673,42 @@ function BalanceChip({ wallet }: { wallet: WalletResponse | null }) {
 // or empty. Copy is exact per the design package, forked on payments-on/off
 // and low/empty. The free CTA still works in every state — this is guidance,
 // not a gate.
-function BalanceNotice({ wallet }: { wallet: WalletResponse | null }) {
+function BalanceNotice({
+  wallet,
+  onRefilled,
+}: {
+  wallet: WalletResponse | null;
+  onRefilled: (wallet: WalletResponse) => void;
+}) {
   if (!wallet) return null;
   const turns = Math.max(0, wallet.approx_turns_remaining);
   const empty = turns <= 0;
   const low = wallet.low_balance && !empty;
   if (!empty && !low) return null;
   const paid = wallet.payments_enabled;
+  // ABS-405: an empty wallet on the payments-off beta is the state this
+  // page used to leave as a flat "open it anyway and see a dead composer".
+  // Offer the same self-serve claim the chat prompt does — this is the
+  // primary entry flow, so a fix that skipped it would still strand the
+  // user one screen later.
+  const refill = canClaimRefill(wallet) ? wallet.beta_refill : undefined;
+  const cooldownUntil =
+    !paid && wallet.beta_refill?.status === "cooldown"
+      ? refillUnlockLabel(wallet.beta_refill.next_available_at)
+      : null;
 
   let body: string;
   if (empty && paid) {
     body =
       "Opening is free, but replies need turns and you're out. Top up now or after you open.";
+  } else if (empty && !paid && refill) {
+    body =
+      "Opening is free, but replies need turns and your free trial is used up. " +
+      `You can add ${refillTurnsLabel(refill)} to this account right now.`;
   } else if (empty && !paid) {
     body =
-      "Opening is free, but replies need turns and your free trial is used up. Paid top-ups open soon.";
+      "Opening is free, but replies need turns and your free trial is used up. Paid top-ups open soon." +
+      (cooldownUntil ? ` More turns unlock ${cooldownUntil}.` : "");
   } else if (low && paid) {
     body =
       "You're running low. Opening is free; your first reply will draw on your last turns.";
@@ -709,6 +736,7 @@ function BalanceNotice({ wallet }: { wallet: WalletResponse | null }) {
           Top up turns →
         </Btn>
       )}
+      {empty && refill && <BetaRefillClaim onRefilled={onRefilled} />}
     </div>
   );
 }

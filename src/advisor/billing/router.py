@@ -83,6 +83,7 @@ from advisor.billing.webhooks import handle_event
 from advisor.billing import turns
 from advisor.db.cases import credit_balance_for
 from advisor.db.models import CasePurchase, QuestionPurchase, User
+from advisor.db import wallet as wallet_service
 from advisor.db.wallet import list_transactions
 
 logger = logging.getLogger(__name__)
@@ -557,6 +558,50 @@ class BillingMeResponse(BaseModel):
     )
 
 
+class BetaRefillState(BaseModel):
+    """The payments-off self-serve refill's availability (ABS-405).
+
+    Rides on every wallet read so the out-of-turns prompt can offer the
+    claim (or explain the wait) without a second round trip. Like every
+    other figure on the wallet view, the turn conversion is backend-owned.
+    """
+
+    available: bool = Field(
+        ...,
+        description=(
+            "True when POST /v1/billing/wallet/refill would grant tokens "
+            "right now. False whenever payments are on (top-ups are the "
+            "path then), the feature is off, the lifetime cap is spent, or "
+            "the cooldown hasn't elapsed."
+        ),
+    )
+    status: str = Field(
+        ...,
+        description=(
+            "available | cooldown | exhausted | disabled — the reason "
+            "behind ``available``, so the UI can word the refusal."
+        ),
+    )
+    tokens: int = Field(
+        default=0, description="Tokens one claim is worth (0 when disabled)."
+    )
+    approx_turns: int = Field(
+        default=0,
+        description="floor(tokens / tokens_per_turn) — what a claim buys.",
+    )
+    grants_remaining: int = Field(
+        default=0,
+        description="Claims left against the lifetime cap.",
+    )
+    next_available_at: str | None = Field(
+        default=None,
+        description=(
+            "ISO-8601 instant the next claim unlocks. Set only for the "
+            "``cooldown`` status."
+        ),
+    )
+
+
 class WalletResponse(BaseModel):
     """Body of ``GET /v1/billing/wallet`` — the turns-aware balance view.
 
@@ -610,6 +655,43 @@ class WalletResponse(BaseModel):
         description=(
             "Whether top-ups are purchasable (Stripe on). When False the "
             "UI shows 'paid top-ups coming soon' at exhaustion."
+        ),
+    )
+    beta_refill: BetaRefillState = Field(
+        ...,
+        description=(
+            "ABS-405: the payments-off self-serve way out of an exhausted "
+            "wallet. Always present; ``available`` is False when the claim "
+            "would be refused (including whenever payments are on)."
+        ),
+    )
+
+
+class WalletRefillResponse(BaseModel):
+    """Body of ``POST /v1/billing/wallet/refill`` (ABS-405).
+
+    Always 200: a refused claim ("you're on cooldown", "cap spent") is a
+    normal answer, not an error, and the client wants the fresh wallet
+    either way. ``status`` is ``granted`` when tokens landed, otherwise the
+    same refusal vocabulary ``BetaRefillState.status`` uses.
+    """
+
+    status: str = Field(
+        ...,
+        description="granted | cooldown | exhausted | disabled.",
+    )
+    tokens_granted: int = Field(
+        default=0, description="Tokens credited by this call (0 if refused)."
+    )
+    approx_turns_granted: int = Field(
+        default=0, description="floor(tokens_granted / tokens_per_turn)."
+    )
+    wallet: WalletResponse = Field(
+        ...,
+        description=(
+            "The wallet as it stands after this call — including the "
+            "updated ``beta_refill`` block — so the UI re-enables the "
+            "composer without a follow-up GET."
         ),
     )
 
@@ -1281,7 +1363,43 @@ def _build_topup_catalog(
     )
 
 
-def _wallet_response(user: User, *, payments_enabled: bool) -> WalletResponse:
+def _beta_refill_view(
+    db: Any,
+    user: User,
+    *,
+    payments_enabled: bool,
+) -> BetaRefillState:
+    """Project the ABS-405 refill policy for the wallet view.
+
+    The payments posture gate lives here rather than in the wallet service:
+    the refill exists only because there is nothing to buy, so once Stripe
+    is on the answer is a flat ``disabled`` and the top-up CTA takes over.
+    ``unlimited_credits`` accounts are likewise never offered one — their
+    wallet cannot strand them.
+    """
+    per_turn = turns.tokens_per_turn()
+    if payments_enabled or bool(getattr(user, "unlimited_credits", False)):
+        return BetaRefillState(
+            available=False, status=wallet_service.REFILL_DISABLED
+        )
+    state = wallet_service.beta_refill_state(db, user_id=user.id)
+    return BetaRefillState(
+        available=state.status == wallet_service.REFILL_AVAILABLE,
+        status=state.status,
+        tokens=state.tokens,
+        approx_turns=state.tokens // per_turn if state.tokens else 0,
+        grants_remaining=state.grants_remaining,
+        next_available_at=(
+            state.next_available_at.isoformat()
+            if state.next_available_at is not None
+            else None
+        ),
+    )
+
+
+def _wallet_response(
+    db: Any, user: User, *, payments_enabled: bool
+) -> WalletResponse:
     """Project a ``User`` into the turns-aware wallet view.
 
     All thresholds are read fresh from the environment (via
@@ -1289,6 +1407,9 @@ def _wallet_response(user: User, *, payments_enabled: bool) -> WalletResponse:
     size / floor / warn threshold takes effect without a restart. ``low_balance``
     and ``chat_enabled`` are computed here — never client-side — so the UI's
     states line up with the server's pre-flight rules.
+
+    ``db`` is needed for the ABS-405 refill block, which counts the user's
+    prior refill claims out of the ledger.
     """
     balance = int(user.token_balance or 0)
     floor = turns.chat_min_balance_tokens()
@@ -1307,6 +1428,9 @@ def _wallet_response(user: User, *, payments_enabled: bool) -> WalletResponse:
         # balance strictly above the floor (pre-flight refuses at <= floor).
         chat_enabled=unlimited or balance > floor,
         payments_enabled=payments_enabled,
+        beta_refill=_beta_refill_view(
+            db, user, payments_enabled=payments_enabled
+        ),
     )
 
 
@@ -1316,15 +1440,22 @@ def _mount_wallet_read_routes(
     user_dependency: Callable[..., Any],
     user_resolver: Callable[[Any, Session], User],
     open_db: Callable[[], Any],
+    commit: Callable[[Any], None],
     payments_enabled: bool,
 ) -> None:
-    """Mount ``GET /wallet`` and ``GET /wallet/transactions`` (ABS-380).
+    """Mount the wallet surface (ABS-380) plus its refill claim (ABS-405).
 
-    Read-only and deliberately NOT gated by ``_require_enabled``: the token
-    wallet is the beta product's balance, so it must be visible on the
-    dormant (payments-off) router too — mounted on both flavours, same as
-    ``GET /me``. Both endpoints are ownership-scoped: a caller only ever
-    reads their own balance and their own ledger rows.
+    ``GET /wallet`` and ``GET /wallet/transactions`` are deliberately NOT
+    gated by ``_require_enabled``: the token wallet is the beta product's
+    balance, so it must be visible on the dormant (payments-off) router too
+    — mounted on both flavours, same as ``GET /me``. Every endpoint here is
+    ownership-scoped: a caller only ever reads or refills their own wallet.
+
+    ``POST /wallet/refill`` is mounted on both flavours for the same reason
+    (a route that exists on only one router is a trap — see the answer
+    endpoints), but it grants nothing when ``payments_enabled`` is True: the
+    refill is the payments-off stopgap, and once there is something to buy
+    the top-up checkout is the path.
     """
 
     @router.get("/wallet", response_model=WalletResponse)
@@ -1333,7 +1464,59 @@ def _mount_wallet_read_routes(
     ) -> WalletResponse:
         with open_db() as db:
             user = user_resolver(auth_session, db)
-            return _wallet_response(user, payments_enabled=payments_enabled)
+            return _wallet_response(
+                db, user, payments_enabled=payments_enabled
+            )
+
+    @router.post("/wallet/refill", response_model=WalletRefillResponse)
+    def post_wallet_refill(
+        auth_session: Any = Depends(user_dependency),
+    ) -> WalletRefillResponse:
+        """Claim one self-serve beta refill (ABS-405).
+
+        The way out of an overdrawn wallet while payments are off. Before
+        this, an exhausted tester's only path back into chat was an
+        operator running ``grant_tokens`` by hand — every stuck user was a
+        support touch.
+
+        Always 200. A refused claim (cooldown not elapsed, lifetime cap
+        spent, feature off, payments on) comes back as a ``status`` plus
+        the unchanged wallet, because "not yet, and here's when" is a
+        normal answer the UI needs to render — not a 4xx. The response
+        carries the post-claim wallet so the client re-enables the composer
+        without a follow-up read.
+        """
+        with open_db() as db:
+            user = user_resolver(auth_session, db)
+            if payments_enabled or bool(
+                getattr(user, "unlimited_credits", False)
+            ):
+                # Nothing to grant: top-ups are purchasable (or this
+                # account never runs out). Report it in the same shape a
+                # policy refusal uses rather than 404-ing a mounted route.
+                return WalletRefillResponse(
+                    status=wallet_service.REFILL_DISABLED,
+                    wallet=_wallet_response(
+                        db, user, payments_enabled=payments_enabled
+                    ),
+                )
+            state = wallet_service.claim_beta_refill(db, user=user)
+            if state.tokens_granted:
+                commit(db)
+            per_turn = turns.tokens_per_turn()
+            # Re-read the row rather than trusting the resolver's instance:
+            # it may be detached (see ``post_free_start``), in which case its
+            # ``token_balance`` predates the grant we just committed and the
+            # response would tell the client it is still out of turns.
+            fresh = db.get(User, user.id) or user
+            return WalletRefillResponse(
+                status=state.status,
+                tokens_granted=state.tokens_granted,
+                approx_turns_granted=state.tokens_granted // per_turn,
+                wallet=_wallet_response(
+                    db, fresh, payments_enabled=payments_enabled
+                ),
+            )
 
     @router.get(
         "/wallet/transactions", response_model=WalletTransactionsResponse
@@ -1954,6 +2137,7 @@ def build_billing_router(
         user_dependency=user_dependency,
         user_resolver=user_resolver,
         open_db=_open_db,
+        commit=_commit,
         payments_enabled=settings.payments_enabled,
     )
 
@@ -2292,6 +2476,7 @@ def build_dormant_billing_router(
             user_dependency=user_dependency,
             user_resolver=user_resolver,
             open_db=_open_db_dormant,
+            commit=_commit_dormant,
             payments_enabled=False,
         )
 

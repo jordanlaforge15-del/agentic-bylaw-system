@@ -7,6 +7,7 @@ together.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -16,9 +17,16 @@ from sqlalchemy.exc import IntegrityError
 from advisor.billing.turns import signup_token_grant
 from advisor.db.models import TokenTransaction, User
 from advisor.db.wallet import (
+    REASON_BETA_REFILL,
     REASON_SIGNUP_GRANT,
+    REFILL_AVAILABLE,
+    REFILL_COOLDOWN,
+    REFILL_DISABLED,
+    REFILL_EXHAUSTED,
     adjust_tokens,
+    beta_refill_state,
     burn_tokens,
+    claim_beta_refill,
     credit_topup,
     get_balance,
     grant_signup_tokens_if_needed,
@@ -345,3 +353,189 @@ def test_signup_grant_absorbs_a_constraint_violation_it_did_not_see(
             if r.entry_type == "grant"
         ]
         assert len(grants) == 1
+
+
+# ---------- beta refill (ABS-405) -----------------------------------------
+#
+# The self-serve way out of an overdrawn wallet while payments are off.
+# Policy lives entirely in the ledger: claims are ``grant`` rows stamped
+# ``beta_refill``, so the cooldown and the lifetime cap are counted from the
+# audit trail rather than a column that could drift away from it.
+
+
+@pytest.fixture()
+def refill_env(monkeypatch) -> None:
+    """A small, predictable refill policy: 1,000 tokens, 3 claims, 6h apart."""
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_ENABLED", "true")
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_TOKENS", "1000")
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_MAX_GRANTS", "3")
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_COOLDOWN_HOURS", "6")
+
+
+def test_refill_is_available_to_a_user_who_has_never_claimed(
+    tmp_path: Path, refill_env
+) -> None:
+    db_url = _db_url(tmp_path)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        state = beta_refill_state(s, user_id=uid)
+    assert state.status == REFILL_AVAILABLE
+    assert state.tokens == 1_000
+    assert state.grants_used == 0
+    assert state.grants_remaining == 3
+    assert state.next_available_at is None
+
+
+def test_claim_credits_the_wallet_and_writes_a_beta_refill_grant(
+    tmp_path: Path, refill_env
+) -> None:
+    db_url = _db_url(tmp_path)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        # Overdraw the wallet for real — a floorless burn, the case this
+        # whole feature exists for.
+        burn_tokens(s, user=s.get(User, uid), amount=500)
+        s.commit()
+
+    with session_scope(db_url) as s:
+        state = claim_beta_refill(s, user=s.get(User, uid))
+        s.commit()
+    assert state.status == "granted"
+    assert state.tokens_granted == 1_000
+    assert state.grants_remaining == 2
+
+    with session_scope(db_url) as s:
+        # Out of overdraft: -500 + 1,000. The ledger still sums to the balance.
+        assert get_balance(s, user_id=uid) == 500
+        assert _ledger_sum(s, uid) == 500
+        rows = list_transactions(s, user_id=uid, limit=100)
+        refills = [r for r in rows if r.reason == REASON_BETA_REFILL]
+        assert len(refills) == 1
+        assert refills[0].entry_type == "grant"
+        assert refills[0].amount_tokens == 1_000
+
+
+def test_second_claim_inside_the_cooldown_is_refused_with_an_unlock_time(
+    tmp_path: Path, refill_env
+) -> None:
+    db_url = _db_url(tmp_path)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        claim_beta_refill(s, user=s.get(User, uid))
+        s.commit()
+
+    with session_scope(db_url) as s:
+        state = claim_beta_refill(s, user=s.get(User, uid))
+        s.commit()
+    assert state.status == REFILL_COOLDOWN
+    assert state.tokens_granted == 0
+    assert state.next_available_at is not None
+    # The unlock instant is one cooldown out from the claim we just made.
+    assert state.next_available_at > datetime.now(timezone.utc)
+    assert state.next_available_at <= datetime.now(timezone.utc) + timedelta(
+        hours=6
+    )
+    with session_scope(db_url) as s:
+        assert get_balance(s, user_id=uid) == 1_000  # not double-credited
+
+
+def test_claim_succeeds_once_the_cooldown_has_elapsed(
+    tmp_path: Path, refill_env
+) -> None:
+    db_url = _db_url(tmp_path)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        claim_beta_refill(s, user=s.get(User, uid))
+        s.commit()
+
+    # Seven hours later — past the 6h cooldown.
+    later = datetime.now(timezone.utc) + timedelta(hours=7)
+    with session_scope(db_url) as s:
+        state = claim_beta_refill(s, user=s.get(User, uid), now=later)
+        s.commit()
+    assert state.status == "granted"
+    with session_scope(db_url) as s:
+        assert get_balance(s, user_id=uid) == 2_000
+
+
+def test_lifetime_cap_exhausts_the_refill(tmp_path: Path, refill_env) -> None:
+    db_url = _db_url(tmp_path)
+    uid = _seed_user(db_url)
+    base = datetime.now(timezone.utc)
+    for i in range(3):
+        with session_scope(db_url) as s:
+            state = claim_beta_refill(
+                s, user=s.get(User, uid), now=base + timedelta(hours=7 * i)
+            )
+            s.commit()
+        assert state.status == "granted", f"claim {i} refused"
+
+    # Cooldown long past, but the cap is spent — permanently.
+    with session_scope(db_url) as s:
+        state = claim_beta_refill(
+            s, user=s.get(User, uid), now=base + timedelta(days=30)
+        )
+        s.commit()
+    assert state.status == REFILL_EXHAUSTED
+    assert state.grants_remaining == 0
+    with session_scope(db_url) as s:
+        assert get_balance(s, user_id=uid) == 3_000
+
+
+def test_disabled_flag_refuses_the_claim(tmp_path: Path, refill_env, monkeypatch) -> None:
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_ENABLED", "false")
+    db_url = _db_url(tmp_path)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        state = claim_beta_refill(s, user=s.get(User, uid))
+        s.commit()
+    assert state.status == REFILL_DISABLED
+    with session_scope(db_url) as s:
+        assert get_balance(s, user_id=uid) == 0
+        assert list_transactions(s, user_id=uid) == []
+
+
+def test_zero_max_grants_disables_the_refill(
+    tmp_path: Path, refill_env, monkeypatch
+) -> None:
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_MAX_GRANTS", "0")
+    db_url = _db_url(tmp_path)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        assert beta_refill_state(s, user_id=uid).status == REFILL_DISABLED
+
+
+def test_zero_cooldown_allows_back_to_back_claims_up_to_the_cap(
+    tmp_path: Path, refill_env, monkeypatch
+) -> None:
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_COOLDOWN_HOURS", "0")
+    db_url = _db_url(tmp_path)
+    uid = _seed_user(db_url)
+    for _ in range(3):
+        with session_scope(db_url) as s:
+            assert claim_beta_refill(s, user=s.get(User, uid)).status == "granted"
+            s.commit()
+    with session_scope(db_url) as s:
+        assert claim_beta_refill(s, user=s.get(User, uid)).status == REFILL_EXHAUSTED
+        s.commit()
+
+
+def test_signup_grant_does_not_count_against_the_refill_cap(
+    tmp_path: Path, refill_env
+) -> None:
+    """The cap counts ``beta_refill`` rows only — not every ``grant`` row.
+
+    Otherwise the signup grant (and any admin gift, also a ``grant``) would
+    silently eat a refill and a brand-new user would arrive with fewer
+    claims than the policy says.
+    """
+    db_url = _db_url(tmp_path)
+    uid = _seed_user(db_url)
+    with session_scope(db_url) as s:
+        grant_tokens(s, user=s.get(User, uid), amount=9_000, reason=REASON_SIGNUP_GRANT)
+        grant_tokens(s, user=s.get(User, uid), amount=1_000, reason="admin_gift")
+        s.commit()
+    with session_scope(db_url) as s:
+        state = beta_refill_state(s, user_id=uid)
+    assert state.status == REFILL_AVAILABLE
+    assert state.grants_remaining == 3

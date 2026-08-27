@@ -377,6 +377,15 @@ function ProductAppPageInner() {
     void refreshWallet();
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ABS-405: a claimed beta refill hands back the post-claim wallet, so the
+  // workspace leaves the out-of-turns state in place — no reload, no second
+  // read. Safe to trust over a refetch: this only fires while the composer
+  // is disabled, so no turn can be settling underneath it.
+  const applyRefilledWallet = (refilled: WalletResponse) => {
+    setWallet(refilled);
+    if (refilled.chat_enabled) setRefused(false);
+  };
+
   // Fetch the case anchor (kind + label) whenever caseId changes so
   // the parcel pane can show the address even before a spatial lookup.
   // ABS-453: the same response carries ``user_case_number``, so this is also
@@ -1186,7 +1195,11 @@ function ProductAppPageInner() {
                 />
               )}
               {caseId !== null && outOfTokens && (
-                <TopUpPrompt paymentsEnabled={wallet?.payments_enabled ?? false} />
+                <TopUpPrompt
+                  paymentsEnabled={wallet?.payments_enabled ?? false}
+                  betaRefill={wallet?.beta_refill}
+                  onRefilled={applyRefilledWallet}
+                />
               )}
               <ChatDisclaimerBar />
               {caseId === null ? (

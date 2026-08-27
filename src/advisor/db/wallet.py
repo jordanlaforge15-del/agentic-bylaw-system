@@ -25,6 +25,8 @@ turn at ``balance <= floor``), enforced upstream — not a ledger invariant.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -46,6 +48,21 @@ ENTRY_ADJUST = "adjust"
 # (see ``TokenTransaction.__table_args__``), so it is the DB's definition of
 # "the signup grant" and must not drift.
 REASON_SIGNUP_GRANT = "signup_grant"
+
+# The ``reason`` stamped on a self-serve beta refill (ABS-405). Load-bearing:
+# the cooldown and the lifetime cap are both computed by counting ledger rows
+# carrying exactly this reason, so there is no separate counter to drift out
+# of sync with the ledger — and an operator reading a statement can tell a
+# refill apart from the signup grant and from a hand-made admin gift.
+REASON_BETA_REFILL = "beta_refill"
+
+# ``BetaRefillState.status`` values. "available" means a claim would succeed
+# right now; the rest are the reasons it wouldn't.
+REFILL_AVAILABLE = "available"
+REFILL_COOLDOWN = "cooldown"
+REFILL_EXHAUSTED = "exhausted"
+REFILL_DISABLED = "disabled"
+REFILL_GRANTED = "granted"
 
 
 def _apply_entry(
@@ -342,6 +359,171 @@ def grant_signup_tokens_if_needed(db: Session, *, user: User) -> bool:
     locked.metadata_json["token_grant_issued"] = True
     db.flush()
     return True
+
+
+@dataclass(frozen=True)
+class BetaRefillState:
+    """Whether the payments-off self-serve refill is claimable (ABS-405).
+
+    ``status`` is one of ``available`` / ``cooldown`` / ``exhausted`` /
+    ``disabled`` — or ``granted``, which only ever comes back from
+    ``claim_beta_refill`` and means the tokens landed on this call.
+
+    ``tokens`` is what one claim is worth; ``tokens_granted`` is what this
+    call actually credited (0 for every read and for a refused claim).
+    ``next_available_at`` is set only for ``cooldown`` — it is the instant
+    the next claim unlocks, so the UI can say "more turns in 4h" instead of
+    a bare "no".
+    """
+
+    status: str
+    tokens: int
+    grants_used: int
+    grants_remaining: int
+    next_available_at: datetime | None = None
+    tokens_granted: int = 0
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Coerce a ledger timestamp to an aware UTC datetime.
+
+    ``created_at`` is ``DateTime(timezone=True)`` and always written aware,
+    but sqlite (unit tests) has no native tz storage and hands the value
+    back naive. Treating a naive read as UTC keeps the cooldown arithmetic
+    correct on both backends instead of raising on the comparison.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _beta_refill_history(
+    db: Session, *, user_id: int
+) -> tuple[int, datetime | None]:
+    """Return ``(claims_made, newest_claim_at)`` from the ledger.
+
+    The ledger is the only bookkeeping: refills are ``grant`` rows stamped
+    with ``REASON_BETA_REFILL``, so there is no counter column that can
+    disagree with the audit trail. Bounded by the lifetime cap, so reading
+    the rows rather than aggregating them is cheap and dodges the
+    backend-dependent typing of ``MAX()`` over a timestamp.
+    """
+    rows = list(
+        db.execute(
+            select(TokenTransaction.created_at)
+            .where(TokenTransaction.user_id == user_id)
+            .where(TokenTransaction.entry_type == ENTRY_GRANT)
+            .where(TokenTransaction.reason == REASON_BETA_REFILL)
+            .order_by(TokenTransaction.created_at.desc())
+        ).scalars()
+    )
+    newest = _as_utc(rows[0]) if rows else None
+    return len(rows), newest
+
+
+def beta_refill_state(
+    db: Session, *, user_id: int, now: datetime | None = None
+) -> BetaRefillState:
+    """Evaluate the beta-refill policy for a user without granting anything.
+
+    Read-only: safe to call from ``GET /wallet`` on every page load. The
+    policy is (in order) the enabled flag and a non-zero grant size, then
+    the lifetime cap, then the cooldown since the newest claim. Callers
+    still have to layer the payments-off gate on top — this function knows
+    the wallet, not the deployment's payment posture.
+    """
+    from advisor.billing import turns  # noqa: PLC0415
+
+    tokens = turns.beta_refill_tokens()
+    max_grants = turns.beta_refill_max_grants()
+    if not turns.beta_refill_enabled() or tokens <= 0 or max_grants <= 0:
+        return BetaRefillState(
+            status=REFILL_DISABLED,
+            tokens=0,
+            grants_used=0,
+            grants_remaining=0,
+        )
+
+    used, newest = _beta_refill_history(db, user_id=user_id)
+    remaining = max(0, max_grants - used)
+    if remaining == 0:
+        return BetaRefillState(
+            status=REFILL_EXHAUSTED,
+            tokens=tokens,
+            grants_used=used,
+            grants_remaining=0,
+        )
+
+    cooldown = timedelta(hours=turns.beta_refill_cooldown_hours())
+    moment = now or datetime.now(timezone.utc)
+    if newest is not None and cooldown:
+        unlocks_at = newest + cooldown
+        if moment < unlocks_at:
+            return BetaRefillState(
+                status=REFILL_COOLDOWN,
+                tokens=tokens,
+                grants_used=used,
+                grants_remaining=remaining,
+                next_available_at=unlocks_at,
+            )
+    return BetaRefillState(
+        status=REFILL_AVAILABLE,
+        tokens=tokens,
+        grants_used=used,
+        grants_remaining=remaining,
+    )
+
+
+def claim_beta_refill(
+    db: Session, *, user: User, now: datetime | None = None
+) -> BetaRefillState:
+    """Claim one self-serve beta refill, or explain why it was refused.
+
+    Returns a ``granted`` state (with ``tokens_granted`` set) when the
+    tokens landed, otherwise the same refusal state ``beta_refill_state``
+    would have reported. Never raises for a refused claim — "you're on
+    cooldown" is a normal answer, not an error.
+
+    Concurrency mirrors ``grant_signup_tokens_if_needed``: the policy is
+    re-evaluated **under the user row's write lock**, so two clicks racing
+    (a double-tapped button, a retried request) serialise. The second one
+    blocks until the first commits, then counts the row the first wrote and
+    correctly reports cooldown. ``populate_existing`` is load-bearing for
+    the same reason it is there — the caller's ``user`` is already in the
+    identity map, and without a forced refresh the locked re-select hands
+    back the cached instance and its stale balance.
+
+    Does not commit — the caller owns the transaction boundary.
+    """
+    locked = db.execute(
+        select(User)
+        .where(User.id == user.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+    state = beta_refill_state(db, user_id=locked.id, now=now)
+    if state.status != REFILL_AVAILABLE:
+        return state
+    grant_tokens(
+        db,
+        user=locked,
+        amount=state.tokens,
+        reason=REASON_BETA_REFILL,
+    )
+    logger.info(
+        "beta refill granted: user=%s tokens=%d claim=%d/%d",
+        locked.id,
+        state.tokens,
+        state.grants_used + 1,
+        state.grants_used + state.grants_remaining,
+    )
+    return BetaRefillState(
+        status=REFILL_GRANTED,
+        tokens=state.tokens,
+        grants_used=state.grants_used + 1,
+        grants_remaining=state.grants_remaining - 1,
+        tokens_granted=state.tokens,
+    )
 
 
 def get_balance(db: Session, *, user_id: int) -> int:
