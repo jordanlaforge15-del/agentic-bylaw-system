@@ -44,7 +44,13 @@ REQUIRED_WHEEL_DATA_FILES = [
     "layer1/semantic/taxonomy.json",
     "layer2/prompts/assets/system_v1.txt",
     "layer2/compliance/attributes/taxonomy.yaml",
+    # ABS-420: the corpus-coherence audit's declaration set. One entry is
+    # named literally so a rename of the directory fails here; the whole set
+    # is checked by test_wheel_contains_every_dataset_config below.
+    "layer1/datasets/halifax_zoning.yaml",
 ]
+
+DATASET_CONFIG_DIR = REPO_ROOT / "src" / "layer1" / "datasets"
 
 
 @pytest.fixture(scope="module")
@@ -95,6 +101,53 @@ def test_wheel_contains_runtime_data_files(built_wheel: Path) -> None:
         "[tool.setuptools.package-data] in pyproject.toml, or the deployed "
         "advisor image will FileNotFoundError at runtime (ABS-412)"
     )
+
+
+def test_wheel_contains_every_dataset_config(built_wheel: Path) -> None:
+    """Every layer1 dataset YAML must ship, not just the ones named above.
+
+    The corpus-coherence audit (ABS-356) reads this whole directory as its
+    declaration set: a config that exists in the checkout but not in the
+    wheel is a role the deployed advisor silently stops checking. Absent the
+    entire directory — the state every image before ABS-420 shipped — it
+    checked nothing and reported ``{"status":"ok","checked_roles":0}``.
+    """
+    expected = {f"layer1/datasets/{path.name}" for path in DATASET_CONFIG_DIR.glob("*.yaml")}
+    assert expected, f"no dataset configs found under {DATASET_CONFIG_DIR}"
+    with zipfile.ZipFile(built_wheel) as wheel:
+        names = set(wheel.namelist())
+    missing = sorted(expected - names)
+    assert not missing, (
+        f"wheel is missing dataset configs: {missing} — /v1/monitoring/"
+        "corpus-coherence would stop checking those overlay roles in the "
+        "deployed image while still reporting green (ABS-420)"
+    )
+
+
+def test_dataset_config_dir_follows_the_installed_package() -> None:
+    """The audit's config dir must be the package dir, not a repo-relative walk.
+
+    ``Path(__file__).parents[3] / "src" / "layer1" / "datasets"`` resolved to
+    ``/opt/venv/lib/python3.11/src/layer1/datasets`` inside the advisor image
+    — a path no install creates. Pinning it to the package directory is what
+    makes the packaged YAMLs above reachable at runtime (ABS-420).
+    """
+    from layer1 import datasets as layer1_datasets
+
+    from bylaw_retrieval.retrieval.coherence_audit import DEFAULT_DATASET_CONFIG_DIR
+
+    assert DEFAULT_DATASET_CONFIG_DIR == Path(layer1_datasets.__file__).resolve().parent
+    assert "site-packages" in str(DEFAULT_DATASET_CONFIG_DIR) or DEFAULT_DATASET_CONFIG_DIR == (
+        DATASET_CONFIG_DIR
+    )
+
+
+def test_missing_config_dir_raises_instead_of_auditing_nothing(tmp_path: Path) -> None:
+    """An unreadable declaration set is an error, never an empty audit (ABS-420)."""
+    from bylaw_retrieval.retrieval.coherence_audit import load_overlay_declarations
+
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        load_overlay_declarations(tmp_path / "not-installed" / "datasets")
 
 
 def test_taxonomy_json_loads_via_importlib_resources() -> None:
