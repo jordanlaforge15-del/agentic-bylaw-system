@@ -112,6 +112,34 @@ function applyBalancePatch(
   return next;
 }
 
+type CaseRecord = {
+  id: number;
+  user_case_number: number;
+  anchor_kind: string;
+  anchor_label: string;
+};
+
+/**
+ * Resolve one case's record — anchor + user-facing case number (ABS-424).
+ *
+ * Prefers GET /api/cases/{id}, which always resolves for a case the caller
+ * owns. Falls back to scanning the capped case list so the shell still works
+ * against a backend that predates the single-case route. Returns null when
+ * neither source can identify the case; the caller leaves state untouched
+ * rather than painting a guess.
+ */
+async function fetchCaseRecord(caseId: number): Promise<CaseRecord | null> {
+  const one = await fetch(`/api/cases/${caseId}`, { cache: "no-store" });
+  if (one.ok) {
+    const body = (await one.json()) as { case?: CaseRecord | null };
+    if (body.case) return body.case;
+  }
+  const list = await fetch("/api/cases", { cache: "no-store" });
+  if (!list.ok) return null;
+  const data = (await list.json()) as { cases: CaseRecord[] };
+  return data.cases.find((c) => c.id === caseId) ?? null;
+}
+
 // Top-level page wraps the inner component in Suspense because
 // ``useSearchParams`` opts the tree into client-side rendering for
 // the params hook. Without the boundary, ``next build`` refuses to
@@ -356,28 +384,18 @@ function ProductAppPageInner() {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/api/cases", { cache: "no-store" });
-        if (!res.ok) return;
-        const data = (await res.json()) as {
-          cases: Array<{
-            id: number;
-            user_case_number: number;
-            anchor_kind: string;
-            anchor_label: string;
-          }>;
-        };
-        // A newer caseId won the race while this was in flight — its own
-        // run of this effect owns the state now.
-        if (cancelled) return;
-        const matched = data.cases.find((c) => c.id === caseId);
-        if (matched) {
-          setCaseAnchor({
-            kind: matched.anchor_kind,
-            label: matched.anchor_label,
-          });
-          if (typeof matched.user_case_number === "number") {
-            setCaseNumber(matched.user_case_number);
-          }
+        // ABS-424: ask for *this* case directly. GET /api/cases is capped at
+        // the newest N, so a user deep in their case history could open an
+        // older case and never find it in the list — leaving the footer
+        // without a number until the first turn's SSE ``session`` event
+        // supplied one, which read as the case number changing identity
+        // mid-conversation. The single-case route always resolves. The list
+        // stays as a fallback for a deployment whose backend predates it.
+        const detail = await fetchCaseRecord(caseId);
+        if (cancelled || !detail) return;
+        setCaseAnchor({ kind: detail.anchor_kind, label: detail.anchor_label });
+        if (typeof detail.user_case_number === "number") {
+          setCaseNumber(detail.user_case_number);
         }
       } catch {
         // Non-critical — parcel pane falls back to generic empty state.

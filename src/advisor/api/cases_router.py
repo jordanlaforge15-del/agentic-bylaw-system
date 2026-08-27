@@ -3,6 +3,9 @@
 Five endpoints expose the case service to the frontend:
 
 * ``GET /v1/cases`` — auth-required. List the user's cases newest-first.
+* ``GET /v1/cases/{case_id}`` — auth-required. One case by id (404 when it
+  isn't the caller's). Unlike the capped list, this always resolves, so the
+  frontend can render a stable user-facing case number (ABS-424).
 * ``GET /v1/cases/match`` — auth-required. Pre-flight match for the
   case-open form: "do you already have a case for this anchor within
   the 30-day window?" Frontend uses the response to decide whether to
@@ -91,6 +94,10 @@ class OpenCaseResponse(BaseModel):
 
 class CaseListResponse(BaseModel):
     cases: list[CaseOut]
+
+
+class CaseDetailResponse(BaseModel):
+    case: CaseOut
 
 
 # -- Router factory ---------------------------------------------------------
@@ -293,5 +300,26 @@ def build_cases_router(
             return CaseListResponse(
                 cases=[CaseOut.model_validate(c) for c in cases]
             )
+
+    # ABS-424: the list above is capped (``list_user_cases`` limit), so a
+    # frontend that needs one specific case's ``user_case_number`` — the
+    # durable, user-facing "CASE #N" — cannot rely on finding it there. A
+    # heavy user opening an older case by URL would miss the list entirely
+    # and the badge would only settle once a chat turn's SSE ``session``
+    # event arrived, making the number appear to change mid-conversation.
+    # Registered after ``/match`` so the static route keeps priority.
+    @router.get("/{case_id}", response_model=CaseDetailResponse)
+    def get_case(
+        case_id: int,
+        auth_session: Any = Depends(user_dependency),
+    ) -> CaseDetailResponse:
+        with _open_db() as db:
+            user = user_resolver(auth_session, db)
+            case = db.get(Case, case_id)
+            if case is None or case.user_id != user.id:
+                raise HTTPException(
+                    status_code=404, detail={"code": "case_not_found"}
+                )
+            return CaseDetailResponse(case=CaseOut.model_validate(case))
 
     return router
