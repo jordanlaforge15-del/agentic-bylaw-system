@@ -34,6 +34,12 @@ type Props = {
   // generic "No parcel yet" copy.
   anchorLabel?: string | null;
   anchorKind?: string | null;
+  // ABS-423: terminal status of the case-open spatial join
+  // (`spatial_facts.status`). When it is "unresolved" the server has
+  // already tried and failed, so the empty state must say so rather
+  // than keep promising a pending geocode.
+  spatialStatus?: string | null;
+  spatialReason?: string | null;
   // When `true`, the pane drops its fixed width and left border — the
   // parent (Sheet on mobile, side overlay on tablet) supplies them.
   inSheet?: boolean;
@@ -44,7 +50,17 @@ type Props = {
   appendix?: boolean;
 };
 
-export function ParcelPane({ parcel, sessionId, caseId, anchorLabel, anchorKind, inSheet, appendix }: Props) {
+export function ParcelPane({
+  parcel,
+  sessionId,
+  caseId,
+  anchorLabel,
+  anchorKind,
+  spatialStatus,
+  spatialReason,
+  inSheet,
+  appendix,
+}: Props) {
   const [shareOpen, setShareOpen] = useState(false);
   // ABS-451: inside the workspace the clause drawer is owned by the
   // CitationViewerProvider, so a rail card and an inline reference open
@@ -81,7 +97,12 @@ export function ParcelPane({ parcel, sessionId, caseId, anchorLabel, anchorKind,
       {parcel ? (
         <ParcelDetails parcel={parcel} onCitationClick={openCitation} />
       ) : (
-        <EmptyParcel anchorLabel={anchorLabel} anchorKind={anchorKind} />
+        <EmptyParcel
+          anchorLabel={anchorLabel}
+          anchorKind={anchorKind}
+          spatialStatus={spatialStatus}
+          spatialReason={spatialReason}
+        />
       )}
 
       <div className="mt-auto border-t border-hair px-5 py-3.5 flex flex-col gap-2">
@@ -262,14 +283,69 @@ function ShareModal({ caseId, onClose }: ShareModalProps) {
 
 // ── Parcel detail ────────────────────────────────────────────────────────────
 
+// ABS-423: the extractor's `reason` strings are written for the model's
+// system prompt, not for a user. Translate the ones we ship; anything
+// unmapped falls through verbatim so a new failure mode is still legible
+// (and debuggable) rather than silently swallowed.
+const UNRESOLVED_REASONS: Record<string, string> = {
+  "could not parse anchor as a civic address or PID":
+    "we couldn't read this anchor as a civic address or PID",
+  "geocoder could not resolve anchor":
+    "the address didn't match any known Halifax location",
+  "geocoded point is not inside any parcel polygon":
+    "the geocoded point doesn't fall inside any mapped parcel",
+  "anchor_kind is not 'address'":
+    "this case is anchored to a project reference, not a civic address",
+  "resolved geometry has no usable centroid":
+    "the matched location has no usable centre point",
+};
+
+function humanizeUnresolvedReason(reason?: string | null): string | null {
+  if (!reason) return null;
+  return UNRESOLVED_REASONS[reason] ?? reason;
+}
+
 function EmptyParcel({
   anchorLabel,
   anchorKind,
+  spatialStatus,
+  spatialReason,
 }: {
   anchorLabel?: string | null;
   anchorKind?: string | null;
+  spatialStatus?: string | null;
+  spatialReason?: string | null;
 }) {
   const hasAddressAnchor = anchorKind === "address" && anchorLabel;
+
+  // Terminal failure beats the pending copy: the server already tried
+  // and stored the outcome, so no amount of asking will fill this pane.
+  if (spatialStatus === "unresolved" && anchorLabel) {
+    const reason = humanizeUnresolvedReason(spatialReason);
+    return (
+      <div className="px-5 py-[18px] flex flex-col gap-1.5">
+        <div
+          className="font-sans font-bold leading-[1.15]"
+          style={{ fontSize: 22, letterSpacing: "-0.025em" }}
+          data-testid="parcel-anchor-address"
+        >
+          {anchorLabel}
+        </div>
+        <div className="text-[12.5px] text-text-muted">
+          Halifax Regional Municipality
+        </div>
+        <p
+          className="text-[12.5px] text-text-muted leading-[1.55] m-0 mt-2"
+          data-testid="parcel-unresolved"
+        >
+          We couldn&rsquo;t locate this address in the parcel data
+          {reason ? ` — ${reason}` : ""}. Bylaw answers still work, but
+          parcel attributes (zone, height, FAR) won&rsquo;t appear here.
+          Open a new case with a corrected civic address to try again.
+        </p>
+      </div>
+    );
+  }
 
   if (hasAddressAnchor) {
     return (

@@ -117,6 +117,10 @@ type CaseRecord = {
   user_case_number: number;
   anchor_kind: string;
   anchor_label: string;
+  // ABS-423: terminal outcome of the case-open spatial join. Optional
+  // because a backend that predates it simply omits the fields.
+  spatial_status?: string | null;
+  spatial_reason?: string | null;
 };
 
 /**
@@ -287,6 +291,10 @@ function ProductAppPageInner() {
   const [caseAnchor, setCaseAnchor] = useState<{
     kind: string;
     label: string;
+    // ABS-423: terminal outcome of the case-open spatial join, so the
+    // parcel pane shows the failure instead of a permanent "pending".
+    spatialStatus?: string | null;
+    spatialReason?: string | null;
   } | null>(null);
   // Token wallet (ABS-386). Seeded from /api/billing/wallet on mount, then
   // decremented live off the per-turn ``token_balance`` SSE event. Null while
@@ -392,8 +400,18 @@ function ProductAppPageInner() {
         // mid-conversation. The single-case route always resolves. The list
         // stays as a fallback for a deployment whose backend predates it.
         const detail = await fetchCaseRecord(caseId);
+        // A newer caseId won the race while this was in flight — its own
+        // run of this effect owns the state now.
         if (cancelled || !detail) return;
-        setCaseAnchor({ kind: detail.anchor_kind, label: detail.anchor_label });
+        setCaseAnchor({
+          kind: detail.anchor_kind,
+          label: detail.anchor_label,
+          // ABS-423: both sources project ``CaseOut``, so the terminal
+          // spatial-join outcome rides along and the parcel pane can render
+          // a real failure instead of an eternal "geocoding pending".
+          spatialStatus: detail.spatial_status ?? null,
+          spatialReason: detail.spatial_reason ?? null,
+        });
         if (typeof detail.user_case_number === "number") {
           setCaseNumber(detail.user_case_number);
         }
@@ -1046,6 +1064,11 @@ function ProductAppPageInner() {
   // else the case anchor.
   const paneAnchorLabel = reportContent?.address ?? caseAnchor?.label;
   const paneAnchorKind = reportContent ? "address" : caseAnchor?.kind;
+  // ABS-423: the spatial status describes the *case anchor*. A report-backed
+  // pane may be showing the report's subject address instead, so the failure
+  // note only applies when the pane is rendering the case anchor itself.
+  const paneSpatialStatus = reportContent ? null : caseAnchor?.spatialStatus;
+  const paneSpatialReason = reportContent ? null : caseAnchor?.spatialReason;
 
   // ABS-346: the report's "Export PDF" renders the ReportDocument (letterhead
   // → findings → verification footer) via the dedicated report print surface —
@@ -1217,6 +1240,8 @@ function ProductAppPageInner() {
             caseId={caseId}
             anchorLabel={paneAnchorLabel}
             anchorKind={paneAnchorKind}
+            spatialStatus={paneSpatialStatus}
+            spatialReason={paneSpatialReason}
             appendix={isReportBacked}
           />
         </div>
@@ -1274,6 +1299,8 @@ function ProductAppPageInner() {
             caseId={caseId}
             anchorLabel={paneAnchorLabel}
             anchorKind={paneAnchorKind}
+            spatialStatus={paneSpatialStatus}
+            spatialReason={paneSpatialReason}
             appendix={isReportBacked}
             inSheet
           />
@@ -1293,6 +1320,8 @@ function ProductAppPageInner() {
             caseId={caseId}
             anchorLabel={paneAnchorLabel}
             anchorKind={paneAnchorKind}
+            spatialStatus={paneSpatialStatus}
+            spatialReason={paneSpatialReason}
             appendix={isReportBacked}
             inSheet
           />
