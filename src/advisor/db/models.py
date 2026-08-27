@@ -313,6 +313,28 @@ class Case(Base):
         MutableDict.as_mutable(json_type()), nullable=False, default=dict
     )
 
+    # ABS-423: the parcel panel needs to tell "the spatial join hasn't
+    # run yet" apart from "it ran and definitively failed". The full
+    # ``metadata_json`` stays off the wire (it carries internal feature
+    # ids and provenance); these two narrow reads are what ``CaseOut``
+    # exposes so the UI can stop promising data that will never arrive.
+    @property
+    def spatial_status(self) -> str | None:
+        """``spatial_facts.status`` ('ok' / 'unresolved'), or None."""
+        return self._spatial_fact("status")
+
+    @property
+    def spatial_reason(self) -> str | None:
+        """Why resolution failed, when ``spatial_status`` is unresolved."""
+        return self._spatial_fact("reason")
+
+    def _spatial_fact(self, key: str) -> str | None:
+        facts = (self.metadata_json or {}).get("spatial_facts")
+        if not isinstance(facts, dict):
+            return None
+        value = facts.get(key)
+        return value if isinstance(value, str) else None
+
     user: Mapped[User] = relationship(back_populates="cases")
     sessions: Mapped[list["ChatSession"]] = relationship(
         back_populates="case",

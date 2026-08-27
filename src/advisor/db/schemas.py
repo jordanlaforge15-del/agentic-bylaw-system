@@ -160,6 +160,11 @@ class CaseOut(BaseModel):
     opened_at: datetime
     last_activity_at: datetime
     closed_at: datetime | None = None
+    # ABS-423: terminal outcome of the case-open spatial join, so the
+    # parcel panel can render a real failure instead of an eternal
+    # "geocoding pending". None means no facts were computed at all.
+    spatial_status: str | None = None
+    spatial_reason: str | None = None
 
 
 class CaseCreditOut(BaseModel):
