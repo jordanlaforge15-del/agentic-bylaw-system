@@ -38,6 +38,10 @@ services:
       ADVISOR_DEMO_USER_ID: ${ADVISOR_DEMO_USER_ID:-demo-user-1}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # ABS-507: absolute origin used by /robots.txt and /sitemap.xml.
+      # Falls back to the production hostname inside site-url.ts, so an
+      # unset value is safe here.
+      SITE_URL: ${SITE_URL:-https://agenticbylawsystems.com}
     depends_on:
       advisor:
         condition: service_healthy

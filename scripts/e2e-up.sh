@@ -620,6 +620,7 @@ start_web() {
     ADMIN_PASSWORD="${E2E_ADMIN_PASSWORD:-e2e-admin-pw}" \
     DATABASE_URL="$DATABASE_URL_E2E_PG" \
     NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true \
+    SITE_URL="http://localhost:${E2E_WEB_PORT}" \
     nohup npx next dev -p "$E2E_WEB_PORT" &
     echo $! >"${PID_DIR}/web.pid"
     disown
