@@ -234,7 +234,39 @@ def test_returns_503_when_the_audit_raises(
     response = client.get("/v1/monitoring/corpus-coherence")
 
     assert response.status_code == 503
-    assert response.json()["status"] == "error"
+    body = response.json()
+    assert body["status"] == "error"
+    # ABS-420: name the failure. "error" alone cannot tell an operator mid-
+    # rollout whether the database is down or the image cannot read its
+    # dataset configs.
+    assert "RuntimeError" in body["detail"]
+    assert "db unreachable" in body["detail"]
+
+
+def test_an_audit_that_checked_nothing_is_an_error_not_a_green(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ABS-420 — the shape production served for months.
+
+    With no dataset configs on disk the audit loads zero declarations, finds
+    zero missing roles, and reports itself coherent. That is
+    ``{"status":"ok","checked_roles":0}``: a green that would survive every
+    degradation this endpoint exists to catch.
+    """
+    monkeypatch.setattr(
+        "bylaw_retrieval.retrieval.audit_corpus_coherence",
+        lambda *a, **k: CorpusCoherenceReport(
+            coherent=True, checked_roles=0, bylaws_checked=0, missing=[]
+        ),
+    )
+
+    response = client.get("/v1/monitoring/corpus-coherence")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "error"
+    assert body["checked_roles"] == 0
+    assert "no overlay declarations loaded" in body["detail"]
 
 
 def test_returns_503_contaminated_when_e2e_markers_found(
