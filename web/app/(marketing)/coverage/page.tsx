@@ -11,6 +11,7 @@
 // (or vice versa) — the two should agree.
 
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { Mono } from "@/components/mono";
 import { Btn } from "@/components/btn";
@@ -95,11 +96,12 @@ const stageClass = (s: RoadmapItem["stage"]) =>
 const stageBgClass = (s: RoadmapItem["stage"]) =>
   s === "QUEUED" ? "bg-accent-ink" : "bg-text-muted opacity-35";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/coverage",
   title: "Bylaw Coverage — ABS°",
   description:
     "Exactly which Halifax zoning rules ABS reads today: the Regional Centre Land Use By-law, indexed end to end, plus the HRM by-laws queued next.",
-};
+});
 
 export default function CoveragePage() {
   return (

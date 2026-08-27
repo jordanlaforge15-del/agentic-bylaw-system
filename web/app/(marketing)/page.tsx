@@ -16,6 +16,7 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
+import { pageMetadata } from "@/lib/page-metadata";
 import { AgentWalkthrough } from "@/components/home/agent-walkthrough";
 import { AddressDemo } from "@/components/home/address-demo";
 import { Btn } from "@/components/btn";
@@ -25,15 +26,18 @@ import { Section } from "@/components/section";
 import { Stat } from "@/components/stat";
 import { PROOF } from "@/lib/mock";
 
-// Per-page SEO (ABS-509). Every marketing route overrides the root layout's
-// shared title/description so the pages stop competing as duplicates in
-// search. Title pattern: `<Page> — ABS°`; the home page keeps the brand
-// string. Descriptions stay under 160 chars and name no vendors.
-export const metadata: Metadata = {
+// Per-page SEO (ABS-509, extended by ABS-510). Every marketing route
+// overrides the root layout's shared title/description so the pages stop
+// competing as duplicates in search, and carries its own canonical +
+// social card via pageMetadata(). Title pattern: `<Page> — ABS°`; the
+// home page keeps the brand string. Descriptions stay under 160 chars
+// and name no vendors.
+export const metadata: Metadata = pageMetadata({
+  path: "/",
   title: "ABS° — Agentic Bylaw System",
   description:
     "Ask a question about a Halifax parcel and get a sourced reading of the Regional Centre Land Use By-law, cited back to the exact clause. In private beta.",
-};
+});
 
 export default function HomePage() {
   return (

@@ -5,6 +5,7 @@
 // flag on a bad reading) and says so honestly.
 
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { Mono } from "@/components/mono";
 import { Page, PageHead } from "@/components/marketing/page-shell";
@@ -28,11 +29,12 @@ const FAQS: Array<{ q: string; a: string }> = [
   },
 ];
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/support",
   title: "Support — ABS°",
   description:
     "Get help with ABS: email support, how to flag a bad bylaw reading, and answers on coverage, billing by the turn, and the limits of a research tool.",
-};
+});
 
 export default function SupportPage() {
   return (
