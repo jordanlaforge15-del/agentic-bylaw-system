@@ -121,6 +121,17 @@ def test_wallet_shape_and_turns(tmp_path: Path, monkeypatch) -> None:
         "floor_tokens": 0,
         "chat_enabled": True,
         "payments_enabled": True,
+        # ABS-405: the refill block rides on every wallet read. This is the
+        # payments-ON client, where the top-up checkout is the path out of
+        # an empty wallet, so the refill is flatly unavailable.
+        "beta_refill": {
+            "available": False,
+            "status": "disabled",
+            "tokens": 0,
+            "approx_turns": 0,
+            "grants_remaining": 0,
+            "next_available_at": None,
+        },
     }
 
 
@@ -274,3 +285,150 @@ def test_me_token_balance_on_dormant_router(tmp_path: Path) -> None:
     client = _dormant_client(db_url)
     body = client.get("/v1/billing/me", headers=_headers("u1")).json()
     assert body["token_balance"] == 7_000
+
+
+# ---------- POST /wallet/refill (ABS-405) ---------------------------------
+#
+# The self-serve way out of an overdrawn wallet during the payments-off
+# beta. Mounted on BOTH router flavours — a route that exists only on the
+# live router would be missing in exactly the posture that needs it.
+
+
+@pytest.fixture()
+def refill_env(monkeypatch) -> None:
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_ENABLED", "true")
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_TOKENS", "1000")
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_MAX_GRANTS", "2")
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_COOLDOWN_HOURS", "6")
+    monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "1000")
+    monkeypatch.setenv("ADVISOR_CHAT_MIN_BALANCE_TOKENS", "0")
+
+
+def test_dormant_wallet_advertises_the_refill(tmp_path: Path, refill_env) -> None:
+    db_url = _db_url(tmp_path)
+    _seed(db_url, clerk_user_id="u1", balance=0)
+    client = _dormant_client(db_url)
+
+    body = client.get("/v1/billing/wallet", headers=_headers("u1")).json()
+    assert body["chat_enabled"] is False  # at the floor — stuck
+    assert body["beta_refill"] == {
+        "available": True,
+        "status": "available",
+        "tokens": 1_000,
+        "approx_turns": 1,
+        "grants_remaining": 2,
+        "next_available_at": None,
+    }
+
+
+def test_dormant_refill_grants_and_re_enables_chat(tmp_path: Path, refill_env) -> None:
+    db_url = _db_url(tmp_path)
+    uid = _seed(db_url, clerk_user_id="u1", balance=0)
+    client = _dormant_client(db_url)
+
+    r = client.post("/v1/billing/wallet/refill", headers=_headers("u1"))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "granted"
+    assert body["tokens_granted"] == 1_000
+    assert body["approx_turns_granted"] == 1
+    # The response carries the post-claim wallet so the UI re-enables the
+    # composer without a follow-up GET.
+    assert body["wallet"]["balance_tokens"] == 1_000
+    assert body["wallet"]["chat_enabled"] is True
+    assert body["wallet"]["beta_refill"]["grants_remaining"] == 1
+
+    # And it is durable — a fresh read sees the credited balance.
+    with session_scope(db_url) as s:
+        assert s.get(User, uid).token_balance == 1_000
+
+
+def test_dormant_refill_respects_the_cooldown(tmp_path: Path, refill_env) -> None:
+    db_url = _db_url(tmp_path)
+    _seed(db_url, clerk_user_id="u1", balance=0)
+    client = _dormant_client(db_url)
+
+    assert (
+        client.post("/v1/billing/wallet/refill", headers=_headers("u1")).json()[
+            "status"
+        ]
+        == "granted"
+    )
+    second = client.post("/v1/billing/wallet/refill", headers=_headers("u1")).json()
+    # A refusal is a 200 with a reason, not a 4xx — the client needs the
+    # wallet back either way and "not yet" is a normal answer.
+    assert second["status"] == "cooldown"
+    assert second["tokens_granted"] == 0
+    assert second["wallet"]["balance_tokens"] == 1_000  # no double credit
+    assert second["wallet"]["beta_refill"]["next_available_at"] is not None
+
+
+def test_refill_is_scoped_to_the_calling_user(tmp_path: Path, refill_env) -> None:
+    db_url = _db_url(tmp_path)
+    uid_a = _seed(db_url, clerk_user_id="ua", balance=0)
+    uid_b = _seed(db_url, clerk_user_id="ub", balance=0)
+    client = _dormant_client(db_url)
+
+    client.post("/v1/billing/wallet/refill", headers=_headers("ua"))
+    with session_scope(db_url) as s:
+        assert s.get(User, uid_a).token_balance == 1_000
+        assert s.get(User, uid_b).token_balance == 0
+    # ub's own claim is untouched by ua's cooldown.
+    assert (
+        client.post("/v1/billing/wallet/refill", headers=_headers("ub")).json()[
+            "status"
+        ]
+        == "granted"
+    )
+
+
+def test_live_payments_on_router_never_grants_a_refill(
+    tmp_path: Path, refill_env
+) -> None:
+    """Once top-ups are purchasable the refill is closed, not merely hidden."""
+    db_url = _db_url(tmp_path)
+    uid = _seed(db_url, clerk_user_id="u1", balance=0)
+    client = _live_client(db_url, payments_enabled=True)
+
+    body = client.post("/v1/billing/wallet/refill", headers=_headers("u1")).json()
+    assert body["status"] == "disabled"
+    assert body["tokens_granted"] == 0
+    with session_scope(db_url) as s:
+        assert s.get(User, uid).token_balance == 0
+
+
+def test_unlimited_credits_user_is_not_offered_a_refill(
+    tmp_path: Path, refill_env
+) -> None:
+    db_url = _db_url(tmp_path)
+    uid = _seed(db_url, clerk_user_id="u1", balance=0, unlimited=True)
+    client = _dormant_client(db_url)
+
+    body = client.get("/v1/billing/wallet", headers=_headers("u1")).json()
+    assert body["chat_enabled"] is True  # never stuck in the first place
+    assert body["beta_refill"]["available"] is False
+    assert (
+        client.post("/v1/billing/wallet/refill", headers=_headers("u1")).json()[
+            "status"
+        ]
+        == "disabled"
+    )
+    with session_scope(db_url) as s:
+        assert s.get(User, uid).token_balance == 0
+
+
+def test_refill_is_exhausted_after_the_lifetime_cap(
+    tmp_path: Path, refill_env, monkeypatch
+) -> None:
+    monkeypatch.setenv("ADVISOR_BETA_REFILL_COOLDOWN_HOURS", "0")
+    db_url = _db_url(tmp_path)
+    _seed(db_url, clerk_user_id="u1", balance=0)
+    client = _dormant_client(db_url)
+
+    for _ in range(2):
+        client.post("/v1/billing/wallet/refill", headers=_headers("u1"))
+    body = client.post("/v1/billing/wallet/refill", headers=_headers("u1")).json()
+    assert body["status"] == "exhausted"
+    assert body["wallet"]["beta_refill"]["available"] is False
+    assert body["wallet"]["beta_refill"]["grants_remaining"] == 0
+    assert body["wallet"]["balance_tokens"] == 2_000
