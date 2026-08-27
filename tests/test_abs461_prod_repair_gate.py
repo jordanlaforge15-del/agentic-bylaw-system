@@ -99,10 +99,15 @@ def test_a_differently_sized_change_stops_the_run(tmp_path):
 @pytest.mark.parametrize(
     "warning",
     [
-        "WARNING repair_page_break_splits:     phantom 'Part V > 9' has no preceding "
-        "section to graft onto — text joined, paths LEFT AS-IS for manual review",
-        "WARNING repair_page_break_splits:       7125: SKIPPED, "
-        "'Part V > 198 > [Side Setback Requirements] > (b)' already exists",
+        (
+            "WARNING repair_page_break_splits:     phantom 'Part V > 9' has no "
+            "preceding section to graft onto — text joined, paths LEFT AS-IS "
+            "for manual review"
+        ),
+        (
+            "WARNING repair_page_break_splits:       7125: SKIPPED, "
+            "'Part V > 198 > [Side Setback Requirements] > (b)' already exists"
+        ),
     ],
 )
 def test_a_clause_the_repair_could_not_place_stops_the_run(tmp_path, warning):
