@@ -49,7 +49,15 @@
       "src/layer1/pipeline/corpus_repath.py": "sha256:2f62324c41d765e5f4fdfd6365dec52d342001c3f2b599fc177912924a086fb8",
       "src/layer1/pipeline/hierarchy.py": "sha256:bfc82920c948677e294b9343e91916dc45ee9da92a11b42c37df10929e4cbc6c"
     },
-    "acknowledged_drift": null
+    "acknowledged_drift": {
+      "_comment": "A deliberate decision to keep a baseline measured against slightly older retrieval code. Valid only for the exact digest below; the next change to any watched file fails the gate again.",
+      "digest": "sha256:a7a73f81d079fb7b9a2578f1d1f9030a0c8257c4e892fa711fc3ded031e5a5ec",
+      "reason": "ABS-420: coherence_audit.py resolves its dataset-config directory through the installed layer1.datasets package and raises when that directory is absent. The module is audit-only — nothing in it is on a retrieval or ranking path, and no recall/precision number in this baseline can move as a result.",
+      "acknowledged_commit": "b1d124eeb82f9a4b51d7b5477b35bc7d8ac74031",
+      "drifted_files": [
+        "mcp/bylaw_retrieval/retrieval/coherence_audit.py"
+      ]
+    }
   },
   "k": 10,
   "query_count": 72,
