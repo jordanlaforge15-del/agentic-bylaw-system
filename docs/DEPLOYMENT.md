@@ -358,6 +358,32 @@ ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor ale
 ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor alembic current"
 ```
 
+### Data migrations (corpus repairs)
+
+Some migrations repair *content*, not shape — `0027_permission_grid_backfill`
+materializes the blank permission-matrix cells the PDF parser drops
+([ABS-520](ABS-520-RAGGED-PERMISSION-GRID.md)). They ride in the same
+`alembic upgrade head` for one reason: ABS-520's repair shipped as code plus a
+hand-run script, the script was only ever run against dev, and production spent
+a release cycle telling users a prohibition "could not be extracted" while every
+test stayed green. A repair with no delivery mechanism is not deployed.
+
+Two things behave differently for them:
+
+* **`--sql` shows nothing.** The statements depend on what the corpus geometry
+  says, so a data migration cannot be rendered offline. It logs a warning under
+  `alembic upgrade head --sql` and does its work only against a live database.
+* **They are corpus-sized, not row-sized.** Read the summary line the migration
+  logs (`filled=… refused=…`) rather than assuming success — the refused count
+  is real extraction debt that stays `unknown` on purpose.
+
+Verify a corpus repair after the upgrade:
+
+```bash
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor \
+  python scripts/verify_permission_grid_integrity.py --zone ER-2"
+```
+
 ### Expand/contract discipline
 
 Because migrations run before the new code deploys (or before the old code is rolled back), every migration must be backwards-compatible across the deploy window:

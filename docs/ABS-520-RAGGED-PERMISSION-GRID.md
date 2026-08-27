@@ -172,10 +172,62 @@ corpus:
 ragged corpus twice — as a blank-dropping parser leaves it, then after the
 backfill — and requires it to fail before it passes.
 
-## Operating it
+## Getting the repair into an environment (ABS-526)
+
+The paragraph above was, for one release cycle, the whole delivery mechanism —
+and it is a sentence in a document. The code merged and deployed; the script was
+run by hand against dev; **production kept its ragged grid** and went on
+answering "the permission could not be extracted" where the by-law prints a
+blank. Nothing failed. The tests that cover this repair all run against a corpus
+enrichment had densified at ingest, so none of them could see a corpus that was
+ingested before the repair existed — which is every corpus already in service.
+
+So the repair now travels with the deploy. `0027_permission_grid_backfill` calls
+`densify_corpus` — the same function enrichment and the backfill script call —
+and `alembic upgrade head` runs on every deploy and every e2e stack boot. An
+environment converges because it was deployed, not because someone remembered.
+
+The migration is idempotent, a no-op on a corpus with no permission matrix, and
+reversible: `downgrade` deletes exactly the cells carrying
+`metadata_json.grid_fill='absent_cell'`, and nothing else writes that key.
+
+`web/e2e/functional/abs526-permission-grid-migration.spec.ts` holds it to that.
+It reconstructs production's state — seed the ragged matrix, enrich it, strip
+the materialized cells back out — checks that the prohibition reads as
+unreadable, runs `alembic upgrade head`, and requires the answer to come back
+`not_permitted` with a citation, while the row the parser genuinely lost stays
+`undetermined`.
+
+### Verifying a corpus that predates the migration
+
+Confirm rather than assume. On the target database:
+
+```sql
+select count(*) from source_table_cell
+where metadata_json->>'grid_fill' = 'absent_cell';
+```
+
+Zero, with permission-matrix tables present, means the repair never reached it.
+Then, on the server (the advisor image carries both `alembic/` and `scripts/`,
+so neither step needs a tunnel):
 
 ```bash
-# Report, and see the blast radius, without writing:
+docker compose -f /srv/bylaw/docker-compose.yml exec advisor alembic upgrade head
+docker compose -f /srv/bylaw/docker-compose.yml exec advisor \
+  python scripts/verify_permission_grid_integrity.py --zone ER-2
+```
+
+G1 and G2 must pass. Record G3's refused residue — that is the extraction debt
+this repair declines to guess at, and it belongs on the issue rather than
+mistaken for coverage.
+
+## Operating it by hand
+
+The script remains the tool for a rehearsal, for a per-zone blast radius, and
+for a corpus ingested *after* the migration already ran:
+
+```bash
+# Rehearse — writes, measures the real blast radius, rolls back:
 .venv/bin/python scripts/backfill_permission_grid.py --dry-run \
     --zone ER-2 --zone HR-1
 
@@ -186,7 +238,11 @@ backfill — and requires it to fail before it passes.
 .venv/bin/python scripts/verify_permission_grid_integrity.py --zone ER-2
 ```
 
-A fresh ingest needs neither: enrichment densifies as it classifies.
+`--dry-run` used to pass `apply=False`, which left the per-zone before/after
+line — the one number an operator reads to decide whether to run for real —
+trivially identical. It now applies, measures, and rolls back.
+
+A fresh ingest needs none of it: enrichment densifies as it classifies.
 
 ## Known follow-ups
 

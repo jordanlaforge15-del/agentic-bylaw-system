@@ -79,9 +79,10 @@ def _run(url: str, direction: str) -> None:
     """Run one direction of the migration the way alembic runs it."""
     module = _load_migration()
     engine = create_engine(url, future=True)
-    with engine.begin() as connection:
-        with Operations.context(MigrationContext.configure(connection)):
-            getattr(module, direction)()
+    with engine.begin() as connection, Operations.context(
+        MigrationContext.configure(connection)
+    ):
+        getattr(module, direction)()
     engine.dispose()
 
 

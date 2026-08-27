@@ -45,8 +45,9 @@ from __future__ import annotations
 
 import logging
 
-from alembic import op
 from sqlalchemy.orm import Session
+
+from alembic import op
 
 # A child of alembic's own logger, so the summary lands in the deploy log that
 # `alembic upgrade head` is already writing — the refused-intersection residue
