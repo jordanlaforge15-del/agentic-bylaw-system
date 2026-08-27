@@ -45,18 +45,25 @@ function marketingRoutes(): string[] {
 }
 
 /**
- * True when the route's own page.tsx or layout.tsx opts out of indexing
- * via `robots: { index: false }` in its exported metadata. A source-text
- * probe rather than a module import: importing a Next page pulls in the
- * whole server component graph, and the metadata export is a static
- * object literal in every marketing route today.
+ * True when the route's own page.tsx or layout.tsx opts out of indexing.
+ * A source-text probe rather than a module import: importing a Next page
+ * pulls in the whole server component graph.
+ *
+ * Two spellings, because ABS-510 introduced a second one:
+ *   * `robots: { index: false }` — written inline in a metadata literal.
+ *   * `noindex: true` — the pageMetadata() flag in web/lib/page-metadata.ts,
+ *     which expands to the same `robots` block. A route that switches to
+ *     the helper must keep being seen as opted out, or this spec starts
+ *     demanding a sitemap entry for an account page.
  */
+const OPT_OUT_PATTERN = /index:\s*false|noindex:\s*true/;
+
 function optsOutOfIndexing(route: string): boolean {
   const dir = route === "/" ? MARKETING_DIR : path.join(MARKETING_DIR, route.slice(1));
   return ["page.tsx", "layout.tsx"].some((file) => {
     const full = path.join(dir, file);
     if (!fs.existsSync(full)) return false;
-    return /index:\s*false/.test(fs.readFileSync(full, "utf8"));
+    return OPT_OUT_PATTERN.test(fs.readFileSync(full, "utf8"));
   });
 }
 
