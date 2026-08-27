@@ -119,7 +119,21 @@ def _cell_specs() -> list[tuple[int, int, str, dict]]:
     return specs
 
 
-def seed(session) -> dict[str, int]:
+def seed(
+    session,
+    *,
+    file_hash: str = DOCUMENT_FILE_HASH,
+    bylaw_name: str = DOCUMENT_BYLAW_NAME,
+    caption: str = TABLE_CAPTION,
+) -> dict[str, int]:
+    """Seed the ragged matrix, optionally under a second identity.
+
+    ABS-526's spec needs the same fixture in its own document: it strips the
+    materialized cells back out mid-run to reproduce a corpus ingested before
+    the repair existed, and Playwright runs spec files in parallel — doing that
+    to the document ABS-520's spec is reading would fail it for the wrong
+    reason.
+    """
     if session.bind.dialect.name == "postgresql":
         from sqlalchemy import text as sa_text
 
@@ -127,17 +141,15 @@ def seed(session) -> dict[str, int]:
             sa_text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601520)
         )
 
-    document = _get_or_create_document(session)
-    table = _ensure_table(session, document.id, TABLE_CAPTION, 48, 48, _cell_specs())
+    document = _get_or_create_document(session, file_hash, bylaw_name)
+    table = _ensure_table(session, document.id, caption, 48, 48, _cell_specs())
     session.flush()
     return {"document_id": document.id, "table_id": table.id}
 
 
-def _get_or_create_document(session) -> Document:
+def _get_or_create_document(session, file_hash: str, bylaw_name: str) -> Document:
     document = (
-        session.execute(
-            select(Document).where(Document.file_hash == DOCUMENT_FILE_HASH)
-        )
+        session.execute(select(Document).where(Document.file_hash == file_hash))
         .scalars()
         .first()
     )
@@ -147,9 +159,9 @@ def _get_or_create_document(session) -> Document:
         return document
     document = Document(
         municipality=DOCUMENT_MUNICIPALITY,
-        bylaw_name=DOCUMENT_BYLAW_NAME,
+        bylaw_name=bylaw_name,
         source_path="e2e/ragged_permission_grid.pdf",
-        file_hash=DOCUMENT_FILE_HASH,
+        file_hash=file_hash,
         mime_type="application/pdf",
         page_count=60,
         parser_version="e2e-seed",
@@ -248,8 +260,21 @@ def _ensure_cells(
 
 
 def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--file-hash", default=DOCUMENT_FILE_HASH)
+    parser.add_argument("--bylaw-name", default=DOCUMENT_BYLAW_NAME)
+    parser.add_argument("--caption", default=TABLE_CAPTION)
+    args = parser.parse_args()
+
     with session_scope() as session:
-        ids = seed(session)
+        ids = seed(
+            session,
+            file_hash=args.file_hash,
+            bylaw_name=args.bylaw_name,
+            caption=args.caption,
+        )
     print(
         "seed_e2e_ragged_permission_grid: "
         f"document={ids['document_id']} table={ids['table_id']}"
