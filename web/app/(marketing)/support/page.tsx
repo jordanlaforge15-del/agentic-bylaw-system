@@ -4,6 +4,7 @@
 // hours yet. This page lists the two real channels (email + the in-app
 // flag on a bad reading) and says so honestly.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Mono } from "@/components/mono";
 import { Page, PageHead } from "@/components/marketing/page-shell";
@@ -26,6 +27,12 @@ const FAQS: Array<{ q: string; a: string }> = [
     a: "You pay by the turn. Opening a conversation is free; each reply from the advisor draws turns from your balance, and you top up when you run low (the Pricing page has the details). On this deployment the purchase flow may be dormant — beta accounts are typically granted a starting balance manually. See the Billing page once signed in.",
   },
 ];
+
+export const metadata: Metadata = {
+  title: "Support — ABS°",
+  description:
+    "Get help with ABS: email support, how to flag a bad bylaw reading, and answers on coverage, billing by the turn, and the limits of a research tool.",
+};
 
 export default function SupportPage() {
   return (

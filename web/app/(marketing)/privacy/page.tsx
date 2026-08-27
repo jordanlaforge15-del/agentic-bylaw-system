@@ -6,6 +6,7 @@
 // third parties that receive user data) without naming infrastructure
 // brands.
 
+import type { Metadata } from "next";
 import { LegalShell, Section } from "@/components/marketing/legal-shell";
 
 const SECTIONS: Section[] = [
@@ -138,6 +139,12 @@ const SECTIONS: Section[] = [
     ],
   },
 ];
+
+export const metadata: Metadata = {
+  title: "Privacy Policy — ABS°",
+  description:
+    "How ABS handles your account details, the parcels and questions you research, and diagnostic data: what we keep, for how long, and who receives it.",
+};
 
 export default function PrivacyPage() {
   return (

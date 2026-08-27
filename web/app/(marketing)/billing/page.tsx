@@ -8,10 +8,19 @@
 // the turns-aware wallet, ledger, reports, and cases from the /api proxies
 // and drives its own signed-out card.
 
+import type { Metadata } from "next";
 import { BillingContent } from "@/components/billing/billing-content";
 import { Mono } from "@/components/mono";
 
 export const dynamic = "force-dynamic";
+
+// Account surface: unique title, noindex (see /cases for the rationale).
+export const metadata: Metadata = {
+  title: "Billing — ABS°",
+  description:
+    "Your ABS turn balance, wallet ledger, purchased reports, and case history in one account view. Top up turns whenever your balance runs low.",
+  robots: { index: false, follow: false },
+};
 
 export default function BillingPage() {
   return (
