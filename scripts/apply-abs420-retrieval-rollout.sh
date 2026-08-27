@@ -192,7 +192,11 @@ production has never had ingested."
   say "Preflight complete. Proceed with the deploy, then run: $0 verify"
 }
 
-mode_verify() {
+# Both writing-adjacent modes start here. Without it, a run against a
+# pre-migration database gets a raw "column retrieval_enabled does not exist"
+# from psql — which reads like the tool is broken rather than like the deploy
+# has not happened.
+require_migration() {
   head2 "alembic"
   local version
   version="$(alembic_version)"
@@ -201,6 +205,10 @@ mode_verify() {
     fail "production is at $version, before $MIGRATION — the deploy did not run \
 the migration. Do not curate; fix the deploy."
   fi
+}
+
+mode_verify() {
+  require_migration
 
   head2 "backfill result (the enabled set)"
   inventory verify | "$PYTHON" "$GATE" --verify
@@ -231,6 +239,8 @@ mode_curate() {
     shift
   done
   [ ${#enable[@]} -eq 0 ] && [ ${#disable[@]} -eq 0 ] && fail "curate needs --enable and/or --disable ids"
+
+  require_migration
 
   head2 "current state"
   inventory verify >&2
