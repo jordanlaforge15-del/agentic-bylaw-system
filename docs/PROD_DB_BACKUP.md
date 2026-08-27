@@ -54,6 +54,12 @@ Two tiers, 11 artifacts, identical on both sides:
 | daily | `layer1-prod-<Dow>.dump[.gpg]` | 7 | overwrite in place; day 8 replaces day 1 |
 | weekly | `layer1-prod-weekly-<ISO week>.dump[.gpg]` | `BYLAW_KEEP_WEEKLY` (4) | promoted on the first run of each ISO week, pruned oldest-first |
 
+> **These numbers are published.** The privacy policy's §5.0 tells users
+> deleted data can persist in backups for "roughly one month", derived
+> from 7 daily + 4 weekly. Changing `BYLAW_KEEP_WEEKLY` means changing
+> that page too — `web/e2e/functional/abs131-privacy-backup-retention.spec.ts`
+> fails if they drift apart.
+
 Weekly promotion keys off "first run of this ISO week", not a fixed
 weekday, so a night the host was down costs nothing — the next run that
 week promotes instead.
@@ -96,6 +102,12 @@ the key on disk is not the key that made it — surfaces within seven days.
 Create a Storage Box in the Hetzner console (BX11 is ample — the dumps
 are single-digit GB compressed) and enable **SSH support** in its
 settings. Storage Boxes speak SSH/rsync on **port 23**, not 22.
+
+> **Pick an EU location** (Falkenstein or Helsinki, not Ashburn or
+> Singapore). The privacy policy tells users their data — including
+> backups — stays in the European Union, and `web/e2e/functional/
+> abs131-privacy-backup-retention.spec.ts` holds that claim in place. A
+> non-EU Storage Box would make the published policy untrue.
 
 Generate a dedicated key on the production host and register it:
 
