@@ -33,14 +33,21 @@ def script_directory():
 
 
 def test_reports_the_dm3_split_state(script_directory) -> None:
-    """0025 applied, 0026 pending — the state ABS-499 was written against."""
+    """0025 applied, 0026 pending — the state ABS-499 was written against.
+
+    Asserted relative to the chain, not against a frozen list: every migration
+    added after 0026 lengthens what is pending from 0025, and that is not this
+    test's subject.
+    """
     report = compute_drift(("0025_signup_grant_unique",), script_directory)
 
+    revisions = [item.revision for item in report.pending]
     assert report.is_behind
-    assert [item.revision for item in report.pending] == ["0026_drop_parcel_zone_code"]
+    assert revisions[0] == "0026_drop_parcel_zone_code"
+    assert revisions[-1] == script_directory.get_heads()[0]
     rendered = report.render()
     assert "alembic_version : 0025_signup_grant_unique" in rendered
-    assert "BEHIND — 1 migration(s) pending" in rendered
+    assert f"BEHIND — {len(revisions)} migration(s) pending" in rendered
     assert "0026_drop_parcel_zone_code" in rendered
     assert "alembic/versions/0026_drop_parcel_zone_code.py" in rendered
 
@@ -68,7 +75,7 @@ def test_never_stamped_database_is_behind_by_everything(script_directory) -> Non
 def test_pending_entries_carry_the_migration_docstring(script_directory) -> None:
     report = compute_drift(("0025_signup_grant_unique",), script_directory)
 
-    (pending,) = report.pending
+    pending = report.pending[0]
     assert "parcel.zone_code" in pending.summary
 
 
@@ -87,7 +94,7 @@ def test_reads_the_split_state_off_a_real_database(tmp_path: Path) -> None:
     report = drift_report(_stamped_sqlite_db(tmp_path, "0025_signup_grant_unique"))
 
     assert report.is_behind
-    assert [item.revision for item in report.pending] == ["0026_drop_parcel_zone_code"]
+    assert report.pending[0].revision == "0026_drop_parcel_zone_code"
     assert "0026_drop_parcel_zone_code" in report.summary_line()
 
 

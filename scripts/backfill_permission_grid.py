@@ -11,6 +11,15 @@ runs the same code on every fresh ingest
 (:func:`layer1.semantic.permission_grid.densify_permission_matrix`), so a
 re-enrich and a backfill produce identical grids.
 
+Running it is no longer the only way a corpus gets repaired: the
+``0027_permission_grid_backfill`` Alembic migration calls the identical
+:func:`layer1.semantic.permission_grid.densify_corpus` on every ``alembic
+upgrade``, so an environment converges on deploy whether or not an operator
+remembers this script (ABS-526 — production spent a release cycle ragged
+because only dev had ever been backfilled by hand). This script remains the
+tool for a dry run, for a per-zone blast radius, and for repairing a corpus
+ingested after the migration already ran.
+
 Scope and safety
 ----------------
 Only tables carrying a ``permission_matrix`` semantic profile are touched, and
@@ -30,7 +39,7 @@ nothing.
 
 Usage
 -----
-    # Report what would be filled, and the undetermined-use blast radius:
+    # Rehearse — writes, measures the undetermined-use blast radius, rolls back:
     .venv/bin/python scripts/backfill_permission_grid.py --dry-run \
         --zone ER-2 --zone ER-1 --zone CH-1
 
@@ -43,71 +52,34 @@ import argparse
 import logging
 import sys
 import time
-from collections import Counter
-from dataclasses import dataclass, field
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from layer1.db.base import SourceTable, SourceTableCell, TableSemanticProfile
 from layer1.db.migration_fence import fence_or_abort
 from layer1.db.session import session_scope
 from layer1.semantic.enrichment import enumerate_permission_column
-from layer1.semantic.permission_grid import densify_permission_matrix
-from layer1.semantic.permission_markers import PERMISSION_MATRIX_PROFILE, UNKNOWN
+from layer1.semantic.permission_grid import (
+    CorpusGridFillStats,
+    densify_corpus,
+    permission_matrix_tables,
+    table_cells,
+)
+from layer1.semantic.permission_markers import UNKNOWN
 
 logger = logging.getLogger("backfill_permission_grid")
 
+# The corpus walk lives in the package so the Alembic migration can call it too
+# (ABS-526). Re-exported here because the guard script and the tests address it
+# through this module.
+__all__ = [
+    "GridBackfillStats",
+    "backfill",
+    "permission_matrix_tables",
+    "table_cells",
+    "undetermined_counts",
+]
 
-@dataclass
-class GridBackfillStats:
-    """What we did, suitable for a post-run issue update."""
-
-    tables_scanned: int = 0
-    tables_refused: int = 0
-    cells_filled: int = 0
-    cells_refused: int = 0
-    reasons: Counter = field(default_factory=Counter)
-
-    def summary_line(self) -> str:
-        reasons = " ".join(
-            f"{name}={count}" for name, count in sorted(self.reasons.items())
-        )
-        return (
-            f"tables={self.tables_scanned} "
-            f"tables_refused={self.tables_refused} "
-            f"filled={self.cells_filled} "
-            f"refused={self.cells_refused} "
-            f"[{reasons}]"
-        )
-
-
-def permission_matrix_tables(session: Session) -> list[SourceTable]:
-    return list(
-        session.execute(
-            select(SourceTable)
-            .join(
-                TableSemanticProfile,
-                TableSemanticProfile.table_id == SourceTable.id,
-            )
-            .where(TableSemanticProfile.profile_type == PERMISSION_MATRIX_PROFILE)
-            .order_by(SourceTable.document_id, SourceTable.page_start, SourceTable.id)
-        )
-        .scalars()
-        .all()
-    )
-
-
-def table_cells(session: Session, table_id: int) -> list[SourceTableCell]:
-    return list(
-        session.execute(
-            select(SourceTableCell)
-            .where(SourceTableCell.table_id == table_id)
-            .order_by(SourceTableCell.row_index, SourceTableCell.col_index)
-        )
-        .scalars()
-        .all()
-    )
+GridBackfillStats = CorpusGridFillStats
 
 
 def undetermined_counts(session: Session, zones: list[str]) -> dict[str, int]:
@@ -143,28 +115,26 @@ def backfill(session: Session, *, dry_run: bool = False) -> GridBackfillStats:
     Caller owns the transaction. In dry-run mode the audit runs and is counted
     but no cell is created.
     """
-    stats = GridBackfillStats()
-    for table in permission_matrix_tables(session):
-        stats.tables_scanned += 1
-        cells = table_cells(session, table.id)
-        audit = densify_permission_matrix(session, table, cells, apply=not dry_run)
-        if audit.table_reason is not None:
-            stats.tables_refused += 1
-        stats.cells_filled += len(audit.gaps)
-        stats.cells_refused += len(audit.refused)
-        stats.reasons.update(audit.reason_counts())
-        if not dry_run and audit.gaps:
-            session.flush()
-        logger.info(
-            "table=%s doc=%s page=%s filled=%d refused=%d %s",
-            table.id,
-            table.document_id,
-            table.page_start,
-            len(audit.gaps),
-            len(audit.refused),
-            audit.table_reason or "",
-        )
-    return stats
+    return densify_corpus(session, apply=not dry_run)
+
+
+def rehearse(
+    session: Session, zones: list[str]
+) -> tuple[GridBackfillStats, dict[str, int], dict[str, int]]:
+    """Apply the backfill, measure it, then undo it.
+
+    ``--dry-run`` used to pass ``apply=False``, which left the per-zone
+    before/after line trivially identical — the one number an operator reads to
+    decide whether to run for real proved nothing (ABS-526). So the rehearsal
+    writes the cells, reads the blast radius off the repaired corpus, and rolls
+    the whole transaction back. Callers must not commit afterwards; the
+    surrounding :func:`session_scope` commits an empty transaction.
+    """
+    before = undetermined_counts(session, zones) if zones else {}
+    stats = backfill(session, dry_run=False)
+    after = undetermined_counts(session, zones) if zones else {}
+    session.rollback()
+    return stats, before, after
 
 
 def main() -> int:
@@ -172,7 +142,10 @@ def main() -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Audit and report, but create no cells.",
+        help=(
+            "Rehearse: write the cells, report the real blast radius, then "
+            "roll back. Leaves the corpus untouched."
+        ),
     )
     parser.add_argument(
         "--zone",
@@ -203,9 +176,12 @@ def main() -> int:
     zones = args.zone or []
     started = time.monotonic()
     with session_scope(args.database_url) as session:
-        before = undetermined_counts(session, zones) if zones else {}
-        stats = backfill(session, dry_run=args.dry_run)
-        after = undetermined_counts(session, zones) if zones else {}
+        if args.dry_run:
+            stats, before, after = rehearse(session, zones)
+        else:
+            before = undetermined_counts(session, zones) if zones else {}
+            stats = backfill(session, dry_run=False)
+            after = undetermined_counts(session, zones) if zones else {}
     elapsed_s = time.monotonic() - started
 
     print(

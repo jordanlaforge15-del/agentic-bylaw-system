@@ -425,3 +425,127 @@ def densify_permission_matrix(
             )
         )
     return audit
+
+
+# ---------------------------------------------------------------------------
+# Corpus-wide repair (ABS-526)
+# ---------------------------------------------------------------------------
+#
+# Enrichment densifies each table as it is ingested, so a corpus ingested after
+# ABS-520 needs nothing. A corpus ingested *before* it — production's, on the
+# day this was written — carries the ragged grid until something walks it. Two
+# callers do: ``scripts/backfill_permission_grid.py`` (an operator, with a
+# dry-run and per-zone blast radius) and the ``0027_permission_grid_backfill``
+# Alembic migration (every environment, on deploy). Both share the loop below
+# so an environment cannot be repaired one way and not the other.
+
+
+@dataclass
+class CorpusGridFillStats:
+    """What a corpus-wide densify did, suitable for a post-run issue update."""
+
+    tables_scanned: int = 0
+    tables_refused: int = 0
+    cells_filled: int = 0
+    cells_refused: int = 0
+    reasons: dict[str, int] = field(default_factory=dict)
+
+    def summary_line(self) -> str:
+        reasons = " ".join(
+            f"{name}={count}" for name, count in sorted(self.reasons.items())
+        )
+        return (
+            f"tables={self.tables_scanned} "
+            f"tables_refused={self.tables_refused} "
+            f"filled={self.cells_filled} "
+            f"refused={self.cells_refused} "
+            f"[{reasons}]"
+        )
+
+
+def permission_matrix_tables(session: Any) -> list[Any]:
+    """Every table carrying a ``permission_matrix`` semantic profile."""
+    from sqlalchemy import select
+
+    from layer1.db.base import SourceTable, TableSemanticProfile
+    from layer1.semantic.permission_markers import PERMISSION_MATRIX_PROFILE
+
+    return list(
+        session.execute(
+            select(SourceTable)
+            .join(
+                TableSemanticProfile,
+                TableSemanticProfile.table_id == SourceTable.id,
+            )
+            .where(TableSemanticProfile.profile_type == PERMISSION_MATRIX_PROFILE)
+            .order_by(SourceTable.document_id, SourceTable.page_start, SourceTable.id)
+        )
+        .scalars()
+        .all()
+    )
+
+
+def table_cells(session: Any, table_id: int) -> list[Any]:
+    from sqlalchemy import select
+
+    from layer1.db.base import SourceTableCell
+
+    return list(
+        session.execute(
+            select(SourceTableCell)
+            .where(SourceTableCell.table_id == table_id)
+            .order_by(SourceTableCell.row_index, SourceTableCell.col_index)
+        )
+        .scalars()
+        .all()
+    )
+
+
+def densify_corpus(session: Any, *, apply: bool = True) -> CorpusGridFillStats:
+    """Densify every permission matrix in the corpus. Caller owns the transaction.
+
+    Idempotent — a second pass finds the intersections occupied and creates
+    nothing — and a no-op on a corpus with no permission matrix, which is every
+    CI database and any e2e worktree without the Halifax ingest.
+    """
+    stats = CorpusGridFillStats()
+    for table in permission_matrix_tables(session):
+        stats.tables_scanned += 1
+        cells = table_cells(session, table.id)
+        audit = densify_permission_matrix(session, table, cells, apply=apply)
+        if audit.table_reason is not None:
+            stats.tables_refused += 1
+        stats.cells_filled += len(audit.gaps)
+        stats.cells_refused += len(audit.refused)
+        for reason, count in audit.reason_counts().items():
+            stats.reasons[reason] = stats.reasons.get(reason, 0) + count
+        if apply and audit.gaps:
+            session.flush()
+        logger.info(
+            "table=%s doc=%s page=%s filled=%d refused=%d %s",
+            table.id,
+            table.document_id,
+            table.page_start,
+            len(audit.gaps),
+            len(audit.refused),
+            audit.table_reason or "",
+        )
+    return stats
+
+
+def strip_corpus_grid_fills(session: Any) -> int:
+    """Delete every materialized blank cell, returning how many went.
+
+    The reverse of :func:`densify_corpus`, and the reason the fills carry a
+    label: the repair is undoable without touching a cell the parser stored.
+    Nothing else writes ``grid_fill``, so this cannot take real content.
+    """
+    removed = 0
+    for table in permission_matrix_tables(session):
+        for cell in table_cells(session, table.id):
+            if is_grid_filled(cell):
+                session.delete(cell)
+                removed += 1
+    if removed:
+        session.flush()
+    return removed
