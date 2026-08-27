@@ -432,6 +432,23 @@ def test_dry_run_names_the_plaintext_risk(env: dict[str, str], tmp_path: Path) -
     assert "would write UNENCRYPTED" in result.stderr
 
 
+def test_dry_run_doubles_as_a_config_preflight(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    """A misconfiguration fails the dry run rather than being narrated in it.
+
+    `--dry-run` is what an operator runs after editing backup.env, so the
+    useful answer to "offsite target set, no passphrase, no override" is a
+    nonzero exit now — not a plan that would have been refused at 02:30.
+    """
+    with_storage_box(env, tmp_path)
+
+    result = run_backup(env, args=["--dry-run"])
+
+    assert result.returncode != 0
+    assert "refusing to send an unencrypted dump offsite" in result.stderr
+
+
 def test_unknown_flag_is_rejected(env: dict[str, str]) -> None:
     result = run_backup(env, args=["--yolo"])
 

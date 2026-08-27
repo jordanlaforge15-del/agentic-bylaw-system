@@ -146,6 +146,8 @@ chmod 600 /srv/bylaw/backup.env
 set -a; . /srv/bylaw/backup.env; set +a
 
 /srv/bylaw/scripts/backup-prod-db.sh --dry-run   # changes nothing; prints the plan
+                                                 # (and fails on a bad config,
+                                                 #  so it doubles as a preflight)
 /srv/bylaw/scripts/backup-prod-db.sh             # the real thing
 /srv/bylaw/scripts/verify-prod-backup.sh --restore
 
