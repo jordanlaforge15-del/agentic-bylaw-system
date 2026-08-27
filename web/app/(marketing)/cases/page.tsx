@@ -2,6 +2,7 @@
 // /billing) because it's an account-management surface rather than the
 // chat product itself.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { ADVISOR_API_URL } from "@/lib/api";
 import { CaseListResponse } from "@/lib/cases";
@@ -10,6 +11,15 @@ import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
 
 export const dynamic = "force-dynamic";
+
+// Account surface, not a landing page: unique title for the tab, and
+// noindex so a signed-out shell of someone's case list never ranks.
+export const metadata: Metadata = {
+  title: "Your Cases — ABS°",
+  description:
+    "Browse your ABS research cases: every parcel question you have opened, its current status, and the sourced bylaw readings the advisor returned.",
+  robots: { index: false, follow: false },
+};
 
 
 async function fetchAuthed<T>(path: string): Promise<T | { _unauthorized: true } | null> {

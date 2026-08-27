@@ -7,11 +7,18 @@
 // through the Next proxy so the gate/posture subsets are stubbable and the
 // page can retry a failed catalog load without a full navigation.
 
+import type { Metadata } from "next";
 import { PricingCards } from "@/components/marketing/pricing-cards";
 import { HighlightWord } from "@/components/highlight-word";
 import { Mono } from "@/components/mono";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Pricing — ABS°",
+  description:
+    "Pay by the turn: start with free trial turns, top up when you run low, and buy fixed-price written bylaw reports. All prices in Canadian dollars.",
+};
 
 export default function PricingPage() {
   return (
