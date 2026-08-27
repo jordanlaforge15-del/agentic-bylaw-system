@@ -24,9 +24,11 @@
 //   6. assert it reads `not_permitted` with a citation
 //
 // Step 5 only rewinds the alembic *pointer*; it never runs a downgrade, so a
-// spec running in parallel keeps its cells. The migration is idempotent, and
-// only ever adds cells the geometry vouches for, so re-running it across the
-// whole e2e database is a no-op for every other document in it.
+// spec running in parallel keeps its cells. Re-running the migration across the
+// whole e2e database is a no-op for every other document in it: it fills only
+// where the geometry vouches for the row, and this fixture and ABS-520's are
+// the only permission matrices in the suite seeded with bboxes at all — every
+// other one is refused as `no_geometry`, holes and `unknown` verdicts intact.
 
 import type { APIRequestContext } from "@playwright/test";
 import { execSync } from "node:child_process";
