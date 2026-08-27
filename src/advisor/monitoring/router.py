@@ -124,9 +124,33 @@ def _run_corpus_coherence_audit() -> tuple[dict[str, Any], int]:
             coverage = audit_governing_bylaw_coverage(
                 session, default_document_id_resolver=retrieval_enabled_resolver
             )
-    except Exception:
+    except Exception as exc:
         logger.exception("corpus-coherence audit (ABS-356) failed to run")
-        return {"status": "error"}, 503
+        # Name the failure. An operator reading this at 23:00 during a rollout
+        # needs to tell "the database is unreachable" from "this image cannot
+        # read its dataset configs" (ABS-420) without shelling into the box.
+        return {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}, 503
+
+    # An audit with nothing to check is not a passing audit. Production ran
+    # for months on {"status":"ok","checked_roles":0} because the deployed
+    # image had no dataset configs to declare roles from (ABS-420) — a green
+    # that would have stayed green through every degradation it exists to
+    # catch. Zero declarations is now an error, in every deployment.
+    if report.checked_roles == 0:
+        logger.error(
+            "corpus-coherence audit (ABS-356) loaded zero overlay declarations — "
+            "the deployment cannot read its layer1 dataset configs"
+        )
+        return {
+            "status": "error",
+            "detail": (
+                "no overlay declarations loaded — this deployment cannot read its "
+                "layer1 dataset configs, so the audit checked nothing"
+            ),
+            "checked_roles": 0,
+            "bylaws_checked": report.bylaws_checked,
+            "missing": [],
+        }, 503
 
     if not report.coherent:
         logger.warning(

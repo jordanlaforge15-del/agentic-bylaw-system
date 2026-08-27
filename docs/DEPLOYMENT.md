@@ -143,7 +143,11 @@ Standard recipe for a code change to web or advisor:
     # filesystem violation — do NOT proceed to step 6.
     ```
     See `scripts/preflight_advisor_image.sh` for the canonical script form with
-    help text and override env vars.
+    help text and override env vars. **Prefer the script**: the one-liner above
+    only proves the app imports. The script additionally loads every runtime
+    data file the wheel must carry and the corpus-coherence audit's overlay
+    declarations — the class of gap that let `/v1/monitoring/corpus-coherence`
+    report a green while checking zero roles (ABS-412, ABS-420).
 6. **Pull & restart just that service**:
    ```bash
    ssh bylaw-prod "cd /srv/bylaw && docker compose pull web && docker compose up -d web"
@@ -151,6 +155,12 @@ Standard recipe for a code change to web or advisor:
    ssh bylaw-prod "cd /srv/bylaw && docker compose up -d advisor"
    ```
 7. **Verify**: `curl` against the public endpoint, check `docker compose ps`, tail logs (`docker compose logs --tail 30 <svc>`). For chat changes, send a real query.
+   - The release carrying migration `0024_document_retrieval_enabled` has its own
+     post-deploy procedure — the retrieval scope switches from newest-per-by-law
+     to an explicit per-document flag, and nothing looks different if the backfill
+     ran against a corpus that moved. Run
+     `scripts/apply-abs420-retrieval-rollout.sh verify` and follow
+     [ABS-420-RETRIEVAL-ENABLED-ROLLOUT.md](ABS-420-RETRIEVAL-ENABLED-ROLLOUT.md).
 8. **Merge to main** and push: `git checkout main && git merge --no-ff fix/... && git push origin main`.
 9. **Delete the feature branch**: `git branch -d fix/...`.
 

@@ -42,6 +42,7 @@ from typing import Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from layer1 import datasets as layer1_datasets
 from layer1.datasets.config import DatasetConfig, load_dataset_config
 from layer1.db.base import (
     Document,
@@ -70,9 +71,20 @@ from bylaw_retrieval.retrieval.service import (
     scoped_linked_datasets,
 )
 
-# src/layer1/datasets/ — the real dataset config directory, resolved
-# relative to this file so the audit works regardless of cwd.
-DEFAULT_DATASET_CONFIG_DIR = Path(__file__).resolve().parents[3] / "src" / "layer1" / "datasets"
+# The real dataset config directory, resolved through the installed
+# ``layer1.datasets`` package rather than by walking up from this file
+# (ABS-420). Both resolutions agree in a repo checkout — the package IS
+# src/layer1/datasets — but only this one survives a wheel install, where the
+# code lives in site-packages and there is no src/ tree above it. The old
+# parents[3] walk resolved to /opt/venv/lib/python3.11/src/layer1/datasets in
+# the advisor image: a path that never existed, whose .glob() returned nothing,
+# so /v1/monitoring/corpus-coherence answered {"status":"ok","checked_roles":0}
+# in production no matter how broken the corpus was. The tripwire built for the
+# ABS-349/350 degradation had never fired in the one place it guards.
+#
+# The YAML files reach site-packages via [tool.setuptools.package-data];
+# tests/test_package_data.py builds a real wheel and asserts they are in it.
+DEFAULT_DATASET_CONFIG_DIR = Path(layer1_datasets.__file__).resolve().parent
 
 
 def _overlay_configs(config_dir: Path) -> list[DatasetConfig]:
@@ -94,8 +106,22 @@ def _overlay_configs(config_dir: Path) -> list[DatasetConfig]:
 
 
 def load_overlay_declarations(config_dir: Path | str = DEFAULT_DATASET_CONFIG_DIR) -> list[OverlayDeclaration]:
-    """Read every overlay-role dataset config under ``config_dir`` off disk."""
-    configs = _overlay_configs(Path(config_dir))
+    """Read every overlay-role dataset config under ``config_dir`` off disk.
+
+    Raises ``FileNotFoundError`` when ``config_dir`` does not exist. An audit
+    that cannot read its declarations knows nothing, and the shape of "knows
+    nothing" here used to be an empty ``glob()`` — indistinguishable, at every
+    call site, from "every declared role is visible" (ABS-420). Callers that
+    legitimately audit a subset pass ``overlay_declarations`` directly; nobody
+    passes a directory they expect to be absent.
+    """
+    directory = Path(config_dir)
+    if not directory.is_dir():
+        raise FileNotFoundError(
+            f"dataset config directory {directory} does not exist — the "
+            "corpus-coherence audit cannot load its overlay declarations"
+        )
+    configs = _overlay_configs(directory)
     return [
         OverlayDeclaration(
             dataset_name=config.name,
