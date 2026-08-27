@@ -124,7 +124,12 @@ case "$verb" in
         target="${@: -1}"
         payload="$(resolve "$mount" "$target")"
         emit_toc "$payload" >/dev/null || exit 1
-        sed -n '2p' "$payload" | sed 's/^tables=//' > "$STATE/$cname.restored"
+        # FAKE_RESTORE_DROP lets a test make the restored database disagree
+        # with the archive's table of contents — the case where only a query
+        # against the restored data can tell you the recovery is incomplete.
+        sed -n '2p' "$payload" | sed 's/^tables=//' \
+          | tr ',' '\n' | grep -vxF "${FAKE_RESTORE_DROP:-__none__}" | paste -sd, - \
+          > "$STATE/$cname.restored"
         exit 0
         ;;
       psql)
