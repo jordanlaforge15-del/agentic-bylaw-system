@@ -70,11 +70,12 @@ test("case badge never renders the internal DB id, even before the case list res
   const { id: caseId, user_case_number: caseNum } =
     await openDivergentCase(suffix);
 
-  // Hold GET /api/cases (the source of user_case_number on a direct load)
-  // long enough that the "not yet known" state is observable. Only the
-  // collection route — /api/cases/<id>/... sub-routes must pass through.
+  // Hold both load-time sources of user_case_number long enough that the
+  // "not yet known" state is observable: the case list and, since ABS-424,
+  // the single-case lookup GET /api/cases/<id>. Deeper sub-routes
+  // (/api/cases/<id>/close etc.) must still pass through.
   await page.route(
-    (url) => url.pathname === "/api/cases",
+    (url) => /^\/api\/cases(\/\d+)?$/.test(url.pathname),
     async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 3_000));
       await route.continue();
