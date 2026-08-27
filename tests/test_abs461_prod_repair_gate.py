@@ -1,4 +1,4 @@
-"""The drift gate in scripts/apply-abs461-prod-repair.sh (ABS-465).
+"""The drift gate and the redaction filter in scripts/apply-abs461-prod-repair.sh (ABS-465).
 
 ABS-465 says the production dry run "must print exactly the four splits in the
 assessment doc" and, if it prints anything else, **stop**. Left to a human that
@@ -15,6 +15,7 @@ reasoned about.
 from __future__ import annotations
 
 import subprocess
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -132,3 +133,68 @@ def test_the_gate_never_writes(tmp_path):
     assert result.returncode == 0
     assert "Opening tunnel" not in result.stderr
     assert list(tmp_path.iterdir()) == [tmp_path / "dry-run.txt"]
+
+
+# --- the redaction filter -------------------------------------------------
+#
+# Everything the repair prints passes through this on its way to the operator's
+# terminal, because a failed connection prints the DSN. It used to be
+# `sed "s/${PG_PASSWORD}/***/g"`, and a generated Postgres password is exactly
+# the kind of string that breaks a sed pattern: '/' ends the s/// delimiter,
+# '.' matches anything, '&' expands to the whole match, '\' escapes. The first
+# is a hard error, and a hard error here under `set -euo pipefail` used to
+# abort the run and throw away the repair's entire output — on the --apply
+# path, that discards the revert sidecar path after the write has committed.
+# So these cases are not hypothetical unicode trivia; they are the reason the
+# filter is Python and not sed.
+
+PASSWORDS_THAT_BREAK_SED = [
+    "a/b/c",  # closes sed's own delimiter — the confirmed repro
+    "pw.with.dots",  # '.' would match any character
+    "amp&sand",  # '&' expands to the whole match in the replacement
+    "back\\slash",  # '\' escapes whatever follows it
+    "brack[et]s*+?^$",  # a character class, and every quantifier
+    "plain-secret",
+]
+
+
+def run_redact(text: str, password: str, home: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(GATE), "--redact"],
+        input=text,
+        capture_output=True,
+        text=True,
+        check=False,
+        # A deliberately bare environment: the filter must not depend on
+        # anything the operator's shell happens to be carrying.
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(home), "PG_PASSWORD": password},
+    )
+
+
+@pytest.mark.parametrize("password", PASSWORDS_THAT_BREAK_SED)
+def test_the_password_is_redacted_whatever_characters_it_carries(tmp_path, password):
+    encoded = urllib.parse.quote(password, safe="")
+    transcript_text = (
+        f"could not connect to postgresql+psycopg://layer1:{encoded}@127.0.0.1:15442/layer1\n"
+        f"psql: FATAL: password authentication failed (tried {password})\n"
+        "page-break splits: 4 joined\n"
+    )
+
+    result = run_redact(transcript_text, password, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert password not in result.stdout
+    assert encoded not in result.stdout
+    # Redacting is not the same as swallowing: the operator still needs to be
+    # able to read the transcript that told them something went wrong.
+    assert "page-break splits: 4 joined" in result.stdout
+    assert result.stdout.count("***") == 2
+
+
+def test_redaction_never_swallows_the_transcript(tmp_path):
+    # The failure this guards is not "the password leaked" but "the run died
+    # in the filter and took the sidecar path with it". Output in, output out.
+    text = "revert sidecar written to /home/op/abs461-prod-sidecars/x.json\n"
+    result = run_redact(text, "s/l/a/s/h/e/s", tmp_path)
+    assert result.returncode == 0
+    assert result.stdout == text

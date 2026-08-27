@@ -108,6 +108,11 @@ container's own environment and never write it down:
 # 1. credentials, straight from the container
 PGPW=$(ssh bylaw-prod 'docker exec bylaw-postgres printenv POSTGRES_PASSWORD')
 
+# 1b. PG_PORT outranks DATABASE_URL's port (ABS-501). If your shell still
+#     carries a worktree's e2e port triplet, every command below is silently
+#     redirected off the tunnel and onto a local test database.
+unset PG_PORT
+
 # 2. tunnel (leave running in its own shell)
 ssh -N -L 15442:172.18.0.2:5432 bylaw-prod
 
@@ -122,7 +127,9 @@ DATABASE_URL="postgresql+psycopg://layer1:${PGPW}@127.0.0.1:15442/layer1" \
 ```
 
 The password is generated and may contain characters a URL would eat; the
-script percent-encodes it, so do the same if you build the DSN by hand.
+script percent-encodes it, so do the same if you build the DSN by hand. Keep it
+in the environment as above and out of `--database-url`: a command line is
+world-readable on the box you run it from.
 
 The known caveat about this tunnel — it drops on long write transactions —
 does not bite here: the whole repair is sub-second and commits in one
@@ -180,6 +187,7 @@ so the connection that reports success is not the one that did the writing.
 
 ```bash
 PGPW=$(ssh bylaw-prod 'docker exec bylaw-postgres printenv POSTGRES_PASSWORD')
+unset PG_PORT   # see 1b above
 DATABASE_URL="postgresql+psycopg://layer1:${PGPW}@127.0.0.1:15442/layer1" \
   .venv/bin/python scripts/repair_page_break_splits.py \
     --revert ~/abs461-prod-sidecars/page_break_repair_sidecar_<stamp>.json

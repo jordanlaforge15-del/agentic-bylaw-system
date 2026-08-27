@@ -19,6 +19,7 @@
 #   scripts/apply-abs461-prod-repair.sh                  # dry run + drift gate
 #   scripts/apply-abs461-prod-repair.sh --apply          # repair, then verify
 #   scripts/apply-abs461-prod-repair.sh --gate FILE      # gate a saved transcript
+#   PG_PASSWORD=... ... --redact < FILE                  # the redaction filter alone
 #
 # Configuration:
 #   ABS461_SSH_HOST       ssh target for the production host (default: bylaw-prod)
@@ -55,6 +56,64 @@ EXPECTED_SUMMARY="4 joined, 2 phantom section(s) removed, 10 citation_path(s) re
 
 say() { printf '%s\n' "$*" >&2; }
 fail() { printf 'STOP: %s\n' "$*" >&2; exit 1; }
+
+# --- credential handling -------------------------------------------------
+#
+# Two rules, both learned the hard way, both exercised by
+# tests/test_abs461_prod_repair_gate.py:
+#
+#   1. The password never reaches a command line. /proc/<pid>/cmdline is
+#      world-readable, so `--database-url postgresql://user:secret@...` shows
+#      the production credential to every other account on this machine for
+#      the length of the run. It goes through the environment instead, which
+#      is readable only by its owner.
+#
+#   2. The password is never fed to a *pattern*. Redaction used to be
+#      `sed "s/${PG_PASSWORD}/***/g"`, which a generated Postgres password
+#      breaks in several ways: a '/' terminates sed's own s/// delimiter, a
+#      '.' matches any character, an '&' expands to the whole match. The
+#      first of those is a hard error, and under `set -euo pipefail` a hard
+#      error in the redaction pipe took the run down with it — discarding
+#      the repair's entire output, including the revert sidecar path, after
+#      the write to production had already committed. str.replace() has no
+#      metacharacters and nothing to escape.
+
+encode_password() {
+  PW="$PG_PASSWORD" python3 -c \
+    'import os, urllib.parse; print(urllib.parse.quote(os.environ["PW"], safe=""))'
+}
+
+# Filter stdin to stdout, blanking the password in both its raw and its
+# URL-encoded form — a failed connection prints the DSN, which carries the
+# encoded one.
+redact() {
+  PW="${PG_PASSWORD:-}" PW_ENC="${PG_PASSWORD_ENC:-}" python3 -c '
+import os, sys
+
+secrets = sorted(
+    {s for s in (os.environ.get("PW", ""), os.environ.get("PW_ENC", "")) if s},
+    key=len,
+    reverse=True,
+)
+for line in sys.stdin:
+    for secret in secrets:
+        line = line.replace(secret, "***")
+    sys.stdout.write(line)
+'
+}
+
+# Run the repair with the DSN in the environment rather than in argv.
+run_repair() {
+  (
+    export DATABASE_URL="$REPAIR_DSN"
+    # layer1.config lets PG_PORT override DATABASE_URL's port (ABS-501, for
+    # stale e2e exports). An operator whose shell still carries a worktree's
+    # port triplet would otherwise have this run silently redirected off the
+    # tunnel and onto a local test database.
+    unset PG_PORT
+    exec "$PYTHON" "$REPO_ROOT/scripts/repair_page_break_splits.py" "$@"
+  )
+}
 
 # Read a dry-run transcript and decide whether production still matches the
 # assessment. Split out as its own mode so it is testable without a production
@@ -99,8 +158,9 @@ while [ $# -gt 0 ]; do
     --apply) MODE="apply" ;;
     --dry-run) MODE="dry-run" ;;
     --gate) shift; MODE="gate"; GATE_FILE="${1:-}" ;;
+    --redact) MODE="redact" ;;
     --sidecar-dir) shift; SIDECAR_DIR="${1:-}" ;;
-    *) fail "usage: $(basename "$0") [--apply] [--gate FILE] [--sidecar-dir DIR]" ;;
+    *) fail "usage: $(basename "$0") [--apply] [--gate FILE] [--redact] [--sidecar-dir DIR]" ;;
   esac
   shift
 done
@@ -108,6 +168,17 @@ done
 if [ "$MODE" = "gate" ]; then
   [ -n "$GATE_FILE" ] || fail "--gate needs a transcript path"
   gate_transcript "$GATE_FILE"
+  exit 0
+fi
+
+# The redaction filter, on its own, over stdin. Exposed so it can be tested
+# against the passwords that break a sed-based one without a production
+# database anywhere in the loop.
+if [ "$MODE" = "redact" ]; then
+  PG_PASSWORD="${PG_PASSWORD:-}"
+  PG_PASSWORD_ENC=""
+  [ -z "$PG_PASSWORD" ] || PG_PASSWORD_ENC="$(encode_password)"
+  redact
   exit 0
 fi
 
@@ -137,9 +208,8 @@ PG_PASSWORD="$(ssh -o BatchMode=yes "$SSH_HOST" \
   || fail "could not read POSTGRES_USER/DB/PASSWORD from $PG_CONTAINER"
 
 # The password is generated, so it may carry characters a URL would eat.
-PG_PASSWORD_ENC="$(PW="$PG_PASSWORD" python3 -c \
-  'import os, urllib.parse; print(urllib.parse.quote(os.environ["PW"], safe=""))')"
-DATABASE_URL="postgresql+psycopg://${PG_USER}:${PG_PASSWORD_ENC}@127.0.0.1:${LOCAL_PORT}/${PG_DB}"
+PG_PASSWORD_ENC="$(encode_password)"
+REPAIR_DSN="postgresql+psycopg://${PG_USER}:${PG_PASSWORD_ENC}@127.0.0.1:${LOCAL_PORT}/${PG_DB}"
 
 # --- tunnel --------------------------------------------------------------
 
@@ -155,12 +225,10 @@ kill -0 "$TUNNEL_PID" 2>/dev/null || fail "tunnel did not come up (is $LOCAL_POR
 # --- dry run, then the gate ----------------------------------------------
 
 say "Dry run (writes nothing)"
-"$PYTHON" "$REPO_ROOT/scripts/repair_page_break_splits.py" \
-  --database-url "$DATABASE_URL" --document-id "$DOCUMENT_ID" --dry-run \
-  > "$WORK/dry-run.txt" 2>&1 \
-  || { sed "s/${PG_PASSWORD}/***/g" "$WORK/dry-run.txt" >&2; fail "dry run failed"; }
+run_repair --document-id "$DOCUMENT_ID" --dry-run > "$WORK/dry-run.txt" 2>&1 \
+  || { redact < "$WORK/dry-run.txt" >&2; fail "dry run failed"; }
 
-sed "s/${PG_PASSWORD}/***/g" "$WORK/dry-run.txt" >&2
+redact < "$WORK/dry-run.txt" >&2
 gate_transcript "$WORK/dry-run.txt"
 
 if [ "$MODE" = "dry-run" ]; then
@@ -177,11 +245,23 @@ case "$SIDECAR_DIR" in
 esac
 
 say "Applying repair; revert sidecar -> $SIDECAR_DIR"
-"$PYTHON" "$REPO_ROOT/scripts/repair_page_break_splits.py" \
-  --database-url "$DATABASE_URL" --document-id "$DOCUMENT_ID" \
-  --sidecar-dir "$SIDECAR_DIR" 2>&1 | sed "s/${PG_PASSWORD}/***/g" >&2
+# Captured to a file rather than piped, so nothing between here and the
+# terminal can lose the output of a run that has already written to
+# production — the sidecar path is in there.
+apply_status=0
+run_repair --document-id "$DOCUMENT_ID" --sidecar-dir "$SIDECAR_DIR" \
+  > "$WORK/apply.txt" 2>&1 || apply_status=$?
+redact < "$WORK/apply.txt" >&2 \
+  || say "WARNING: could not redact the repair's output; withheld to avoid printing the password"
 
 SIDECAR="$(ls -1t "$SIDECAR_DIR"/page_break_repair_sidecar_*.json 2>/dev/null | head -n 1 || true)"
+
+if [ "$apply_status" -ne 0 ]; then
+  # A non-zero exit does not mean nothing was written: unresolved clauses are
+  # reported as a failure after the commit. Name the sidecar before stopping.
+  [ -z "$SIDECAR" ] || say "a revert sidecar was written: $SIDECAR"
+  fail "repair exited $apply_status — see the output above"
+fi
 [ -n "$SIDECAR" ] || fail "repair reported success but wrote no revert sidecar"
 
 # --- verify --------------------------------------------------------------
@@ -202,6 +282,7 @@ done
 
 say ""
 say "Revert command (record this on the issue alongside the sidecar path):"
+say "  unset PG_PORT   # it would override the port below (ABS-501)"
 say "  DATABASE_URL=\"postgresql+psycopg://${PG_USER}:<password>@127.0.0.1:${LOCAL_PORT}/${PG_DB}\" \\"
 say "    .venv/bin/python scripts/repair_page_break_splits.py --revert $SIDECAR"
 say ""
