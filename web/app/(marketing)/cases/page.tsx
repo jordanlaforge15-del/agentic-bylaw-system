@@ -3,6 +3,7 @@
 // chat product itself.
 
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { ADVISOR_API_URL } from "@/lib/api";
 import { CaseListResponse } from "@/lib/cases";
@@ -14,12 +15,14 @@ export const dynamic = "force-dynamic";
 
 // Account surface, not a landing page: unique title for the tab, and
 // noindex so a signed-out shell of someone's case list never ranks.
-export const metadata: Metadata = {
+// noindex, but still self-canonical — see the note on /billing (ABS-510).
+export const metadata: Metadata = pageMetadata({
+  path: "/cases",
   title: "Your Cases — ABS°",
   description:
     "Browse your ABS research cases: every parcel question you have opened, its current status, and the sourced bylaw readings the advisor returned.",
-  robots: { index: false, follow: false },
-};
+  noindex: true,
+});
 
 
 async function fetchAuthed<T>(path: string): Promise<T | { _unauthorized: true } | null> {

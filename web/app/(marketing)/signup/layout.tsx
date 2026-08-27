@@ -4,12 +4,14 @@
 // wrapper that carries it (ABS-509).
 
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/signup",
   title: "Request an Invite — ABS°",
   description:
     "ABS is in private beta. Request an invite to ask questions about the Halifax Regional Centre Land Use By-law and get sourced, cited readings back.",
-};
+});
 
 export default function SignupLayout({
   children,

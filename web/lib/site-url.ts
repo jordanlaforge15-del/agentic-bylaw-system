@@ -1,10 +1,11 @@
 // Single source of truth for the site's absolute public origin.
 //
 // Anything that has to emit a fully-qualified URL — robots.txt's
-// `Sitemap:` line, sitemap.xml's `<loc>` values, and (once ABS wires
-// it) the root layout's `metadataBase` — reads it from here rather
-// than hardcoding the hostname in each spot. One env var, one
-// normalisation rule, no drift.
+// `Sitemap:` line, sitemap.xml's `<loc>` values, and the root layout's
+// `metadataBase` (ABS-510), which in turn resolves every canonical,
+// og:url and og:image on the site — reads it from here rather than
+// hardcoding the hostname in each spot. One env var, one normalisation
+// rule, no drift.
 //
 // Env:
 //   SITE_URL   absolute origin, e.g. "https://agenticbylawsystems.com".

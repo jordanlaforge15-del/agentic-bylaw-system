@@ -5,6 +5,7 @@
 // this page reflects that.
 
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { Mono } from "@/components/mono";
 import { Btn } from "@/components/btn";
@@ -34,11 +35,12 @@ const PRINCIPLES = [
   },
 ];
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/about",
   title: "About — ABS°",
   description:
     "Why ABS exists: a research tool that reads the Halifax Regional Centre Land Use By-law against one parcel and cites every assertion. Built in Halifax.",
-};
+});
 
 export default function AboutPage() {
   return (
