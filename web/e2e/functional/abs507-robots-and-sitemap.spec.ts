@@ -17,23 +17,16 @@
 // sees, not on whatever the browser decides to render.
 
 import { test, expect } from "../fixtures/test-env";
-
-// The public marketing routes. Must match PUBLIC_ROUTES in
-// web/app/sitemap.ts — this list is the spec's independent copy on
-// purpose, so a silent edit to the source list fails here.
-const PUBLIC_PATHS = [
-  "/",
-  "/pricing",
-  "/about",
-  "/coverage",
-  "/support",
-  "/changelog",
-  "/privacy",
-  "/terms",
-];
+// The public route list is imported, not copied (ABS-527). It used to be
+// a hand-maintained duplicate here; it drifted from the sitemap's copy
+// and /signup fell through the gap. Drift-detection now lives in
+// abs527-sitemap-covers-indexable-routes.spec.ts, which derives the
+// expected set from the filesystem instead of from another list.
+import { PUBLIC_PATHS } from "../../lib/public-routes";
 
 // Auth-gated / operational surfaces. /app, /admin and /cases/new 307
-// for anonymous visitors; the rest are credential dead-ends.
+// for anonymous visitors; the rest are credential dead-ends. Note
+// `/sign-up` is the Clerk gate, not the public `/signup` invite page.
 const GATED_PATHS = [
   "/app",
   "/admin",
@@ -79,6 +72,13 @@ test.describe("robots.txt + sitemap.xml (ABS-507)", () => {
         `robots.txt must disallow ${path}`,
       ).toMatch(new RegExp(`^Disallow:\\s*${path}$`, "im"));
     }
+
+    // ...and must NOT disallow the public invite-request page, which
+    // differs from the Clerk gate by a single hyphen (ABS-527).
+    expect(
+      body,
+      "robots.txt must not disallow /signup (the public invite page)",
+    ).not.toMatch(/^Disallow:\s*\/signup$/im);
   });
 
   test("(b) the advertised sitemap URL resolves to a valid urlset", async ({

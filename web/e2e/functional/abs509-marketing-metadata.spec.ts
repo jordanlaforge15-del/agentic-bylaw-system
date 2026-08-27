@@ -8,22 +8,13 @@
 // and asserts they are present, brand-stamped, length-sane, and — the part
 // that actually catches a regression — pairwise unique across the site.
 //
-// Adding a marketing route? Add it to ROUTES. A new page that forgets its
-// metadata export will inherit the root title and fail the uniqueness check.
+// Adding a public marketing route? Add it to PUBLIC_ROUTES in
+// web/lib/public-routes.ts — the one list this spec, the sitemap, and the
+// ABS-507 spec all read (ABS-527). A new page that forgets its metadata
+// export will inherit the root title and fail the uniqueness check.
 
 import { expect, test } from "../fixtures/test-env";
-
-const ROUTES = [
-  "/",
-  "/pricing",
-  "/coverage",
-  "/about",
-  "/support",
-  "/changelog",
-  "/privacy",
-  "/terms",
-  "/signup",
-] as const;
+import { PUBLIC_PATHS as ROUTES } from "../../lib/public-routes";
 
 // Google truncates around here; the ticket caps descriptions at ~160.
 const MAX_DESCRIPTION_LENGTH = 160;
