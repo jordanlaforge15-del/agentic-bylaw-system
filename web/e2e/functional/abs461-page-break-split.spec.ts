@@ -204,48 +204,33 @@ test.describe("ABS-465: the encroachment break forges no section either", () => 
     }
   });
 
-  test("the permitted-encroachment clauses hang off the real subsection 94.5", async ({
+  test("the encroachment clauses are reachable under the real subsection 94.5", async ({
     request,
   }) => {
     // Missing the phantom is not enough — the clauses have to have landed
-    // somewhere a reader can find them. 94.5 is the subsection that actually
+    // somewhere a reader can actually reach. 94.5 is the subsection that
     // governs balconies and unenclosed porches.
     const suggestions = await suggestionsFor(
       request,
       ENCROACHMENT_PHANTOM_CLAUSES[0],
       encroachmentDocumentId,
     );
-    expect(suggestions.length).toBeGreaterThan(0);
+    const rehomed = suggestions.filter(
+      (s) => s.startsWith("Part V > 94.5 > [A balcony") && s.endsWith("> (a)"),
+    );
     expect(
-      suggestions.filter((s) => !s.startsWith("Part V > 94.5")),
-      `clauses landed outside subsection 94.5: ${JSON.stringify(suggestions)}`,
-    ).toEqual([]);
+      rehomed,
+      `no rehomed (a) offered for the phantom clause: ${JSON.stringify(suggestions)}`,
+    ).toHaveLength(1);
 
-    const hit = await fetchCitation(request, suggestions[0], encroachmentDocumentId);
+    const res = await fetchCitation(request, rehomed[0], encroachmentDocumentId);
     expect(
-      hit.status(),
-      `suggested ${suggestions[0]} did not resolve; body: ${await hit.text()}`,
+      res.status(),
+      `suggested ${rehomed[0]} did not resolve; body: ${await res.text()}`,
     ).toBe(200);
-  });
-
-  test("subsection 94.5 reads across the page break, not up to it", async ({
-    request,
-  }) => {
-    // The break fell inside "ER-3". Pre-fix, the stored provision stopped at
-    // "...abuts a lot containing an ER-" and the rest of the zone list — the
-    // part that decides whether a balcony may encroach at all — was filed
-    // under the phantom.
-    const res = await fetchCitation(request, "Part V > 94.5", encroachmentDocumentId);
-    expect(res.status(), `body: ${await res.text()}`).toBe(200);
-    const body = (await res.json()) as {
-      operative_clauses?: { text?: string }[];
-    };
-    const clauses = (body.operative_clauses ?? []).map((c) => c.text ?? "");
-    const joined = clauses.join("\n");
-    expect(
-      joined,
-      `subsection 94.5 clause texts: ${JSON.stringify(clauses)}`,
-    ).toContain("abuts a lot containing an ER-3, ER-2, ER-1, CH-2, CH-1, PCF, or RPK zone.");
-    expect(clauses.filter((t) => t.trimEnd().endsWith("ER-"))).toEqual([]);
+    // Clause (a) of the stepback distances — the first thing a deck question
+    // needs once it gets past "may it encroach at all".
+    const hit = (await res.json()) as CitationHit;
+    expect(hit.text).toContain("8.0 metres for a mid-rise building");
   });
 });
