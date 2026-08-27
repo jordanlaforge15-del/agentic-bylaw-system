@@ -21,6 +21,15 @@ import { absoluteUrl } from "../lib/site-url";
 // Auth-gated and operational surfaces. Kept in sync by hand with
 // isProtectedRoute in proxy.ts plus the credential pages; the sitemap
 // deliberately lists none of these.
+//
+// READ THE HYPHEN (ABS-527). `/sign-up` below is the Clerk credential
+// gate at app/sign-up/ — a dead end for a crawler. It is NOT `/signup`,
+// the public invite-request marketing page at app/(marketing)/signup/,
+// which is indexable and listed in the sitemap. One hyphen separates
+// them, and mistaking one for the other is exactly what left /signup
+// crawlable-but-undiscoverable. Do not add `/signup` here without also
+// removing it from PUBLIC_ROUTES in web/lib/public-routes.ts and giving
+// its layout `robots: { index: false, follow: false }`.
 const DISALLOWED_PATHS = [
   "/app",
   "/admin",
