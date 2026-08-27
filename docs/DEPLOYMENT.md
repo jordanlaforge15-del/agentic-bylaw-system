@@ -24,7 +24,10 @@ Everything production lives under `/srv/bylaw/`:
 ├── Caddyfile               # reverse proxy + TLS + rate-limit config
 ├── Dockerfile.caddy        # custom Caddy build with caddy-ratelimit plugin
 ├── Dockerfile.postgres     # custom Postgres build with pgvector + PostGIS
-└── backups/                # nightly pg_dump targets (manual for now)
+├── backup.env              # backup config sourced by cron (chmod 600)
+├── backup.pass             # gpg passphrase (chmod 600 — also in the password manager)
+├── scripts/                # backup-prod-db.sh, verify-prod-backup.sh, installer
+└── backups/                # rotation dir + backup.log + cron.log (ABS-131)
 ```
 
 The repo's `docker-compose.yml` at root is the **local dev** compose (postgres + codex container); it's NOT used in production. The repo's `Caddyfile`, `Dockerfile.advisor`, `Dockerfile.caddy`, `Dockerfile.postgres`, `web/Dockerfile`, and root `.dockerignore` *are* the source-of-truth that the server-side copies mirror — sync them via `scp` when the repo versions change.
@@ -420,15 +423,33 @@ See the commit `[advisor] Fix session-detail 404 caused by user_id format mismat
 
 Adding a single `external_dataset` (e.g. a new geo layer) doesn't need the full-reload sledgehammer. Use `psql \COPY (SELECT … WHERE external_dataset_id = N)` to scope the dump to just the new rows, then `\COPY … FROM` to insert on prod. After insert, re-derive the PostGIS `geometry` column with `UPDATE … SET geometry = ST_GeomFromGeoJSON(geometry_geojson::text)` — mirroring migration 0009's pattern. The two user/billing rules above still apply (a surgical insert never overwrites; a TRUNCATE-and-replace on `external_dataset_feature` would, so don't).
 
-### Backups (manual, ~no automation yet)
+### Backups (automated — ABS-131)
+
+Nightly at 02:30 the host dumps `layer1`, verifies the archive is readable
+and carries the four system-of-record tables, encrypts it, rotates it
+through 7 daily + 4 weekly slots, and mirrors that set to a Hetzner
+Storage Box. At 04:00 on Sundays it restores the newest artifact into a
+throwaway Postgres and counts rows, so a week of silently corrupt dumps
+surfaces within seven days instead of during an outage.
+
+Full runbook — Storage Box setup, the passphrase, the restore procedure —
+in **[PROD_DB_BACKUP.md](PROD_DB_BACKUP.md)**. The short version:
 
 ```bash
-# Run on the server
-docker compose -f /srv/bylaw/docker-compose.yml exec -T postgres \
-  pg_dump -U layer1 layer1 | gzip > /srv/bylaw/backups/layer1-$(date +%F).sql.gz
+# Check on it
+tail -n 40 /srv/bylaw/backups/backup.log
+/srv/bylaw/scripts/verify-prod-backup.sh            # fast archive check
+
+# Take an extra dump by hand before a risky migration. Name it outside the
+# rotation patterns so the prune never touches it.
+set -a; . /srv/bylaw/backup.env; set +a
+docker exec -i bylaw-postgres pg_dump -U layer1 -d layer1 -Fc \
+  > /srv/bylaw/backups/layer1-prod-pre-migration-$(date +%F).dump.manual
 ```
 
-Tracked as a deploy follow-up: schedule this in cron and ship to a Hetzner Storage Box. For now, run by hand before risky migrations.
+The gpg passphrase lives in `/srv/bylaw/backup.pass` **and** in the
+operator's password manager. If it only ever lived on the server, the
+offsite copies are unreadable the day the server dies.
 
 This dump is the *complete* backup. The only other stateful volume,
 `bylaw_submissions` (uploaded IFC/PDF artefacts), is deliberately excluded —
@@ -664,7 +685,7 @@ The shared-password gate is enabled whenever Clerk isn't configured — includin
 ## Open follow-ups
 
 1. **Move production `docker-compose.yml` into the repo** (perhaps as `compose.prod.yml`) so server config is also version-controlled.
-2. **Automate backups** — cron + Hetzner Storage Box upload, encrypted with `age` or `gpg`.
+2. **Automate backups** — DONE (ABS-131). Cron + verification + gpg + Hetzner Storage Box mirror; see [PROD_DB_BACKUP.md](PROD_DB_BACKUP.md).
 3. **Switch to real Clerk auth** — DONE. Live at `pk_test_` dev instance (`stunning-goshawk-55.clerk.accounts.dev`). Flip to a Production instance before public launch (no code work — same env-var swap as the runbook).
 
 ### Invite-only access flow
