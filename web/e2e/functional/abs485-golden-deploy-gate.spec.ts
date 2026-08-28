@@ -322,6 +322,45 @@ test.describe("ABS-485 the gate is wired into the paths that ship", () => {
     expect(ci).toContain("github.base_ref");
   });
 
+  test("a custom `if:` on a build job still honours the gate", () => {
+    // `needs` alone is not enough, and this was wrong on the first pass.
+    // GitHub Actions applies the implicit success()-on-needs check only to jobs
+    // with NO `if:` of their own; writing a custom condition replaces it. Both
+    // build jobs carry one (main-push-only), so each must restate success() or
+    // `needs: [..., golden-gate]` only orders the jobs — the prod images would
+    // build and push on every main push with the gate HELD.
+    const ci = fs.readFileSync(CI_WORKFLOW, "utf-8");
+    for (const job of ["build-advisor", "build-web"]) {
+      const block = ci.split(`\n  ${job}:`)[1].split("\n    steps:")[0];
+      const condition = block
+        .split("\n")
+        .filter((l) => !l.trim().startsWith("#"))
+        .find((l) => l.trim().startsWith("if:"));
+      expect(condition, `${job} has no if:`).toBeDefined();
+      expect(condition, `${job} drops the implicit success() on needs`).toContain(
+        "success()",
+      );
+    }
+  });
+
+  test("the gate job installs no extras it does not need", () => {
+    // The gate reads two JSON files and hashes one. It once imported the
+    // advisor package by proxy — via scripts/verify_golden_cases.py — and died
+    // on CI's base install before evaluating anything, exiting 1: on main,
+    // indistinguishable from a held gate. If this job ever needs a heavier
+    // install, an import regressed; the install line is not the fix.
+    const ci = fs.readFileSync(CI_WORKFLOW, "utf-8");
+    const job = ci.split("golden-gate:")[1].split("\n  build-advisor:")[0];
+    const commands = job
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("#"))
+      .join("\n");
+    expect(commands).toContain('pip install -e "."');
+    for (const extra of ["[dev]", "[advisor]", "[dev,advisor]"]) {
+      expect(commands).not.toContain(extra);
+    }
+  });
+
   test("test-and-deploy-bylaw runs it before promoting", () => {
     const skill = fs.readFileSync(TEST_AND_DEPLOY_SKILL, "utf-8");
     expect(skill).toContain("scripts/check_deploy_gate.py");
