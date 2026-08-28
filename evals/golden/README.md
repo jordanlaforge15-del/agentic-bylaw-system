@@ -193,6 +193,44 @@ python scripts/verify_golden_cases.py --check
 python scripts/verify_golden_cases.py evals/runs/<ts> --gate
 ```
 
+## Where the gate is enforced (ABS-485)
+
+`verify_run.py` answers "did *this run* pass?" — it needs a run, and a run costs
+metered API spend. A promotion pipeline needs a cheaper question answered:
+**may this release be promoted?**
+
+```bash
+python scripts/check_deploy_gate.py          # 0 open, 1 held, 2 could not evaluate
+python scripts/check_deploy_gate.py --json   # machine-readable
+```
+
+No run, no database, no API spend — the condition that holds the gate today
+(is every entry attested?) is a file check. It reports `unattested`,
+`no_graded_run` and `graded_failing` separately, because a hold and a failure
+demand opposite responses: one is "a qualified human has work to do", the other
+is "the advisor is wrong".
+
+Once attested, an attestation nothing has graded still proves nothing, so the
+gate additionally requires a `GOLDEN_SUMMARY.json` whose recorded
+`golden_file_sha256` matches this file's bytes. That digest is what stops
+*attest → grade → green → edit an attestation → promote* from reading as gated:
+the stale summary graded a different file.
+
+Three places run it, independently, so skipping one does not ship:
+
+| Where | What a held gate does |
+|---|---|
+| `.claude/skills/test-and-deploy-bylaw/SKILL.md` Step 7.0 | Halts before `dev → main` is merged or tagged. |
+| `.claude/skills/deploy-bylaw/SKILL.md` preconditions | Halts before any image is built, for a direct deploy. |
+| `golden-gate` job in `.github/workflows/ci.yml` | Fails on `main` and blocks both image builds via `needs`. Warns without failing on `dev` — feature work is not a production deploy. |
+
+**The gate is held today and will stay held until a human attests.** That is
+the artifact working, not a pipeline to route around. The only way to open it is
+[Filling in an attestation](#filling-in-an-attestation), by someone qualified to
+give the answer professionally. Backfilling one — as a placeholder, to unblock a
+release, or from a careful reading of the by-law — turns the project's only
+non-model ground truth into a record of what the model already says.
+
 ## One run is not a verdict (ABS-524)
 
 A case that grades PASS on one run and PARTIAL on the next has told you

@@ -29,6 +29,7 @@ Anchor docs (link, don't restate):
 - [docs/BRANCHING_STRATEGY.md](../../../docs/BRANCHING_STRATEGY.md) — `dev → main` promotion gate.
 - [docs/E2E_TESTING.md](../../../docs/E2E_TESTING.md) — e2e commands, worktree port convention.
 - [CLAUDE.md](../../../CLAUDE.md) — `In Review` gate already requires green e2e; this skill enforces it at the dev→main boundary.
+- [evals/golden/README.md](../../../evals/golden/README.md) — the golden-case deploy gate Step 7.0 enforces, and the attestation procedure that is the only way to open it.
 
 ---
 
@@ -167,6 +168,34 @@ After a safe-fix commit, return to [Step 3](#step-3--run-the-full-suite) and re-
 
 This step encodes [docs/BRANCHING_STRATEGY.md §The promotion gate](../../../docs/BRANCHING_STRATEGY.md). Tests are green at this point; the goal is to land `dev` on `main` cleanly and tag the resulting commit.
 
+### 7.0 — Golden-case deploy gate (hard, runs first)
+
+A green Playwright suite says the product works. It says nothing about whether the advisor's *answers* are correct — every expectation in the generated eval was authored by a model, and the system under test is a model. The golden subset is the only tier where a qualified human recorded the right answer, and `evals/golden/golden_cases.json` has always declared that a production deploy requires it. Until ABS-485 nothing ran that check, which is how a known-wrong answer reached prod ([docs/data-gaps/abs461-production-impact.md](../../../docs/data-gaps/abs461-production-impact.md)).
+
+Run it before anything else in Step 7 — before inspecting the diff, before choosing a version, and certainly before merging:
+
+```bash
+python scripts/check_deploy_gate.py
+```
+
+No database, no run, no API spend: the condition that holds the gate today is a file check. Branch on the exit code:
+
+| Exit | Meaning | Action |
+|---|---|---|
+| **0** | Gate OPEN — every entry attested, and a run graded against *this* golden file passed them all. | Proceed to 7.1. |
+| **1** | Gate HELD — promotion must not proceed. | **Halt.** Surface the script's output verbatim; it names the reason. |
+| **2** | The gate could not be evaluated (missing or malformed golden file, run dir that does not exist). | **Halt.** "I could not check" is not "I checked and it passed." Fix the input and re-run. |
+
+The output distinguishes the ways a hold happens, because the operator's next move is completely different:
+
+- **`unattested`** — no qualified human has recorded the correct answer for one or more cases. Nothing has been demonstrated about correctness, in either direction. This is a hold, not a failure. The unblock is a human filling in the attestations per [evals/golden/README.md](../../../evals/golden/README.md) § "Filling in an attestation".
+- **`graded_failing`** — a human recorded the correct answer and the advisor gave a different one. A real defect. Fix the advisor; do not edit the attestation to match the output.
+- **`no_graded_run`** — everything is attested but no eval run has been graded against this exact golden file. Every grade records the golden file's SHA-256, so an attestation edited after a green run does not inherit that run's verdict. Produce and grade a run (`python scripts/verify_run.py evals/runs/<ts>`), then re-check.
+
+> **The gate is HELD today (0/6 attested) and that is correct.** Do not author, draft, or backfill an attestation to clear it — not as a placeholder, not "to unblock the release", not even from a careful reading of the by-law. A model-authored attestation is not an attestation: it converts the project's only non-model ground truth into a record of what the model already says, and it defeats the entire artifact. The attestation work is a human task tracked outside this skill. If a release is genuinely urgent while the gate is held, that is the user's call to make explicitly — surface the hold and ask.
+
+CI enforces the same check independently: the `golden-gate` job in [.github/workflows/ci.yml](../../../.github/workflows/ci.yml) is a `needs` of both image builds, so a held gate blocks the prod images even if this step were skipped.
+
 ### 7.1 — Inspect what is being promoted
 
 ```bash
@@ -252,6 +281,8 @@ After `deploy-bylaw` reports verification green, this skill is done.
 
 | Symptom | Branch |
 |---|---|
+| `check_deploy_gate.py` exits 1 at Step 7.0 | **Halt — do not promote.** Surface the script's output; it names whether the hold is `unattested` (a qualified human has work to do), `graded_failing` (the advisor is wrong), or `no_graded_run`. Never clear it by writing an attestation. |
+| `check_deploy_gate.py` exits 2 at Step 7.0 | Halt. The gate could not be evaluated — a malformed or missing golden file. This is not a passing gate. |
 | `git status --porcelain` not empty at Step 1 | Halt. Surface the dirty files. Do not stash or discard — assume it's the user's WIP. |
 | `make e2e-up` fails | Halt. Per [E2E_TESTING.md](../../../docs/E2E_TESTING.md), port collisions across worktrees are the most common cause. Do not retry blindly. |
 | Iteration counter > 5 | Halt. Summarize all 5 attempts, the cumulative diffs, and remaining red specs. |
@@ -268,4 +299,6 @@ After `deploy-bylaw` reports verification green, this skill is done.
 - Edit or fork `deploy-bylaw`. That skill owns the deploy procedure; this one chains into it.
 - Handle the `hotfix/* → main` path. Hotfixes stay manual per BRANCHING_STRATEGY.
 - Roll back. Defer to `deploy-bylaw`'s rollback recipe (Step 7a there).
+- Author, draft, or backfill a golden-case attestation, under any circumstance. Step 7.0 reads them; nothing in this repo writes them. See [evals/golden/README.md](../../../evals/golden/README.md).
+- Grade an eval run. Step 7.0 only checks whether a matching grade exists; producing one is `scripts/verify_run.py` and costs metered API spend.
 - Replace the In Review gate in [CLAUDE.md](../../../CLAUDE.md). Per-issue e2e still happens in each worktree; this skill is the final, full-suite gate at the dev→main boundary.

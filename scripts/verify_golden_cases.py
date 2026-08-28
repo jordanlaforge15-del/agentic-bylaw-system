@@ -63,6 +63,7 @@ iterating on the golden grader.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -78,7 +79,14 @@ if str(REPO_ROOT / "src") not in sys.path:
     # time), so the grader imports it rather than re-implementing it.
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from advisor.chat.heading_consistency import find_contradictions
+# ABS-485: ``advisor.chat`` is NOT imported here at module scope. Importing the
+# advisor package executes ``advisor.billing``, which reaches FastAPI — a
+# ``[advisor]`` extra, not a base dependency. That made this module unimportable
+# under a plain ``pip install -e "."``, and took the deploy gate down with it:
+# ``check_deploy_gate.py`` only reads and hashes JSON, but it imports this
+# module, so it died at import on a lean runner before evaluating anything. A
+# crash exits non-zero and is therefore indistinguishable from a held gate.
+# The one function that needs the heading checker imports it itself.
 from scripts.verify_test_prompts import (
     DEFAULT_DB_URL,
     Corpus,
@@ -117,6 +125,18 @@ REFUSAL_MARKERS = (
 # ---------------------------------------------------------------------------
 # Loading and validation
 # ---------------------------------------------------------------------------
+
+
+def golden_file_digest(path: Path) -> str:
+    """SHA-256 of the golden file's bytes, recorded in every grade (ABS-485).
+
+    The deploy gate needs to know *which* golden file a summary graded. Without
+    that, "attest → grade → green → edit an attestation → promote" reads as
+    gated: the summary on disk still says the gate was open, for a file that no
+    longer exists. Bytes, not a normalised parse — a whitespace-only edit is
+    still an edit a reviewer should be asked to re-grade.
+    """
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def load_golden(path: Path) -> dict[str, Any]:
@@ -351,6 +371,8 @@ def grade_headings(turn_texts: list[str]) -> dict[str, Any]:
     compares several zones under an unanchored heading is skipped as ambiguous
     rather than guessed at.
     """
+    from advisor.chat.heading_consistency import find_contradictions
+
     found = [c for text in turn_texts for c in find_contradictions(text)]
     return {
         "ok": not found,
@@ -559,6 +581,11 @@ def grade_run(
         "golden_file": str(golden_path.relative_to(REPO_ROOT))
         if golden_path.is_absolute() and str(golden_path).startswith(str(REPO_ROOT))
         else str(golden_path),
+        # ABS-485: which golden file this grade actually graded. The deploy gate
+        # refuses a summary whose digest does not match the file it is gating on,
+        # so an attestation edited after a green run cannot inherit that run's
+        # verdict.
+        "golden_file_sha256": golden_file_digest(golden_path),
         "run_dir": str(run_dir),
         "gate": gate,
         "cases": [
