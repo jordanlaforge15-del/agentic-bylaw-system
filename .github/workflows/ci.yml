@@ -101,17 +101,82 @@ jobs:
         run: pytest --tb=short
 
   # ---------------------------------------------------------------------------
+  # golden-gate — the production-deploy gate (ABS-485)
+  #
+  # evals/golden/golden_cases.json declares that a production deploy requires
+  # every entry to be attested by a qualified human and to grade GOLDEN_PASS.
+  # Until ABS-485 that rule existed only in prose, which is how a known-wrong
+  # answer reached prod (docs/data-gaps/abs461-production-impact.md). This job
+  # is what turns it into a gate.
+  #
+  # It needs no database, no run and no API spend: the condition that holds the
+  # gate today is a file check.
+  #
+  # Enforcement is scoped to the dev -> main promotion, deliberately:
+  #   * on main (push or PR targeting it) the gate is HARD — a non-zero exit
+  #     fails the job and, via `needs`, blocks both image builds.
+  #   * on dev and feature branches it runs and reports, but does not fail.
+  #     Feature work is not a production deploy, and a gate that stops every
+  #     commit gets deleted rather than satisfied.
+  #
+  # EXPECTED STATE TODAY: the gate is HELD (0/6 attested), so promotion to main
+  # is blocked. That is the designed behaviour, not a broken pipeline. The only
+  # legitimate way to open it is a qualified human filling in the attestations
+  # per evals/golden/README.md. Do not weaken this job, do not add a bypass
+  # input, and above all do not write the attestations to make it green — a
+  # model-authored attestation is not evidence, and backfilling one destroys
+  # the only non-model ground truth the project has.
+  # ---------------------------------------------------------------------------
+  golden-gate:
+    name: Golden-case deploy gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # The gate reads JSON files; it does not import the advisor package or
+      # touch a database, so the heavy [dev,advisor] install is not needed.
+      - name: Install dependencies
+        run: pip install -e "."
+
+      - name: Check the golden-case deploy gate
+        run: |
+          set +e
+          python scripts/check_deploy_gate.py
+          gate=$?
+          set -e
+          echo "gate exit code: $gate"
+          if [ "${{ github.ref }}" = "refs/heads/main" ] || \
+             [ "${{ github.base_ref }}" = "main" ]; then
+            if [ "$gate" -ne 0 ]; then
+              echo "::error::Promotion to main is blocked by the golden-case deploy gate (exit $gate). See the output above and evals/golden/README.md. Do not author attestations to clear this."
+            fi
+            exit "$gate"
+          fi
+          if [ "$gate" -ne 0 ]; then
+            echo "::warning::The golden-case deploy gate is currently HELD. This does not block work on dev, but it will block promotion to main."
+          fi
+          exit 0
+
+  # ---------------------------------------------------------------------------
   # build-advisor — push Dockerfile.advisor to GHCR
   # Runs only on push to main, gated on all CI jobs passing.
   #
   # Test gate: to prevent merge of failing code, enable branch protection on
   # main/dev in GitHub Settings › Branches and mark the Lint, TypeScript
-  # typecheck, and Python tests jobs as required status checks.
+  # typecheck, Python tests, and Golden-case deploy gate jobs as required
+  # status checks. `needs` already blocks the build when the gate is held; the
+  # branch-protection entry is what additionally blocks the dev → main merge
+  # that would trigger it.
   # ---------------------------------------------------------------------------
   build-advisor:
     name: Build advisor image
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test]
+    needs: [lint, typecheck, test, golden-gate]
     if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     permissions:
       contents: read
@@ -159,7 +224,7 @@ jobs:
   build-web:
     name: Build web image
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test]
+    needs: [lint, typecheck, test, golden-gate]
     if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     permissions:
       contents: read
