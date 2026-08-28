@@ -144,14 +144,19 @@ jobs:
         run: pip install -e "."
 
       - name: Check the golden-case deploy gate
+        # Refs go through `env`, not `${{ }}` interpolated into the script body:
+        # a fork PR controls its own branch name, and interpolation would splice
+        # it into the shell. A gate that can be talked out of running is not one.
+        env:
+          REF: ${{ github.ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set +e
           python scripts/check_deploy_gate.py
           gate=$?
           set -e
           echo "gate exit code: $gate"
-          if [ "${{ github.ref }}" = "refs/heads/main" ] || \
-             [ "${{ github.base_ref }}" = "main" ]; then
+          if [ "$REF" = "refs/heads/main" ] || [ "$BASE_REF" = "main" ]; then
             if [ "$gate" -ne 0 ]; then
               echo "::error::Promotion to main is blocked by the golden-case deploy gate (exit $gate). See the output above and evals/golden/README.md. Do not author attestations to clear this."
             fi
