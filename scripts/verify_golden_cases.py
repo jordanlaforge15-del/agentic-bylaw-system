@@ -63,6 +63,7 @@ iterating on the golden grader.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -117,6 +118,18 @@ REFUSAL_MARKERS = (
 # ---------------------------------------------------------------------------
 # Loading and validation
 # ---------------------------------------------------------------------------
+
+
+def golden_file_digest(path: Path) -> str:
+    """SHA-256 of the golden file's bytes, recorded in every grade (ABS-485).
+
+    The deploy gate needs to know *which* golden file a summary graded. Without
+    that, "attest → grade → green → edit an attestation → promote" reads as
+    gated: the summary on disk still says the gate was open, for a file that no
+    longer exists. Bytes, not a normalised parse — a whitespace-only edit is
+    still an edit a reviewer should be asked to re-grade.
+    """
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def load_golden(path: Path) -> dict[str, Any]:
@@ -559,6 +572,11 @@ def grade_run(
         "golden_file": str(golden_path.relative_to(REPO_ROOT))
         if golden_path.is_absolute() and str(golden_path).startswith(str(REPO_ROOT))
         else str(golden_path),
+        # ABS-485: which golden file this grade actually graded. The deploy gate
+        # refuses a summary whose digest does not match the file it is gating on,
+        # so an attestation edited after a green run cannot inherit that run's
+        # verdict.
+        "golden_file_sha256": golden_file_digest(golden_path),
         "run_dir": str(run_dir),
         "gate": gate,
         "cases": [
