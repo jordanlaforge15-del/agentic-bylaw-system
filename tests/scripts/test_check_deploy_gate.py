@@ -399,3 +399,142 @@ def test_golden_file_digest_changes_with_the_file(tmp_path: Path) -> None:
     before = golden_file_digest(path)
     path.write_text('{"cases": [] }')
     assert golden_file_digest(path) != before
+
+
+# ---------------------------------------------------------------------------
+# 6. The gate actually runs where CI runs it, and actually stops the builds
+#
+# Both of these were broken on the first pass, and both broke silently in the
+# same direction: the gate looked wired up and enforced nothing.
+# ---------------------------------------------------------------------------
+
+
+_CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+# Installs a meta-path finder that refuses every distribution the ``[advisor]``
+# extra brings and the base install does not. Prepended to a tail that either
+# runs the gate or tries a blocked import.
+_BLOCK_EXTRAS = """
+import sys
+from importlib.abc import MetaPathFinder
+
+BLOCKED = ("fastapi", "starlette", "uvicorn", "anthropic", "openai")
+
+
+class _NoExtras(MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name.split(".")[0] in BLOCKED:
+            raise ModuleNotFoundError("blocked by test: " + name)
+        return None
+
+
+sys.meta_path.insert(0, _NoExtras())
+"""
+
+_RUN_GATE = """
+src = open(GATE, "rb").read()
+sys.argv[0] = GATE
+exec(compile(src, GATE, "exec"), {"__name__": "__main__", "__file__": GATE})
+"""
+
+
+def _blocked_script(tail: str) -> str:
+    return f"GATE = {str(GATE_SCRIPT)!r}\n{_BLOCK_EXTRAS}{tail}"
+
+
+def _run_cli_without_extras(
+    golden: Path, runs_root: Path, *extra: str
+) -> subprocess.CompletedProcess:
+    """Run the gate with the ``[advisor]`` extras made unimportable.
+
+    CI installs the gate with a bare ``pip install -e "."``. Building a venv per
+    test to reproduce that would be slow, so the extras are instead made
+    unreachable inside a throwaway interpreter.
+    """
+    return subprocess.run(
+        [
+            sys.executable, "-c", _blocked_script(_RUN_GATE),
+            "--golden", str(golden),
+            "--runs-root", str(runs_root),
+            *extra,
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_gate_opens_without_the_advisor_extras_installed(
+    tmp_path: Path, runs_root: Path
+) -> None:
+    """The load-bearing one: it must reach EXIT_OPEN, not merely exit non-zero.
+
+    Asserting a *hold* under the blocker would prove nothing — an import crash
+    holds too, and that is exactly the bug this pins. ``verify_golden_cases``
+    imported ``advisor.chat.heading_consistency`` at module scope, which
+    executes ``advisor.billing`` and reaches FastAPI. On CI's base install the
+    gate died at import and exited 1, which on ``main`` is indistinguishable
+    from "gate HELD" — a hold reported without evaluating anything.
+    """
+    golden = _write_golden(tmp_path, [_attested_case()])
+    _write_graded_run(
+        runs_root, "20260828T000000Z",
+        digest=golden_file_digest(golden), verdicts={"TC-001": "GOLDEN_PASS"},
+    )
+    proc = _run_cli_without_extras(golden, runs_root)
+    assert proc.returncode == EXIT_OPEN, proc.stdout + proc.stderr
+    assert "GATE: OPEN" in proc.stdout
+
+
+def test_the_import_blocker_is_not_vacuous(tmp_path: Path, runs_root: Path) -> None:
+    """Guard the guard: prove the blocker can actually stop an import.
+
+    Without this, deleting a name from ``BLOCKED`` would turn the test above
+    into a tautology that passes forever.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-c", _blocked_script("import fastapi\n")],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode != 0
+    assert "blocked by test" in proc.stderr
+
+
+def test_the_gate_job_installs_no_extras() -> None:
+    """A reappearing ``[dev,advisor]`` install is the bug, not the fix.
+
+    The gate reads JSON. If it ever needs the heavy install to run, something
+    has re-imported the advisor package at module scope.
+    """
+    text = _CI_WORKFLOW.read_text()
+    job = text.split("golden-gate:", 1)[1].split("\n  build-advisor:", 1)[0]
+    # Comments in this job discuss the extras at length; only what the runner
+    # executes counts.
+    commands = "\n".join(
+        line for line in job.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert 'pip install -e "."' in commands
+    for extra in ("[dev]", "[advisor]", "[dev,advisor]"):
+        assert extra not in commands, f"golden-gate must not install {extra}"
+
+
+@pytest.mark.parametrize("job", ["build-advisor", "build-web"])
+def test_a_held_gate_blocks_the_prod_image_build(job: str) -> None:
+    """``needs:`` alone does not gate a job that carries its own ``if:``.
+
+    GitHub Actions applies the implicit ``success()`` check on ``needs`` only to
+    jobs with no ``if:`` of their own; a custom condition replaces it. Both build
+    jobs have one (they are ``main``-push-only), so each must restate
+    ``success()`` or ``needs: [..., golden-gate]`` merely orders the jobs and the
+    prod images ship past a held gate.
+    """
+    text = _CI_WORKFLOW.read_text()
+    block = text.split(f"\n  {job}:", 1)[1].split("\n    steps:", 1)[0]
+    needs = next(line for line in block.splitlines() if line.strip().startswith("needs:"))
+    assert "golden-gate" in needs
+    condition = next(line for line in block.splitlines() if line.strip().startswith("if:"))
+    assert "success()" in condition, (
+        f"{job} has a custom `if:`, which drops Actions' implicit success() on "
+        "`needs` — a held golden-gate would not stop this build"
+    )

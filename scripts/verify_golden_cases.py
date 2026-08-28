@@ -79,7 +79,14 @@ if str(REPO_ROOT / "src") not in sys.path:
     # time), so the grader imports it rather than re-implementing it.
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from advisor.chat.heading_consistency import find_contradictions
+# ABS-485: ``advisor.chat`` is NOT imported here at module scope. Importing the
+# advisor package executes ``advisor.billing``, which reaches FastAPI — a
+# ``[advisor]`` extra, not a base dependency. That made this module unimportable
+# under a plain ``pip install -e "."``, and took the deploy gate down with it:
+# ``check_deploy_gate.py`` only reads and hashes JSON, but it imports this
+# module, so it died at import on a lean runner before evaluating anything. A
+# crash exits non-zero and is therefore indistinguishable from a held gate.
+# The one function that needs the heading checker imports it itself.
 from scripts.verify_test_prompts import (
     DEFAULT_DB_URL,
     Corpus,
@@ -364,6 +371,8 @@ def grade_headings(turn_texts: list[str]) -> dict[str, Any]:
     compares several zones under an unanchored heading is skipped as ambiguous
     rather than guessed at.
     """
+    from advisor.chat.heading_consistency import find_contradictions
+
     found = [c for text in turn_texts for c in find_contradictions(text)]
     return {
         "ok": not found,

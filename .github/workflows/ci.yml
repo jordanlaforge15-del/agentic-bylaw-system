@@ -138,8 +138,17 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      # The gate reads JSON files; it does not import the advisor package or
-      # touch a database, so the heavy [dev,advisor] install is not needed.
+      # Base install only — no [dev,advisor] extra. The gate reads two JSON
+      # files and hashes one; it needs no FastAPI, no database, no model client.
+      #
+      # This is a constraint the gate's own imports must respect, and it was
+      # violated once: scripts/verify_golden_cases.py imported
+      # advisor.chat.heading_consistency at module scope, which executes
+      # advisor.billing, which imports FastAPI — an [advisor] extra. The gate
+      # died at import here and exited 1, which on main is indistinguishable
+      # from "gate HELD". A gate that reports a hold it never evaluated is
+      # worse than no gate. If this step ever needs a bigger install to pass,
+      # that is the bug; fix the import, not this line.
       - name: Install dependencies
         run: pip install -e "."
 
@@ -182,7 +191,13 @@ jobs:
     name: Build advisor image
     runs-on: ubuntu-latest
     needs: [lint, typecheck, test, golden-gate]
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    # `success() &&` is load-bearing, not decorative. Actions applies the
+    # implicit success()-on-needs check only to jobs with NO `if:` of their own;
+    # writing a custom condition replaces it outright. Without it this job runs
+    # on every push to main even with the golden gate HELD — `needs` would order
+    # the jobs without gating them, and ABS-485's enforcement would be a comment.
+    # Pinned by tests/scripts/test_check_deploy_gate.py.
+    if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     permissions:
       contents: read
       packages: write
@@ -230,7 +245,9 @@ jobs:
     name: Build web image
     runs-on: ubuntu-latest
     needs: [lint, typecheck, test, golden-gate]
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    # See build-advisor: a custom `if:` drops the implicit success()-on-needs,
+    # so this must restate it or a held gate will not stop the prod web image.
+    if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     permissions:
       contents: read
       packages: write

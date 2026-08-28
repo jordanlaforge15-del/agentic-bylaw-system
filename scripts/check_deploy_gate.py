@@ -68,6 +68,13 @@ if str(REPO_ROOT) not in sys.path:
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
+# These four are file-and-hash helpers, but the module they live in is shared
+# with the grader. It must therefore stay importable under a base
+# ``pip install -e "."`` — no ``[advisor]`` extra, no FastAPI, no database. That
+# is a live constraint, not a preference: this gate runs on the leanest runner
+# in CI, and if this import raises the script exits non-zero *without having
+# evaluated anything*, which is indistinguishable from a held gate. See the
+# ABS-485 note at the top of scripts/verify_golden_cases.py.
 from scripts.verify_golden_cases import (
     DEFAULT_GOLDEN_FILE,
     golden_file_digest,
