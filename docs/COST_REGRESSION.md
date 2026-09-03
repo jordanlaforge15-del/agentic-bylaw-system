@@ -64,25 +64,45 @@ and threaded down to `ChatSession.model` at session-create time. The
 legacy `ADVISOR_LLM_MODEL` env var is also honoured for backwards
 compatibility (see `src/advisor/llm/registry.py`).
 
-### Verify the model before spending money
+### Verify the model — and the billing mode — before spending money
 
 ```bash
-curl -s http://127.0.0.1:8000/healthz | jq '.llm.main_model'
-# expected: "claude-haiku-4-5"
+curl -s http://127.0.0.1:8000/healthz | jq '.llm'
+# {
+#   "provider": "anthropic",            <- metered Messages API
+#   "main_model": "claude-haiku-4-5",
+#   "anthropic_api_key_present": true   <- presence only, never the key
+# }
 ```
+
+ABS-514: `provider` is read off the gateway the advisor actually
+constructed, not from `ADVISOR_LLM_PROVIDER`, so it cannot drift from
+what is serving traffic. `provider: "anthropic"` with
+`anthropic_api_key_present: true` means **every turn of this run is
+billed per token**. A `mock` provider is the e2e stack and spends
+nothing. `run_test_prompts.py` prints the same three facts to stderr
+before it sends any traffic.
 
 ### Run the case with the precondition check on
 
 ```bash
 .venv/bin/python scripts/run_test_prompts.py \
   --ids TC-005 \
-  --model claude-haiku-4-5
+  --model claude-haiku-4-5 \
+  --allow-metered
 ```
 
 `--model` pings `/healthz` before any chat traffic and aborts if the
 live advisor reports a different `main_model`. This is the
 spend-protection trip — without it, a stale Opus stack will quietly
 serve a $4+ run when you meant a $0.50 one.
+
+`--allow-metered` is the second half of that pre-flight (ABS-515): the
+same `/healthz` read reports whether the live advisor's gateway bills per
+token, and the runner refuses to start against a metered one until you
+say so. It is required for every real run — see
+[TEST_PROMPT_GENERATION.md](TEST_PROMPT_GENERATION.md), including the
+`set -a; . ./.env` trap that made a metered advisor look free.
 
 ### Inspect the results
 
@@ -113,8 +133,8 @@ hits and case complexity).
 ```bash
 export ANTHROPIC_API_KEY="..."
 unset ADVISOR_LLM_MAIN_MODEL  # Opus is the default
-./scripts/dev-up.sh &
-.venv/bin/python scripts/run_test_prompts.py --model claude-opus-4-5
+make advisor-eval &
+.venv/bin/python scripts/run_test_prompts.py --model claude-opus-4-5 --allow-metered
 ```
 
 Verify `iterations` and `total_usage` on `tool_loop_metrics` look
@@ -180,7 +200,7 @@ curl -s http://127.0.0.1:8000/healthz | jq '.llm.main_model'
 
 TS_OPUS=$(date -u +%Y%m%dT%H%M%SZ)
 .venv/bin/python scripts/run_test_prompts.py \
-  --model claude-opus-4-5 \
+  --model claude-opus-4-5 --allow-metered \
   --out-dir "evals/runs/${TS_OPUS}-opus-baseline"
 ```
 
@@ -201,7 +221,7 @@ curl -s http://127.0.0.1:8000/healthz | jq '.llm.main_model'
 
 TS_SONNET=$(date -u +%Y%m%dT%H%M%SZ)
 .venv/bin/python scripts/run_test_prompts.py \
-  --model claude-sonnet-4-6 \
+  --model claude-sonnet-4-6 --allow-metered \
   --out-dir "evals/runs/${TS_SONNET}-sonnet-candidate"
 ```
 
@@ -216,12 +236,15 @@ TS_SONNET=$(date -u +%Y%m%dT%H%M%SZ)
 
 ### 4. (Optional) Run quality verification on both
 
-Requires the dev DB to be up:
+Requires the dev DB to be up — or pass `--corpus-json <snapshot>` to grade
+against a committed corpus slice instead (ABS-462), which is how the graded
+provisions are checked in CI and in worktrees without the Halifax ingest:
 
 ```bash
-.venv/bin/python scripts/verify_test_prompts.py \
+# One entry point per run: golden tier (gating) then generated tier (advisory).
+.venv/bin/python scripts/verify_run.py \
   "evals/runs/${TS_OPUS}-opus-baseline"
-.venv/bin/python scripts/verify_test_prompts.py \
+.venv/bin/python scripts/verify_run.py \
   "evals/runs/${TS_SONNET}-sonnet-candidate"
 # Re-run compare to incorporate quality scores:
 .venv/bin/python scripts/compare_ab_runs.py \
@@ -241,6 +264,13 @@ Requires the dev DB to be up:
 - **Quality comparison** — PASS/PARTIAL/FAIL verdicts + hallucination
   count per case (if verification data present)
 - **Verdict recommendation** — SWITCH TO SONNET / KEEP OPUS / REVIEW
+
+Verdicts from the verifier are `PASS`, `PARTIAL`, `FAIL`,
+`FAIL_HALLUCINATION` (a citation with no matching fragment in the
+corpus) and `FAIL_APPLICABILITY` (a *real* provision applied where its
+stated condition is not met — ABS-462). Treat `FAIL_APPLICABILITY` as
+at least as serious as a hallucination: the answer is wrong and every
+existence check passes it.
 
 Decision rule: switch to Sonnet **only** if hallucination count ≤
 Opus count AND PASS rate ≥ Opus PASS rate. A regression in either

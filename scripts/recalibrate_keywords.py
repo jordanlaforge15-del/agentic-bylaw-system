@@ -60,26 +60,45 @@ DEFAULT_DB_URL = "postgresql://layer1:layer1@localhost:5432/layer1"
 #     minimum; height is Schedule 15, not a flat number).
 #   - TC-005: "not permitted" and "no off-street parking" never appeared (home
 #     occupation IS permitted in HR-2; parking described as "not required").
+#
+# ABS-470 corrections. This script is the upstream source of the keyword field,
+# so the corpus corrections had to land here too — otherwise the next run
+# silently reinstates every defect the audit found:
+#   - TC-001: 6.0 m dropped, 2.5 m added. s.198 is the SIDE setback and s.199
+#     the REAR one; both branch on what the lot abuts, and 1222 Robie abuts no
+#     ER, CH, PCF or RPK lot, so s.199(1)(b) = 3.0 m rear and s.198(1)(f) =
+#     2.5 m side govern. 6.0 m is s.199(1)(a), the abutting branch.
+#   - TC-002: "secondary suite" is not a use in this by-law — the string does
+#     not occur once in the ingest and lookup_citation answers unknown_use.
+#     Table 1B's rows are Two-unit dwelling use and Backyard suite use.
+#   - TC-007 / TC-009 / TC-010: the lot-coverage percentages contradicted the
+#     sections the cases cite. ss.121, 142, 168, 187, 204 and 221 all read "No
+#     maximum required lot coverage applies." 80% is the LI/HRI figure (s.251)
+#     and 70% is nowhere in the by-law.
+#   - TC-011 / TC-012 / TC-015: Section 196 (HR height), Table 1A and Section
+#     111 (a DD rule) were sitting in INS, RPK and DH cases respectively.
 # ---------------------------------------------------------------------------
 
 EMPIRICAL_KEYWORDS: dict[str, list[str]] = {
-    # HR-1 rear/side setbacks (Sections 198-199): 6.0 m where abutting ER/CH/RPK,
-    # 3.0 m elsewhere; deck permit exemption 0.6 m threshold (Section 9).
+    # HR-1 rear/side setbacks: s.199(1)(b) rear = 3.0 m and s.198(1)(f) side =
+    # 2.5 m, this lot abutting no ER, CH, PCF or RPK lot; deck permit exemption
+    # 0.6 m threshold (Section 9(1)(c)).
     "TC-001": [
         "HR-1",
-        "6.0 m",
         "3.0 m",
+        "2.5 m",
         "0.6 m",
         "rear setback",
         "side setback",
     ],
 
-    # ER-2: secondary suite = two-unit dwelling use (permitted). Section 51 home
-    # occupation. Rear setback 6.0 m (Section 230); side per Schedule 19/Special Area.
+    # ER-2: a basement conversion is a two-unit dwelling use, which Table 1B
+    # carries for ER-2. Section 51 home occupation. Rear setback 6.0 m
+    # (Section 230); side per Schedule 19/Special Area.
     "TC-002": [
         "ER-2",
         "two-unit dwelling",
-        "secondary suite",
+        "Table 1B",
         "permitted",
     ],
 
@@ -134,8 +153,9 @@ EMPIRICAL_KEYWORDS: dict[str, list[str]] = {
         "0.0 m",
     ],
 
-    # CEN-2 redevelopment: multi-unit permitted. Front 0.0 m, rear 3.0 m. Lot
-    # coverage 80%. Height per Schedule 15 (precinct map, not flat number).
+    # CEN-2 redevelopment: multi-unit permitted. Front 0.0 m, rear 3.0 m. No
+    # lot coverage cap — s.168 reads "No maximum required lot coverage
+    # applies." Height per Schedule 15 (precinct map, not flat number).
     "TC-007": [
         "CEN-2",
         "permitted",
@@ -144,7 +164,6 @@ EMPIRICAL_KEYWORDS: dict[str, list[str]] = {
         "height precinct",
         "0.0 m",
         "3.0 m",
-        "80%",
     ],
 
     # DH heritage demolition: multi-unit permitted. Heritage Conservation District
@@ -165,7 +184,8 @@ EMPIRICAL_KEYWORDS: dict[str, list[str]] = {
     ],
 
     # DD mixed-use: multi-unit + daycare permitted (Table 1A). Front 0.0 m, rear
-    # 3.0 m. Lot coverage 80%. Motor vehicle parking not required (Section 433).
+    # 3.0 m. No lot coverage cap — s.121 reads "No maximum required lot coverage
+    # applies." Motor vehicle parking not required (Section 433).
     "TC-009": [
         "DD",
         "permitted",
@@ -173,12 +193,13 @@ EMPIRICAL_KEYWORDS: dict[str, list[str]] = {
         "not required",
         "0.0 m",
         "3.0 m",
-        "80%",
         "daycare",
     ],
 
     # COR corridor: multi-unit + commercial permitted. Front setback 3.0 m (unlike
-    # CEN-1 at 0.0 m). Side setback 0.0 m. Lot coverage 70%. Height per Schedule 15.
+    # CEN-1 at 0.0 m). Side setback 0.0 m. No lot coverage cap — s.187 reads "No
+    # maximum required lot coverage applies"; 70% is nowhere in the by-law at
+    # all. Height per Schedule 15.
     # FAR per Schedule 17. Motor vehicle parking required (Section 433 — COR does NOT
     # get the no-parking exemption; only CEN-1, CEN-2, DH, DD do).
     "TC-010": [
@@ -191,36 +212,39 @@ EMPIRICAL_KEYWORDS: dict[str, list[str]] = {
         "3.0 m",
         "front setback",
         "0.0 m",
-        "70%",
     ],
 
     # INS institutional zone: university lab expansion. The key use is educational /
-    # institutional, NOT multi-unit dwelling. Height per Schedule 15. Setbacks per
-    # Sections 198-199 or zone-specific. No FAR cap specified in text.
+    # institutional, NOT multi-unit dwelling. Height per Schedule 15, capped by
+    # Section 254 — the INS chapter's height section (ss.253-267), not the HR
+    # chapter's Section 196. No FAR cap specified in text.
     "TC-011": [
         "INS",
         "permitted",
         "Schedule 15",
         "height precinct",
         "setback",
-        "Section 196",
+        "Section 254",
         "lot coverage",
     ],
 
     # RPK Regional Park Zone: very limited permitted uses. No residential or commercial
     # use permitted as-of-right. Accessory structure exemption (Section 9(d)) requires
-    # a lawful principal use to exist first. Likely no RPK setback standards in Table 3.
+    # a lawful principal use to exist first. RPK's permissions are in Table 1C, not
+    # Table 1A — turn 1 misframes it as 1A and the right answer corrects that.
     "TC-012": [
         "RPK",
         "permitted",
-        "Table 1A",
+        "Table 1C",
         "setback",
         "development permit",
         "Section 9",
     ],
 
     # DH heritage retention infill: heritage conservation district, demolition control,
-    # Section 111 for heritage permits. Height per Schedule 15. Streetwall. Setbacks.
+    # Section 132 for the DH front/flanking setback the case asks about. Section 111
+    # is the DD equivalent (ss.107-128) and does not reach a DH lot. Height per
+    # Schedule 15. Streetwall. Setbacks.
     # NOTE: "Heritage Advisory Committee" does NOT appear in the real bylaw text;
     # correct reference is "heritage conservation district" or "Schedule 22".
     "TC-015": [
@@ -230,7 +254,7 @@ EMPIRICAL_KEYWORDS: dict[str, list[str]] = {
         "heritage conservation district",
         "Schedule 22",
         "demolition",
-        "Section 111",
+        "Section 132",
         "Schedule 15",
         "streetwall",
     ],
@@ -244,6 +268,86 @@ EMPIRICAL_KEYWORDS: dict[str, list[str]] = {
 # These are grounded in the real LUB document (document_id=4, 4340 fragments).
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Part V is chaptered by zone, and each chapter restates the same standards
+# under its own section numbers. The feature tables below used to hardcode the
+# HR chapter's numbers — Section 196 for height, Section 200 for streetwall —
+# for every zone, which is where TC-011, TC-014, TC-016 and TC-018 got HR
+# sections into INS, CEN-2, DD and COR cases. Same story for Table 1A, which
+# was emitted for RPK.
+#
+# Section numbers below are read out of the ingest (document_id=4): every
+# height section carries "Subject to Sections 103 and 104, and Part X, any main
+# building shall not exceed", and every streetwall one "maximum required
+# streetwall height shall be".
+#
+# A zone absent from a map contributes no section keyword rather than a wrong
+# one. That is the whole point of the correction.
+# ---------------------------------------------------------------------------
+
+ZONE_HEIGHT_SECTION: dict[str, str] = {
+    "DD": "Section 109",
+    "DH": "Section 131",
+    "CEN-2": "Section 157",
+    "CEN-1": "Section 157",
+    "COR": "Section 177",
+    "HR-2": "Section 196",
+    "HR-1": "Section 196",
+    "CLI": "Section 213",
+    "ER-3": "Section 227",
+    "ER-2": "Section 227",
+    "ER-1": "Section 227",
+    "CH-2": "Section 238",
+    "CH-1": "Section 238",
+    "LI": "Section 247",
+    "HRI": "Section 247",
+    "INS": "Section 254",
+    "DND": "Section 299",
+    "H": "Section 299",
+    "PCF": "Section 306",
+    "RPK": "Section 306",
+    "CDD-2": "Section 319",
+    "CDD-1": "Section 319",
+}
+
+# Only the chapters that impose a streetwall at all.
+ZONE_STREETWALL_SECTION: dict[str, str] = {
+    "DD": "Section 117",
+    "DH": "Section 137",
+    "CEN-2": "Section 164",
+    "CEN-1": "Section 164",
+    "COR": "Section 183",
+    "HR-2": "Section 200",
+    "HR-1": "Section 200",
+    "CLI": "Section 217",
+    "INS": "Section 258",
+}
+
+# The permitted-use table that actually carries each zone's column.
+ZONE_USE_TABLE: dict[str, str] = {
+    **{z: "Table 1A" for z in ("DD", "DH", "CEN-2", "CEN-1", "COR", "HR-2", "HR-1")},
+    **{z: "Table 1B" for z in ("ER-3", "ER-2", "ER-1", "CH-2", "CH-1")},
+    **{
+        z: "Table 1C"
+        for z in ("CLI", "LI", "HRI", "INS", "UC-2", "UC-1", "DND", "H", "PCF", "RPK", "WA")
+    },
+    "HCD-SV": "Table 1D",
+}
+
+# The chapters that state a numbered lot-coverage cap. Every other chapter's
+# lot-coverage section reads, in full, "No maximum required lot coverage
+# applies" — so a percentage keyword there marks the correct answer wrong.
+ZONE_LOT_COVERAGE_SECTION: dict[str, str] = {
+    "ER-3": "Section 231",
+    "ER-2": "Section 231",
+    "ER-1": "Section 231",
+    "CH-2": "Section 243",
+    "CH-1": "Section 243",
+    "LI": "Section 251",
+    "HRI": "Section 251",
+    "INS": "Section 262",
+}
+
 # Base keywords that appear in every case for a given zone (zone identifier,
 # use-permission language, and invariant schedule references).
 ZONE_BASE_KEYWORDS: dict[str, list[str]] = {
@@ -254,7 +358,11 @@ ZONE_BASE_KEYWORDS: dict[str, list[str]] = {
     "DH":    ["DH", "permitted", "Schedule 15", "Schedule 17"],
     "ER-1":  ["ER-1", "permitted", "Schedule 15", "Schedule 18"],
     "ER-2":  ["ER-2", "permitted", "Schedule 18"],
-    "ER-3":  ["ER-3", "permitted", "Section 63", "Schedule 15"],
+    # Section 63 (internal conversion to a 3-/4-/multi-unit dwelling) used to
+    # sit here and so reached every ER-3 case regardless of what it asked --
+    # including TC-019, which is about a backyard suite. It belongs to the
+    # case that actually asks about conversion (TC-003, above).
+    "ER-3":  ["ER-3", "permitted", "Schedule 15"],
     "HR-1":  ["HR-1", "permitted", "Schedule 15", "Schedule 17"],
     "HR-2":  ["HR-2", "permitted", "Schedule 15", "Schedule 17"],
     "INS":   ["INS", "permitted", "Schedule 15"],
@@ -266,40 +374,54 @@ FEATURE_KEYWORDS: dict[str, list[str]] = {
     # Rear/side setbacks — Sections 198-199 for HR zones, 228-230 for ER zones.
     # Values are precinct/adjacency-dependent, so we cite sections + stable values.
     "setbacks": ["setback", "rear setback", "side setback", "Section 199", "Section 198"],
-    "rear_setback": ["rear setback", "6.0 m", "Section 199"],
+    # s.199(1)(a)'s 6.0 m is the branch for a rear lot line abutting an ER, CH,
+    # PCF or RPK lot; s.199(1)(b)'s 3.0 m is the default. Emitting 6.0 m
+    # unconditionally graded the default answer as a miss, so the number is
+    # left to the per-case entries that have checked what the lot abuts.
+    "rear_setback": ["rear setback", "Section 199"],
     "side_setback": ["side setback", "Section 198", "Section 229"],
     "front_setback": ["front setback", "Schedule 18", "Section 228"],
-    # Height: always governed by Schedule 15 (Section 196 / 227), never a flat number
-    # in HR/CEN/COR/DD/DH zones.
-    "height": ["Schedule 15", "height precinct", "Section 196"],
+    # Height: always governed by Schedule 15, never a flat number in
+    # HR/CEN/COR/DD/DH zones. The capping section is per-chapter — see
+    # ZONE_HEIGHT_SECTION, resolved in _keywords_for_case.
+    "height": ["Schedule 15", "height precinct"],
     "height_overlay": ["Schedule 15", "height precinct"],
     # FAR: Schedule 17 in CEN/DH/DD zones; HR/COR zones have no FAR cap.
     "FAR": ["Schedule 17", "floor area ratio"],
     "FAR_overlay": ["Schedule 17", "floor area ratio"],
-    # Lot coverage: ER zones have 40%/50%/60% caps; HR zones have none.
-    "lot_coverage": ["lot coverage", "Section 231"],
-    # Use permission: Table 1A/1B, as-of-right permissions.
-    "use_permission": ["multi-unit dwelling", "permitted", "Table 1A"],
-    "permitted_use": ["multi-unit dwelling", "permitted", "Table 1A"],
+    # Lot coverage: only ER, CH, LI/HRI and INS carry a cap. Section 231 is the
+    # ER one and used to be emitted for every zone — see
+    # ZONE_LOT_COVERAGE_SECTION.
+    "lot_coverage": ["lot coverage"],
+    # Use permission: the governing table is per-zone — see ZONE_USE_TABLE.
+    "use_permission": ["multi-unit dwelling", "permitted"],
+    "permitted_use": ["multi-unit dwelling", "permitted"],
     # Parking: Table 15 via Section 433; downtown/HR zones have no minimum.
     "parking": ["Section 433", "Table 15", "not required"],
     # Heritage overlay: heritage conservation district (Schedule 22).
     # NOTE: "Heritage Advisory Committee" is NOT in the real bylaw text.
     "heritage_overlay": ["heritage", "heritage conservation district", "Schedule 22", "Section 110"],
-    # Demolition control: Section 111 or 112.
-    "demolition_control": ["demolition", "Section 111", "heritage"],
+    # Demolition control. Section 111 was listed here and is a DD streetwall
+    # rule, so it is dropped rather than replaced -- no case exercises this
+    # feature today, and inventing a section is how the other defects started.
+    "demolition_control": ["demolition", "heritage"],
     # Bonus zoning: Part XI, Schedule 17 FAR bonus.
     "bonus_zoning": ["bonus", "Schedule 17", "floor area ratio"],
-    # Backyard suite: distinct from secondary suite (Section 344).
-    "backyard_suite": ["backyard suite", "Section 344", "Schedule 15"],
+    # Backyard suite: the detached rear-yard form, distinct from an internal
+    # conversion to a two-unit dwelling. Section 56 is the permission and
+    # Section 331 the 7.7 m accessory-structure height cap; both are general
+    # provisions, so they hold in any zone where the use is permitted. Section
+    # 344, listed here before, is in the Schmidtville HCD chapter and does not
+    # resolve in the reference index at all.
+    "backyard_suite": ["backyard suite", "Section 56", "Section 331", "Schedule 15"],
     # Non-conforming use: Part II provisions.
     "non_conforming": ["non-conforming", "lawful non-conforming"],
     # Site plan approval: Section 15 triggers.
     "site_plan_approval": ["site plan approval", "Section 15"],
     # Viewplanes: Schedule 50.
     "viewplanes": ["viewplane", "Schedule 50"],
-    # Streetwall/stepback: Sections 200-208.
-    "streetwall": ["streetwall", "Section 200"],
+    # Streetwall: the section is per-chapter — see ZONE_STREETWALL_SECTION.
+    "streetwall": ["streetwall"],
     "stepback": ["stepback", "Section 208"],
     # Ground floor use: active-use requirements in CEN/COR/DD/DH zones.
     "ground_floor_use": ["ground floor", "active use"],
@@ -310,34 +432,43 @@ FEATURE_KEYWORDS: dict[str, list[str]] = {
 # Per-zone, per-feature keyword overrides where the general feature keywords
 # don't apply cleanly (e.g., "lot coverage" for HR zones which have no cap).
 ZONE_FEATURE_OVERRIDES: dict[str, dict[str, list[str]]] = {
+    # ss.204 (HR), 168 (CEN), 142 (DH), 121 (DD) and 187 (COR) all read "No
+    # maximum required lot coverage applies", so none of these zones may carry
+    # a percentage. The 80% that used to sit under CEN and DD is the LI/HRI
+    # figure (s.251); the 90% under DH and the 70% under COR appear nowhere in
+    # the by-law at all.
     "HR-1": {
         "lot_coverage": ["Schedule 17", "floor area ratio", "Section 210"],
-        "setbacks": ["Section 198", "Section 199", "6.0 m", "3.0 m"],
+        # s.198 is the SIDE setback and s.199 the REAR one, and both branch on
+        # what the lot abuts. 3.0 m / 2.5 m are the s.199(1)(b) / s.198(1)(f)
+        # defaults; 6.0 m is s.199(1)(a), which needs an abutting ER, CH, PCF
+        # or RPK lot and belongs in a case that has confirmed one.
+        "setbacks": ["Section 198", "Section 199", "3.0 m", "2.5 m"],
     },
     "HR-2": {
         "lot_coverage": ["Schedule 17", "floor area ratio", "Section 210"],
-        "setbacks": ["Section 198", "Section 199", "6.0 m"],
+        "setbacks": ["Section 198", "Section 199", "3.0 m", "2.5 m"],
     },
     "CEN-1": {
         "setbacks": ["front setback", "0.0 m", "rear setback", "3.0 m"],
-        "lot_coverage": ["80%", "lot coverage"],
+        "lot_coverage": ["lot coverage"],
     },
     "CEN-2": {
         "setbacks": ["front setback", "0.0 m", "rear setback", "3.0 m"],
-        "lot_coverage": ["80%", "lot coverage"],
+        "lot_coverage": ["lot coverage"],
     },
     "DH": {
         "setbacks": ["front setback", "0.0 m", "rear setback", "3.0 m"],
-        "lot_coverage": ["90%", "lot coverage"],
+        "lot_coverage": ["lot coverage"],
     },
     "DD": {
         "setbacks": ["front setback", "0.0 m", "rear setback", "3.0 m"],
-        "lot_coverage": ["80%", "lot coverage"],
+        "lot_coverage": ["lot coverage"],
         "parking": ["Section 433", "not required"],
     },
     "COR": {
         "setbacks": ["front setback", "3.0 m", "side setback", "0.0 m"],
-        "lot_coverage": ["70%", "lot coverage"],
+        "lot_coverage": ["lot coverage"],
     },
     "ER-3": {
         "setbacks": ["Section 229", "1.25 m", "Section 230", "6.0 m", "Schedule 18"],
@@ -366,6 +497,18 @@ def _deduplicate(lst: list[str]) -> list[str]:
     return out
 
 
+# The features whose governing section (or table) is fixed by the zone's Part V
+# chapter rather than shared across the by-law. Emitting one chapter's number
+# for another chapter's zone is the defect ABS-470 corrected in seven cases.
+CHAPTER_BOUND_FEATURES: dict[str, dict[str, str]] = {
+    "height": ZONE_HEIGHT_SECTION,
+    "streetwall": ZONE_STREETWALL_SECTION,
+    "use_permission": ZONE_USE_TABLE,
+    "permitted_use": ZONE_USE_TABLE,
+    "lot_coverage": ZONE_LOT_COVERAGE_SECTION,
+}
+
+
 def _keywords_for_case(tc: dict[str, Any]) -> list[str]:
     """Derive expected_answer_keywords for a single test case from zone/features."""
     tc_id: str = tc["id"]
@@ -382,8 +525,15 @@ def _keywords_for_case(tc: dict[str, Any]) -> list[str]:
         zone_overrides = ZONE_FEATURE_OVERRIDES.get(zone, {})
         if feature in zone_overrides:
             keywords.extend(zone_overrides[feature])
-        elif feature in FEATURE_KEYWORDS:
+            continue
+        if feature in FEATURE_KEYWORDS:
             keywords.extend(FEATURE_KEYWORDS[feature])
+            # Append this chapter's own section/table for the feature. A zone
+            # the map does not carry contributes nothing, which is the correct
+            # outcome: the chapter states no such standard.
+            chapter_map = CHAPTER_BOUND_FEATURES.get(feature)
+            if chapter_map and zone in chapter_map:
+                keywords.append(chapter_map[zone])
 
     return _deduplicate(keywords)
 

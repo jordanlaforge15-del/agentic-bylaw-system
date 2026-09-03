@@ -34,6 +34,7 @@ import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 
 import { E2E_API_URL } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 // Dedicated user per run so the credit setup can't race the shared
 // seeded demo user. Two tests, each opening one standard-tier case, so
@@ -48,10 +49,7 @@ test.beforeAll(() => {
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // Honor PG_PORT so the seed lands in the same Postgres the worktree's
   // FastAPI queries (see docs/E2E_TESTING.md#parallel-worktrees).
-  const pgPort = process.env.PG_PORT || "5432";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
 
   execSync(
     `"${venvPython}" "${seed}" --user-id "${TEST_USER_ID}" ` +

@@ -38,6 +38,10 @@ services:
       ADVISOR_DEMO_USER_ID: ${ADVISOR_DEMO_USER_ID:-demo-user-1}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # ABS-507: absolute origin used by /robots.txt and /sitemap.xml.
+      # Falls back to the production hostname inside site-url.ts, so an
+      # unset value is safe here.
+      SITE_URL: ${SITE_URL:-https://agenticbylawsystems.com}
     depends_on:
       advisor:
         condition: service_healthy
@@ -76,6 +80,15 @@ services:
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      # ABS-87: submission uploads (POST /v1/submissions, POST
+      # /v1/integrations/submissions) stage the file on disk before the IFC /
+      # PDF extractors read it. This container is `read_only: true`, so the
+      # path MUST point at the `bylaw-submissions` volume mounted below —
+      # the default (`data/submissions`, relative to /app) is on the
+      # read-only layer and every upload would 503. Verify after deploy with
+      # `curl -s https://api.agenticbylawsystems.com/healthz | jq
+      # .checks.submission_storage` → "ok".
+      SUBMISSION_STORAGE_DIR: ${SUBMISSION_STORAGE_DIR:-/var/lib/bylaw/submissions}
       # Beta pivot billing matrix (ABS-379) — turn-based token wallet +
       # per-slug gated reports. See .env.example for the full annotation.
       ADVISOR_BILLING_ENABLED: ${ADVISOR_BILLING_ENABLED:-true}
@@ -85,12 +98,27 @@ services:
       # Per-report gate (ABS-384). Deny-by-default when unset; disable a slug
       # only after draining its `authorized` holds (see docs/DEPLOYMENT.md).
       ADVISOR_ENABLED_QUESTIONS: ${ADVISOR_ENABLED_QUESTIONS:-}
-      # Token wallet / turns parameters (ABS-380).
-      ADVISOR_TOKENS_PER_TURN: ${ADVISOR_TOKENS_PER_TURN:-2500}
-      ADVISOR_SIGNUP_TOKEN_GRANT: ${ADVISOR_SIGNUP_TOKEN_GRANT:-25000}
+      # Token wallet / turns parameters (ABS-380), calibrated against measured
+      # prod burn on ABS-416 — a real grounded question costs 103k-248k tokens.
+      # Grant and warn threshold resized on ABS-404 against the measured cost
+      # per wallet-counted token (~$28.9/MTok, docs/COST_MODEL.md).
+      # Fallbacks here MUST track src/advisor/billing/turns.py.
+      ADVISOR_TOKENS_PER_TURN: ${ADVISOR_TOKENS_PER_TURN:-175000}
+      ADVISOR_SIGNUP_TOKEN_GRANT: ${ADVISOR_SIGNUP_TOKEN_GRANT:-525000}
       ADVISOR_CHAT_MIN_BALANCE_TOKENS: ${ADVISOR_CHAT_MIN_BALANCE_TOKENS:-0}
-      ADVISOR_LOW_BALANCE_WARN_TOKENS: ${ADVISOR_LOW_BALANCE_WARN_TOKENS:-5000}
+      ADVISOR_LOW_BALANCE_WARN_TOKENS: ${ADVISOR_LOW_BALANCE_WARN_TOKENS:-175000}
+      # ABS-405: the payments-off self-serve refill — the way out of an
+      # overdrawn wallet without an operator running grant_tokens by hand.
+      # Capped at MAX_GRANTS claims for the life of an account.
+      ADVISOR_BETA_REFILL_ENABLED: ${ADVISOR_BETA_REFILL_ENABLED:-true}
+      ADVISOR_BETA_REFILL_TOKENS: ${ADVISOR_BETA_REFILL_TOKENS:-175000}
+      ADVISOR_BETA_REFILL_COOLDOWN_HOURS: ${ADVISOR_BETA_REFILL_COOLDOWN_HOURS:-6}
+      ADVISOR_BETA_REFILL_MAX_GRANTS: ${ADVISOR_BETA_REFILL_MAX_GRANTS:-3}
       ADVISOR_CHAT_MAX_ITERATIONS: ${ADVISOR_CHAT_MAX_ITERATIONS:-20}
+      # ABS-404: per-turn ceiling on MEASURED wallet tokens (input + output).
+      # The only breaker in the unit the wallet charges — the ABS-291/305 ones
+      # estimate input tokens and cannot see an output-heavy runaway turn.
+      ADVISOR_TURN_MAX_WALLET_TOKENS: ${ADVISOR_TURN_MAX_WALLET_TOKENS:-350000}
       # Stripe — required only when ADVISOR_PAYMENTS_ENABLED=true. Token
       # top-up Price IDs (ABS-381). Legacy STRIPE_PRICE_<TIER>_<PACK> IDs are
       # RETIRED (checkout/pack → 410); do not configure them.
@@ -102,11 +130,22 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      # ABS-87: the ONLY writable non-tmpfs path in this container. Uploaded
+      # IFC / PDF artefacts land in `<mount>/user-<id>/<filename>`. Owned by
+      # UID 1000 to match the container user (see docs/DEPLOYMENT.md for the
+      # one-time chown when adding the volume to a running deployment).
+      - bylaw-submissions:/var/lib/bylaw/submissions
     networks:
       - default
     cap_drop:
       - ALL
     read_only: true
+    # Scratch space for uvicorn / the parsers. Sized to match the preflight
+    # gate in scripts/preflight_advisor_image.sh, which runs the image under
+    # these same constraints before a container swap.
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     mem_limit: 1024m
     pids_limit: 300
     user: "1000:1000"
@@ -118,7 +157,9 @@ services:
         max-size: "25m"
         max-file: "5"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # /healthz is the only health route the app mounts (see
+      # advisor/api/app.py); /health 404s and marks the container unhealthy.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -200,3 +241,12 @@ volumes:
   caddy-config:
   bylaw-postgres-data:
     name: bylaw_bylaw_postgres_data
+  # ABS-87. Submission artefacts are *reproducible inputs*, not system of
+  # record — the extracted attributes, decisions and audit trail all live in
+  # Postgres, and the pipeline never re-reads the file after ingest. The
+  # nightly pg_dump therefore remains the complete backup; this volume is
+  # explicitly out of the backup story (losing it costs the architect a
+  # re-upload, nothing more). Revisit if a future feature re-parses the
+  # original artefact on demand.
+  bylaw-submissions:
+    name: bylaw_submissions

@@ -53,8 +53,8 @@ from sqlalchemy.orm import Session
 import layer1.parsers.ifc_submission  # noqa: F401
 import layer1.parsers.pdf_submission  # noqa: F401
 
+from advisor.api.submission_storage import resolve_storage_root, stage_upload
 from advisor.db.models import User
-from layer1.config import get_settings
 from layer1.models.submission_schemas import (
     ExtractedAttribute,
     SubmissionIngestConfig,
@@ -160,17 +160,13 @@ def build_submissions_router(
     `storage_dir` defaults to the config-driven `submission_storage_dir`;
     tests pass a tmp path.
     """
-    storage_root = (
-        Path(storage_dir)
-        if storage_dir is not None
-        else Path(get_settings().submission_storage_dir)
-    )
+    storage_root = resolve_storage_root(storage_dir)
     # Don't mkdir storage_root at startup — the prod advisor runs with a
     # read-only filesystem (`read_only: true` in compose) and would crash on
-    # boot. The upload handler below calls `user_dir.mkdir(parents=True,
-    # exist_ok=True)` lazily, which creates `storage_root` as a parent on
-    # the first real upload — turning a startup-time crash into a clear
-    # request-time error if no writable volume is mounted.
+    # boot. `stage_upload` creates the per-user dir lazily on the first real
+    # upload and maps an unwritable root to a 503 naming the path (ABS-87);
+    # `GET /healthz` reports the same condition as `submission_storage`
+    # before any user hits it.
 
     router = APIRouter(prefix="/v1/submissions", tags=["submissions"])
 
@@ -228,15 +224,12 @@ def build_submissions_router(
 
             # Stage the upload under the user's storage dir before
             # running the pipeline (the ingest needs a real on-disk path).
-            user_dir = storage_root / f"user-{user.id}"
-            user_dir.mkdir(parents=True, exist_ok=True)
-            target_path = user_dir / file.filename
-            with target_path.open("wb") as out:
-                while True:
-                    chunk = file.file.read(1 << 20)
-                    if not chunk:
-                        break
-                    out.write(chunk)
+            target_path = stage_upload(
+                storage_root,
+                user_id=user.id,
+                filename=file.filename or "",
+                fileobj=file.file,
+            )
 
             try:
                 result: SubmissionIngestResult = ingest_submission(

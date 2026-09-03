@@ -45,6 +45,24 @@ agenticbylawsystems.com {
     reverse_proxy web:3000
 }
 
+# Apex is the canonical host (matches the canonical URLs in the app and the
+# <loc> values in the sitemap). www exists only to redirect into it, so search
+# engines and users never see two hostnames serving the same pages.
+# Caddy provisions the www certificate automatically via ACME — this block
+# must not be deployed before the www DNS record resolves, or issuance fails.
+www.agenticbylawsystems.com {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    # {uri} preserves both path and query string.
+    redir https://agenticbylawsystems.com{uri} permanent
+}
+
 api.agenticbylawsystems.com {
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"

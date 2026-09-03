@@ -8,6 +8,8 @@
 // If you change the binding document, mirror the change here. The two
 // must not drift.
 
+import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import { LegalShell, Section } from "@/components/marketing/legal-shell";
 
 const SECTIONS: Section[] = [
@@ -160,6 +162,13 @@ const SECTIONS: Section[] = [
     ],
   },
 ];
+
+export const metadata: Metadata = pageMetadata({
+  path: "/terms",
+  title: "Terms of Use — ABS°",
+  description:
+    "A plain-English summary of the ABS Terms of Use: what the service is, acceptable use, and why a reading is research rather than legal advice.",
+});
 
 export default function TermsPage() {
   return (

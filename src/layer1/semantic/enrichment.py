@@ -46,7 +46,13 @@ from layer1.semantic.extractors import (
     reset_profile_overlay,
     use_profile_overlay,
 )
-from layer1.semantic.permission_markers import annotate_value_cells, classify_permission_marker
+from layer1.semantic.permission_grid import densify_permission_matrix
+from layer1.semantic.permission_markers import (
+    UNKNOWN,
+    annotate_value_cells,
+    cell_footnotes,
+    classify_permission_marker,
+)
 from layer1.semantic.use_matching import match_use
 
 EXTRACTOR_VERSION = "semantic-v1"
@@ -79,6 +85,10 @@ class SemanticEnrichmentReport:
     table_profiles: int = 0
     axis_bindings: int = 0
     provenance: int = 0
+    # ABS-520: blank permission-matrix cells the parser dropped and this run
+    # materialized, and the ones its geometry refused to vouch for.
+    permission_cells_filled: int = 0
+    permission_cells_unfilled: int = 0
     warnings: list[str] = field(default_factory=list)
 
     def model_dump(self) -> dict:
@@ -91,6 +101,8 @@ class SemanticEnrichmentReport:
             "table_profiles": self.table_profiles,
             "axis_bindings": self.axis_bindings,
             "provenance": self.provenance,
+            "permission_cells_filled": self.permission_cells_filled,
+            "permission_cells_unfilled": self.permission_cells_unfilled,
             "warnings": self.warnings,
         }
 
@@ -611,6 +623,31 @@ def _enrich_table(
         # ingest-time hook (which ran before this profile existed and gated on
         # captions that the corpus doesn't carry) is removed.
         annotate_value_cells(cells, apply=True, conventions=conventions)
+        # ABS-520: the parser emits a ragged grid — a cell with no glyph is
+        # dropped rather than stored — so the by-law's "blank means not
+        # permitted" convention arrives as a missing cell, which retrieval can
+        # only report as ``unknown``. Materialize the blanks the geometry can
+        # vouch for, before the axis bindings make those intersections
+        # addressable.
+        audit = densify_permission_matrix(
+            session, table, cells, apply=True, conventions=conventions
+        )
+        if audit.gaps:
+            # Keep ``rows`` faithful to the grid now on disk. The fact
+            # extractor below skips empty-text cells, so the materialized
+            # blanks add no ``permission`` facts either way — retrieval reads
+            # the cells, not the facts — but a stale ``rows`` is a trap for
+            # whoever changes that pass next.
+            session.flush()
+            cells = (
+                session.query(SourceTableCell)
+                .filter(SourceTableCell.table_id == table.id)
+                .order_by(SourceTableCell.row_index, SourceTableCell.col_index)
+                .all()
+            )
+            rows = _rows_by_index(cells)
+        report.permission_cells_filled += len(audit.gaps)
+        report.permission_cells_unfilled += len(audit.refused)
         _extract_permission_table_facts(session, report, cache, table, rows)
     elif profile_type == "parking_matrix":
         _extract_parking_table_facts(session, report, cache, table, rows)
@@ -1858,6 +1895,12 @@ def resolve_permission_cell(
     ``None`` when either axis can't be resolved. The returned dict carries the
     resolved indices plus the cell's recovered ``permission_marker`` so callers
     don't need a second query.
+
+    ABS-483: when both axes bind but the grid has **no cell** at their
+    intersection, the marker is ``unknown`` — the row was lost in extraction,
+    which is not the same claim as "the bylaw prohibits this". A cell that
+    exists but carries no annotation still reports ``None`` so the caller's
+    on-the-fly classification of ``cell_text`` stays in charge.
     """
     use_norm = normalize_use(use_name)
     zone_norm = normalize_zone(zone)
@@ -1917,15 +1960,22 @@ def resolve_permission_cell(
         .first()
     )
     meta = (cell.metadata_json or {}) if cell is not None else {}
+    cell_text = cell.text if cell is not None else None
     return {
         "table_id": table_id,
         "row_index": row_binding.index,
         "col_index": col_binding.index,
         "use": use_norm,
         "zone": zone_norm,
-        "cell_text": cell.text if cell is not None else None,
-        "permission_marker": meta.get("permission_marker"),
+        "cell_text": cell_text,
+        "permission_marker": (
+            meta.get("permission_marker") if cell is not None else UNKNOWN
+        ),
         "footnote": meta.get("footnote"),
+        # ABS-523: a cell may print several markers ("⑮ ㉒") and every one of
+        # them binds. ``footnote`` is the first and is kept only for callers
+        # that predate the list.
+        "footnotes": cell_footnotes(meta, cell_text),
     }
 
 
@@ -1943,7 +1993,13 @@ def enumerate_permission_column(
 
     Returns ``None`` when the zone doesn't bind a column on ``table_id``
     (caller falls through to the next table), else a list of
-    ``{"use_label", "permission", "footnote_ordinal"}`` dicts in row order.
+    ``{"use_label", "permission", "footnote_ordinal", "footnote_ordinals"}``
+    dicts in row order. ``footnote_ordinals`` is every marker in the cell
+    (ABS-523); ``footnote_ordinal`` is the first of them, lossy, retained for
+    callers that predate the list.
+    ``permission`` is ``permitted`` / ``conditional`` / ``not_permitted``, or
+    ``unknown`` when the bound row has no cell in this column at all (ABS-483 —
+    an extraction gap, reported as such instead of as a prohibition).
     Skips ``section:``-keyed placeholder rows (as :func:`use_row_labels`
     does). Zone matching is hardened for the corpus as ingested: bound
     ``raw_label`` values may carry trailing whitespace ("CEN-1  ") and
@@ -2020,17 +2076,26 @@ def enumerate_permission_column(
         seen_labels.add(label)
         cell = cells_by_row.get(binding.index)
         meta = (cell.metadata_json or {}) if cell is not None else {}
+        cell_text = cell.text if cell is not None else None
         marker = meta.get("permission_marker")
         footnote = meta.get("footnote")
         if marker is None:
-            classified = classify_permission_marker(cell.text if cell is not None else "")
+            # ABS-483: a bound row with NO cell in the grid classifies as
+            # ``unknown`` (pass None, not ""), so a row extraction dropped is
+            # never reported as the bylaw prohibiting the use. A cell that is
+            # present and blank still classifies as ``not_permitted``.
+            classified = classify_permission_marker(cell_text)
             marker = classified.get("permission_marker")
             footnote = classified.get("footnote", footnote)
+        # ABS-523: every marker in the cell, not just the one that happened to
+        # print first — see ``cell_footnotes``.
+        footnotes = cell_footnotes(meta, cell_text) if marker == "conditional" else []
         results.append(
             {
                 "use_label": label,
                 "permission": marker,
                 "footnote_ordinal": footnote,
+                "footnote_ordinals": footnotes,
             }
         )
     return results

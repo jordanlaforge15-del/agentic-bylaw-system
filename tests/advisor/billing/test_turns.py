@@ -9,11 +9,30 @@ from __future__ import annotations
 from advisor.billing import turns
 
 
-def test_defaults_match_design_spec() -> None:
-    assert turns.tokens_per_turn() == 2_500
-    assert turns.signup_token_grant() == 25_000
+def test_defaults_match_measured_calibration() -> None:
+    # ABS-416: recalibrated from the 2,500-token design-spec placeholder
+    # against measured prod burn (a real grounded question costs 103k-248k
+    # tokens). The dependent knobs are whole multiples of the rate, so the
+    # turn counts the product advertises stay exactly what they were.
+    assert turns.tokens_per_turn() == 175_000
+    assert turns.signup_token_grant() == 525_000
     assert turns.chat_min_balance_tokens() == 0
-    assert turns.low_balance_warn_tokens() == 5_000
+    assert turns.low_balance_warn_tokens() == 175_000
+
+
+def test_default_knobs_are_whole_turns() -> None:
+    """The grant / warn threshold must stay expressible in whole turns.
+
+    A recalibration that moves ``DEFAULT_TOKENS_PER_TURN`` without moving
+    these in step would silently change what the UI advertises (the
+    original bug: a grant sized for 10 turns that bought a fraction of
+    one), so pin the relationship rather than only the literals.
+    """
+    per_turn = turns.tokens_per_turn()
+    assert turns.signup_token_grant() % per_turn == 0
+    assert turns.signup_token_grant() // per_turn == 3
+    assert turns.low_balance_warn_tokens() % per_turn == 0
+    assert turns.low_balance_warn_tokens() // per_turn == 1
 
 
 def test_approx_turns_floors_division(monkeypatch) -> None:
@@ -41,10 +60,11 @@ def test_factor_change_effective_without_restart(monkeypatch) -> None:
 
 
 def test_misconfigured_tokens_per_turn_falls_back_to_default(monkeypatch) -> None:
+    default = turns.DEFAULT_TOKENS_PER_TURN
     monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "0")
-    assert turns.tokens_per_turn() == 2_500  # min-guard prevents div-by-zero
+    assert turns.tokens_per_turn() == default  # min-guard prevents div-by-zero
     monkeypatch.setenv("ADVISOR_TOKENS_PER_TURN", "not-a-number")
-    assert turns.tokens_per_turn() == 2_500
+    assert turns.tokens_per_turn() == default
 
 
 def test_env_overrides_thresholds(monkeypatch) -> None:

@@ -46,6 +46,7 @@ from advisor.chat.compact import (
 )
 from advisor.llm import ToolDefinition
 from advisor.llm.tool_loop import ToolHandler
+from bylaw_retrieval.openai_tools import ATTRIBUTE_TAG_FILTER_PROPERTY
 from bylaw_retrieval.retrieval import (
     ATTRIBUTE_VOCABULARY,
     BYLAW_INTENTS,
@@ -107,7 +108,18 @@ _DESC_LOOKUP_CITATION = (
     "Response shape: `{match: <fragment> | null, suggestions: [<path>, ...], instruction: <next-step>}`. "
     "If `match` is null, DO NOT retry lookup_citation with a guessed variant. Instead: "
     "(a) if `suggestions` is non-empty, pick the closest candidate verbatim and re-issue lookup_citation with that exact string; "
-    "(b) if `suggestions` is empty, switch to `search_bylaw_evidence` or `get_document_outline` — the path doesn't exist in this document."
+    "(b) if `suggestions` is empty, switch to `search_bylaw_evidence` or `get_document_outline` — the path doesn't exist in this document.\n\n"
+    "A hit carries `match.operative_clauses`: the other clauses of the same "
+    "provision — the section's own (a)/(b)/(1.5) limbs, or, when you looked up "
+    "a clause, its siblings. These are PART OF THE RULE, not related reading. "
+    "A section whose text ends on a colon ('…shall have no restriction on the "
+    "maximum size of its footprint, except:') states no standard at all by "
+    "itself; the numbers are in its clauses. Quote every clause that applies to "
+    "the zone in question — several limits often bind at once, and reporting "
+    "one of them as if it were the only one is a wrong answer, not a partial "
+    "one. If `operative_clauses_omitted` is non-zero, the provision is longer "
+    "than what you were shown: re-read it with `search_bylaw_evidence` and "
+    "`citation_path_prefix` set to the provision's path."
 )
 
 # This is the long form copied from ``server.py:search_bylaw_evidence``
@@ -158,6 +170,29 @@ _DESC_SEARCH_BYLAW_EVIDENCE = (
     "advisories. If you see a note saying the address should have been "
     "in the 'location' field, RE-ISSUE the call with the slot populated "
     "— do not just ignore it.\n\n"
+    "Each match may carry ``operative_clauses``: the other limbs of the "
+    "SAME provision, delivered with the match because they are part of the "
+    "rule it states rather than related reading. A clause that ranked on its "
+    "own is frequently one of several limits that bind together — a size "
+    "limit stated as a floor area in one subsection and as a footprint in "
+    "another. Read every operative clause before answering, and report every "
+    "limit that applies to the zone in question; naming one when two bind is "
+    "a wrong answer, not an incomplete one. ``operative_clauses_omitted`` "
+    "non-zero means the provision is longer than what you were shown — "
+    "re-issue with ``citation_path_prefix`` set to the provision's path.\n\n"
+    "--------------------------------------------------------------------\n"
+    "Narrowing by regulated attribute via 'attribute_tag_filter':\n\n"
+    "When the question is about a specific regulated dimension (height, a "
+    "setback, lot coverage, floor area ratio, parking), pass the matching "
+    "attribute IDs in ``attribute_tag_filter``. It is an indexed hard "
+    "pre-filter: only clauses tagged with at least one of those IDs are "
+    "scored, so the answer comes from the clauses that actually regulate "
+    "the attribute instead of whatever prose happens to share vocabulary. "
+    "Valid IDs are the 'id' values in the Phase-1 attribute taxonomy "
+    "(src/layer2/compliance/attributes/taxonomy.yaml) — e.g. "
+    "building_height_m, front_setback_m, lot_coverage_percent, "
+    "floor_area_ratio, parking_stalls_count. Multiple IDs union. Omit the "
+    "field for exploratory questions; never send an empty array.\n\n"
     "--------------------------------------------------------------------\n"
     "Tuning the result-set size via 'limit':\n\n"
     "Default 5; bump to 15 when the question covers multiple dimensions "
@@ -320,6 +355,10 @@ _SCHEMA_SEARCH_BYLAW_EVIDENCE: dict[str, Any] = {
             },
             "additionalProperties": False,
         },
+        # ABS-479: imported, not re-typed, so this surface and the
+        # OpenAI-shaped spec in ``mcp/bylaw_retrieval/openai_tools.py``
+        # cannot drift apart (the failure mode ABS-469 had to clean up).
+        "attribute_tag_filter": dict(ATTRIBUTE_TAG_FILTER_PROPERTY),
         "include_context": {"type": "boolean", "default": True},
         "include_cross_references": {"type": "boolean", "default": True},
         "include_tables": {"type": "boolean", "default": True},
@@ -358,7 +397,58 @@ _DESC_GET_ADDRESS_PROFILE = (
     "bonus zoning) into one AddressProfile.\n\n"
     "If the address can't be resolved, the response carries "
     "'unresolvable': true with empty citations rather than an error — fall "
-    "back to search_bylaw_evidence with the location slot in that case."
+    "back to search_bylaw_evidence with the location slot in that case.\n\n"
+    "READ THE RESOLUTION QUALITY BEFORE YOU STATE THE ZONE. The response's "
+    "'resolution_quality' says how the address became a point: 'rooftop' "
+    "matched the building; 'interpolated' means the civic number was NOT "
+    "found and the position was estimated along the street; 'centroid' and "
+    "'approximate' are coarser still. Anything other than 'rooftop' means "
+    "the point may sit on a neighbouring parcel, so the zone — and every "
+    "setback, height and floor-area figure derived from it — may be the "
+    "wrong property's. In that case the response carries 'caveats' and an "
+    "'instruction': surface the uncertainty to the user instead of stating "
+    "the zone as fact. 'outside_mapped_area': true means the address "
+    "resolved but fell outside every mapped boundary — say so; do not "
+    "report a zone.\n\n"
+    "DOES THE ADDRESS EXIST? 'civic_address_status' is checked against the "
+    "municipality's own data before anything is looked up. 'not_found' means "
+    "the street is known and NO published civic address or street-segment "
+    "range covers this number — the address does not exist. The response "
+    "then carries no zone at all, plus 'valid_civic_number_ranges' and "
+    "'suggested_civic_numbers': tell the user the address could not be "
+    "found, quote those, and ask them to confirm. Do NOT re-issue the lookup "
+    "or fall back to search_bylaw_evidence for the same address — a "
+    "geocoder answers a fabricated address by estimating a position from the "
+    "surrounding numbering, which is the failure this check exists to stop. "
+    "'confirmed' means the number exists; 'unverifiable' means no municipal "
+    "address data was in scope and says nothing either way.\n\n"
+    "IS THE ZONE SAFE TO RELY ON? Independent of resolution quality: "
+    "'zone_boundary_distance_m' (with 'nearest_other_zone') reports when the "
+    "point sits within ~25 m of a different zone, and 'parcel_zones' lists "
+    "every zone the parcel intersects when the lot is split between more "
+    "than one. A split lot has no single governing zone — say so and ask "
+    "where on the lot the work is proposed.\n\n"
+    "WHICH BY-LAW GOVERNS THIS PARCEL? The zoning mapping is "
+    "municipality-wide, so a zone code can belong to a by-law that is not in "
+    "this corpus. 'governing_bylaw' names the by-law that governs the "
+    "resolved parcel and 'governing_bylaw_status' says whether we hold it. "
+    "'not_held' is a hard stop, not a hedge: the zone code is the "
+    "municipality's own published mapping and may be stated, but NO standard "
+    "behind it — permitted uses, height, setbacks, floor area, parking — is "
+    "available here, and the standards of the by-laws that ARE available do "
+    "not apply to this parcel. Name the governing by-law, say it must be "
+    "consulted directly with HRM, and do not substitute a figure from "
+    "another by-law. The zone will carry no citation in that case, because "
+    "there is no honest one to give.\n\n"
+    "THE SAME QUESTION FOR EACH OVERLAY, SEPARATELY. The height-precinct, "
+    "FAR and other schedule layers are municipality-wide too, so a parcel "
+    "whose 'governing_bylaw_status' is 'held' can still sit under an overlay "
+    "from a by-law we do not hold. Each entry in 'overlays' carries its own "
+    "'governing_bylaw' / 'governing_bylaw_held', and 'governing_bylaw_held': "
+    "false means the same hard stop for THAT overlay: state the mapped "
+    "value, name the by-law it comes from, and do NOT read the standard out "
+    "of the equivalent schedule in a by-law we do hold — that schedule does "
+    "not govern this ground."
 )
 
 _SCHEMA_GET_ADDRESS_PROFILE: dict[str, Any] = {
@@ -443,6 +533,10 @@ _DESC_GET_ZONE_PROFILE = (
     "same zone — it collapses that sequence into one call. The internal "
     "implementation still uses semantic retrieval, so edge cases the DTO "
     "doesn't anticipate can fall back to search_bylaw_evidence.\n\n"
+    "'uses' may also carry an 'undetermined' list: uses whose permission "
+    "the ingested source did not yield. Those are extraction gaps, not "
+    "prohibitions — report them as not determinable from the ingested "
+    "source, never as permitted or prohibited.\n\n"
     "Filter the response with 'include' (any of 'dimensions', 'uses', "
     "'parking', 'citations'); omit it to get everything. A field is null "
     "when the bylaw is silent or retrieval couldn't extract it "
@@ -820,6 +914,11 @@ def build_bylaw_tools(
             page_start=payload.get("page_start"),
             page_end=payload.get("page_end"),
             location=location,
+            # ABS-479: passthrough for the indexed attribute_tags pre-filter.
+            # An empty list is rejected by RetrievalRequest's validator; the
+            # resulting ValidationError is caught by the tool loop and handed
+            # back to the model as a tool error, not raised out of the request.
+            attribute_tag_filter=payload.get("attribute_tag_filter"),
             include_context=payload.get("include_context", True),
             include_cross_references=payload.get("include_cross_references", True),
             include_tables=payload.get("include_tables", True),
@@ -886,7 +985,7 @@ def build_bylaw_tools(
 
         The evaluator reuses whatever RetrievalService the chat backend
         is already bound to (via ``_resolve_cm``), so the same
-        --latest-only / document-id scope rules apply automatically.
+        enabled-documents / document-id scope rules apply automatically.
         """
         location_payload = payload.get("location")
         location = (

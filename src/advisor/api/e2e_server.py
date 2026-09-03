@@ -49,6 +49,19 @@ if _ABS_LEARNING_SRC.is_dir():
     if _abs_learning_path not in sys.path:
         sys.path.insert(0, _abs_learning_path)
 
+# ABS-430 (with ABS-428): the e2e entrypoint — including every
+# /v1/_test/* seed endpoint it mounts — may only ever address a test
+# database. Mirror the seed-script bootstrap (scripts/e2e_db_default):
+# default DATABASE_URL to the dedicated e2e instance, then hard-refuse
+# any effective target whose database name does not end in `_test`,
+# unless E2E_SEED_ALLOW_DB=<exact-db-name> explicitly whitelists it.
+# Must run before the advisor/layer1 imports below so the lru_cached
+# layer1 settings can only ever resolve to the guarded URL.
+from layer1.seed_guard import default_e2e_database_url, require_test_database
+
+os.environ.setdefault("DATABASE_URL", default_e2e_database_url())
+require_test_database()
+
 from advisor.api.app import create_app
 from advisor.api.metrics_middleware import MetricsMiddleware
 from advisor.db.models import InviteRequest, User
@@ -63,7 +76,7 @@ from layer1.manifest_adapter import (
     load_manifest,
     profile_from_manifest,
 )
-from layer1.models.enums import IngestionStatus, ParseStatus
+from layer1.models.enums import FragmentType, IngestionStatus, ParseStatus
 from layer1.pipeline.verify_coverage import compare_coverage_reports, verify_document_coverage
 from layer1.pipeline.ingest import ingest_file
 from layer1.profiles import HALIFAX_PROFILE
@@ -82,6 +95,14 @@ logger = logging.getLogger(__name__)
 def build_e2e_app() -> FastAPI:
     """Construct the test FastAPI app wired for end-to-end UI tests."""
     setup_logging(json_output=False)
+    # ABS-432: this entrypoint's database IS the e2e suite's own instance —
+    # the `e2e-seed` documents and `e2e_*` datasets the seed scripts create
+    # are fixtures, not contamination. Declare that to the monitoring
+    # router's e2e_contamination tripwire so /v1/monitoring/corpus-coherence
+    # reports them informationally instead of going red. Production
+    # (advisor.api.main) and dev (advisor.api.dev) never import this module,
+    # so any marker row there still flips monitoring to 503.
+    os.environ.setdefault("ADVISOR_E2E_MARKERS_EXPECTED", "1")
     gateway = MockGateway(callable_=build_dispatcher())
 
     # ABS-19: wire a real ClerkVerifier backed by an in-memory test RSA
@@ -216,7 +237,7 @@ class _AddressProfileBody(BaseModel):
 # ABS-163: test-only table-search endpoint. Verifies that SourceTable rows
 # with proper captions are found by the retrieval layer's
 # _structured_permission_table_candidates() path. The Playwright spec seeds
-# tables via seed_e2e_permission_tables.py, then hits this endpoint to
+# tables via seed_e2e_rclub_unified.py (ABS-433), then hits this endpoint to
 # confirm the query finds them by caption pattern.
 class _SearchTablesBody(BaseModel):
     bylaw_name: str = Field(min_length=1, max_length=256)
@@ -235,6 +256,17 @@ class _LinkTableCaptionsBody(BaseModel):
     bylaw_name: str = Field(min_length=1, max_length=512)
     profile: str = "halifax"
     dry_run: bool = False
+
+
+class _GeometryConsistencyBody(BaseModel):
+    """Body for ``POST /v1/_test/geometry-consistency`` (ABS-491).
+
+    Optional scope: omit ``dataset_id`` to audit every ingested feature in
+    the database, which is what a spec asserting "no seed forgot the
+    writer" wants.
+    """
+
+    dataset_id: int | None = None
 
 
 class _ProfilePermissionTablesBody(BaseModel):
@@ -515,23 +547,24 @@ def _mount_test_router(app: FastAPI) -> None:
 
     @app.post("/v1/_test/address-profile-scoped")
     async def address_profile_scoped(body: _AddressProfileBody) -> dict[str, object]:
-        """Resolve an address under the *production* latest-per-bylaw scoping.
+        """Resolve an address under the *production* enabled-documents scoping.
 
         The plain ``/address-profile`` endpoint deliberately runs with no
         default-document resolver so it sees the full corpus regardless of
         same-name collisions in the shared e2e DB (the ABS-349/350 concern).
-        This variant instead wires ``latest_per_bylaw_resolver`` — exactly what
-        ``advisor.api.app`` and the MCP ``server`` use in production — so the
-        ABS-355 spec reproduces the real amendment eviction: a layer still
-        pinned to the superseded document version falls out of scope and the
-        zone resolves to null. With the re-link fix in place the layer follows
-        the amendment onto the new version and the zone resolves again.
+        This variant instead wires ``retrieval_enabled_resolver`` — exactly
+        what ``advisor.api.app`` and the MCP ``server`` use in production — so
+        the ABS-355 spec reproduces the real amendment eviction: a layer still
+        pinned to a disabled document version falls out of scope and the
+        zone resolves to null. With publish-driven re-linking in place the
+        layer follows the amendment onto the newly enabled version and the
+        zone resolves again.
         """
-        from bylaw_retrieval.retrieval import latest_per_bylaw_resolver  # noqa: PLC0415
+        from bylaw_retrieval.retrieval import retrieval_enabled_resolver  # noqa: PLC0415
 
         with session_scope() as session:
             service = RetrievalService(
-                session, default_document_id_resolver=latest_per_bylaw_resolver
+                session, default_document_id_resolver=retrieval_enabled_resolver
             )
             return service.get_address_profile(body.address).model_dump(mode="json")
 
@@ -605,6 +638,10 @@ def _mount_test_router(app: FastAPI) -> None:
                             "col_header_path": cell.col_header_path,
                             "permission_marker": meta.get("permission_marker"),
                             "footnote": meta.get("footnote"),
+                            # ABS-523: every marker in the cell. ``footnote`` is
+                            # the first of these and is lossy — a cell reading
+                            # "⑮ ㉒" carries two conditions and both bind.
+                            "footnotes": meta.get("footnotes") or [],
                         }
                     )
 
@@ -803,6 +840,11 @@ def _mount_test_router(app: FastAPI) -> None:
                     "errors": list(run.errors_json or []),
                     "warnings": list(run.warnings_json or []),
                 }
+            # Test-context auto-publish (ABS-413): production ingest leaves a
+            # document disabled until an operator enables it, but the ABS-74
+            # spec asserts retrieval sees the ingested bylaw immediately.
+            document.retrieval_enabled = True
+            session.flush()
             enrich_report = enrich_document_semantics(
                 session, document_id=document.id, profile=profile
             )
@@ -1120,7 +1162,7 @@ def _mount_test_router(app: FastAPI) -> None:
 
         Mirrors the CLI (``scripts/corpus_coherence_audit.py``) and the
         ``/v1/monitoring/corpus-coherence`` ops endpoint: scopes with
-        ``latest_per_bylaw_resolver`` — the same resolver production wires
+        ``retrieval_enabled_resolver`` — the same resolver production wires
         into ``RetrievalService`` — so a Playwright spec can seed a coherent
         corpus, assert the audit passes, break one link, and assert it fails
         naming the missing role exactly as a real deployment would see it.
@@ -1128,7 +1170,7 @@ def _mount_test_router(app: FastAPI) -> None:
         from bylaw_retrieval.retrieval import (  # noqa: PLC0415
             OverlayDeclaration,
             audit_corpus_coherence,
-            latest_per_bylaw_resolver,
+            retrieval_enabled_resolver,
         )
 
         declarations = [
@@ -1144,7 +1186,95 @@ def _mount_test_router(app: FastAPI) -> None:
             report = audit_corpus_coherence(
                 session,
                 overlay_declarations=declarations,
-                default_document_id_resolver=latest_per_bylaw_resolver,
+                default_document_id_resolver=retrieval_enabled_resolver,
+            )
+        return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/e2e-contamination")
+    async def e2e_contamination() -> dict[str, object]:
+        """Run the ABS-432 e2e-contamination sweep, armed as production judges it.
+
+        The ``/v1/monitoring/corpus-coherence`` endpoint in THIS process
+        reports markers informationally (``expected_test_fixtures``) because
+        the e2e stack's database legitimately holds seeded fixtures — and it
+        caches results for 30s, which would race a spec that mutates markers.
+        This endpoint returns the raw, uncached ``E2eContaminationReport`` —
+        exactly what a dev/prod deployment's tripwire evaluates — so a
+        Playwright spec can insert a synthetic marker row, assert the sweep
+        names it, delete it, and assert it is gone.
+        """
+        from bylaw_retrieval.retrieval import audit_e2e_contamination  # noqa: PLC0415
+
+        with session_scope() as session:
+            report = audit_e2e_contamination(session)
+        return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/geometry-consistency")
+    async def geometry_consistency(
+        body: _GeometryConsistencyBody | None = None,
+    ) -> dict[str, object]:
+        """Audit ``external_dataset_feature.geometry`` against its GeoJSON (ABS-491).
+
+        The PostGIS ``geometry`` column is a denormalization of
+        ``geometry_geojson`` — the shape every spatial query actually
+        matches against, derived from the shape every other read path
+        trusts. sqlite unit tests can't see the column at all, so this is
+        the only place the two are compared against a real PostGIS: a
+        Playwright spec seeds features through the single writer and
+        asserts the audit finds zero rows missing, drifted, or in the
+        wrong SRID.
+        """
+        from layer1.db.geometry import audit_feature_geometry  # noqa: PLC0415
+
+        with session_scope() as session:
+            report = audit_feature_geometry(
+                session,
+                dataset_id=body.dataset_id if body else None,
+            )
+        return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/enabled-name-collisions")
+    async def enabled_name_collisions() -> dict[str, object]:
+        """Run the ABS-434 enabled-name-collision audit, uncached.
+
+        The ``/v1/monitoring/corpus-coherence`` endpoint carries the same
+        check but caches results for 30s, which would race a Playwright spec
+        that seeds and then heals a collision. This endpoint returns the raw
+        ``EnabledNameCollisionReport`` — at most one retrieval-enabled
+        document per case/hyphen/whitespace-normalized ``(municipality,
+        bylaw_name)`` — so a spec can seed a case-variant pair ("Test
+        By-law" / "Test By-Law"), assert the audit names both ids, disable
+        one, and assert the report goes green.
+        """
+        from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+            audit_enabled_name_collisions,
+        )
+
+        with session_scope() as session:
+            report = audit_enabled_name_collisions(session)
+        return report.model_dump(mode="json")
+
+    @app.post("/v1/_test/governing-bylaw-coverage")
+    async def governing_bylaw_coverage() -> dict[str, object]:
+        """Run the ABS-472 governing-by-law coverage audit, uncached.
+
+        Same reason as the two above: ``/v1/monitoring/corpus-coherence``
+        carries this section but caches for 30s, so a spec whose seed adds
+        features could read a body assembled before its own ``beforeAll``
+        ran. This endpoint answers from the database as it stands.
+
+        Scoped through ``retrieval_enabled_resolver`` so "held" means what it
+        means to a real request — visible in the active retrieval scope, not
+        merely ingested.
+        """
+        from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+            audit_governing_bylaw_coverage,
+            retrieval_enabled_resolver,
+        )
+
+        with session_scope() as session:
+            report = audit_governing_bylaw_coverage(
+                session, default_document_id_resolver=retrieval_enabled_resolver
             )
         return report.model_dump(mode="json")
 
@@ -1258,10 +1388,17 @@ class _SeedSessionBody(BaseModel):
     street: str = "Elm St"
     citation_path: str = "4.2.1"
     citation_label: str = "(1)"
-    bylaw_name: str = "Regional Centre Land Use By-Law"
+    # ABS-431 naming convention: even though this value only lands in
+    # synthetic chat tool_result JSON (never a Document row), it must not
+    # read as the real bylaw — see scripts/e2e_fixture_names.py.
+    bylaw_name: str = "Regional Centre Land Use By-Law (Session Seed E2E)"
     clause_text: str = (
         "The minimum front yard setback shall be 3.0 metres from the property line."
     )
+    # Final assistant turn. Overridable so a spec can seed markdown that
+    # exercises the renderer — e.g. an attribute table whose cells carry
+    # inline citation references (ABS-451).
+    assistant_text: str | None = None
 
 
 def _mount_seed_session_endpoint(app: FastAPI) -> None:
@@ -1377,7 +1514,8 @@ def _mount_seed_session_endpoint(app: FastAPI) -> None:
                     "sequence": 3,
                     "role": "assistant",
                     "content_json": (
-                        "Based on the bylaw evidence, the front yard setback is 3 m."
+                        body.assistant_text
+                        or "Based on the bylaw evidence, the front yard setback is 3 m."
                     ),
                 },
             ]
@@ -1436,11 +1574,267 @@ def _mount_search_evidence_endpoint(app: FastAPI) -> None:
 class _ZoneProfileBody(BaseModel):
     zone: str
     include: list[str] | None = None
-    # Optional document scope. Production runs --latest-only (one document);
-    # the e2e corpus holds many bylaws, several staging the same zone codes,
-    # so a spec passes its own seeded document_id to isolate get_zone_profile
-    # to its data (mirrors the document_id scoping on lookup_citation).
+    # Optional document scope. Production scopes to retrieval-enabled
+    # documents (ABS-413); the e2e corpus holds many bylaws, several staging
+    # the same zone codes, so a spec passes its own seeded document_id to
+    # isolate get_zone_profile to its data (mirrors the document_id scoping
+    # on lookup_citation).
     document_id: int | None = None
+
+
+class _RetrievalFlagBody(BaseModel):
+    """ABS-413 e2e driver for the document publish flag."""
+
+    action: Literal["seed", "set", "status"]
+    municipality: str = "Test Municipality ABS-413"
+    bylaw_name: str = "ABS-413 Retrieval Flag By-law"
+    doc_count: int = Field(default=3, ge=1, le=9)
+    document_ids: list[int] | None = None
+    enabled: bool | None = None
+    replace: bool = False
+
+
+class _SearchEnabledScopeBody(BaseModel):
+    query: str
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class _DisableRetrievalProbeBody(BaseModel):
+    """Body for ``POST /v1/_test/disable-retrieval-probe`` (ABS-433).
+
+    Transactionally disables the given documents, probes the production
+    enabled scope (evidence search, permitted-use table lookup, address
+    profile), then re-enables them — all inside ONE transaction under the
+    shared Regional Centre corpus advisory lock. The atomic
+    disable→probe→restore shape exists so the probe can never race a
+    concurrent seed run (whose convergence pass force-re-enables the unified
+    document) and never leaves the shared corpus dark for parallel workers.
+    """
+
+    document_ids: list[int]
+    query: str
+    address: str
+
+
+def _mount_retrieval_flag_endpoints(app: FastAPI) -> None:
+    """ABS-413: drive the real publish surface + production-scope probe.
+
+    ``/v1/_test/retrieval-flag`` seeds N disabled documents (each carrying a
+    sentinel fragment), toggles them through the real
+    ``layer1.pipeline.publish.set_retrieval_enabled``, and reports status via
+    ``list_retrieval_status`` — the exact functions behind the CLI's
+    ``enable-retrieval`` / ``disable-retrieval`` / ``list-documents``.
+
+    ``/v1/_test/search-enabled-scope`` runs a search under
+    ``retrieval_enabled_resolver`` — the resolver production wires — so the
+    Playwright spec can prove opt-in publishing end-to-end: seeded docs are
+    invisible until enabled (fail-closed), replace evicts the older sibling,
+    and disabling hides them again.
+    """
+    from datetime import timedelta  # noqa: PLC0415
+    import hashlib  # noqa: PLC0415
+
+    from bylaw_retrieval.retrieval import (  # noqa: PLC0415
+        RetrievalRequest,
+        retrieval_enabled_resolver,
+    )
+    from layer1.pipeline.publish import (  # noqa: PLC0415
+        list_retrieval_status,
+        set_retrieval_enabled,
+    )
+
+    @app.post("/v1/_test/retrieval-flag")
+    async def retrieval_flag(body: _RetrievalFlagBody) -> dict[str, object]:
+        with session_scope() as session:
+            if body.action == "seed":
+                session.query(Document).filter(
+                    Document.municipality == body.municipality,
+                    Document.bylaw_name == body.bylaw_name,
+                ).delete(synchronize_session=False)
+                session.flush()
+                base_time = utcnow()
+                ids: list[int] = []
+                for i in range(body.doc_count):
+                    file_hash = hashlib.sha256(
+                        f"abs413-{body.bylaw_name}-{i}".encode()
+                    ).hexdigest()[:64]
+                    doc = Document(
+                        municipality=body.municipality,
+                        bylaw_name=body.bylaw_name,
+                        source_path=f"/tmp/abs413-flag-{i}.txt",
+                        file_hash=file_hash,
+                        mime_type="text/plain",
+                        page_count=1,
+                        parser_version="e2e-seed",
+                        ingestion_timestamp=base_time
+                        - timedelta(seconds=(body.doc_count - 1 - i)),
+                        # Mirrors real ingest: documents start unpublished.
+                        retrieval_enabled=False,
+                    )
+                    session.add(doc)
+                    session.flush()
+                    ids.append(doc.id)
+                    session.add(
+                        SourceFragment(
+                            document_id=doc.id,
+                            fragment_type=FragmentType.SECTION,
+                            citation_label=f"413.{i}",
+                            citation_path=f"413.{i}",
+                            page_start=1,
+                            page_end=1,
+                            text=(
+                                f"ABS413_FLAG_SENTINEL_V{i} pergola trellis "
+                                "height limit for versioned publish testing."
+                            ),
+                            parse_status=ParseStatus.PARSED,
+                            source_block_ids_json=[],
+                            metadata_json={},
+                        )
+                    )
+                session.flush()
+                return {"document_ids": ids}
+
+            if body.action == "set":
+                if body.document_ids is None or body.enabled is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="'set' requires document_ids and enabled",
+                    )
+                try:
+                    result = set_retrieval_enabled(
+                        session,
+                        body.document_ids,
+                        body.enabled,
+                        replace=body.replace,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                return {
+                    "changes": [
+                        {
+                            "document_id": c.document_id,
+                            "enabled": c.enabled,
+                            "reason": c.reason,
+                        }
+                        for c in result.changes
+                    ],
+                    "warnings": result.warnings,
+                    "relinked": len(result.relink_results),
+                }
+
+            entries = list_retrieval_status(
+                session,
+                municipality=body.municipality,
+                bylaw_name=body.bylaw_name,
+            )
+            return {
+                "documents": [
+                    {
+                        "id": e.id,
+                        "bylaw_name": e.bylaw_name,
+                        "retrieval_enabled": e.retrieval_enabled,
+                    }
+                    for e in entries
+                ]
+            }
+
+    @app.post("/v1/_test/search-enabled-scope")
+    async def search_enabled_scope(body: _SearchEnabledScopeBody) -> dict[str, object]:
+        with session_scope() as session:
+            service = RetrievalService(
+                session, default_document_id_resolver=retrieval_enabled_resolver
+            )
+            response = service.search(
+                RetrievalRequest(query=body.query, top_k=body.limit)
+            )
+            return {
+                "matches": [
+                    {
+                        "fragment_id": m.fragment_id,
+                        "document_id": m.document_id,
+                        "text": m.text,
+                    }
+                    for m in response.matches
+                ]
+            }
+
+    @app.post("/v1/_test/disable-retrieval-probe")
+    async def disable_retrieval_probe(
+        body: _DisableRetrievalProbeBody,
+    ) -> dict[str, object]:
+        """ABS-433: prove disabling the unified RC-LUB document empties scope.
+
+        Runs the real publish surface (``set_retrieval_enabled`` — the same
+        function behind the CLI's ``disable-retrieval``), then probes three
+        production-scoped surfaces under ``retrieval_enabled_resolver``:
+
+        * the evidence search (fragment scope),
+        * the permission-matrix TABLE scope (which enabled documents own a
+          matrix — the shared e2e corpus legitimately stages matrices on
+          other bylaws, so membership is reported per document id rather
+          than as a global emptiness claim),
+        * ``get_address_profile`` (linked geo-dataset scope),
+
+        and finally re-enables the documents. Everything happens in one
+        transaction while holding the shared Regional Centre corpus advisory
+        lock (key mirrors ``scripts/seed_e2e_rclub_unified.py``), so the
+        probe can neither race a concurrent seed's convergence re-enable nor
+        leave the shared corpus dark for parallel Playwright workers.
+        """
+        from sqlalchemy import text as sa_text  # noqa: PLC0415
+
+        with session_scope() as session:
+            if session.bind.dialect.name == "postgresql":
+                # Same key as seed_e2e_rclub_unified.CORPUS_ADVISORY_LOCK_KEY.
+                session.execute(
+                    sa_text("SELECT pg_advisory_xact_lock(:k)").bindparams(
+                        k=2604601273
+                    )
+                )
+            docs = [session.get(Document, doc_id) for doc_id in body.document_ids]
+            if any(doc is None for doc in docs):
+                raise HTTPException(status_code=400, detail="unknown document id")
+            if not all(doc.retrieval_enabled for doc in docs):
+                raise HTTPException(
+                    status_code=409,
+                    detail="probe expects the documents to start enabled",
+                )
+
+            def _probe() -> dict[str, object]:
+                service = RetrievalService(
+                    session, default_document_id_resolver=retrieval_enabled_resolver
+                )
+                search = service.search(
+                    RetrievalRequest(query=body.query, top_k=20)
+                )
+                # The exact scope lookup_permitted_use resolves against:
+                # every permission-matrix table visible under the enabled
+                # resolver, reported by owning document id.
+                matrix_document_ids = sorted(
+                    {
+                        table.document_id
+                        for table in service._permission_matrix_tables(
+                            document_id=None
+                        )
+                    }
+                )
+                profile = service.get_address_profile(body.address)
+                return {
+                    "matches": [
+                        {"document_id": m.document_id, "text": m.text}
+                        for m in search.matches
+                    ],
+                    "matrix_document_ids": matrix_document_ids,
+                    "zone": profile.zone,
+                    "overlay_count": len(profile.overlays),
+                    "citation_count": len(profile.citations),
+                }
+
+            set_retrieval_enabled(session, body.document_ids, False)
+            disabled = _probe()
+            set_retrieval_enabled(session, body.document_ids, True)
+            restored = _probe()
+            return {"disabled": disabled, "restored": restored}
 
 
 def _mount_zone_profile_endpoint(app: FastAPI) -> None:
@@ -1594,6 +1988,39 @@ def _mount_search_evidence_raw_endpoint(app: FastAPI) -> None:
             return response.model_dump(mode="json")
 
 
+def _mount_openai_tool_search_endpoint(app: FastAPI) -> None:
+    """ABS-492: drive ``search_bylaw_evidence`` through the OpenAI tool surface.
+
+    ``/v1/_test/search-evidence-raw`` builds a ``RetrievalRequest`` directly, so
+    it exercises the request model's defaults, not a tool's. This one goes
+    through ``OpenAIToolExecutor`` — the code path an LLM's tool call actually
+    takes — with no ``include_*`` keys in the arguments, which is how a model
+    calls it in practice: no persona tells it to set the flags.
+
+    That makes the assertion behavioural rather than introspective. The spec
+    does not read a flag off a captured request; it reads the ``ancestor_chain``
+    off the returned match. After ABS-492 a fragment can rank on scope its
+    containers state and it does not, so a match arriving without its chain is
+    a rule with its scope stripped off — which is the regression this guards,
+    and it is invisible to the ABS-297 guard on the advisor's own handler.
+    """
+    from typing import Any  # noqa: PLC0415
+
+    from bylaw_retrieval.openai_tools import OpenAIToolExecutor  # noqa: PLC0415
+
+    @app.post("/v1/_test/openai-tool-search")
+    async def openai_tool_search(body: _SearchEvidenceBody) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"query": body.query, "limit": body.limit}
+        if body.bylaw_name:
+            arguments["bylaw_name"] = body.bylaw_name
+        if body.municipality:
+            arguments["municipality"] = body.municipality
+        with session_scope() as session:
+            return OpenAIToolExecutor(session).execute(
+                "search_bylaw_evidence", arguments
+            )
+
+
 def _mount_advisor_search_include_flags_endpoint(app: FastAPI) -> None:
     """ABS-297: WI-7 / WI-3 drift guard.
 
@@ -1655,6 +2082,202 @@ def _mount_advisor_search_include_flags_endpoint(app: FastAPI) -> None:
         }
 
 
+def _mount_advisor_search_attribute_tag_filter_endpoint(app: FastAPI) -> None:
+    """ABS-479: drive ``attribute_tag_filter`` through the real chat handler.
+
+    The parameter reaches the LLM only if three things line up: it is in the
+    tool's JSON Schema, the handler forwards it onto ``RetrievalRequest``, and
+    the service turns it into the indexed ``attribute_tags`` clause. Pytest
+    covers each link in isolation; this endpoint runs the whole chain inside
+    the deployed FastAPI process against the real Postgres, so a missing
+    migration-0014 index, a JSONB-operator dialect mismatch (the ``?|``-vs-
+    LIKE split that sqlite unit tests mask), or a schema/handler drift trips
+    e2e rather than production.
+
+    Returns the tool's own JSON payload on success. On failure it returns
+    ``ok: false`` with the error string INSTEAD of a 500 — that mirrors
+    ``advisor.llm.tool_loop``, which converts a handler exception into an
+    ``is_error`` tool_result the model can correct. The empty-list case is
+    exactly that path, so the spec asserts on the error string and a 200.
+    """
+    import json  # noqa: PLC0415
+    from contextlib import contextmanager  # noqa: PLC0415
+
+    from fastapi import Body  # noqa: PLC0415
+
+    from advisor.chat.tools import build_bylaw_tools  # noqa: PLC0415
+
+    @contextmanager
+    def _service_factory():
+        with session_scope() as session:
+            yield RetrievalService(session)
+
+    @app.post("/v1/_test/advisor-search-attribute-tag-filter")
+    async def advisor_search_attribute_tag_filter(
+        body: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        if not isinstance(body.get("query"), str):
+            raise HTTPException(status_code=422, detail="missing 'query' (string) in body")
+        _, handlers = build_bylaw_tools(_service_factory)
+        try:
+            raw = await handlers["search_bylaw_evidence"](body)
+        except Exception as exc:  # noqa: BLE001 — the tool-error path under test
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True, "result": json.loads(raw)}
+
+
+# ---------------------------------------------------------------------------
+# ABS-456 / ABS-522: provider resolution, probed in a real process.
+#
+# ``build_gateway()`` runs exactly once per deployment — at boot, against the
+# process environment the service actually inherits. The unit suite reaches it
+# with a hand-built ``AdvisorLLMSettings``, which is the right shape for
+# pinning the resolution logic but cannot see the two things that decide
+# whether a deployment boots:
+#
+#   * whether ``ADVISOR_LLM_PROVIDER`` is read at all (an alias typo, a
+#     settings field renamed out from under its alias, a stray ``.env``
+#     shadowing the process env — all invisible to a constructed settings
+#     object);
+#   * whether a *stale* value in a real environment is rejected rather than
+#     coerced. ABS-522 removed the second provider (``claude_code``, the
+#     ``claude -p`` CLI). A deployment still carrying that value must fail
+#     loudly: silently building the Anthropic gateway would move it from
+#     subscription billing to metered billing without a word.
+#
+# So the probe below spawns one. The child gets an env assembled from scratch —
+# never a copy of this server's — runs ``build_gateway()``, and reports what it
+# got or how it died. Its cwd is a temp dir so no repo ``.env`` can leak into
+# the answer.
+# ---------------------------------------------------------------------------
+
+# Env vars the probe will forward. An allowlist, not a passthrough: this
+# endpoint hands attacker-controllable strings to a subprocess environment, and
+# the e2e server is deliberately unauthenticated. The key is the only one
+# ``build_gateway`` gives meaning to now that there is one provider.
+_REGISTRY_PROBE_ENV_ALLOWLIST = frozenset({"ANTHROPIC_API_KEY"})
+
+# Fixed program — never assembled from request data. It also reports whether
+# the removed CLI backend is importable at all: the removal is only real if the
+# module is gone from the installed package, not merely unreferenced.
+_REGISTRY_PROBE_SOURCE = """
+import importlib.util, json
+
+out = {}
+out["cli_backend_importable"] = (
+    importlib.util.find_spec("advisor.llm.claude_code_backend") is not None
+)
+out["cli_translation_importable"] = (
+    importlib.util.find_spec("advisor.llm.claude_code_translation") is not None
+)
+try:
+    from advisor.llm.registry import build_gateway
+    gateway = build_gateway()
+except BaseException as exc:
+    out["ok"] = False
+    out["error_type"] = type(exc).__name__
+    out["error"] = str(exc)
+else:
+    out["ok"] = True
+    out["gateway_name"] = getattr(gateway, "name", None)
+    out["gateway_class"] = type(gateway).__name__
+print(json.dumps(out))
+"""
+
+
+class _LlmRegistryProbeBody(BaseModel):
+    """Body for ``POST /v1/_test/llm-registry-probe`` (ABS-456/522)."""
+
+    # Optional so the spec can probe the "operator sets nothing" case,
+    # which is what a container with no ADVISOR_LLM_PROVIDER inherits.
+    provider: str | None = Field(default=None, min_length=1, max_length=64)
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Extra environment for the probe process. Keys must be in "
+            "_REGISTRY_PROBE_ENV_ALLOWLIST; anything else is a 400."
+        ),
+    )
+
+
+def _mount_llm_registry_probe_endpoint(app: FastAPI) -> None:
+    """ABS-456/522: run ``build_gateway()`` in a fresh process and report back."""
+
+    @app.post("/v1/_test/llm-registry-probe")
+    async def llm_registry_probe(body: _LlmRegistryProbeBody) -> dict[str, object]:
+        import asyncio  # noqa: PLC0415
+        import json  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+
+        unknown = sorted(set(body.env) - _REGISTRY_PROBE_ENV_ALLOWLIST)
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"env keys not allowed for the registry probe: {unknown}. "
+                    f"Allowed: {sorted(_REGISTRY_PROBE_ENV_ALLOWLIST)}"
+                ),
+            )
+
+        # Built from scratch, not os.environ.copy(): this server may well be
+        # holding an ANTHROPIC_API_KEY, and inheriting it would make the
+        # no-key cases silently untestable. PYTHONPATH carries this process's
+        # import path so the child finds ``advisor`` however it was installed.
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
+            **({} if body.provider is None else {"ADVISOR_LLM_PROVIDER": body.provider}),
+            **body.env,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="llm-registry-probe-") as cwd:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                _REGISTRY_PROBE_SOURCE,
+                env=env,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=120
+                )
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+                raise HTTPException(
+                    status_code=504,
+                    detail="registry probe did not finish within 120s",
+                ) from None
+
+        text = stdout.decode(errors="replace").strip()
+        # The probe prints exactly one JSON line, but an import-time warning
+        # from a dependency would land on stdout ahead of it.
+        payload: dict[str, object] | None = None
+        for line in reversed(text.splitlines()):
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                continue
+            break
+        if payload is None:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"registry probe produced no JSON (rc={process.returncode}). "
+                    f"stdout={text[-2000:]!r} stderr="
+                    f"{stderr.decode(errors='replace')[-2000:]!r}"
+                ),
+            )
+        return {
+            "returncode": process.returncode,
+            "stderr_tail": stderr.decode(errors="replace")[-2000:],
+            **payload,
+        }
+
+
 class _BuyAnswerCheckoutBody(BaseModel):
     user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
     question_slug: str = Field(min_length=1, max_length=64)
@@ -1677,6 +2300,26 @@ class _BuyAnswerGrantFreeBody(BaseModel):
 class _BuyAnswerRefineBody(BaseModel):
     purchase_id: int
     message: str = Field(min_length=1, max_length=2000)
+
+
+class _BuyAnswerSlowTurnBody(BaseModel):
+    """ABS-338: drive the answer (and optionally a refinement) on a
+    connection carrying a deliberately low
+    ``idle_in_transaction_session_timeout``, with an LLM turn slower than
+    that cap.
+
+    The production 500 was a real-Postgres behaviour: the request
+    transaction sat idle for the whole ~84s turn and the server-side cap
+    (60s, ABS-100) terminated the connection, so the settling UPDATE raised
+    ``IdleInTransactionSessionTimeout``. Waiting 60s in an e2e is absurd, so
+    this shrinks the SAME mechanism — 1s cap, 2.5s turn — through the real
+    Next-proxy ↔ FastAPI ↔ Postgres chain.
+    """
+
+    purchase_id: int
+    idle_cap_ms: int = Field(default=1000, ge=100, le=60_000)
+    turn_delay_s: float = Field(default=2.5, ge=0.0, le=30.0)
+    refine_message: str | None = Field(default=None, max_length=2000)
 
 
 class _BuyAnswerQuoteBody(BaseModel):
@@ -2039,6 +2682,117 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
             )
             return _state(purchase)
 
+    @app.post("/v1/_test/buy-answer/answer-slow-turn")
+    async def buy_answer_run_slow(
+        body: _BuyAnswerSlowTurnBody,
+    ) -> dict[str, object]:
+        """ABS-338: run a SLOW answer turn under a low idle-in-txn cap.
+
+        Reproduces the production 500 in miniature against the real e2e
+        Postgres. Before the fix the request transaction stayed open across
+        the turn, so the cap terminated the connection and the settling
+        ``db.flush()`` raised ``IdleInTransactionSessionTimeout`` → HTTP 500.
+        After it, ``run_answer`` / ``run_refinement`` hold no transaction
+        while the turn runs, so there is nothing for the cap to kill.
+
+        The aggressive per-session cap rides a DEDICATED ``NullPool`` engine
+        so it can never leak onto a pooled connection another request reuses.
+        """
+        import asyncio  # noqa: PLC0415
+
+        from sqlalchemy import create_engine, text  # noqa: PLC0415
+        from sqlalchemy.orm import Session  # noqa: PLC0415
+        from sqlalchemy.pool import NullPool  # noqa: PLC0415
+
+        from layer1.config import get_settings as _layer1_settings  # noqa: PLC0415
+
+        class _SlowGateway:
+            """Delegates to the e2e MockGateway, but makes the turn's first
+            LLM call outlast the idle cap pinned on the request connection."""
+
+            name = "mock"
+
+            def __init__(self, inner: Any, delay_s: float) -> None:
+                self._inner = inner
+                self._delay_s = delay_s
+                self._slept = False
+
+            async def _maybe_sleep(self) -> None:
+                if not self._slept:
+                    self._slept = True
+                    await asyncio.sleep(self._delay_s)
+
+            async def complete(self, request):  # noqa: ANN001
+                await self._maybe_sleep()
+                return await self._inner.complete(request)
+
+            async def stream(self, request):  # noqa: ANN001
+                await self._maybe_sleep()
+                async for event in self._inner.stream(request):
+                    yield event
+
+        def _pin_idle_cap(db: Session) -> None:
+            if db.bind is not None and db.bind.dialect.name == "postgresql":
+                db.execute(
+                    text(
+                        "SET SESSION idle_in_transaction_session_timeout = "
+                        f"{int(body.idle_cap_ms)}"
+                    )
+                )
+
+        engine = create_engine(
+            _layer1_settings().database_url, poolclass=NullPool
+        )
+        try:
+            db = Session(bind=engine, expire_on_commit=False, future=True)
+            try:
+                _pin_idle_cap(db)
+                purchase = db.get(_QP, body.purchase_id)
+                if purchase is None:
+                    raise HTTPException(
+                        status_code=404, detail="purchase not found"
+                    )
+                purchase = await answer_flow.run_answer(
+                    db,
+                    purchase,
+                    gateway=_SlowGateway(app.state.gateway, body.turn_delay_s),
+                    persona=app.state.persona_text,
+                    retrieval_factory=app.state.retrieval_factory,
+                    client=_mock_client(),
+                )
+                state = _state(purchase)
+                db.commit()
+            finally:
+                db.close()
+
+            # A non-captured answer has nothing to refine — hand the state
+            # back so the spec fails on the real assertion (status) rather
+            # than on an opaque RefinementNotAvailableError 500.
+            if not body.refine_message or state.get("status") != "captured":
+                return state
+
+            # Sibling proof for run_refinement — a fresh low-cap connection
+            # and another slow turn, since the same flaw lived in both.
+            db = Session(bind=engine, expire_on_commit=False, future=True)
+            try:
+                _pin_idle_cap(db)
+                purchase = db.get(_QP, body.purchase_id)
+                answer = await answer_flow.run_refinement(
+                    db,
+                    purchase,
+                    message=body.refine_message,
+                    gateway=_SlowGateway(app.state.gateway, body.turn_delay_s),
+                    persona=app.state.persona_text,
+                    retrieval_factory=app.state.retrieval_factory,
+                )
+                state = {"refined_answer": answer, **_state(purchase)}
+                db.commit()
+                return state
+            finally:
+                db.close()
+        finally:
+            engine.dispose()
+
     @app.post("/v1/_test/buy-answer/refine")
     async def buy_answer_refine(body: _BuyAnswerRefineBody) -> dict[str, object]:
         with session_scope() as db:
@@ -2088,12 +2842,16 @@ def _mount_buy_answer_test_router(app: FastAPI) -> None:
 
 app = build_e2e_app()
 _mount_seed_session_endpoint(app)
+_mount_retrieval_flag_endpoints(app)
 _mount_search_evidence_endpoint(app)
 _mount_search_evidence_raw_endpoint(app)
 _mount_zone_profile_endpoint(app)
 _mount_bylaw_query_endpoint(app)
 _mount_spatial_candidate_text_endpoint(app)
+_mount_openai_tool_search_endpoint(app)
 _mount_advisor_search_include_flags_endpoint(app)
+_mount_advisor_search_attribute_tag_filter_endpoint(app)
+_mount_llm_registry_probe_endpoint(app)
 _mount_buy_answer_test_router(app)
 
 

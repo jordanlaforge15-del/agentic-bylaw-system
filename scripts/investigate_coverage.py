@@ -668,14 +668,14 @@ def promote_to_linear(
     """
     import asyncio  # noqa: PLC0415
 
-    # The night_manager package lives under scripts/ -- it's not on
-    # sys.path by default. Add the project root so the import works
-    # whether the user runs the script as `python scripts/...` or via
-    # the installed venv.
+    # `scripts` is a package under the project root, which is not on
+    # sys.path by default (running `python scripts/...` puts scripts/
+    # itself there, not its parent). Add the project root so the import
+    # works whether the script is run directly or imported by name.
     project_root = Path(__file__).resolve().parent.parent
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
-    from scripts.night_manager.linear_client import LinearClient  # noqa: PLC0415
+    from scripts.linear_client import LinearClient  # noqa: PLC0415
 
     promotable = [
         inv for inv in investigations

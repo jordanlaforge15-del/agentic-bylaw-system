@@ -13,10 +13,18 @@ from layer1.pipeline.block_classifier import (
     normalize_text,
     split_toc_lines,
 )
-from layer1.pipeline.citations import citation_path, parse_citation_label
+from layer1.pipeline.citation_repath import (
+    part_label_with_chapter,
+    repath_low_level_fragments,
+)
+from layer1.pipeline.citations import CitationMatch, citation_path, parse_citation_label
 from layer1.profiles import ParsingProfile, get_parsing_profile
 
 LOW_LEVEL_FRAGMENT_TYPES = {FragmentType.CLAUSE, FragmentType.SUBCLAUSE}
+PART_FRAGMENT_TYPES = {FragmentType.PART, FragmentType.SCHEDULE, FragmentType.APPENDIX}
+
+#: Confidence ceiling for a labelled provision no citation path can reach.
+UNADDRESSABLE_CONFIDENCE = 0.6
 
 
 @dataclass
@@ -28,14 +36,29 @@ class StackEntry:
 
 @dataclass
 class HierarchyBlock:
-    source_block_index: int
+    source_block_indices: list[int]
     block: PageBlockData
+    page_end: int | None = None
 
 ROMAN_SUBCLAUSE_TOKEN_RE = re.compile(r"^\((?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\)$", re.IGNORECASE)
 _COMPOUND_BASE_RE = re.compile(r"^(\d+[A-Z]*)\(")
 DEFINITION_HEADING_RE = re.compile(r"^\s*definitions?\b", re.IGNORECASE)
 DEFINITION_INTRO_RE = re.compile(r"^\s*in this by-?law\s*:\s*$", re.IGNORECASE)
 LEADING_QUOTED_SPACE_RE = re.compile(r"^(\s*['\"“])\s+")
+
+# ABS-461. A PDF page (or column) break can land inside a hyphenated token —
+# "...is zoned ER-3, ER-" / "2, ER-1, CH-2..." across pages 171/172 of the
+# Regional Centre LUB. The tail is a bare number, so the numeric section regex
+# reads it as a new section and every following clause reparents under a
+# phantom "Part V > 2". These two patterns detect the break so the halves can
+# be rejoined before any citation matching runs.
+HYPHEN_BREAK_TAIL_RE = re.compile(r"[A-Za-z0-9]-$")
+HYPHEN_BREAK_HEAD_RE = re.compile(r"^[A-Za-z0-9]")
+CONTINUATION_JOINABLE_BLOCK_TYPES = {BlockType.PARAGRAPH, BlockType.LIST_ITEM}
+
+# A section/subsection "title" that opens with sentence punctuation is a wrapped
+# line, not a heading: real headings never start with a comma or semicolon.
+MID_SENTENCE_TITLE_RE = re.compile(r"^[,;:.\)\]\}]")
 
 def _find_compound_base_parent(fragments: list[FragmentData], label: str) -> int | None:
     """Search backward through fragments for a section matching the base of a compound label.
@@ -104,11 +127,18 @@ def _looks_like_heading_title(text: str) -> bool:
     return titleish >= lowerish
 
 
-def _heading_context_segment(text: str) -> str | None:
-    cleaned = normalize_text(text)
-    if not cleaned:
-        return None
-    return f"[{cleaned}]"
+def _is_mid_sentence_number(match: CitationMatch) -> bool:
+    """True when a numeric SECTION/SUBSECTION match is really a wrapped line.
+
+    ``parse_citation_label`` is deliberately permissive about what follows a
+    number, so the tail of a hyphen-broken zone list ("2, ER-1, CH-2, ... zone:")
+    parses as section "2" with the title ", ER-1, CH-2, ...". No genuine section
+    heading opens with sentence punctuation, so this is a cheap, precise veto
+    (ABS-461).
+    """
+    if match.fragment_type not in {FragmentType.SECTION, FragmentType.SUBSECTION}:
+        return False
+    return MID_SENTENCE_TITLE_RE.match(match.title) is not None
 
 
 def _should_use_citation_match(block: PageBlockData, text: str, profile: ParsingProfile) -> bool:
@@ -118,6 +148,8 @@ def _should_use_citation_match(block: PageBlockData, text: str, profile: Parsing
         return False
     match = parse_citation_label(text, profile=profile)
     if not match:
+        return False
+    if _is_mid_sentence_number(match):
         return False
 
     if block.block_type == BlockType.FOOTNOTE:
@@ -164,7 +196,7 @@ def _should_promote_roman_subclause(
 def _append_fragment(
     fragments: list[FragmentData],
     block: PageBlockData,
-    block_index: int,
+    block_indices: list[int],
     fragment_type: FragmentType,
     text: str,
     label: str | None,
@@ -172,6 +204,7 @@ def _append_fragment(
     path: str | None,
     status: ParseStatus,
     confidence: float | None,
+    page_end: int | None = None,
 ) -> int:
     fragments.append(
         FragmentData(
@@ -180,13 +213,13 @@ def _append_fragment(
             citation_path=path,
             parent_index=parent_index,
             page_start=block.page_number,
-            page_end=block.page_number,
+            page_end=max(page_end, block.page_number) if page_end is not None else block.page_number,
             reading_order_start=block.reading_order,
             reading_order_end=block.reading_order,
             text=text,
             parse_status=status,
             confidence=confidence,
-            source_block_indices=[block_index],
+            source_block_indices=list(block_indices),
             metadata={"block_type": block.block_type.value},
         )
     )
@@ -203,8 +236,9 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
     current_heading_context_index: int | None = None
 
     for hierarchy_block in _prepare_blocks_for_hierarchy(blocks, profile):
-        block_index = hierarchy_block.source_block_index
+        block_indices = hierarchy_block.source_block_indices
         block = hierarchy_block.block
+        block_page_end = hierarchy_block.page_end
         if block.is_boilerplate or block.block_type in {BlockType.HEADER, BlockType.FOOTER} or not block.raw_text.strip():
             continue
         text = block.normalized_text or " ".join(block.raw_text.split())
@@ -286,27 +320,45 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
                 and definition_container_index is None
             ):
                 contextual_parent_index = current_heading_context_index
-                if path_parent:
-                    heading_segment = _heading_context_segment(fragments[current_heading_context_index].text)
-                    if heading_segment:
-                        path_parent = f"{path_parent} > {heading_segment}"
+                # The path a clause ends up with is decided by
+                # ``repath_low_level_fragments`` once the whole document is
+                # built (ABS-488); the sticky heading only picks the parent
+                # fragment here, it no longer decorates the path.
             can_address = not (match.fragment_type in LOW_LEVEL_FRAGMENT_TYPES and not path_parent)
-            path = citation_path(path_parent, match.label) if can_address else None
+            # A Part's chapter belongs in the Part heading's own label — all
+            # eight of Part I's chapters otherwise compute the bare "Part I" and
+            # collide. Descendants keep inheriting the chapter-free path, so
+            # every stored "Part I > 9" stays exactly where it was.
+            fragment_label = (
+                part_label_with_chapter(match.label, match.title)
+                if match.fragment_type in PART_FRAGMENT_TYPES
+                else match.label
+            )
+            path = citation_path(path_parent, fragment_label) if can_address else None
             status = ParseStatus.PARSED if can_address else ParseStatus.UNCERTAIN
-            confidence = match.confidence if can_address else min(match.confidence, 0.6)
+            # Left uncapped here: the repath pass has the final say on which
+            # low-level fragments are addressable, so it applies the ceiling.
+            confidence = match.confidence
             idx = _append_fragment(
                 fragments,
                 block,
-                block_index,
+                block_indices,
                 match.fragment_type,
                 text,
-                match.label,
+                fragment_label,
                 contextual_parent_index,
                 path,
                 status,
                 confidence,
+                page_end=block_page_end,
             )
-            stack.append(StackEntry(index=idx, level=match.level, path=path))
+            stack.append(
+                StackEntry(
+                    index=idx,
+                    level=match.level,
+                    path=citation_path(path_parent, match.label) if can_address else None,
+                )
+            )
             last_content_parent = idx
             if match.fragment_type not in LOW_LEVEL_FRAGMENT_TYPES:
                 definition_context_index = None
@@ -331,7 +383,7 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
             idx = _append_fragment(
                 fragments,
                 block,
-                block_index,
+                block_indices,
                 FragmentType.HEADING,
                 text,
                 None,
@@ -339,6 +391,7 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
                 None,
                 ParseStatus.UNCERTAIN,
                 0.55,
+                page_end=block_page_end,
             )
             last_content_parent = idx
             current_heading_context_index = idx
@@ -356,7 +409,7 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
             idx = _append_fragment(
                 fragments,
                 block,
-                block_index,
+                block_indices,
                 FragmentType.LIST_ITEM,
                 text,
                 None,
@@ -364,6 +417,7 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
                 None,
                 ParseStatus.UNCERTAIN if text.startswith(("-", "*", "•")) else ParseStatus.PARSED,
                 0.7,
+                page_end=block_page_end,
             )
             last_content_parent = idx
             if _is_definition_container_intro(text):
@@ -375,7 +429,7 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
             _append_fragment(
                 fragments,
                 block,
-                block_index,
+                block_indices,
                 FragmentType.FOOTNOTE,
                 text,
                 None,
@@ -383,6 +437,7 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
                 None,
                 ParseStatus.PARSED,
                 0.75,
+                page_end=block_page_end,
             )
         elif effective_block_type == BlockType.TABLE_REGION:
             continue
@@ -412,7 +467,7 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
             idx = _append_fragment(
                 fragments,
                 block,
-                block_index,
+                block_indices,
                 FragmentType.PROSE,
                 text,
                 None,
@@ -420,41 +475,159 @@ def reconstruct_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile |
                 None,
                 ParseStatus.PARSED if prose_parent_index is not None else ParseStatus.UNCERTAIN,
                 0.8 if prose_parent_index is not None else 0.5,
+                page_end=block_page_end,
             )
             if _is_definition_like(text, profile):
                 definition_context_index = idx
             else:
                 definition_context_index = None
+    _apply_low_level_repath(fragments)
     _clear_duplicate_citation_paths(fragments)
     return fragments
 
 
+def _apply_low_level_repath(fragments: list[FragmentData]) -> None:
+    """Rebuild clause and subclause paths from the container that scopes them.
+
+    A post-pass rather than something woven into the walk above, because it has
+    to be the *same* computation the corpus migration runs over rows already in
+    a database (``scripts/repath_citation_paths.py``) — a clause path that
+    ingest and migration disagreed about would be a citation that changes
+    meaning depending on which one last touched the row. See
+    :mod:`layer1.pipeline.citation_repath`.
+    """
+    for fragment, path in zip(fragments, repath_low_level_fragments(fragments), strict=True):
+        if fragment.fragment_type not in LOW_LEVEL_FRAGMENT_TYPES:
+            continue
+        fragment.citation_path = path
+        if path is None:
+            fragment.parse_status = ParseStatus.UNCERTAIN
+            if fragment.confidence is not None:
+                fragment.confidence = min(fragment.confidence, UNADDRESSABLE_CONFIDENCE)
+        else:
+            fragment.parse_status = ParseStatus.PARSED
+
+
 def _prepare_blocks_for_hierarchy(blocks: list[PageBlockData], profile: ParsingProfile) -> list[HierarchyBlock]:
     prepared: list[HierarchyBlock] = []
-    for block_index, block in enumerate(blocks):
+    for joined in _join_hyphen_broken_blocks(blocks):
+        block_indices = joined.source_block_indices
+        block = joined.block
+        page_end = joined.page_end
         toc_segments = _split_toc_block(block, profile)
         if toc_segments:
-            prepared.extend(HierarchyBlock(block_index, segment) for segment in toc_segments)
+            prepared.extend(HierarchyBlock(block_indices, segment, page_end) for segment in toc_segments)
             continue
         definition_segments = _split_definition_block(block, profile)
         if definition_segments:
-            prepared.extend(HierarchyBlock(block_index, segment) for segment in definition_segments)
+            prepared.extend(HierarchyBlock(block_indices, segment, page_end) for segment in definition_segments)
             continue
         if block.block_type == BlockType.TABLE_REGION or detect_table_like_text(block.raw_text, profile=profile):
-            prepared.append(HierarchyBlock(block_index, block))
+            prepared.append(HierarchyBlock(block_indices, block, page_end))
             continue
-        prepared.extend(_split_block_for_hierarchy(block_index, block, profile))
+        prepared.extend(_split_block_for_hierarchy(block_indices, block, page_end, profile))
     return prepared
 
 
-def _split_block_for_hierarchy(block_index: int, block: PageBlockData, profile: ParsingProfile) -> list[HierarchyBlock]:
+def _joinable_continuation_block(block: PageBlockData) -> bool:
+    return (
+        not block.is_boilerplate
+        and block.block_type in CONTINUATION_JOINABLE_BLOCK_TYPES
+        and bool(block.raw_text.strip())
+    )
+
+
+def _block_text(block: PageBlockData) -> str:
+    return block.normalized_text or normalize_text(block.raw_text)
+
+
+def _is_hyphen_break_continuation(previous: PageBlockData, candidate: PageBlockData) -> bool:
+    """True when ``candidate`` resumes a token ``previous`` broke on a hyphen.
+
+    The hyphen has to be flanked by alphanumerics on both sides of the break —
+    that is what distinguishes a mid-token page break ("ER-" / "2, ER-1...")
+    from a paragraph that merely happens to end in a dash.
+    """
+    if not (_joinable_continuation_block(previous) and _joinable_continuation_block(candidate)):
+        return False
+    if not HYPHEN_BREAK_TAIL_RE.search(_block_text(previous).rstrip()):
+        return False
+    return HYPHEN_BREAK_HEAD_RE.match(_block_text(candidate).lstrip()) is not None
+
+
+def _merge_continuation_block(head: HierarchyBlock, tail: PageBlockData, tail_index: int) -> HierarchyBlock:
+    """Splice a hyphen-broken continuation back onto its head block.
+
+    Joined with no separator so the hyphen closes over the break the way the
+    page rendered it ("ER-" + "2" -> "ER-2"), which is what the zone codes in
+    this corpus require. Provenance keeps both source blocks and the fragment's
+    page range widens to cover the break.
+    """
+    block = head.block
+    merged_raw = f"{block.raw_text.rstrip()}{tail.raw_text.lstrip()}"
+    merged_normalized = f"{_block_text(block).rstrip()}{_block_text(tail).lstrip()}"
+    metadata = {**block.metadata, "joined_hyphen_break_blocks": [*head.source_block_indices, tail_index]}
+    return HierarchyBlock(
+        source_block_indices=[*head.source_block_indices, tail_index],
+        block=PageBlockData(
+            page_number=block.page_number,
+            block_type=block.block_type,
+            bbox=block.bbox,
+            reading_order=block.reading_order,
+            raw_text=merged_raw,
+            normalized_text=normalize_text(merged_normalized),
+            is_boilerplate=block.is_boilerplate,
+            parser_source=block.parser_source,
+            confidence=block.confidence,
+            metadata=metadata,
+        ),
+        page_end=max(tail.page_number, head.page_end or block.page_number),
+    )
+
+
+def _is_skipped_by_hierarchy(block: PageBlockData) -> bool:
+    """Blocks ``reconstruct_hierarchy`` never turns into a fragment."""
+    return (
+        block.is_boilerplate
+        or block.block_type in {BlockType.HEADER, BlockType.FOOTER}
+        or not block.raw_text.strip()
+    )
+
+
+def _join_hyphen_broken_blocks(blocks: list[PageBlockData]) -> list[HierarchyBlock]:
+    """Rejoin blocks the parser split mid-token on a trailing hyphen (ABS-461).
+
+    Running page furniture is stepped over rather than treated as an
+    interruption: a page break puts the footer of one page and the header of
+    the next *between* the two halves of the broken token, which is the normal
+    case for a paginated PDF even though document 4's docling output happens
+    not to emit one there. Those blocks are passed through untouched — the
+    hierarchy discards them anyway.
+    """
+    joined: list[HierarchyBlock] = []
+    open_head: int | None = None
+    for block_index, block in enumerate(blocks):
+        if _is_skipped_by_hierarchy(block):
+            joined.append(HierarchyBlock([block_index], block))
+            continue
+        if open_head is not None and _is_hyphen_break_continuation(joined[open_head].block, block):
+            joined[open_head] = _merge_continuation_block(joined[open_head], block, block_index)
+            continue
+        joined.append(HierarchyBlock([block_index], block))
+        open_head = len(joined) - 1
+    return joined
+
+
+def _split_block_for_hierarchy(
+    block_indices: list[int], block: PageBlockData, page_end: int | None, profile: ParsingProfile
+) -> list[HierarchyBlock]:
     lines = [line.strip() for line in block.raw_text.splitlines() if line.strip()]
     if len(lines) < 2:
-        return [HierarchyBlock(block_index, block)]
+        return [HierarchyBlock(block_indices, block, page_end)]
 
     citation_starts = [idx for idx, line in enumerate(lines) if _is_citation_start_line(line, profile)]
     if len(citation_starts) <= 1:
-        return [HierarchyBlock(block_index, block)]
+        return [HierarchyBlock(block_indices, block, page_end)]
 
     segment_starts = [0]
     for start in citation_starts[1:]:
@@ -462,7 +635,7 @@ def _split_block_for_hierarchy(block_index: int, block: PageBlockData, profile: 
             segment_starts.append(start)
     segment_starts = sorted(set(segment_starts))
     if len(segment_starts) <= 1:
-        return [HierarchyBlock(block_index, block)]
+        return [HierarchyBlock(block_indices, block, page_end)]
 
     segments: list[HierarchyBlock] = []
     for seg_idx, start in enumerate(segment_starts):
@@ -474,7 +647,7 @@ def _split_block_for_hierarchy(block_index: int, block: PageBlockData, profile: 
         segment_type = classify_text_block(segment_text, profile=profile)
         segments.append(
             HierarchyBlock(
-                block_index,
+                block_indices,
                 PageBlockData(
                     page_number=block.page_number,
                     block_type=segment_type,
@@ -487,14 +660,17 @@ def _split_block_for_hierarchy(block_index: int, block: PageBlockData, profile: 
                     confidence=block.confidence,
                     metadata={**block.metadata, "split_from_block": True},
                 ),
+                page_end,
             )
         )
-    return segments or [HierarchyBlock(block_index, block)]
+    return segments or [HierarchyBlock(block_indices, block, page_end)]
 
 
 def _is_citation_start_line(text: str, profile: ParsingProfile) -> bool:
     match = parse_citation_label(normalize_text(text), profile=profile)
     if not match:
+        return False
+    if _is_mid_sentence_number(match):
         return False
     if match.fragment_type in {FragmentType.SECTION, FragmentType.SUBSECTION} and match.title:
         first = match.title.split()[0]
@@ -561,6 +737,18 @@ def _split_toc_block(block: PageBlockData, profile: ParsingProfile) -> list[Page
 
 
 def _clear_duplicate_citation_paths(fragments: list[FragmentData]) -> None:
+    """Blank the ``citation_path`` of fragments whose derived paths collide.
+
+    A collision is a *naming* failure, not a parse failure: two provisions
+    computed the same address, so neither can be cited unambiguously, but the
+    text of both was read and structured correctly. ABS-480: this used to also
+    flip ``PARSED`` -> ``UNCERTAIN`` and cap ``confidence`` at 0.6, which the
+    retrieval scorer reads as a quality signal — ``_score_fragment`` turns the
+    +1.0 parsed bonus into a -2.0 penalty, sinking weak-but-correct matches in
+    the ranking and labelling a cleanly-parsed provision "uncertain" in every
+    response the advisor sees. The collision is recorded in metadata (and
+    scored by ``audit.score_page_risk``); the parse verdict stays as parsed.
+    """
     counts = Counter(fragment.citation_path for fragment in fragments if fragment.citation_path)
     duplicate_paths = {path for path, count in counts.items() if count > 1}
     if not duplicate_paths:
@@ -572,7 +760,3 @@ def _clear_duplicate_citation_paths(fragments: list[FragmentData]) -> None:
         metadata["duplicate_citation_path"] = fragment.citation_path
         fragment.metadata = metadata
         fragment.citation_path = None
-        if fragment.parse_status == ParseStatus.PARSED:
-            fragment.parse_status = ParseStatus.UNCERTAIN
-        if fragment.confidence is not None:
-            fragment.confidence = min(fragment.confidence, 0.6)

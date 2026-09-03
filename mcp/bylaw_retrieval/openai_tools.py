@@ -15,6 +15,45 @@ from bylaw_retrieval.retrieval import (
 )
 
 
+# ABS-479: the single indexed retrieval pre-filter in the repo (the GIN
+# index on ``source_fragment.attribute_tags`` from migration 0014) was
+# reachable only from the compliance evaluator. This property definition is
+# the one the LLM-facing surfaces share — ``src/advisor/chat/tools.py``
+# imports it rather than re-typing it, so the Anthropic-shaped and
+# OpenAI-shaped specs cannot drift the way the ABS-466/ABS-469 descriptions
+# did. Embed a shallow copy per spec so no caller can mutate the shared dict.
+ATTRIBUTE_TAG_FILTER_PROPERTY: dict[str, Any] = {
+    "type": "array",
+    "items": {"type": "string"},
+    "minItems": 1,
+    "description": (
+        "Indexed hard pre-filter on the candidate clause set. When set, only "
+        "fragments tagged with at least one of these attribute IDs are scored "
+        "(multiple IDs are a union, not an intersection). Use it when the "
+        "question targets specific regulated dimensions — e.g. "
+        "['building_height_m'] for a height question, or ['front_setback_m', "
+        "'rear_setback_m', 'side_setback_left_m', 'side_setback_right_m'] for "
+        "setbacks — so the search narrows to tagged clauses before text "
+        "scoring. Valid IDs are the 'id' values in the Phase-1 attribute "
+        "taxonomy at src/layer2/compliance/attributes/taxonomy.yaml: "
+        "building_height_m, building_height_storeys, gross_floor_area_m2, "
+        "floor_area_ratio, lot_coverage_percent, building_footprint_area_m2, "
+        "front_setback_m, rear_setback_m, side_setback_left_m, "
+        "side_setback_right_m, height_to_eaves_m, height_to_ridge_m, "
+        "primary_use_class, secondary_use_classes, occupancy_type, "
+        "construction_type, residential_unit_count, residential_unit_mix, "
+        "parking_stalls_count, parking_stalls_accessible_count, "
+        "bicycle_stalls_count, loading_bays_count, zone_code, "
+        "height_precinct_code, heritage_overlay, flood_overlay, "
+        "transit_catchment, lot_area_m2, corner_lot_boolean, "
+        "arterial_frontage_boolean. Do not invent IDs — an ID outside the "
+        "taxonomy matches no clause and the search returns empty. Omit the "
+        "field entirely for exploratory questions; an EMPTY array is rejected "
+        "as a validation error rather than treated as 'no filter'."
+    ),
+}
+
+
 def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
     return [
         {
@@ -60,7 +99,12 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                 "Use this when the user or agent already knows the citation.\n\n"
                 "Provide exactly one of 'citation_path' or 'structured'. "
                 "Use 'structured' with kind='zone_attribute' to look up a zone's attribute rule "
-                "without guessing the canonical path format."
+                "without guessing the canonical path format.\n\n"
+                "A hit carries 'operative_clauses' — the other clauses of the same provision. "
+                "They are part of the rule, not related reading: a section whose text ends on a "
+                "colon states no standard by itself, and several of its clauses often bind at "
+                "once. 'operative_clauses_omitted' non-zero means the provision is longer than "
+                "what was returned; re-read it with search_bylaw_evidence and citation_path_prefix."
             ),
             "parameters": {
                 "type": "object",
@@ -106,7 +150,7 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                         ],
                     },
                     "document_id": {"type": "integer"},
-                    "include_context": {"type": "boolean", "default": False},
+                    "include_context": {"type": "boolean", "default": True},
                     "include_cross_references": {"type": "boolean", "default": False},
                     "include_tables": {"type": "boolean", "default": False},
                 },
@@ -129,7 +173,13 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                 "Example for '6321 Quinpool Road': set query='maximum building height' "
                 "and location={civic_number: '6321', street: 'Quinpool Road'}. "
                 "If the response's 'notes' array contains a warning that 'location' was "
-                "missing, re-issue the call with the slot set."
+                "missing, re-issue the call with the slot set. "
+                "When the question targets a specific regulated dimension (height, a "
+                "setback, lot coverage, floor area ratio, parking), also set "
+                "'attribute_tag_filter' to the matching attribute IDs — an indexed "
+                "hard pre-filter that restricts scoring to the clauses which actually "
+                "regulate that attribute. Valid IDs are the 'id' values in "
+                "src/layer2/compliance/attributes/taxonomy.yaml."
             ),
             "parameters": {
                 "type": "object",
@@ -169,7 +219,8 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                         },
                         "additionalProperties": False,
                     },
-                    "include_context": {"type": "boolean", "default": False},
+                    "attribute_tag_filter": dict(ATTRIBUTE_TAG_FILTER_PROPERTY),
+                    "include_context": {"type": "boolean", "default": True},
                     "include_cross_references": {"type": "boolean", "default": False},
                     "include_tables": {"type": "boolean", "default": False},
                     "include_datasets": {"type": "boolean", "default": False},
@@ -198,7 +249,25 @@ def build_openai_responses_tool_specs() -> list[dict[str, Any]]:
                 "Saves multiple lookups. The 'address' argument is free text in the "
                 "same shape the search_bylaw_evidence 'location' slot accepts. If the "
                 "address can't be resolved, the response carries 'unresolvable': true "
-                "with empty citations rather than an error."
+                "with empty citations rather than an error. Read "
+                "'resolution_quality' before stating the zone — anything below "
+                "'rooftop' means the point was estimated and may sit on a "
+                "neighbouring parcel. 'civic_address_status': 'not_found' means the "
+                "civic number does not exist in the municipality's own data: there is "
+                "no zone, do not geocode it, and offer "
+                "'valid_civic_number_ranges' / 'suggested_civic_numbers' instead. "
+                "'governing_bylaw_status': 'not_held' means the zone belongs to a "
+                "by-law that is NOT in this corpus — 'governing_bylaw' names it. "
+                "The zone code may be stated but carries no citation, and NO "
+                "standard behind it (uses, height, setbacks, floor area) is "
+                "available: name that by-law and say it must be consulted "
+                "directly, never substitute a figure from another one. Each "
+                "entry in 'overlays' carries the same pair for itself — a "
+                "parcel with a held zone can still sit under a height or FAR "
+                "precinct from a by-law we lack, and "
+                "'governing_bylaw_held': false is the same hard stop for "
+                "that overlay: never read its standard out of the equivalent "
+                "schedule in a by-law we do hold."
             ),
             "parameters": {
                 "type": "object",
@@ -267,6 +336,9 @@ class OpenAIToolExecutor:
         args = arguments_json
         if isinstance(arguments_json, str):
             args = json.loads(arguments_json)
+        # Deliberately unscoped (ABS-413): this executor is an eval/dev
+        # harness where the caller owns the session and decides the corpus;
+        # the retrieval_enabled publish gate applies to deployments, not here.
         service = RetrievalService(self.session)
 
         if tool_name == "list_documents":
@@ -287,7 +359,9 @@ class OpenAIToolExecutor:
                 include_text=args.get("include_text", False),
             ).model_dump(mode="json")
         if tool_name == "lookup_citation":
-            request = _validated(CitationLookupRequest, args)
+            request = _validated(
+                CitationLookupRequest, _with_tool_defaults(args)
+            )
             response = service.lookup_citation(request)
             # ABS-261: lookup_citation now returns a
             # CitationLookupResponse envelope. To preserve the existing
@@ -299,7 +373,7 @@ class OpenAIToolExecutor:
                 return response.match.model_dump(mode="json")
             return response.model_dump(mode="json")
         if tool_name == "search_bylaw_evidence":
-            request = _validated(RetrievalRequest, args)
+            request = _validated(RetrievalRequest, _with_tool_defaults(args))
             return service.search(request).model_dump(mode="json")
         if tool_name == "get_address_profile":
             return service.get_address_profile(str(args.get("address") or "")).model_dump(
@@ -313,6 +387,29 @@ class OpenAIToolExecutor:
                 proposed=args.get("proposed"),
             ).model_dump(mode="json")
         raise ValueError(f"Unsupported OpenAI retrieval tool: {tool_name}")
+
+
+#: The include_* defaults an *evidence-bearing tool surface* applies before
+#: validation, as opposed to the request model's own field defaults.
+#:
+#: ABS-288 set ``RetrievalRequest.include_* = False`` so an internal caller
+#: (the compliance evaluator, the zone-profile builder) gets a lean match
+#: unless it asks for more. That is the right default for a caller that knows
+#: what it wants and the wrong one for an LLM, which never sets the flags
+#: because no persona tells it to — ABS-297 pinned that asymmetry for the
+#: advisor's chat handler, which supplies its own True fallback.
+#:
+#: ABS-492 makes the gap consequential rather than merely wasteful: a fragment
+#: can now rank on scope its containers state and it does not, so a match
+#: returned without its ancestor chain is a rule with its scope stripped off.
+#: These surfaces therefore default it on, and the JSON schemas above advertise
+#: that same default. An explicit value from the model still wins — the merge
+#: is defaults-first.
+_TOOL_SURFACE_INCLUDE_DEFAULTS = {"include_context": True}
+
+
+def _with_tool_defaults(args: dict[str, Any]) -> dict[str, Any]:
+    return {**_TOOL_SURFACE_INCLUDE_DEFAULTS, **args}
 
 
 def _validated(model_cls, payload: dict[str, Any]):

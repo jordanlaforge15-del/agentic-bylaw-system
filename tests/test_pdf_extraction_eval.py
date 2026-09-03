@@ -467,6 +467,66 @@ class TestCLI:
 
 
 # --------------------------------------------------------------------------
+# ABS-482: demo output must be unmistakably synthetic
+# --------------------------------------------------------------------------
+
+SYNTHETIC_BANNER = "SYNTHETIC — demo fixtures, not a measurement"
+
+
+class TestSyntheticBanner:
+    def test_demo_report_file_carries_banner(self, tmp_path):
+        """A --demo run must stamp the SYNTHETIC banner into the report."""
+        main(["--demo", "--out", str(tmp_path)])
+        md_file = next(tmp_path.glob("pdf_accuracy_*.md"))
+        content = md_file.read_text(encoding="utf-8")
+        assert SYNTHETIC_BANNER in content
+
+    def test_demo_report_filename_marked_synthetic(self, tmp_path):
+        main(["--demo", "--out", str(tmp_path)])
+        md_file = next(tmp_path.glob("pdf_accuracy_*.md"))
+        assert md_file.name.startswith("pdf_accuracy_SYNTHETIC_")
+
+    def test_demo_gate_verdict_is_qualified(self, tmp_path):
+        """The ✅/❌ gate line must not read as a real gate result."""
+        main(["--demo", "--out", str(tmp_path)])
+        content = next(tmp_path.glob("pdf_accuracy_*.md")).read_text(encoding="utf-8")
+        assert "SYNTHETIC, NOT A GATE RESULT" in content
+        assert "[SYNTHETIC]" in content.splitlines()[0]
+
+    def test_demo_stdout_report_carries_banner(self, tmp_path, capsys):
+        main(["--demo", "--out", str(tmp_path), "--print"])
+        assert SYNTHETIC_BANNER in capsys.readouterr().out
+
+    def test_real_report_has_no_banner(self):
+        """A report built from non-demo results stays unmarked."""
+        report = build_report(_run_demo())
+        assert report.synthetic is False
+        assert "SYNTHETIC" not in render_report_markdown(report)
+
+    def test_build_report_propagates_synthetic_flag(self):
+        report = build_report(_run_demo(), synthetic=True)
+        assert report.synthetic is True
+        assert SYNTHETIC_BANNER in render_report_markdown(report)
+
+
+class TestNoCheckedInSyntheticReport:
+    """ABS-482: the hardcoded-fixture accuracy report must stay deleted."""
+
+    def test_synthetic_report_not_checked_in(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        stale = repo_root / "docs/extraction/pdf_accuracy_2026-05-26.md"
+        assert not stale.exists(), (
+            "docs/extraction/pdf_accuracy_2026-05-26.md is --demo output, not a "
+            "measurement; it must not be committed."
+        )
+        committed = list((repo_root / "docs/extraction").glob("pdf_accuracy_*.md"))
+        assert committed == [], (
+            f"Unexpected checked-in accuracy report(s): {committed}. Reports are "
+            "run artifacts, not documentation."
+        )
+
+
+# --------------------------------------------------------------------------
 # Taxonomy-level sanity checks
 # --------------------------------------------------------------------------
 

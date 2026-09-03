@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
 import re
-from collections import defaultdict
-from typing import Callable
+from collections import Counter, defaultdict
+from collections.abc import Iterable
+from dataclasses import dataclass
+from functools import lru_cache
+from collections.abc import Sequence
+from typing import Any, Callable
 
 from sqlalchemy import (
     Select,
@@ -15,6 +20,7 @@ from sqlalchemy import (
     desc,
     or_,
     select,
+    text as sql_text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, JSONB
 from sqlalchemy.orm import Session
@@ -25,6 +31,8 @@ from shapely.geometry import shape as shapely_shape
 from bylaw_retrieval.retrieval.schemas import (
     ATTRIBUTE_VOCABULARY,
     BYLAW_INTENTS,
+    EVIDENCE_CLASS_CONFIDENCE,
+    MIN_GATED_EVIDENCE_CONFIDENCE,
     AddressProfile,
     AdjacentZoningProfile,
     AncestorFragment,
@@ -40,9 +48,12 @@ from bylaw_retrieval.retrieval.schemas import (
     DocumentOutlineItem,
     DocumentOutlineResponse,
     DocumentSummary,
+    EvidenceClass,
+    FootnoteCondition,
     LinkedDataset,
     LocationSlot,
     NeighbourZone,
+    OperativeClause,
     OverlayRef,
     PermittedUseQuery,
     PermittedUseResult,
@@ -50,6 +61,7 @@ from bylaw_retrieval.retrieval.schemas import (
     RetrievalRequest,
     RetrievalResponse,
     ScheduleRowQuery,
+    TableCellMatch,
     TableCellSummary,
     TableSummary,
     ZoneAttributeQuery,
@@ -58,6 +70,18 @@ from bylaw_retrieval.retrieval.schemas import (
     ZoneProfile,
     ConditionalUse,
     ZoneUses,
+)
+from bylaw_retrieval.retrieval.binding import ZoneScopeIndex, build_zone_scope_index
+from bylaw_retrieval.retrieval.channels import TextChannelScores
+from bylaw_retrieval.retrieval.context import AncestorIndex, split_citation_path
+from bylaw_retrieval.retrieval.provision import ProvisionLineage
+from bylaw_retrieval.retrieval.tables import (
+    CHANNEL_THRESHOLD as TABLE_CHANNEL_THRESHOLD,
+)
+from bylaw_retrieval.retrieval.tables import (
+    TableCellHit,
+    TableIndex,
+    table_channel_scores,
 )
 from layer1.db.base import (
     CrossReference,
@@ -73,6 +97,7 @@ from layer1.db.base import (
     TableSemanticProfile,
 )
 from layer1.models.enums import FragmentType
+from layer1.naming import normalize_bylaw_name
 from layer1.semantic.enrichment import (
     enumerate_permission_column,
     resolve_mainland_permitted_use,
@@ -83,20 +108,41 @@ from layer1.semantic.extractors import normalize_use, normalize_zone
 from layer1.semantic.use_matching import match_use
 from layer1.semantic.permission_markers import (
     PERMISSION_MATRIX_PROFILE,
+    UNKNOWN,
     classify_permission_marker,
     ordinal_to_circled,
+)
+from layer2.retrieval.civic_address import (
+    CivicAddressVerdict,
+    community_from_address,
+    format_ranges,
+    verify_civic_address,
 )
 from layer2.retrieval.datasets import _summarize_dataset
 from layer2.retrieval.geocode import resolve_location_with_detail
 from layer2.retrieval.location import LocationReference, RegexLocationExtractor
+from layer2.retrieval.resolution_quality import (
+    OUTSIDE_MAPPED_AREA_CAVEAT,
+    classify_resolution,
+    resolution_caveat,
+)
 from layer2.retrieval.spatial import (
+    DEFAULT_ABUT_DISTANCE_M,
+    PARCEL_ABUT_DISTANCE_M,
+    ZONE_BOUNDARY_PROXIMITY_M,
     ResolvedLocation,
+    features_within,
     find_abutting_features,
     find_containing_feature,
     query_features,
+    square_degrees_to_m2,
 )
 
-TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+# A run of alphanumerics, optionally hyphen-joined to further runs, so a zone
+# code ("HR-2") or a hyphenated compound ("single-family") is captured whole
+# rather than pre-split by the tokenizer. See ``_tokenize`` for what happens
+# to the compound afterwards.
+TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
 
 
 # Resolver signature: takes a session, returns document id(s) to scope
@@ -129,6 +175,131 @@ OVERLAY_ROLE_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("zoning", "zone"),
     ("zone", "zone"),
 )
+
+# ABS-466: the caveat an unresolvable address carries, so every "we don't
+# know" state on an AddressProfile speaks through the same ``caveats`` list.
+_UNRESOLVABLE_CAVEAT = (
+    "This address could not be resolved to a point, so no zone or overlay "
+    "was looked up. Do not state a zone for it — ask the user to confirm "
+    "the address, or fall back to text retrieval with the location slot."
+)
+
+# ABS-469: the address does not exist. A geocoder still answers it — it
+# interpolates a position from the surrounding civic numbering — so this
+# caveat has to be emphatic about what the resulting point is worth, which is
+# nothing. The correct response is a refusal plus the numbers that do exist.
+_NONEXISTENT_ADDRESS_CAVEAT = (
+    "This civic number does not exist. {evidence} No zone, setback, height or "
+    "floor-area figure can be given for it: the geocoder still returns a "
+    "point for an address like this by estimating a position from the "
+    "surrounding civic numbering, and that point sits on some other owner's "
+    "parcel. Tell the user the address could not be found, quote the civic "
+    "numbers that do exist on that street, and ask them to confirm the "
+    "address before anything is answered about the property."
+)
+
+_ZONE_BOUNDARY_CAVEAT = (
+    "The resolved point is {distance:.0f} m from the {other_zone} boundary. "
+    "Zone lines run through and between lots, so a point this close means the "
+    "zone above — and every setback, height and floor-area figure derived "
+    "from it — may belong to the adjoining {other_zone} land instead. State "
+    "the proximity and tell the user to confirm the parcel's zoning with HRM "
+    "before relying on the figures."
+)
+
+_MULTI_ZONE_PARCEL_CAVEAT = (
+    "This parcel is split across more than one zone ({zones}). The standards "
+    "differ across the lot, so which zone governs depends on where on the "
+    "parcel the work is proposed. Do not answer as though one zone applied to "
+    "the whole property — say the lot is split and ask where the work sits."
+)
+
+# ABS-472: the zoning layer is municipality-wide, so a zone code can name a
+# by-law this corpus does not hold. This is not an imprecision to hedge — the
+# zone itself is the publisher's, and correct — it is a hard limit on what can
+# be answered, because every standard behind the code lives in a document we
+# do not have.
+_GOVERNING_BYLAW_NOT_HELD_CAVEAT = (
+    "This parcel is zoned {zone} under the {bylaw}, which is NOT in this "
+    "corpus. The zone code is the municipality's own published mapping and can "
+    "be stated, but no standard behind it — permitted uses, height, setbacks, "
+    "floor area, parking — is available here, and the standards of the "
+    "by-laws that ARE held do not apply to this parcel. Do not answer with a "
+    "figure from another by-law: name the {bylaw} as the governing by-law and "
+    "tell the user it must be consulted directly with HRM Planning & "
+    "Development."
+)
+
+# ABS-473: the same defect one layer over, and it needs its own wording. The
+# zone caveat above says the parcel's whole rule set is missing. This one is
+# narrower and easier to miss: the zone may be perfectly well held, and only
+# an *overlay* — a height precinct, a FAR precinct — comes from a by-law we
+# don't have. 48 of the 1,822 features in halifax_height_precincts are
+# Suburban Housing Accelerator LUB precincts served as Schedule 15 of the
+# Regional Centre LUB, so a max-height answer read the right number off the
+# wrong by-law. The mapped value itself is the municipality's own and stays.
+_OVERLAY_GOVERNING_BYLAW_NOT_HELD_CAVEAT = (
+    "The {overlay} covering this address ({label}) is mapped under the "
+    "{bylaw}, which is NOT in this corpus — it is not part of {citation}, "
+    "and {citation} does not apply to this ground. The mapped value is the "
+    "municipality's own and can be stated as such, but nothing that "
+    "interprets it — how it is measured, what exempts or bonuses it, how it "
+    "interacts with the zone — is available here. Do not read the {overlay} "
+    "standard out of {citation} or any other by-law held in this corpus: "
+    "name the {bylaw} and tell the user it must be confirmed with HRM "
+    "Planning & Development."
+)
+
+# How each overlay role reads in that caveat. Keyed off the same roles
+# ``overlay_role_for_name`` produces; the generic bucket falls back to the
+# neutral "overlay" so a newly added layer still gets a readable sentence
+# rather than a raw role slug.
+_OVERLAY_ROLE_NOUNS: dict[str, str] = {
+    "height_precinct": "height precinct",
+    "far_precinct": "floor-area-ratio precinct",
+    "heritage": "heritage conservation district",
+    "bonus_zoning": "bonus-zoning district",
+    "shadow_impact": "shadow-impact area",
+    "pedestrian_street": "pedestrian-oriented commercial street designation",
+    "overlay": "overlay",
+}
+
+
+#: A query's distinct tokens paired with their compiled word-boundary
+#: matchers, as returned by :func:`query_token_patterns`.
+TokenPatterns = tuple[tuple[str, "re.Pattern[str]"], ...]
+
+
+@dataclass(frozen=True)
+class FragmentScore:
+    """What one fragment earned on its own words, and which words earned it.
+
+    ``matched_tokens`` is the set of query tokens the fragment accounted for
+    itself — through its text, its citation label or the structural steps of
+    its citation path. The context channel subtracts it so scope inherited
+    from a container is only ever paid for once (ABS-492).
+    """
+
+    score: float
+    matched_tokens: frozenset[str]
+
+
+@dataclass(frozen=True)
+class GoverningBylaw:
+    """The by-law governing one matched overlay feature (ABS-472).
+
+    ``document`` is the ingested, in-scope document for that by-law, or None
+    when the corpus does not hold it — the whole point of resolving this per
+    feature rather than per dataset.
+    """
+
+    name: str
+    code: str | None
+    document: Document | None
+
+    @property
+    def held(self) -> bool:
+        return self.document is not None
 
 
 def overlay_role_for_name(name: str | None) -> str:
@@ -181,13 +352,63 @@ def scoped_linked_datasets(
     return list(session.execute(dataset_stmt).scalars().all())
 
 
+def governing_document_for_bylaw_name(
+    session: Session,
+    bylaw_name: str,
+    *,
+    municipality: str | None = None,
+    scoped_document_ids: list[int] | None = None,
+) -> Document | None:
+    """Find the ingested document for a by-law named by a *feature* (ABS-472).
+
+    Module-level twin of ``RetrievalService._document_for_bylaw_name`` (which
+    delegates here behind a per-request memo) so the corpus-coverage audit can
+    ask exactly the question ``get_address_profile`` asks — "do we hold the
+    by-law that governs this ground?" — without re-deriving the matching rule
+    and drifting from what a real request sees.
+
+    Matching is normalized (``layer1.naming``): the by-law names a publisher
+    stamps on its geography differ from our ingested document titles by the
+    case/hyphen noise that module exists for. An exact normalized match wins;
+    otherwise a *prefix* match is accepted when exactly one document qualifies,
+    which absorbs title qualifiers ("… (Consolidated to 2024)") without
+    absorbing a different by-law. Prefix and not substring on purpose:
+    "Dartmouth Land Use By-law" is a substring of "Downtown Dartmouth Land Use
+    By-law", and those govern different ground.
+    """
+    target = normalize_bylaw_name(bylaw_name)
+    if not target:
+        return None
+    normalized_municipality = (
+        normalize_bylaw_name(municipality) if municipality else None
+    )
+    stmt = select(Document)
+    if scoped_document_ids is not None:
+        stmt = stmt.where(Document.id.in_(scoped_document_ids))
+
+    prefix_candidates: list[Document] = []
+    for document in session.execute(stmt).scalars():
+        if normalized_municipality is not None and (
+            normalize_bylaw_name(document.municipality or "") != normalized_municipality
+        ):
+            continue
+        name = normalize_bylaw_name(document.bylaw_name or "")
+        if not name:
+            continue
+        if name == target:
+            return document
+        if name.startswith(target) or target.startswith(name):
+            prefix_candidates.append(document)
+    return prefix_candidates[0] if len(prefix_candidates) == 1 else None
+
+
 def latest_document_id_resolver(session: Session) -> int | None:
     """Return the id of the most recently ingested document, or None.
 
     "Most recent" means largest ``ingestion_timestamp``; ties broken by id
-    descending. Used by the MCP server's ``--latest-only`` mode to scope
-    every request to the freshest ingest, since dev workflows commonly
-    re-ingest the same bylaw multiple times.
+    descending. Dev/debug utility only — no deployment scopes retrieval by
+    recency anymore (see ``retrieval_enabled_resolver``); this survives for
+    scripts and resolver-mechanism tests that want a single-doc scope.
     """
     return (
         session.execute(
@@ -200,32 +421,30 @@ def latest_document_id_resolver(session: Session) -> int | None:
     )
 
 
-def latest_per_bylaw_resolver(session: Session) -> list[int] | None:
-    """Return the id of the most recently ingested document *per bylaw*.
+def retrieval_enabled_resolver(session: Session) -> list[int]:
+    """Return the ids of documents explicitly published to retrieval.
 
-    Groups documents by ``(municipality, bylaw_name)`` and picks the
-    newest ingest of each (largest ``ingestion_timestamp``, ties broken
-    by ``id`` descending).  This lets a multi-bylaw deployment search
-    across all active bylaws while still de-duplicating re-ingests of
-    the same bylaw — the common dev-workflow concern that
-    ``latest_document_id_resolver`` was built for, generalized.
+    The retrieval corpus is exactly the set of documents an operator has
+    enabled (``document.retrieval_enabled``, toggled via the layer1 CLI's
+    ``enable-retrieval``/``disable-retrieval``) — nothing is derived from
+    ingestion recency. This is the production resolver (advisor app, MCP
+    server, monitoring).
 
-    Returns ``None`` when no documents exist (so the caller can
-    distinguish "no documents at all" from "an empty scope").
+    CONTRACT: always returns a list, never ``None``. An empty list is a
+    real, fail-closed scope — every scoped query returns zero rows. (The
+    latest-* resolvers return ``None`` on an empty corpus, which the
+    scope checks treat as "unscoped"; an opt-in publish flag must not
+    fail open that way.)
     """
-    from sqlalchemy import func  # noqa: PLC0415
-
-    window = func.row_number().over(
-        partition_by=[Document.municipality, Document.bylaw_name],
-        order_by=[desc(Document.ingestion_timestamp), desc(Document.id)],
-    ).label("rn")
-    subq = select(Document.id.label("doc_id"), window).subquery()
-    ids = (
-        session.execute(select(subq.c.doc_id).where(subq.c.rn == 1))
+    return list(
+        session.execute(
+            select(Document.id)
+            .where(Document.retrieval_enabled.is_(True))
+            .order_by(Document.id)
+        )
         .scalars()
         .all()
     )
-    return list(ids) if ids else None
 
 
 class RetrievalService:
@@ -245,6 +464,17 @@ class RetrievalService:
         """
         self.session = session
         self._default_document_id_resolver = default_document_id_resolver
+        # Memo for the containing-parcel lookup, keyed by resolved geometry:
+        # one indexed ST_Contains per distinct location, reused across the
+        # datasets and fragments a single request touches — the ABS-435 abuts
+        # upgrade and the ABS-469 split-lot check share it. None = looked up,
+        # no parcel.
+        self._abut_location_cache: dict[str, dict[str, Any] | None] = {}
+        # ABS-472: memo for "which in-scope document IS this by-law?", keyed by
+        # normalized bylaw name. get_adjacent_zoning resolves it once per
+        # abutting parcel, and every neighbour of a downtown lot names the
+        # same by-law.
+        self._governing_document_cache: dict[str, Document | None] = {}
 
     def _resolve_default_document_ids(self) -> list[int] | None:
         if self._default_document_id_resolver is None:
@@ -294,6 +524,11 @@ class RetrievalService:
         max_fragments: int = 250,
         include_text: bool = False,
     ) -> DocumentOutlineResponse:
+        default_ids = self._resolve_default_document_ids()
+        if default_ids is not None and document_id not in default_ids:
+            # A document outside the scoped corpus must be
+            # indistinguishable from a nonexistent one.
+            raise ValueError(f"Document {document_id} not found")
         document = self._get_document(document_id)
         stmt = (
             select(SourceFragment)
@@ -413,11 +648,23 @@ class RetrievalService:
         ``document_id`` AND-ed with the service's ``default_ids``, so
         suggestions can never escape the scope the caller asked for.
 
-        Uses rapidfuzz ``WRatio`` (handles partial / token-set / token-sort
-        equivalence in one scorer) — well-suited to the asymmetric query
-        case we hit in practice, where a short human-style label like
-        ``"Table 1A"`` needs to find a longer canonical form like
-        ``"Part II > [Table 1A]"``.
+        Two rankers, in order:
+
+        1. **Structural** — when the request looks like a compact legal
+           citation ("198(1)(f)"), match its ordered tokens against each
+           candidate's structural path segments. See
+           :func:`_structural_citation_rank`.
+        2. **rapidfuzz ``WRatio``** (handles partial / token-set /
+           token-sort equivalence in one scorer) for everything else —
+           well-suited to the asymmetric query case where a short
+           human-style label like ``"Table 1A"`` needs to find a longer
+           canonical form like ``"Part II > [Table 1A]"``.
+
+        The structural pass exists because WRatio is the wrong tool for a
+        compact citation: it scores the whole string, so the heading segment
+        an ingest interposes ("Part V > 198 > [Side Setback Requirements] >
+        (f)") drowns out the two tokens that actually identify the clause,
+        and short unrelated paths ending in "(f)" outrank it (ABS-461).
         """
         stmt = (
             select(SourceFragment.citation_path)
@@ -431,6 +678,8 @@ class RetrievalService:
         candidates = [row for row in self.session.execute(stmt).scalars().all() if row]
         if not candidates:
             return []
+
+        structural = _structural_citation_rank(requested, candidates)
         ranked = process.extract(
             requested,
             candidates,
@@ -442,7 +691,13 @@ class RetrievalService:
         # by descending score. We only need the path strings — the score
         # is internal ranking signal, not something the agent should see
         # (it can't meaningfully act on a fuzz score).
-        return [choice for choice, _score, _idx in ranked]
+        fuzzy = [choice for choice, _score, _idx in ranked]
+
+        suggestions: list[str] = []
+        for path in structural + fuzzy:
+            if path not in suggestions:
+                suggestions.append(path)
+        return suggestions[: self._LOOKUP_SUGGESTION_LIMIT]
 
     def _lookup_via_structured(
         self, request: CitationLookupRequest
@@ -528,10 +783,17 @@ class RetrievalService:
            ``not_permitted``. A ``conditional`` cell additionally carries the
            footnote ordinal and its joined condition text.
         4. Every partial-match case (unknown use, unknown zone, no matrix in
-           scope, or an unbound cell) returns a *typed* indeterminate result
-           with a reason — never a silent empty success (FR3).
+           scope, an unbound cell, or an unreadable one) returns a *typed*
+           indeterminate result with a reason — never a silent empty success
+           (FR3).
+
+        ABS-483: a cell whose marker classifies as ``unknown`` (missing from
+        the parsed grid, or an unmapped symbol-font glyph) is an extraction
+        failure, and returns ``reason_code='unreadable_cell'`` rather than the
+        ``not_permitted`` the three-value vocabulary used to force.
         """
         tables = self._permission_matrix_tables(document_id=document_id)
+        unreadable: SourceTable | None = None
         for table in tables:
             resolved = resolve_permission_cell(
                 self.session,
@@ -539,8 +801,17 @@ class RetrievalService:
                 use_name=use,
                 zone=zone,
             )
-            if resolved is not None:
-                return self._build_permitted_use_result(use, zone, table, resolved)
+            if resolved is None:
+                continue
+            result = self._build_permitted_use_result(use, zone, table, resolved)
+            if result is not None:
+                return result
+            # ABS-483: this matrix addressed the pair but the cell is
+            # unreadable. Remember it and keep looking — another slice of the
+            # same logical table (or the Mainland prose path) may still answer
+            # — but never let the gap collapse into "not_permitted".
+            if unreadable is None:
+                unreadable = table
 
         # ABS-283: the Mainland LUB encodes permitted uses as prose section
         # lists, not a symbol-dot matrix. When no matrix addressed the cell, fall
@@ -549,6 +820,25 @@ class RetrievalService:
         mainland = self._resolve_mainland_permitted_use(use, zone, document_id)
         if mainland is not None:
             return mainland
+
+        if unreadable is not None:
+            return PermittedUseResult(
+                use=use,
+                zone=zone,
+                indeterminate=True,
+                reason_code="unreadable_cell",
+                reason=(
+                    f"Use {use!r} and zone {zone!r} address a cell in the "
+                    "permitted-use matrix, but its permission could not be "
+                    "extracted (the cell is missing from the parsed grid, or "
+                    "carries a symbol-font glyph this bylaw's profile does not "
+                    "map). This is an extraction gap — it does NOT mean the use "
+                    "is prohibited. Consult the cited table directly."
+                ),
+                citation=self._table_citation(unreadable),
+                document_id=unreadable.document_id,
+                table_id=unreadable.id,
+            )
 
         if not tables:
             return PermittedUseResult(
@@ -676,8 +966,14 @@ class RetrievalService:
         zone: str,
         table: SourceTable,
         resolved: dict,
-    ) -> PermittedUseResult:
-        """Project a resolved cell dict into a :class:`PermittedUseResult`."""
+    ) -> PermittedUseResult | None:
+        """Project a resolved cell dict into a :class:`PermittedUseResult`.
+
+        Returns ``None`` when the cell resolved to the ``unknown`` marker
+        (ABS-483) so the caller can keep looking at the remaining matrices
+        before giving up — Table 1A spans several ``source_table`` rows, and a
+        gap in one slice doesn't mean the pair is unanswerable.
+        """
         marker = resolved.get("permission_marker")
         footnote = resolved.get("footnote")
         # Fall back to on-the-fly classification when the cell wasn't
@@ -689,12 +985,23 @@ class RetrievalService:
             marker = classified["permission_marker"]
             footnote = classified.get("footnote")
 
-        footnote_ordinal: int | None = None
-        condition_text: str | None = None
+        # ABS-483: an unreadable cell is NOT a verdict. ``permission`` carries
+        # only the three bylaw values, so an extraction failure surfaces as a
+        # typed indeterminate rather than a fabricated "not_permitted".
+        if marker == UNKNOWN:
+            return None
+
+        footnotes: list[FootnoteCondition] = []
         if marker == "conditional":
-            footnote_ordinal = footnote
-            condition_text = self._footnote_condition_text(
-                document_id=table.document_id, ordinal=footnote
+            # ABS-523: every marker in the cell, not just the first. The ER-3
+            # multi-unit cell prints "⑮ ㉒"; keeping ⑮ alone reported a grain
+            # elevator carve-out and dropped the footnote that authorises the
+            # units, and the advisor sent a developer to an unneeded rezoning.
+            ordinals = resolved.get("footnotes") or (
+                [footnote] if footnote is not None else []
+            )
+            footnotes = self._footnote_conditions(
+                document_id=table.document_id, ordinals=ordinals
             )
 
         return PermittedUseResult(
@@ -702,12 +1009,41 @@ class RetrievalService:
             zone=zone,
             indeterminate=False,
             permission=marker,
-            footnote_ordinal=footnote_ordinal,
-            condition_text=condition_text,
+            footnotes=footnotes,
+            footnote_ordinal=footnotes[0].ordinal if footnotes else None,
+            condition_text=footnotes[0].text if footnotes else None,
             citation=self._table_citation(table),
             document_id=table.document_id,
             table_id=table.id,
         )
+
+    def _footnote_conditions(
+        self, *, document_id: int, ordinals: Sequence[int]
+    ) -> list[FootnoteCondition]:
+        """Resolve each of a cell's footnote ordinals to its legend (ABS-523).
+
+        Order is the cell's own print order — the by-law prints ⑮ before ㉒ and
+        a reader comparing the answer against the table should find them the
+        same way round. Duplicates are collapsed; an ordinal whose legend does
+        not resolve is still returned, with ``text=None``, because "condition
+        ㉒ applies and we could not read it" is a materially different thing to
+        tell a reader than silence.
+        """
+        conditions: list[FootnoteCondition] = []
+        seen: set[int] = set()
+        for ordinal in ordinals:
+            if ordinal is None or ordinal in seen:
+                continue
+            seen.add(ordinal)
+            conditions.append(
+                FootnoteCondition(
+                    ordinal=ordinal,
+                    text=self._footnote_condition_text(
+                        document_id=document_id, ordinal=ordinal
+                    ),
+                )
+            )
+        return conditions
 
     def _footnote_condition_text(
         self, *, document_id: int, ordinal: int | None
@@ -880,20 +1216,22 @@ class RetrievalService:
     # right row even when sibling zones share keyword tokens.
     _ZONE_PROFILE_SEARCH_LIMIT = 10
 
-    # Confidence normalisation. ``_score_fragment`` is unbounded but a
-    # *zone-anchored* hit — where the zone code appears in the matched
-    # fragment's citation_path or label, not just its body text — scores
-    # well above this when the dimension keywords also land. Dividing by
-    # this constant maps a solid zone-anchored hit to ~1.0 while a
-    # body-text-only brush (the zone is mentioned but the dimension
-    # keywords are absent) lands below ``_ZONE_FIELD_MIN_CONFIDENCE``.
-    _ZONE_FIELD_FULL_SCORE = 40.0
-
-    # Below this normalised confidence a field is treated as "not
-    # confidently extracted": the value is dropped to None and NO
-    # citation is emitted for it (AC-2.9). Keeps the DTO honest — a
-    # value the retrieval couldn't stand behind never reaches the LLM.
-    _ZONE_FIELD_MIN_CONFIDENCE = 0.5
+    # Below this confidence a field is treated as "not confidently
+    # extracted": the value is dropped to None and NO citation is emitted
+    # for it (AC-2.9). Keeps the DTO honest — a value the retrieval
+    # couldn't stand behind never reaches the LLM.
+    #
+    # ABS-493: this used to compare ``min(1.0, score / 40.0)`` against
+    # 0.5, which made the verdict a function of query WORD COUNT —
+    # ``_score_fragment`` adds a fixed bonus per matching query token, so
+    # a wordier query out-scored a terser one on identical evidence. On
+    # the Regional Centre fixture that cost COR all three of its setbacks
+    # (query "COR setback", 2 tokens, 0.425) while CEN-2 kept them off
+    # the very same ``Table 3 > <zone>`` row shape (query "CEN-2 setback",
+    # 4 tokens, 1.0). The gate now reads an ordinal
+    # :class:`EvidenceClass` — see the enum's docstring and
+    # ``docs/decisions/ABS-493-CONFIDENCE-DEFINITION.md``.
+    _ZONE_FIELD_MIN_CONFIDENCE = MIN_GATED_EVIDENCE_CONFIDENCE
 
     def get_zone_profile(
         self,
@@ -958,7 +1296,7 @@ class RetrievalService:
             zone_full_name = _extract_zone_full_name(identity.text, zone)
             chapter = _extract_chapter(identity.citation_path)
             if (zone_full_name or chapter) and identity.citation_path:
-                citations.add(identity, ["zone_full_name", "chapter"])
+                citations.add(identity.match, ["zone_full_name", "chapter"])
 
         dimensions: ZoneDimensions | None = None
         if "dimensions" in wanted:
@@ -1002,12 +1340,17 @@ class RetrievalService:
         )
         return self.search(request).matches
 
-    def _zone_best_match(self, query: str, zone_pattern) -> RetrievalMatch | None:
+    def _zone_best_match(self, query: str, zone_pattern) -> "_ZoneEvidence | None":
         """Highest-scoring search match whose text/citation names the zone.
 
         Filtering to fragments that actually mention the zone code is
         what keeps a sibling zone's row (which shares dimension keywords)
         from being mistaken for this zone's row.
+
+        Returns the match paired with its :class:`EvidenceClass` (ABS-493).
+        The class is a property of the (query, fragment) pair, so it is
+        computed here — where the query is still in hand — rather than
+        re-derived downstream from a score that has already forgotten it.
         """
         for match in self._zone_search(query):
             haystack = " ".join(
@@ -1016,17 +1359,18 @@ class RetrievalService:
                 if part
             )
             if zone_pattern.search(haystack):
-                return match
+                return self._evidence(match, query)
         return None
 
-    def _field_confidence(self, match: RetrievalMatch) -> float:
-        return min(1.0, match.score / self._ZONE_FIELD_FULL_SCORE)
+    def _evidence(self, match: RetrievalMatch, query: str) -> "_ZoneEvidence":
+        """Pair a match with the :class:`EvidenceClass` its query earns it."""
+        return _ZoneEvidence(match=match, evidence_class=_classify_evidence(query, match))
 
     def _build_zone_dimensions(
         self,
-        dims_match: RetrievalMatch | None,
-        setback_match: RetrievalMatch | None,
-        far_match: RetrievalMatch | None,
+        dims_match: "_ZoneEvidence | None",
+        setback_match: "_ZoneEvidence | None",
+        far_match: "_ZoneEvidence | None",
         citations: "_CitationAccumulator",
         confidence: dict[str, float],
     ) -> ZoneDimensions:
@@ -1035,21 +1379,21 @@ class RetrievalService:
         # Height + lot coverage live in one row (Table 5), so they share
         # the same match + citation.
         if dims_match is not None:
-            conf = self._field_confidence(dims_match)
+            conf = dims_match.confidence
             if conf >= self._ZONE_FIELD_MIN_CONFIDENCE:
                 height = _extract_height_m(dims_match.text)
                 coverage = _extract_coverage_pct(dims_match.text)
                 if height is not None:
                     dims.max_height_m = height
-                    confidence["max_height_m"] = round(conf, 3)
-                    citations.add(dims_match, ["max_height_m"])
+                    confidence["max_height_m"] = conf
+                    citations.add(dims_match.match, ["max_height_m"])
                 if coverage is not None:
                     dims.max_lot_coverage_pct = coverage
-                    confidence["max_lot_coverage_pct"] = round(conf, 3)
-                    citations.add(dims_match, ["max_lot_coverage_pct"])
+                    confidence["max_lot_coverage_pct"] = conf
+                    citations.add(dims_match.match, ["max_lot_coverage_pct"])
 
         if setback_match is not None:
-            conf = self._field_confidence(setback_match)
+            conf = setback_match.confidence
             if conf >= self._ZONE_FIELD_MIN_CONFIDENCE:
                 for kind, attr in (
                     ("front", "front_setback_m"),
@@ -1059,23 +1403,23 @@ class RetrievalService:
                     value = _extract_setback_m(setback_match.text, kind)
                     if value is not None:
                         setattr(dims, attr, value)
-                        confidence[attr] = round(conf, 3)
-                        citations.add(setback_match, [attr])
+                        confidence[attr] = conf
+                        citations.add(setback_match.match, [attr])
 
         if far_match is not None:
-            conf = self._field_confidence(far_match)
+            conf = far_match.confidence
             if conf >= self._ZONE_FIELD_MIN_CONFIDENCE:
                 far = _extract_far(far_match.text)
                 if far is not None:
                     dims.max_far = far
-                    confidence["max_far"] = round(conf, 3)
-                    citations.add(far_match, ["max_far"])
+                    confidence["max_far"] = conf
+                    citations.add(far_match.match, ["max_far"])
 
         return dims
 
     def _build_zone_uses(
         self,
-        uses_match: RetrievalMatch | None,
+        uses_match: "_ZoneEvidence | None",
         zone: str,
         citations: "_CitationAccumulator",
         confidence: dict[str, float],
@@ -1087,26 +1431,101 @@ class RetrievalService:
         # the fallback for P/N-styled corpora.
         matrix = self._build_zone_uses_from_matrix(zone, citations, confidence)
         if matrix is not None:
+            # ABS-484: the matrix path may no longer short-circuit while it
+            # holds UNKNOWNs. A cell the parser lost is not an answer, so the
+            # prose path is consulted for exactly those uses before the gap is
+            # reported as a gap.
+            if matrix.undetermined:
+                self._resolve_undetermined_from_prose(
+                    matrix, uses_match, zone, citations, confidence
+                )
             return matrix
 
         uses = ZoneUses()
         if uses_match is None:
             return uses
-        conf = self._field_confidence(uses_match)
+        conf = uses_match.confidence
         if conf < self._ZONE_FIELD_MIN_CONFIDENCE:
             return uses
         permitted, not_permitted = _extract_uses(uses_match.text, zone)
         if permitted or not_permitted:
             uses.permitted = permitted
             uses.not_permitted = not_permitted
-            confidence["uses"] = round(conf, 3)
-            citations.add(uses_match, ["uses"])
+            confidence["uses"] = conf
+            citations.add(uses_match.match, ["uses"])
         return uses
 
-    # Confidence recorded for matrix-enumerated use lists. Matches the table
-    # classifier's permission-matrix confidence (_classify_table) — the cells
-    # are read directly off bound axes, not regex-extracted from prose.
-    _MATRIX_USES_CONFIDENCE = 0.9
+    def _resolve_undetermined_from_prose(
+        self,
+        uses: ZoneUses,
+        uses_match: "_ZoneEvidence | None",
+        zone: str,
+        citations: "_CitationAccumulator",
+        confidence: dict[str, float],
+    ) -> None:
+        """Try the prose path on exactly the uses the matrix left UNKNOWN (ABS-484).
+
+        The matrix column and the P/N prose row are two readings of the same
+        bylaw, and a corpus may carry both — a cell dropped in table parsing
+        can still be stated in the section text. So a use the matrix could not
+        read is looked up in the prose row *by name*: when the prose answers,
+        the use moves into the determinate list it belongs to and the prose
+        fragment is cited for it; when the prose is silent (or absent, or too
+        weak a match), the use stays in ``undetermined``, uncited.
+
+        Mutates ``uses`` in place. Only ever *removes* from ``undetermined`` —
+        it never manufactures new undetermined entries.
+        """
+        if uses_match is None or not uses.undetermined:
+            return
+        conf = uses_match.confidence
+        if conf < self._ZONE_FIELD_MIN_CONFIDENCE:
+            return
+        permitted, not_permitted = _extract_uses(uses_match.text, zone)
+        prose: dict[str, str] = {}
+        for name in not_permitted:
+            for key in _use_match_keys(name):
+                prose[key] = "not_permitted"
+        # Permitted wins a collision: a prose row that lists the use on both
+        # sides is itself ambiguous, and the permissive reading is the one that
+        # doesn't invent a prohibition.
+        for name in permitted:
+            for key in _use_match_keys(name):
+                prose[key] = "permitted"
+
+        remaining: list[str] = []
+        resolved = False
+        for label in uses.undetermined:
+            verdict = next(
+                (prose[key] for key in _use_match_keys(label) if key in prose), None
+            )
+            if verdict == "permitted":
+                uses.permitted.append(label)
+            elif verdict == "not_permitted":
+                uses.not_permitted.append(label)
+            else:
+                remaining.append(label)
+                continue
+            resolved = True
+        uses.undetermined = remaining
+        if not resolved:
+            return
+        citations.add(uses_match.match, ["uses"])
+        # The ``uses`` block now mixes matrix cells with a weaker prose
+        # reading, so its confidence drops to the weaker of the two rather
+        # than keeping the matrix's rung for entries the matrix never
+        # produced. Taking the min is well-defined precisely because these
+        # are rungs on one ordinal ladder (ABS-493) — the block is only as
+        # well-evidenced as its weakest contributing reading.
+        existing = confidence.get("uses")
+        confidence["uses"] = conf if existing is None else min(existing, conf)
+
+    # Confidence recorded for matrix-enumerated use lists: the BOUND_TABLE_CELL
+    # rung (ABS-493). Matches the table classifier's permission-matrix
+    # confidence (_classify_table) — the cells are read directly off bound
+    # axes, not regex-extracted from prose, which is why this outranks every
+    # keyword-derived rung except an outright citation-path identity match.
+    _MATRIX_USES_CONFIDENCE = EVIDENCE_CLASS_CONFIDENCE[EvidenceClass.BOUND_TABLE_CELL]
 
     def _zone_bound_in_permission_matrix(self, zone: str) -> bool:
         """True when a scoped permission matrix binds ``zone`` as a column."""
@@ -1154,36 +1573,64 @@ class RetrievalService:
                     continue
                 seen.add(label)
                 permission = row["permission"]
-                if permission == "permitted":
+                # ABS-483/ABS-484: an ``unknown`` row (bound, but with no
+                # readable cell in this column) is an extraction gap, not a
+                # prohibition — folding it into not_permitted would state a
+                # prohibition we never read. It goes to ``undetermined``, where
+                # it carries neither citation nor confidence.
+                if permission == UNKNOWN:
+                    uses.undetermined.append(label)
+                elif permission == "permitted":
                     uses.permitted.append(label)
                 elif permission == "conditional":
-                    ordinal = row.get("footnote_ordinal")
-                    condition: str | None = None
-                    if ordinal is not None:
+                    # ABS-523: the whole cell's markers. ``get_zone_profile`` is
+                    # the case-open shortcut the server instructions tell the
+                    # agent to call first, so a condition dropped here is the
+                    # first thing the agent learns about the zone and the last
+                    # thing it will think to re-check.
+                    ordinals = row.get("footnote_ordinals") or []
+                    if not ordinals and row.get("footnote_ordinal") is not None:
+                        ordinals = [row["footnote_ordinal"]]
+                    footnotes: list[FootnoteCondition] = []
+                    for ordinal in ordinals:
                         cache_key = (table.document_id, ordinal)
                         if cache_key not in condition_cache:
                             condition_cache[cache_key] = self._footnote_condition_text(
                                 document_id=table.document_id, ordinal=ordinal
                             )
-                        condition = condition_cache[cache_key]
+                        footnotes.append(
+                            FootnoteCondition(
+                                ordinal=ordinal, text=condition_cache[cache_key]
+                            )
+                        )
                     uses.conditional.append(
                         ConditionalUse(
-                            use=label, footnote_ordinal=ordinal, condition=condition
+                            use=label,
+                            footnotes=footnotes,
+                            footnote_ordinal=(
+                                footnotes[0].ordinal if footnotes else None
+                            ),
+                            condition=footnotes[0].text if footnotes else None,
                         )
                     )
                 elif permission == "not_permitted":
                     uses.not_permitted.append(label)
 
-        if not contributing or not (
-            uses.permitted or uses.conditional or uses.not_permitted
-        ):
+        determinate = bool(uses.permitted or uses.conditional or uses.not_permitted)
+        if not contributing or not (determinate or uses.undetermined):
             # No matrix binds the zone (or only placeholder rows did) — let
             # the caller fall through to the prose-extraction path.
             return None
-        confidence["uses"] = self._MATRIX_USES_CONFIDENCE
-        for table in contributing:
-            ref = self._table_citation(table)
-            citations.add_ref(ref, ["uses"])
+        if determinate:
+            # ABS-484: the 0.9 claim covers the cells we actually read. A
+            # column of nothing but UNKNOWNs asserts nothing, so it gets no
+            # confidence entry and no citation — a citation beside an
+            # extraction gap reads as evidence for a verdict that was never
+            # extracted.
+            confidence["uses"] = self._MATRIX_USES_CONFIDENCE
+            for table in contributing:
+                ref = self._table_citation(table)
+                citations.add_ref(ref, ["uses"])
         return uses
 
     def _build_zone_parking(
@@ -1198,11 +1645,13 @@ class RetrievalService:
         exemption clause.
         """
         parking = ZoneParking()
-        matches = self._zone_search("off-street parking requirements")
+        query = "off-street parking requirements"
+        matches = self._zone_search(query)
         if not matches:
             return parking
-        match = matches[0]
-        conf = self._field_confidence(match)
+        evidence = self._evidence(matches[0], query)
+        match = evidence.match
+        conf = evidence.confidence
         if conf < self._ZONE_FIELD_MIN_CONFIDENCE:
             return parking
 
@@ -1219,7 +1668,7 @@ class RetrievalService:
                 parking.schedule_reference,
             )
         ):
-            confidence["parking"] = round(conf, 3)
+            confidence["parking"] = conf
             citations.add(match, ["parking"])
         return parking
 
@@ -1234,23 +1683,43 @@ class RetrievalService:
     _SPATIAL_TEXT_BOTH_BONUS = 10.0
 
     def search(self, request: RetrievalRequest) -> RetrievalResponse:
-        # Two retrievers run in parallel: text-keyword scoring against
-        # fragments, and spatial intersection against linked geo datasets
-        # when a location is supplied. They produce disjoint or overlapping
-        # candidate fragment sets that are merged on fragment_id, with a
-        # bonus for fragments surfaced by both channels.
+        # Three retrievers run in parallel: text-keyword scoring against
+        # fragments, spatial intersection against linked geo datasets when a
+        # location is supplied, and direct scoring of table cells (ABS-500).
+        # They produce disjoint or overlapping candidate sets that are merged
+        # on fragment_id — the table channel keys its cells by the anchor
+        # fragment they are cited through — with an agreement bonus for
+        # fragments two *independent* channels reached (see
+        # _merge_channel_scores for why text and table are not independent).
         resolved_location, resolution_detail = self._resolve_location_slot(
             request.location
         )
 
         text_scored = self._text_channel_scores(request)
+        # ABS-494: full-text search joins the text side as a second opinion on
+        # the same question the ladder answers. It is blended into the text
+        # channel rather than merged as a peer of spatial/table because the two
+        # are not independent evidence — see _blend_fts_into_text.
+        #
+        # Skipped outright when the ladder found nothing: the blend discards a
+        # lone FTS ranking anyway (there is no ladder scale to borrow), so
+        # issuing the query would be paying for a result that cannot be used.
+        # This is the spatial-only path — "what applies at this address?" with
+        # no keywords the corpus matches.
+        if text_scored:
+            text_scored = self._blend_fts_into_text(
+                text_scored, self._fts_channel_scores(request)
+            )
         spatial_scored = (
             self._spatial_channel_scores(request, resolved_location)
             if resolved_location is not None
             else {}
         )
+        table_scored, table_hits = self._table_channel_scores(
+            request, discriminating=text_scored.discriminating
+        )
 
-        merged = self._merge_channel_scores(text_scored, spatial_scored)
+        merged = self._merge_channel_scores(text_scored, spatial_scored, table_scored)
         total_matches = len(merged)
 
         notes = self._build_response_notes(
@@ -1288,6 +1757,16 @@ class RetrievalService:
                 resolved_location=resolved_location,
             )
             match.retrieval_channels = sorted(channels)
+            # Attached whatever ``include_tables`` says: a table-channel match
+            # ranked *because of* a cell, and returning it without naming that
+            # cell would hand the model an anchor fragment it cannot ground the
+            # answer in. ``include_tables`` still governs the bulk
+            # ``related_tables`` dump, which is a different thing — everything
+            # near the fragment, whether or not it bore on the query.
+            if "table" in channels:
+                match.table_matches = [
+                    self._table_cell_match(hit) for hit in table_hits.get(fragment_id, [])
+                ]
             matches.append(match)
 
         return RetrievalResponse(
@@ -1340,6 +1819,98 @@ class RetrievalService:
         """Spatial predicate query_features should use for a given overlay role."""
         return "abuts" if role in self._ABUTS_OVERLAY_ROLES else "intersects"
 
+    def _abut_location(
+        self, resolved: ResolvedLocation
+    ) -> tuple[ResolvedLocation, float]:
+        """Upgrade a resolved location to the parcel polygon for abut tests (ABS-435).
+
+        "Does this lot abut a designated street" is a question about the *lot*,
+        but a civic geocode returns a rooftop/centroid point, and the distance
+        from that point to the centreline is dominated by lot depth: over the
+        HRM parcels along Quinpool Road it runs 0.1–283 m for parcels that
+        genuinely front the street, overlapping the range for parcels that
+        don't. No point threshold separates the two, which is how 6321 Quinpool
+        Rd (36.7 m from the centreline, squarely on the corridor) reported
+        ``abuts_pedestrian_street=false``.
+
+        Measured from the parcel boundary the question is separable — the front
+        lot line sits on the right-of-way edge — so when a parcel fabric is
+        ingested we swap the point for the parcel polygon containing it and use
+        the tighter ``PARCEL_ABUT_DISTANCE_M``. Falls back to the point (and the
+        looser, admittedly lossy ``DEFAULT_ABUT_DISTANCE_M``) when no parcels
+        dataset is in scope or the point falls outside every parcel.
+        """
+        if resolved.kind == "parcel":
+            return resolved, PARCEL_ABUT_DISTANCE_M
+
+        parcel_geometry = self._containing_parcel_geometry(resolved)
+        if parcel_geometry is None:
+            return resolved, DEFAULT_ABUT_DISTANCE_M
+        # Rebuild the location from THIS caller's resolved location rather than
+        # caching the ResolvedLocation itself: the cache is keyed by geometry
+        # alone, so a shared entry must not carry another address's confidence
+        # or reference_text.
+        return (
+            ResolvedLocation(
+                kind="parcel",
+                geometry=parcel_geometry,
+                confidence=resolved.confidence,
+                source=f"{resolved.source}+parcel",
+                reference_text=resolved.reference_text,
+            ),
+            PARCEL_ABUT_DISTANCE_M,
+        )
+
+    def _containing_parcel_geometry(
+        self, resolved: ResolvedLocation
+    ) -> dict[str, Any] | None:
+        """GeoJSON of the parcel containing ``resolved``, or None.
+
+        Memoised on the geometry, because one profile now asks this twice —
+        once for the Schedule 7 abuts test (ABS-435) and once for the
+        split-lot check (ABS-469) — and the containing-parcel query is a
+        PostGIS point-in-polygon over the whole 182k-parcel fabric.
+        """
+        cache_key = json.dumps(resolved.geometry, sort_keys=True)
+        if cache_key in self._abut_location_cache:
+            return self._abut_location_cache[cache_key]
+        geometry = self._resolve_containing_parcel_geometry(resolved)
+        self._abut_location_cache[cache_key] = geometry
+        return geometry
+
+    def _resolve_containing_parcel_geometry(
+        self, resolved: ResolvedLocation
+    ) -> dict[str, Any] | None:
+        parcels_ids = self._parcels_dataset_ids()
+        if not parcels_ids:
+            return None
+        try:
+            point = shapely_shape(resolved.geometry)
+        except (TypeError, ValueError, KeyError):
+            return None
+        if point.is_empty:
+            return None
+        if point.geom_type != "Point":
+            point = point.representative_point()
+        parcel = find_containing_feature(
+            self.session, dataset_ids=parcels_ids, point=point
+        )
+        if parcel is None or not parcel.geometry_geojson:
+            return None
+        return parcel.geometry_geojson
+
+    def _location_for_role(
+        self, role: str, resolved: ResolvedLocation
+    ) -> tuple[ResolvedLocation, float]:
+        """Location + abut buffer ``query_features`` should use for an overlay role.
+
+        Point-in-polygon overlays keep the resolved location as-is; only the
+        abuts roles pay for the parcel upgrade.
+        """
+        if role in self._ABUTS_OVERLAY_ROLES:
+            return self._abut_location(resolved)
+        return resolved, DEFAULT_ABUT_DISTANCE_M
+
     def get_address_profile(self, address: str) -> AddressProfile:
         """Resolve an address to its zone + overlay grounding context.
 
@@ -1354,23 +1925,104 @@ class RetrievalService:
         Never raises for an unresolvable address — FR-3.4 — returning an
         ``AddressProfile`` with ``unresolvable=True`` and empty citations so
         the calling agent can fall back to the thin tools cleanly.
+
+        ABS-469: the civic number is checked against the municipality's own
+        data BEFORE the address is geocoded. A number no published address or
+        street-segment range covers does not exist, and the geocoder will
+        happily invent a position for it by interpolating from the
+        surrounding numbering — so the check runs first and the address is
+        refused with the numbers that do exist, rather than answered from a
+        point on somebody else's parcel.
         """
         refs = RegexLocationExtractor().extract(address)
         if not refs:
-            return AddressProfile(address=address, unresolvable=True)
+            return AddressProfile(
+                address=address, unresolvable=True, caveats=[_UNRESOLVABLE_CAVEAT]
+            )
 
         ref = refs[0]
-        resolved, _detail = resolve_location_with_detail(self.session, ref)
         canonical_address = ref.raw_text or address
+        verdict: CivicAddressVerdict | None = None
+        if ref.kind == "civic_address":
+            verdict = verify_civic_address(
+                self.session,
+                civic_number=ref.civic_number,
+                street=ref.street,
+                # Read off ``address`` — what the caller typed — not
+                # ``canonical_address``. The extractor's ``raw_text`` is only
+                # the span it matched ("251 Stairs Street"), so the community
+                # has already been stripped by the time it reaches the
+                # LocationReference. Without the community, same-named streets
+                # in different communities share one address extent and a
+                # fabricated number lands in the apparent gap between them
+                # (ABS-474).
+                community=community_from_address(address),
+            )
+            if verdict.status == "not_found":
+                return self._nonexistent_address_profile(
+                    canonical_address, ref, verdict
+                )
+
+        resolved, _detail = resolve_location_with_detail(self.session, ref)
         if resolved is None:
-            return AddressProfile(
+            profile = AddressProfile(
                 address=canonical_address,
                 civic_number=ref.civic_number,
                 street=ref.street,
                 pid=ref.parcel_id,
                 unresolvable=True,
+                caveats=[_UNRESOLVABLE_CAVEAT],
             )
-        return self._build_address_profile(canonical_address, ref, resolved)
+            self._apply_civic_verdict(profile, verdict)
+            return profile
+        return self._build_address_profile(
+            canonical_address, ref, resolved, verdict=verdict
+        )
+
+    def _nonexistent_address_profile(
+        self,
+        address: str,
+        ref: LocationReference,
+        verdict: CivicAddressVerdict,
+    ) -> AddressProfile:
+        """The refusal an address that does not exist deserves.
+
+        No geocode is attempted: there is nothing to geocode, and asking the
+        external geocoder would only produce the interpolated point this whole
+        check exists to stop being used. ``unresolvable`` stays False because
+        the failure is not "we could not find it" — it is "it is not there",
+        a different thing to tell the user and the only one that carries a
+        correction.
+        """
+        profile = AddressProfile(
+            address=address,
+            civic_number=ref.civic_number,
+            street=ref.street,
+            pid=ref.parcel_id,
+            unresolvable=False,
+        )
+        self._apply_civic_verdict(profile, verdict)
+        profile.caveats = [
+            _NONEXISTENT_ADDRESS_CAVEAT.format(evidence=_verdict_evidence(verdict))
+        ]
+        return profile
+
+    @staticmethod
+    def _apply_civic_verdict(
+        profile: AddressProfile, verdict: CivicAddressVerdict | None
+    ) -> None:
+        """Copy a civic-address verdict onto the DTO (no-op when absent)."""
+        if verdict is None:
+            return
+        profile.civic_address_status = verdict.status
+        if verdict.method is not None:
+            profile.civic_address_evidence = (
+                f"{verdict.method} ({verdict.dataset_name})"
+                if verdict.dataset_name
+                else verdict.method
+            )
+        profile.valid_civic_number_ranges = format_ranges(verdict.valid_ranges)
+        profile.suggested_civic_numbers = [str(n) for n in verdict.suggestions]
 
     # -- ABS-375: adjacent-parcel zoning lookup ---------------------------
     #
@@ -1439,7 +2091,7 @@ class RetrievalService:
             )
 
         subject_centroid = self._feature_centroid(subject)
-        subject_zone, _ = self._resolve_zone_at_point(subject_centroid or point)
+        subject_zone, _, _ = self._resolve_zone_at_point(subject_centroid or point)
 
         neighbours_features = find_abutting_features(
             self.session, dataset_ids=parcels_ids, subject=subject
@@ -1450,10 +2102,19 @@ class RetrievalService:
             centroid = self._feature_centroid(feature)
             if centroid is None:
                 continue
-            zone, zone_dataset = self._resolve_zone_at_point(centroid)
-            if citation is None and zone_dataset is not None:
+            zone, zone_dataset, governing = self._resolve_zone_at_point(centroid)
+            # ABS-472: no citation at all beats one naming a by-law that does
+            # not govern the neighbour's land — the setback this profile feeds
+            # would then be read out of the wrong document.
+            if (
+                citation is None
+                and zone_dataset is not None
+                and (governing is None or governing.held)
+            ):
                 citation = self._citation_ref_for_dataset(
-                    zone_dataset, source="zone"
+                    zone_dataset,
+                    source="zone",
+                    governing_document=governing.document if governing else None,
                 )
             neighbours.append(
                 NeighbourZone(
@@ -1519,12 +2180,15 @@ class RetrievalService:
 
     def _resolve_zone_at_point(
         self, point
-    ) -> tuple[str | None, ExternalDataset | None]:
+    ) -> tuple[str | None, ExternalDataset | None, GoverningBylaw | None]:
         """Resolve the zone code covering ``point`` (a shapely Point).
 
         Intersects the point against every in-scope zoning overlay and
-        returns the strongest match's ``zone_code`` plus its dataset (for
-        citation). Returns ``(None, None)`` when no zone polygon covers the
+        returns the strongest match's ``zone_code``, its dataset (for
+        citation), and the by-law that governs that particular feature
+        (ABS-472 — a municipality-wide layer's zone may belong to a by-law
+        this corpus does not hold, and must not be cited to the layer's own
+        linked document). Returns all-None when no zone polygon covers the
         point or no zoning dataset is in scope.
         """
         location = ResolvedLocation(
@@ -1541,8 +2205,8 @@ class RetrievalService:
             canonical = matches[0].feature.canonical_attributes_json or {}
             zone = canonical.get("zone_code")
             if zone:
-                return str(zone), dataset
-        return None, None
+                return str(zone), dataset, self._governing_bylaw(dataset, dict(canonical))
+        return None, None, None
 
     @staticmethod
     def _bearing(origin, target) -> str | None:
@@ -1764,41 +2428,150 @@ class RetrievalService:
     def _overlay_role(self, dataset: ExternalDataset) -> str:
         return overlay_role_for_name(dataset.name)
 
+    # -- ABS-472: per-feature governing by-law ----------------------------
+    #
+    # ``ExternalDataset.linked_document_id`` binds a whole layer to one
+    # document. For a municipality-wide layer that link is a publishing fact,
+    # not a jurisdictional one: HRM's zoning layer spans 22 by-law areas and
+    # only two of them are ingested, so citing every feature to the linked
+    # document attributes a Downtown Halifax zone to the Regional Centre LUB.
+    # These helpers resolve the citing document from the *feature's own*
+    # by-law attribution, and say so plainly when that by-law is not held.
+
+    def _governing_bylaw_config(self, dataset: ExternalDataset) -> dict[str, Any] | None:
+        """The dataset's declared ``links_to.governing_bylaw_from``, if any.
+
+        Read from the persisted ``metadata_json`` the ingest wrote, so
+        retrieval never has to reach back to the YAML on disk.
+        """
+        links_to = (dataset.metadata_json or {}).get("links_to") or {}
+        governing = links_to.get("governing_bylaw_from")
+        return governing if isinstance(governing, dict) else None
+
+    def _governing_bylaw(
+        self, dataset: ExternalDataset, canonical: dict[str, Any]
+    ) -> GoverningBylaw | None:
+        """Resolve which by-law governs one matched feature, and whether we hold it.
+
+        Returns None when the dataset publishes no per-feature attribution (the
+        pre-ABS-472 world, and the correct answer for a layer that genuinely
+        does belong to a single by-law) or when the feature's own attribution
+        is missing — a feature whose by-law area we can't read is not evidence
+        that the dataset-level link is right, but it isn't evidence it's wrong
+        either, so it stays ``unknown`` rather than being refused.
+        """
+        config = self._governing_bylaw_config(dataset)
+        if config is None:
+            return None
+        name = canonical.get(config.get("name_attribute") or "")
+        if not isinstance(name, str) or not name.strip():
+            return None
+        code = canonical.get(config.get("code_attribute") or "")
+        document = self._document_for_bylaw_name(name, fallback=dataset)
+        return GoverningBylaw(
+            name=name,
+            code=code if isinstance(code, str) and code else None,
+            document=document,
+        )
+
+    def _document_for_bylaw_name(
+        self, bylaw_name: str, *, fallback: ExternalDataset
+    ) -> Document | None:
+        """The in-scope document for ``bylaw_name``, or None when not held.
+
+        Delegates the matching rule to
+        :func:`governing_document_for_bylaw_name` (shared with the ABS-472
+        coverage audit) behind a per-request memo, and answers within the
+        active retrieval scope: held means held AND visible right now — a
+        document ingested but never published cannot back a citation.
+
+        Municipality is taken from the layer's own linked document; a layer
+        and its features belong to one municipality even when they span its
+        by-laws.
+        """
+        linked = (
+            self.session.get(Document, fallback.linked_document_id)
+            if fallback.linked_document_id is not None
+            else None
+        )
+        municipality = linked.municipality if linked is not None else None
+        cache_key = (
+            f"{normalize_bylaw_name(municipality or '')}|"
+            f"{normalize_bylaw_name(bylaw_name)}"
+        )
+        if cache_key not in self._governing_document_cache:
+            self._governing_document_cache[cache_key] = (
+                governing_document_for_bylaw_name(
+                    self.session,
+                    bylaw_name,
+                    municipality=municipality,
+                    scoped_document_ids=self._resolve_default_document_ids(),
+                )
+            )
+        return self._governing_document_cache[cache_key]
+
     def _build_address_profile(
         self,
         address: str,
         ref: LocationReference,
         resolved: ResolvedLocation,
+        *,
+        verdict: CivicAddressVerdict | None = None,
     ) -> AddressProfile:
+        # ABS-466: the zone below is only as good as the point that selected
+        # it, so the profile reports how that point was arrived at. Google's
+        # location_type wins when the resolution came through it; otherwise
+        # the classifier falls back to the confidence float.
+        quality = classify_resolution(resolved.location_type, resolved.confidence)
         profile = AddressProfile(
             address=address,
             civic_number=ref.civic_number,
             street=ref.street,
             pid=ref.parcel_id,
             unresolvable=False,
+            resolution_quality=quality,
+            location_confidence=resolved.confidence,
+            location_type=resolved.location_type,
+            location_resolver=resolved.source,
         )
+        self._apply_civic_verdict(profile, verdict)
+        zone_dataset_ids: list[int] = []
         overlays: list[OverlayRef] = []
         citations: list[CitationRef] = []
+        # ABS-473: non-zone overlays whose own by-law is outside the corpus.
+        # Kept as (role, label, by-law) rather than folded into the zone's
+        # scalar governing_* fields because they are a different claim: the
+        # zone can be held and correctly cited while a height precinct over
+        # the same point comes from a by-law we do not have.
+        unheld_overlays: list[tuple[str, str | None, str, str | None]] = []
         # "available" = a dataset of this role is in scope, so a non-match is
         # a meaningful False rather than an unknown None.
         heritage_available = False
         bonus_available = False
         pedestrian_available = False
+        zone_available = False
 
         for dataset in self._scoped_linked_datasets():
             role = self._overlay_role(dataset)
-            if role == "heritage":
+            if role == "zone":
+                zone_available = True
+                zone_dataset_ids.append(dataset.id)
+            elif role == "heritage":
                 heritage_available = True
             elif role == "bonus_zoning":
                 bonus_available = True
             elif role == "pedestrian_street":
                 pedestrian_available = True
 
+            # ABS-435: abuts roles measure from the parcel polygon when a
+            # parcel fabric is ingested, not from the geocoded rooftop point.
+            role_location, abut_distance_m = self._location_for_role(role, resolved)
             matches = query_features(
                 self.session,
                 dataset_id=dataset.id,
-                location=resolved,
+                location=role_location,
                 predicate=self._predicate_for_role(role),
+                abut_distance_m=abut_distance_m,
             )
             if not matches:
                 continue
@@ -1808,19 +2581,52 @@ class RetrievalService:
             canonical = dict(best.feature.canonical_attributes_json or {})
             label = self._overlay_label(role, canonical, best.feature.feature_key)
 
+            # ABS-472: the dataset-level link says which document the LAYER
+            # was published with; a municipality-wide layer's feature says
+            # which by-law governs THIS ground. When the two disagree the
+            # feature wins, and when the feature names a by-law we don't hold
+            # there is no citation to give — emitting the layer's one would
+            # attribute the zone to a by-law that does not govern it.
+            governing = self._governing_bylaw(dataset, canonical)
             overlays.append(
                 OverlayRef(
                     kind=role,
                     dataset_name=dataset.name,
                     label=label,
-                    citation=dataset.linked_fragment_citation,
+                    citation=(
+                        None
+                        if governing is not None and not governing.held
+                        else dataset.linked_fragment_citation
+                    ),
                     attributes=canonical,
+                    governing_bylaw=governing.name if governing else None,
+                    governing_bylaw_held=governing.held if governing else None,
                 )
             )
-            citations.append(self._citation_ref_for_dataset(dataset, source=role))
+            if governing is None or governing.held:
+                citations.append(
+                    self._citation_ref_for_dataset(
+                        dataset,
+                        source=role,
+                        governing_document=governing.document if governing else None,
+                    )
+                )
+
+            if role != "zone" and governing is not None and not governing.held:
+                unheld_overlays.append(
+                    (role, label, governing.name, dataset.linked_fragment_citation)
+                )
 
             if role == "zone":
                 profile.zone = canonical.get("zone_code") or label
+                if governing is not None:
+                    profile.governing_bylaw = governing.name
+                    profile.governing_bylaw_code = governing.code
+                    profile.governing_bylaw_status = (
+                        "held" if governing.held else "not_held"
+                    )
+                else:
+                    profile.governing_bylaw_status = "unknown"
             elif role == "height_precinct":
                 profile.height_precinct = label
             elif role == "far_precinct":
@@ -1845,7 +2651,154 @@ class RetrievalService:
 
         profile.overlays = overlays
         profile.citations = citations
+
+        # ABS-469: a zone code is only safe when the point that selected it is
+        # not sitting on a zone line, and when the parcel it names is not
+        # split between zones. Both are computed from the zoning dataset the
+        # loop above already identified, and both are independent of how good
+        # the geocode was.
+        if profile.zone is not None:
+            self._apply_zone_boundary_context(
+                profile, resolved, zone_dataset_ids=zone_dataset_ids
+            )
+
+        # ABS-466: state the resolution's limits instead of letting a zone
+        # picked by an estimated point read as fact.
+        caveats: list[str] = []
+        # ABS-472 leads: the other caveats qualify how well we found the
+        # parcel; this one says the by-law behind its zone isn't here at all,
+        # which bounds the answer no matter how perfect the resolution was.
+        if profile.governing_bylaw_status == "not_held":
+            caveats.append(
+                _GOVERNING_BYLAW_NOT_HELD_CAVEAT.format(
+                    zone=profile.zone, bylaw=profile.governing_bylaw
+                )
+            )
+        # ABS-473: next, for the same reason — a standard read out of the
+        # wrong by-law is wrong no matter how well the address resolved. The
+        # zone caveat above does not cover it: the zone can be held and
+        # correctly cited while the height precinct over it is not.
+        for role, label, bylaw, citation in unheld_overlays:
+            caveats.append(
+                _OVERLAY_GOVERNING_BYLAW_NOT_HELD_CAVEAT.format(
+                    overlay=_OVERLAY_ROLE_NOUNS.get(role, "overlay"),
+                    label=label or "unlabelled",
+                    bylaw=bylaw,
+                    citation=citation or "the schedule this layer is linked to",
+                )
+            )
+        quality_caveat = resolution_caveat(quality)
+        if quality_caveat is not None:
+            caveats.append(quality_caveat)
+        if profile.parcel_zones:
+            caveats.append(
+                _MULTI_ZONE_PARCEL_CAVEAT.format(zones=", ".join(profile.parcel_zones))
+            )
+        if profile.zone_boundary_distance_m is not None:
+            caveats.append(
+                _ZONE_BOUNDARY_CAVEAT.format(
+                    distance=profile.zone_boundary_distance_m,
+                    other_zone=profile.nearest_other_zone,
+                )
+            )
+        if profile.zone is None:
+            if zone_available:
+                # A zoning dataset WAS in scope and the point missed every
+                # polygon. That is a coverage fact about the location — a
+                # distinct, actionable state — not "this parcel has no zone",
+                # and not the same as an address we couldn't find at all.
+                profile.outside_mapped_area = True
+                caveats.append(OUTSIDE_MAPPED_AREA_CAVEAT)
+            else:
+                caveats.append(
+                    "No zoning boundary dataset is in scope for this "
+                    "address, so the zone could not be checked at all. The "
+                    "absence of a zone here says nothing about the property."
+                )
+        profile.caveats = caveats
         return profile
+
+    # A zone polygon's edge is shared with its neighbour's, so a parcel that
+    # merely touches the next zone picks up a sliver of it from coordinate
+    # precision alone. Measured on the HRM fabric these slivers run 0.2–5 m²
+    # against parcels of 180–1,100 m², while a genuine split gives each zone
+    # tens of square metres AND a real share of the lot. Requiring both a 5%
+    # share and 10 m² keeps 2563 Maitland's real PCF/HR-1 split (107 m² and
+    # 66 m² of a ~180 m² lot) and drops 2500 Robie's 0.6 m² of ER-2 against
+    # 705 m² of COR.
+    _MULTI_ZONE_MIN_SHARE = 0.05
+    _MULTI_ZONE_MIN_AREA_M2 = 10.0
+
+    def _apply_zone_boundary_context(
+        self,
+        profile: AddressProfile,
+        resolved: ResolvedLocation,
+        *,
+        zone_dataset_ids: list[int],
+    ) -> None:
+        """Populate the zone-boundary proximity and multi-zone parcel fields.
+
+        ABS-469 tier 4, and orthogonal to everything else in this issue: an
+        exact rooftop match is still unsafe when the zone line runs through
+        the lot or along it. "This point is 8 m from the CEN-1 boundary;
+        confirm the zone with HRM" is a correct answer where a bare zone code
+        is not.
+        """
+        if not zone_dataset_ids:
+            return
+        for dataset_id in zone_dataset_ids:
+            nearby = features_within(
+                self.session,
+                dataset_id=dataset_id,
+                location=resolved,
+                distance_m=ZONE_BOUNDARY_PROXIMITY_M,
+            )
+            for feature, distance_m in nearby:
+                code = (feature.canonical_attributes_json or {}).get("zone_code")
+                if not code or str(code) == profile.zone:
+                    continue
+                # features_within sorts nearest-first, so the first differing
+                # zone IS the nearest one.
+                profile.nearest_other_zone = str(code)
+                profile.zone_boundary_distance_m = round(distance_m, 1)
+                break
+            if profile.nearest_other_zone is not None:
+                break
+
+        parcel_geometry = self._containing_parcel_geometry(resolved)
+        if parcel_geometry is None:
+            return
+        parcel_location = ResolvedLocation(
+            kind="parcel",
+            geometry=parcel_geometry,
+            confidence=resolved.confidence,
+            source=resolved.source,
+        )
+        try:
+            latitude = shapely_shape(parcel_geometry).representative_point().y
+        except (TypeError, ValueError, KeyError):
+            return
+        shares: dict[str, float] = {}
+        for dataset_id in zone_dataset_ids:
+            for match in query_features(
+                self.session, dataset_id=dataset_id, location=parcel_location
+            ):
+                code = (match.feature.canonical_attributes_json or {}).get("zone_code")
+                if not code:
+                    continue
+                area_m2 = square_degrees_to_m2(match.overlap_area, latitude)
+                shares[str(code)] = shares.get(str(code), 0.0) + area_m2
+        if len(shares) < 2:
+            return
+        total = sum(shares.values())
+        significant = [
+            code
+            for code, area in sorted(shares.items(), key=lambda kv: -kv[1])
+            if area >= self._MULTI_ZONE_MIN_AREA_M2
+            and (total <= 0 or area / total >= self._MULTI_ZONE_MIN_SHARE)
+        ]
+        if len(significant) > 1:
+            profile.parcel_zones = significant
 
     @staticmethod
     def _overlay_label(
@@ -1889,8 +2842,30 @@ class RetrievalService:
         ) or feature_key
 
     def _citation_ref_for_dataset(
-        self, dataset: ExternalDataset, *, source: str
+        self,
+        dataset: ExternalDataset,
+        *,
+        source: str,
+        governing_document: Document | None = None,
     ) -> CitationRef:
+        """Cite the document that actually governs the matched feature.
+
+        ``governing_document`` (ABS-472) re-points the citation when a
+        municipality-wide layer's feature is governed by a by-law other than
+        the one the layer is linked to — a Halifax Mainland zone must cite the
+        Halifax Mainland LUB, not the Regional Centre LUB the layer ships
+        alongside. The declared citation label is re-resolved *within* that
+        document; when it carries no such fragment the citation degrades to a
+        document-level pointer rather than borrowing the linked document's
+        fragment, which would put a real fragment id behind a claim that
+        document never made.
+        """
+        if governing_document is not None and (
+            governing_document.id != dataset.linked_document_id
+        ):
+            return self._citation_ref_for_governing_document(
+                dataset, governing_document, source=source
+            )
         fragment = (
             self.session.get(SourceFragment, dataset.linked_fragment_id)
             if dataset.linked_fragment_id is not None
@@ -1910,6 +2885,38 @@ class RetrievalService:
             document_id=document.id if document else None,
             municipality=document.municipality if document else None,
             bylaw_name=document.bylaw_name if document else None,
+            backs=[source],
+        )
+
+    def _citation_ref_for_governing_document(
+        self,
+        dataset: ExternalDataset,
+        document: Document,
+        *,
+        source: str,
+    ) -> CitationRef:
+        """Cite ``document`` for a feature the layer's own link would misattribute."""
+        citation = dataset.linked_fragment_citation
+        fragment = None
+        if citation:
+            fragments = (
+                self.session.execute(
+                    select(SourceFragment).where(
+                        SourceFragment.document_id == document.id,
+                        SourceFragment.citation_label == citation,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if len(fragments) == 1:
+                fragment = fragments[0]
+        return CitationRef(
+            citation_path=fragment.citation_path if fragment else None,
+            citation_label=fragment.citation_label if fragment else None,
+            document_id=document.id,
+            municipality=document.municipality,
+            bylaw_name=document.bylaw_name,
             backs=[source],
         )
 
@@ -1980,19 +2987,456 @@ class RetrievalService:
     # only when its score exceeds this baseline.
     _TEXT_CHANNEL_THRESHOLD = 1.0
 
-    def _text_channel_scores(self, request: RetrievalRequest) -> dict[int, float]:
+    # Provision-in-context (ABS-492). A token the clause does not state but
+    # its containers do is real evidence of scope and weaker evidence than the
+    # clause's own words, so it scores below the own-text weight (+4) rather
+    # than at it. Set too high, a Part heading naming a zone drags its whole
+    # subtree above clauses that state the standard; set to zero, the 2,968
+    # fragments with no citation_path keep no visible scope at all.
+    _CONTEXT_TOKEN_SCORE = 2.0
+
+    # A token that matches a large share of the scope is describing the corpus,
+    # not the clause: "the", "is", "zone" and "building" all hit thousands of
+    # fragments, and crediting them as inherited scope would add a near-constant
+    # to every fragment that happens to have an ancestor. The cut is a document
+    # frequency measured on this request's own scope rather than a hand-kept
+    # stop-word list, so it adapts to a narrowed scope (attribute_tag_filter)
+    # and to a corpus this repo has not ingested yet.
+    _CONTEXT_TOKEN_MAX_DF = 0.15
+
+    # Zone-scope binding (ABS-500). A clause sitting under a container that
+    # declares the query's zone ("Part V, Chapter 9: Built Form and Siting
+    # Requirements within the ER3, ER-2, and ER-1 Zones") is *governed by* that
+    # zone. That is a structural fact about how the clause is addressed, so it
+    # scores at the citation-path rung (+12) rather than the inherited-context
+    # rung (+2) — which is what stops a landscaping clause that merely lists
+    # ER-1 among abutting zones (own text, +4) from outranking the section that
+    # states the ER-1 standard. See bylaw_retrieval.retrieval.binding.
+    _ZONE_SCOPE_BINDING_SCORE = 12.0
+
+    # Zone-scope exclusion (ABS-518). The mirror of the binding above, and the
+    # half that was missing: a clause governed by a container that declares
+    # zones and *not* the query's is off-chapter, and the by-law says so in the
+    # heading. It matters because the chapters are near-identical prose over
+    # different numbers — ER Chapter 9 and HR Chapter 7 both say "the minimum
+    # required side setback for any main building shall be" — so an HR-1
+    # question matches the ER chapter's words just as well as the HR chapter's
+    # and, when the ER side carries a captioned table, better. Symmetric with
+    # the binding (-12 against +12) so an off-chapter clause lands a full
+    # structural rung below an on-chapter one rather than merely losing a
+    # tie-break. Applies to both the text channel and the table channel's
+    # anchors: "Table 9" is off-chapter for HR-1 for exactly the reason
+    # s.229 is.
+    _ZONE_SCOPE_EXCLUSION_PENALTY = 12.0
+
+    def _zone_scope_index(self) -> ZoneScopeIndex:
+        """The corpus's zone vocabulary and zone-declaring containers, cached.
+
+        Keyed on the *default* document scope rather than the request's: the
+        vocabulary is a property of the ingest, and rebuilding it per filter
+        shape would put two extra scans in front of every search.
+        """
+        scope = self._resolve_default_document_ids()
+        key = tuple(sorted(scope)) if scope is not None else None
+        cached = getattr(self, "_zone_scope_index_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, build_zone_scope_index(self.session, scope))
+            self._zone_scope_index_cache = cached
+        return cached[1]
+
+    def _provisions(self) -> ProvisionLineage:
+        """Path-addressed lineage and clause completion, cached per service.
+
+        Unlike ``_table_index`` / ``_zone_scope_index`` this is not keyed on the
+        document scope and is not built eagerly: it answers one path at a time
+        against the ``(document_id, citation_path)`` unique index and memoises
+        what it was asked, so a search that returns five matches from one
+        section resolves that section once. Nothing about it depends on which
+        documents are in scope — a citation path names one fragment in one
+        document by constraint.
+        """
+        lineage = getattr(self, "_provision_lineage_cache", None)
+        if lineage is None:
+            lineage = ProvisionLineage(self.session)
+            self._provision_lineage_cache = lineage
+        return lineage
+
+    def _table_index(self) -> TableIndex:
+        """Tables, cells, axis labels and anchors for the default scope, cached."""
+        scope = self._resolve_default_document_ids()
+        key = tuple(sorted(scope)) if scope is not None else None
+        cached = getattr(self, "_table_index_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, TableIndex.build(self.session, scope))
+            self._table_index_cache = cached
+        return cached[1]
+
+    def _text_channel_scores(self, request: RetrievalRequest) -> TextChannelScores:
         """Keyword-score every in-scope fragment. Returns {fragment_id: score}
         for fragments whose score exceeds the parse-status baseline (i.e. the
         query text actually matched some content).
+
+        Three things are scored: the fragment's own citable identity (text,
+        label, structural citation path), the scope its containers supply —
+        the bracketed prose in its own path plus every ancestor's heading and
+        text — and, when the query names a zone, whether the fragment is
+        *governed by* a container declaring that zone. The threshold is applied
+        to the sum, which is what makes a stripped list item ("(f) 2.5 metres
+        elsewhere.") reachable through its parent section's terms instead of
+        invisible to the channel entirely.
         """
         stmt = self._fragment_scope_statement(request)
         fragments = self.session.execute(stmt).scalars().all()
-        scored: dict[int, float] = {}
+        if not fragments:
+            return TextChannelScores()
+
+        details = {
+            fragment.id: score_fragment_detail(fragment, request.query)
+            for fragment in fragments
+        }
+        token_patterns = query_token_patterns(request.query.strip().lower())
+        discriminating = self._discriminating_tokens(token_patterns, details.values())
+
+        index = AncestorIndex.build(self.session, fragments)
+        # Ancestors are shared by whole subtrees, so the per-ancestor token
+        # match is memoised: the corpus has ~7k fragments over ~1.6k distinct
+        # ancestors, and a Part heading is re-scored once instead of once per
+        # descendant.
+        ancestor_tokens: dict[int, frozenset[str]] = {}
+
+        # Containers declaring a zone the query named. A fragment binds when it
+        # *is* one of them (so "where are the COR built-form requirements?"
+        # still ranks the chapter heading above the sections it scopes) or when
+        # one of them is an ancestor.
+        zones_named = self._zones_named(request.query)
+        zone_index = self._zone_scope_index()
+        declaring = zone_index.containers_declaring(zones_named)
+        excluding = zone_index.containers_excluding(zones_named)
+
+        scored = TextChannelScores(discriminating=discriminating)
         for fragment in fragments:
-            score = self._score_fragment(fragment, request.query)
+            detail = details[fragment.id]
+            context = self._context_tokens(
+                fragment, index, token_patterns, ancestor_tokens
+            )
+            # Only tokens the fragment does not already account for: an
+            # ancestor repeating the clause's own words is not new evidence.
+            inherited = (context & discriminating) - detail.matched_tokens
+            score = detail.score + self._CONTEXT_TOKEN_SCORE * len(inherited)
+            score += self._zone_scope_adjustment(
+                fragment.id, index.chain(fragment.id), declaring, excluding
+            )
             if score > self._TEXT_CHANNEL_THRESHOLD:
                 scored[fragment.id] = score
         return scored
+
+    def _zone_scope_adjustment(
+        self,
+        fragment_id: int,
+        chain: tuple[int, ...],
+        declaring: frozenset[int],
+        excluding: frozenset[int],
+    ) -> float:
+        """The zone-scope credit or debit one fragment earns for its chapter.
+
+        A fragment is on-chapter when it *is* a container declaring the query's
+        zone or descends from one, and off-chapter when the nearest zone-
+        declaring container above it names other zones only. Binding wins any
+        conflict: nesting puts an HR clause under both ``Part V, Chapter 7 …
+        HR-2 and HR-1`` and, sometimes, a broader heading that lists a
+        different set, and a container that does declare the zone is the
+        specific statement.
+
+        Containers naming no zone at all are in neither set — they are silent
+        on the question, so they neither credit nor debit.
+        """
+        if declaring and (
+            fragment_id in declaring or any(a in declaring for a in chain)
+        ):
+            return self._ZONE_SCOPE_BINDING_SCORE
+        if excluding and (
+            fragment_id in excluding or any(a in excluding for a in chain)
+        ):
+            return -self._ZONE_SCOPE_EXCLUSION_PENALTY
+        return 0.0
+
+    def _fts_channel_scores(self, request: RetrievalRequest) -> dict[int, float]:
+        """Rank the in-scope corpus by Postgres full-text search (ABS-494).
+
+        The ranked expression is *verbatim* the one indexed by
+        ``ix_source_fragment_text_tsv`` (0002:243), so the predicate is index-
+        eligible. Any drift between the two turns an index scan into a
+        7,100-row sequential re-tsvectorisation that still returns the right
+        answer — the kind of regression a correctness test cannot see, which is
+        why the expression is a module constant shared with the eval harness
+        rather than written out twice.
+
+        That index is also why this is a **hybrid and not a replacement**: the
+        tsvector covers ``citation_label`` and ``text`` and cannot see
+        ``citation_path``, which is the whole basis of the ladder's structural
+        scoring. Neither channel can be dropped for the other.
+
+        The tsquery is a **disjunction**. ``websearch_to_tsquery`` conjoins
+        terms, and a nine-term conjunction over a by-law clause matches nothing
+        at all — every dimensional question would come back empty. Retrieval
+        wants a graded ranking over partial matches, which is a disjunction
+        plus a rank function. Leaving the stop words in the string is
+        deliberate too: ``to_tsquery`` runs them through the english dictionary
+        and drops them itself, which is the single largest correction this
+        channel makes to the ladder, where ``a``/``in``/``for`` each earn +12
+        whenever they land inside a heading-decorated citation path.
+
+        Returns ``{}`` on any non-Postgres dialect. The sqlite-backed unit
+        tests therefore exercise the ladder alone, and the blend below is a
+        no-op for them.
+        """
+        if self._dialect_name() != "postgresql":
+            return {}
+        tsquery = fts_or_query(request.query or "")
+        if not tsquery:
+            return {}
+
+        scope = (
+            self._fragment_scope_statement(request)
+            .with_only_columns(SourceFragment.id)
+            .order_by(None)
+        )
+        rank_expr = sql_text(
+            f"ts_rank_cd({FTS_VECTOR_SQL}, to_tsquery('english', :tsq), 1)"
+        ).bindparams(tsq=tsquery)
+        matches_expr = sql_text(
+            f"{FTS_VECTOR_SQL} @@ to_tsquery('english', :tsq)"
+        ).bindparams(tsq=tsquery)
+        stmt = (
+            select(SourceFragment.id, rank_expr)
+            .where(SourceFragment.id.in_(select(scope.subquery().c.id)))
+            .where(matches_expr)
+        )
+        return {
+            int(fragment_id): float(rank)
+            for fragment_id, rank in self.session.execute(stmt).all()
+            if rank > 0
+        }
+
+    #: How the two text sub-channels split the vote. Chosen from the sweep in
+    #: `evals/retrieval/experiments/RESULTS.md`, not from taste: every weight in
+    #: [0.35, 0.70] beats the control, the curve is smooth and unimodal, and
+    #: recall peaks over 0.40-0.50. It is a plateau rather than a spike, which
+    #: is the evidence that this is an effect and not a constant fitted to 68
+    #: unreviewed labels. 0.50 is the midpoint of the peak and posts the better
+    #: MRR of the two settings tied for best recall.
+    _FTS_TEXT_WEIGHT = 0.5
+
+    def _blend_fts_into_text(
+        self, text_scored: TextChannelScores, fts_scored: dict[int, float]
+    ) -> TextChannelScores:
+        """Fold the FTS ranking into the text channel, on the ladder's scale.
+
+        Two decisions, both load-bearing.
+
+        **Why blend instead of merging as a fourth peer channel.**
+        ``_merge_channel_scores`` takes a ``max()`` and pays an agreement bonus
+        for *independent* channels. FTS is not independent of the ladder: both
+        read the fragment's own words, so a clause matching on both has
+        supplied one piece of evidence twice, and paying an agreement bonus for
+        it would lift every verbose clause above the terse one that actually
+        states the standard. This is the same argument ABS-500 made for not
+        paying text and table a joint bonus.
+
+        **Why the result is rescaled back onto the ladder's top score.**
+        Fusion downstream is a ``max()`` across channels denominated in ladder
+        units — a spatial containment is 100.0, a table cell is scored by the
+        same token ladder. A text side handed back on a normalised [0, 1] scale
+        would lose every ``max()`` it entered, and the retriever would silently
+        become "table channel, text deleted". So the blend changes the text
+        side's *order*, which is the hypothesis the experiment tested, and
+        nothing about its magnitude.
+
+        Max-normalisation rather than min-max: the channels have a meaningful
+        zero (nothing matched) and no meaningful floor among the fragments that
+        did match, so subtracting the minimum would inflate a weak channel's
+        worst surviving candidate instead of leaving it near zero.
+
+        ``discriminating`` is carried through untouched. ``search()`` reads it
+        off this object to scope the table channel, so dropping it here would
+        silently re-scope a channel this method has no business touching.
+        """
+        if not fts_scored or not text_scored:
+            return text_scored
+        ladder_top = max(text_scored.values())
+        fts_top = max(fts_scored.values())
+        if ladder_top <= 0 or fts_top <= 0:
+            return text_scored
+
+        weight = self._FTS_TEXT_WEIGHT
+        blended = TextChannelScores(discriminating=text_scored.discriminating)
+        combined: dict[int, float] = {}
+        for fragment_id in set(text_scored) | set(fts_scored):
+            combined[fragment_id] = (
+                weight * (text_scored.get(fragment_id, 0.0) / ladder_top)
+                + (1.0 - weight) * (fts_scored.get(fragment_id, 0.0) / fts_top)
+            )
+        combined_top = max(combined.values())
+        if combined_top <= 0:
+            return text_scored
+        for fragment_id, score in combined.items():
+            blended[fragment_id] = (score / combined_top) * ladder_top
+        return blended
+
+    def _zones_named(self, query: str) -> frozenset[str]:
+        """The zone codes this query names, read against the corpus vocabulary."""
+        return self._zone_scope_index().zones_named_in(query)
+
+    def _table_channel_scores(
+        self,
+        request: RetrievalRequest,
+        discriminating: frozenset[str] = frozenset(),
+    ) -> tuple[dict[int, float], dict[int, list[TableCellHit]]]:
+        """Rank ``source_table_cell`` directly. Returns (scores, cell hits).
+
+        Both maps are keyed by the table's **anchor fragment** — the provision
+        that introduces the table — because that is how a cell is cited (see
+        ``docs/ABS-500-TABLE-CHANNEL.md``) and because it is what lets the
+        result fuse with the fragment-keyed text and spatial channels.
+
+        Scoped to the same documents the text channel sees. Page and
+        citation-path filters are deliberately not applied: they address
+        fragments, and a table's page band is the table's, not its anchor's.
+        """
+        scope = self._resolve_default_document_ids()
+        allowed: set[int] | None = set(scope) if scope is not None else None
+        if request.document_id is not None:
+            allowed = (
+                {request.document_id}
+                if allowed is None
+                else allowed & {request.document_id}
+            )
+        if request.municipality or request.bylaw_name:
+            stmt = select(Document.id)
+            if request.municipality:
+                stmt = stmt.where(Document.municipality.ilike(f"%{request.municipality}%"))
+            if request.bylaw_name:
+                stmt = stmt.where(Document.bylaw_name.ilike(f"%{request.bylaw_name}%"))
+            named = set(self.session.execute(stmt).scalars().all())
+            allowed = named if allowed is None else allowed & named
+        if allowed is not None and not allowed:
+            return {}, {}
+
+        zones_named = self._zones_named(request.query)
+        result = table_channel_scores(
+            self._table_index(),
+            token_patterns=query_token_patterns(request.query.strip().lower()),
+            zones_named=zones_named,
+            discriminating=discriminating,
+            document_ids=allowed,
+        )
+        scores = self._apply_zone_scope_to_anchors(result.scores, zones_named)
+        return scores, {fid: hits for fid, hits in result.hits.items() if fid in scores}
+
+    def _apply_zone_scope_to_anchors(
+        self, scores: dict[int, float], zones_named: frozenset[str]
+    ) -> dict[int, float]:
+        """Re-score table hits by the chapter their anchor fragment sits in.
+
+        A table is cited through the provision that introduces it, and that
+        provision sits in a chapter like any other — so ``Table 9: Minimum
+        required side setbacks …`` is a clause of ``Part V, Chapter 9 … within
+        the ER3, ER-2, and ER-1 Zones`` and does not govern HR-1, no matter how
+        exactly its caption echoes an HR-1 side-setback question (ABS-518).
+
+        The table channel already binds an *axis* to a named zone; this binds
+        the *table* to a chapter, which is the only signal available for a
+        table whose axes are Established Residential Special Area names rather
+        than zone codes — precisely the table that mis-ranked.
+
+        Anchors are one fragment per table (tens, not thousands), so the extra
+        ancestor closure is cheap next to the text channel's.
+        """
+        if not zones_named or not scores:
+            return scores
+        zone_index = self._zone_scope_index()
+        declaring = zone_index.containers_declaring(zones_named)
+        excluding = zone_index.containers_excluding(zones_named)
+        if not declaring and not excluding:
+            return scores
+        anchors = (
+            self.session.execute(
+                select(SourceFragment).where(SourceFragment.id.in_(scores))
+            )
+            .scalars()
+            .all()
+        )
+        index = AncestorIndex.build(self.session, anchors)
+        adjusted: dict[int, float] = {}
+        for fragment_id, score in scores.items():
+            score += self._zone_scope_adjustment(
+                fragment_id, index.chain(fragment_id), declaring, excluding
+            )
+            # Below the channel's own admission bar the hit is no longer
+            # evidence, and keeping it would leave a demoted off-chapter table
+            # attached to a match it no longer earned.
+            if score >= TABLE_CHANNEL_THRESHOLD:
+                adjusted[fragment_id] = score
+        return adjusted
+
+    def _discriminating_tokens(
+        self,
+        token_patterns: TokenPatterns,
+        details: Iterable[FragmentScore],
+    ) -> frozenset[str]:
+        """The query tokens rare enough in this scope to carry scope.
+
+        Document frequency comes from the own-identity match already computed
+        for every in-scope fragment, so the cut costs counting, not a second
+        pass over the text.
+        """
+        document_frequency: Counter[str] = Counter()
+        scope_size = 0
+        for detail in details:
+            scope_size += 1
+            document_frequency.update(detail.matched_tokens)
+        if scope_size == 0:
+            return frozenset()
+        cut = scope_size * self._CONTEXT_TOKEN_MAX_DF
+        return frozenset(
+            token
+            for token, _pattern in token_patterns
+            if document_frequency[token] <= cut
+        )
+
+    def _context_tokens(
+        self,
+        fragment: SourceFragment,
+        index: AncestorIndex,
+        token_patterns: TokenPatterns,
+        ancestor_tokens: dict[int, frozenset[str]],
+    ) -> frozenset[str]:
+        """Query tokens stated by this fragment's containers.
+
+        Two sources, both of them container prose rather than the clause's own
+        words: the bracketed segments of its citation path (the container
+        sentence ABS-488 folded into the path) and the text and heading of
+        every ancestor.
+        """
+        _structural, descriptive = split_citation_path(fragment.citation_path)
+        matched: set[str] = (
+            {token for token, pattern in token_patterns if pattern.search(descriptive)}
+            if descriptive
+            else set()
+        )
+        for ancestor_id in index.chain(fragment.id):
+            cached = ancestor_tokens.get(ancestor_id)
+            if cached is None:
+                node = index.node(ancestor_id)
+                haystack = node.haystack if node is not None else ""
+                cached = frozenset(
+                    token
+                    for token, pattern in token_patterns
+                    if haystack and pattern.search(haystack)
+                )
+                ancestor_tokens[ancestor_id] = cached
+            matched |= cached
+        return frozenset(matched)
 
     def _spatial_channel_scores(
         self,
@@ -2007,8 +3451,9 @@ class RetrievalService:
         match (containment over partial overlap) wins.
         """
         # Mirror the same scope rules used by the text channel so a request
-        # under --latest-only (or with explicit document_id / municipality /
-        # bylaw_name) constrains the spatial channel identically.
+        # under the enabled-documents scope (or with explicit document_id /
+        # municipality / bylaw_name) constrains the spatial channel
+        # identically.
         datasets = self._scoped_linked_datasets(
             document_id=request.document_id,
             municipality=request.municipality,
@@ -2049,11 +3494,14 @@ class RetrievalService:
                 and dataset.linked_fragment_id not in allowed_linked_fragment_ids
             ):
                 continue
+            role = self._overlay_role(dataset)
+            role_location, abut_distance_m = self._location_for_role(role, location)
             for match in query_features(
                 self.session,
                 dataset_id=dataset.id,
-                location=location,
-                predicate=self._predicate_for_role(self._overlay_role(dataset)),
+                location=role_location,
+                predicate=self._predicate_for_role(role),
+                abut_distance_m=abut_distance_m,
             ):
                 score = (
                     self._SPATIAL_CONTAINS_SCORE
@@ -2069,26 +3517,43 @@ class RetrievalService:
         self,
         text_scored: dict[int, float],
         spatial_scored: dict[int, float],
+        table_scored: dict[int, float] | None = None,
     ) -> list[tuple[float, int, list[str]]]:
         """Return [(score, fragment_id, channels)] sorted by score desc.
 
         Channel set per fragment lets the caller see whether the match came
-        from text, spatial, or both. Fragments hit by both channels get a
-        small bonus on top of the max channel score so they outrank
-        single-channel hits with the same raw score.
+        from text, spatial, table, or several. Fragments hit by more than one
+        channel get a small bonus on top of the max channel score so they
+        outrank single-channel hits with the same raw score.
+
+        The table channel is keyed by the anchor fragment its cells are cited
+        through, which is what lets it fuse here rather than arrive as a
+        separate result list the caller has to interleave itself.
         """
-        fragment_ids = set(text_scored) | set(spatial_scored)
+        table_scored = table_scored or {}
+        fragment_ids = set(text_scored) | set(spatial_scored) | set(table_scored)
         merged: list[tuple[float, int, list[str]]] = []
         for fid in fragment_ids:
             text_s = text_scored.get(fid, 0.0)
             spatial_s = spatial_scored.get(fid, 0.0)
+            table_s = table_scored.get(fid, 0.0)
             channels: list[str] = []
             if text_s > 0:
                 channels.append("text")
             if spatial_s > 0:
                 channels.append("spatial")
-            score = max(text_s, spatial_s)
-            if text_s > 0 and spatial_s > 0:
+            if table_s > 0:
+                channels.append("table")
+            score = max(text_s, spatial_s, table_s)
+            # The agreement bonus is for *independent* channels. Text and
+            # spatial are independent: keyword relevance and a point falling
+            # inside a precinct polygon are two different reasons to believe.
+            # Text and table are not — a table's anchor fragment is usually the
+            # sentence introducing the table, so it echoes the caption the
+            # table channel just scored, and paying for both double-counts one
+            # piece of evidence and lifts every captioned table above the prose
+            # that states the standard.
+            if spatial_s > 0 and (text_s > 0 or table_s > 0):
                 score += self._SPATIAL_TEXT_BOTH_BONUS
             merged.append((score, fid, channels))
         merged.sort(key=lambda entry: (-entry[0], entry[1]))
@@ -2178,6 +3643,14 @@ class RetrievalService:
         resolved_location: ResolvedLocation | None = None,
     ) -> RetrievalMatch:
         document = self._get_document(fragment.document_id)
+        # ABS-521: unconditional, and deliberately not behind ``include_context``.
+        # The flag means "drop the containers this fragment sits under to save
+        # tokens", and dropping them costs a reader scope. An operative clause is
+        # not scope — it is the other half of the sentence. ``lookup_citation``
+        # defaults ``include_context`` to *False*, so gating here would leave the
+        # exact call the ticket reports ("lookup_citation Part V > 333") still
+        # returning a rule that ends on a colon.
+        clauses, omitted = self._provisions().operative_clauses(fragment)
         return RetrievalMatch(
             fragment_id=fragment.id,
             document_id=document.id,
@@ -2193,6 +3666,19 @@ class RetrievalService:
             text=fragment.text,
             score=score,
             ancestor_chain=self._ancestor_chain(fragment) if include_context else [],
+            operative_clauses=[
+                OperativeClause(
+                    id=clause.id,
+                    fragment_type=clause.fragment_type.value,
+                    citation_label=clause.citation_label,
+                    citation_path=clause.citation_path,
+                    page_start=clause.page_start,
+                    page_end=clause.page_end,
+                    text=clause.text,
+                )
+                for clause in clauses
+            ],
+            operative_clauses_omitted=omitted,
             cross_references=self._cross_references_for_fragment(fragment) if include_cross_references else [],
             related_tables=self._related_tables_for_fragment(fragment) if include_tables else [],
             linked_datasets=self._linked_datasets_for_fragment(fragment, resolved_location)
@@ -2227,11 +3713,16 @@ class RetrievalService:
             )
             feature_matches: list[DatasetFeatureMatch] = []
             if resolved_location is not None:
+                role = self._overlay_role(dataset)
+                role_location, abut_distance_m = self._location_for_role(
+                    role, resolved_location
+                )
                 for match in query_features(
                     self.session,
                     dataset_id=dataset.id,
-                    location=resolved_location,
-                    predicate=self._predicate_for_role(self._overlay_role(dataset)),
+                    location=role_location,
+                    predicate=self._predicate_for_role(role),
+                    abut_distance_m=abut_distance_m,
                 ):
                     feature_matches.append(
                         DatasetFeatureMatch(
@@ -2276,26 +3767,32 @@ class RetrievalService:
             page_count=document.page_count,
             parser_version=document.parser_version,
             ingestion_timestamp=document.ingestion_timestamp,
+            retrieval_enabled=document.retrieval_enabled,
         )
 
     def _ancestor_chain(self, fragment: SourceFragment) -> list[AncestorFragment]:
-        chain: list[AncestorFragment] = []
-        current = fragment.parent
-        while current is not None:
-            chain.append(
-                AncestorFragment(
-                    id=current.id,
-                    fragment_type=current.fragment_type.value,
-                    citation_label=current.citation_label,
-                    citation_path=current.citation_path,
-                    page_start=current.page_start,
-                    page_end=current.page_end,
-                    text=current.text,
-                )
+        """Containers above ``fragment``, root-first, by path *and* by tree.
+
+        Before ABS-521 this walked ``fragment.parent`` alone. For the 1,906
+        clauses whose ``parent_fragment_id`` points at the heading printed above
+        their section rather than at the section itself, that walk showed the
+        agent a chain that omitted the very sentence the clause finishes: the
+        chain over ``Part V > 333 > (a)`` named "Part V, Chapter 19: Accessory
+        Structures…" and "Accessory Structure Footprint and Area" and never
+        s.333. The union of both lineages is what a reader holding the page has.
+        """
+        return [
+            AncestorFragment(
+                id=ancestor.id,
+                fragment_type=ancestor.fragment_type.value,
+                citation_label=ancestor.citation_label,
+                citation_path=ancestor.citation_path,
+                page_start=ancestor.page_start,
+                page_end=ancestor.page_end,
+                text=ancestor.text,
             )
-            current = current.parent
-        chain.reverse()
-        return chain
+            for ancestor in self._provisions().lineage(fragment)
+        ]
 
     def _cross_references_for_fragment(self, fragment: SourceFragment) -> list[CrossReferenceSummary]:
         refs = self.session.execute(
@@ -2328,6 +3825,44 @@ class RetrievalService:
             )
             for ref in refs
         ]
+
+    def _table_cell_match(self, hit: TableCellHit) -> TableCellMatch:
+        """Project a ranked cell into its citation.
+
+        The citation is the anchor fragment's — the provision that introduces
+        the table — exactly as ``_table_citation`` already cites a permitted-use
+        matrix. What the cell adds on top is its address: the table, the row and
+        column labels that name it, and the coordinates that let a reader find
+        it on the page. See ``docs/ABS-500-TABLE-CHANNEL.md``.
+        """
+        document = self._get_document(hit.document_id)
+        citation_path: str | None = None
+        citation_label: str | None = hit.caption
+        if hit.anchor_fragment_id is not None:
+            anchor = self.session.get(SourceFragment, hit.anchor_fragment_id)
+            if anchor is not None:
+                citation_path = anchor.citation_path
+                citation_label = anchor.citation_label or hit.caption
+        return TableCellMatch(
+            table_id=hit.table_id,
+            document_id=hit.document_id,
+            municipality=document.municipality,
+            bylaw_name=document.bylaw_name,
+            caption=hit.caption,
+            profile_type=hit.profile_type,
+            anchor_fragment_id=hit.anchor_fragment_id,
+            citation_path=citation_path,
+            citation_label=citation_label,
+            page_start=hit.page_start,
+            page_end=hit.page_end,
+            row_index=hit.row_index,
+            col_index=hit.col_index,
+            row_label=hit.row_label,
+            col_label=hit.col_label,
+            text=hit.text,
+            score=hit.score,
+            bound_by=list(hit.bound_by),
+        )
 
     def _related_tables_for_fragment(self, fragment: SourceFragment) -> list[TableSummary]:
         tables = self.session.execute(
@@ -2384,39 +3919,184 @@ class RetrievalService:
         return document
 
     def _score_fragment(self, fragment: SourceFragment, query: str) -> float:
-        query_text = query.strip().lower()
-        tokens = _tokenize(query_text)
-        if not tokens:
-            return 0.0
-        haystacks = [fragment.text.lower()]
-        if fragment.citation_label:
-            haystacks.append(fragment.citation_label.lower())
-        if fragment.citation_path:
-            haystacks.append(fragment.citation_path.lower())
+        return score_fragment_detail(fragment, query).score
 
-        score = 0.0
-        joined = " ".join(haystacks)
-        if query_text == (fragment.citation_path or "").lower():
-            score += 100.0
-        elif fragment.citation_path and query_text in fragment.citation_path.lower():
-            score += 35.0
-        elif query_text in joined:
-            score += 20.0
 
-        unique_tokens = set(tokens)
-        for token in unique_tokens:
-            if fragment.citation_path and token in fragment.citation_path.lower():
-                score += 12.0
-            elif fragment.citation_label and token in fragment.citation_label.lower():
-                score += 8.0
-            elif token in fragment.text.lower():
-                score += 4.0
+#: A citation-path segment that locates a fragment rather than citing it.
+#: Deliberately the same shape as ``_NON_STRUCTURAL_SEGMENT_RE``'s Part/
+#: Schedule/Appendix arm, minus the bracketed arm ``split_citation_path``
+#: already removed.
+_LOCATOR_SEGMENT_RE = re.compile(r"^(?:part|schedule|appendix)\b", re.IGNORECASE)
 
-        if fragment.parse_status.value == "parsed":
-            score += 1.0
+
+@lru_cache(maxsize=8192)
+def _locator_free_citation_path(structural: str) -> str:
+    """``"schedule a > 31 > 38bi(1)"`` -> ``"31 > 38bi(1)"``.
+
+    Cached on the already-split structural path, which is stable for the life
+    of an ingest and shared by every fragment beneath a container.
+    """
+    if not structural:
+        return ""
+    return " > ".join(
+        segment
+        for segment in (part.strip() for part in structural.split(">"))
+        if segment and not _LOCATOR_SEGMENT_RE.match(segment)
+    )
+
+
+def score_fragment_detail(fragment: SourceFragment, query: str) -> FragmentScore:
+    """Score a fragment on its own citable identity, and say which query tokens
+    it accounted for.
+
+    Reads nothing but ``text`` / ``citation_label`` / ``citation_path`` /
+    ``parse_status`` off the fragment, which is why it is a function rather
+    than a method: the scoring rule is pure and is exercised as such by
+    ``tests/bylaw_retrieval/test_score_fragment_tokens.py``.
+
+    The matched-token set is what makes the context channel additive rather
+    than duplicative: a token the fragment already states itself must not be
+    paid for a second time because an ancestor happens to repeat it (see
+    :meth:`RetrievalService._text_channel_scores`). It also supplies the
+    document-frequency counts that decide which tokens are discriminating
+    enough to carry scope at all.
+    """
+    query_text = query.strip().lower()
+    token_patterns = query_token_patterns(query_text)
+    if not token_patterns:
+        return FragmentScore(score=0.0, matched_tokens=frozenset())
+    # Only the *structural* steps of the path speak for the fragment. ABS-488
+    # repathed clauses onto the container that scopes them, which put the
+    # container's whole sentence into the child's path as a bracketed segment
+    # — so before ABS-492 a leaf clause banked +12 per token, and +35 for a
+    # phrase, on prose it does not contain: three and nine times what the
+    # fragment that actually states the rule earns for its own text (+4). That
+    # inverted the ranking wholesale, every "(a)"/"(b)" under a topically
+    # worded container outranking the section stating the standard. The
+    # bracketed prose is not discarded — ``_text_channel_scores`` re-admits it
+    # through the context channel, at context weight.
+    citation_path, _descriptive = split_citation_path(fragment.citation_path)
+    citation_label = (fragment.citation_label or "").lower()
+    text = fragment.text.lower()
+    # The per-token rung goes one step further than the phrase rungs below and
+    # drops the *locator* segments too — "Part V", "Schedule A", "Appendix B"
+    # (ABS-518). They say where the fragment sits, not how it is cited, and
+    # they are written in ordinary words a question is full of: "a" in an
+    # HR-1 setback question matched "Schedule A" and banked +12, three times
+    # what the section stating the standard earns for its own text, on every
+    # one of the 4,000-odd Halifax Mainland fragments whose path begins that
+    # way. A whole by-law outranking another on the word "a" is the citation
+    # rung paying for a coincidence of prose. The phrase rungs keep the full
+    # path: "Part V > 198" is a citation someone would type.
+    structural_path = _locator_free_citation_path(citation_path)
+
+    score = 0.0
+    # An exact echo of the path, in either the form the ingest stores or the
+    # form a reader would cite. The rungs below it are strictly the fragment's
+    # own words — its structural path, then its text and label.
+    if query_text in {(fragment.citation_path or "").lower(), citation_path}:
+        score += 100.0
+    elif citation_path and query_text in citation_path:
+        score += 35.0
+    elif query_text in f"{text} {citation_label}":
+        score += 20.0
+
+    matched: set[str] = set()
+    for token, pattern in token_patterns:
+        if structural_path and pattern.search(structural_path):
+            score += 12.0
+        elif citation_label and pattern.search(citation_label):
+            score += 8.0
+        elif pattern.search(text):
+            score += 4.0
         else:
-            score -= 2.0
-        return score
+            continue
+        matched.add(token)
+
+    if fragment.parse_status.value == "parsed":
+        score += 1.0
+    else:
+        score -= 2.0
+    return FragmentScore(score=score, matched_tokens=frozenset(matched))
+
+
+@dataclass(frozen=True)
+class _ZoneEvidence:
+    """A zone-profile match plus the evidence class its query earns it (ABS-493).
+
+    ``get_zone_profile`` runs five separate searches and hands the winning
+    matches down to the section builders. The evidence class depends on the
+    *pair* (query, fragment), so it has to travel with the match — the
+    builders no longer see the query, and ``RetrievalMatch.score`` cannot
+    reconstruct it (the score is a sum, not a locus).
+
+    Proxies ``text`` / ``citation_path`` so builder bodies read the fragment
+    exactly as they did when they were handed a bare ``RetrievalMatch``;
+    ``.match`` is the underlying match, needed for citation accumulation.
+    """
+
+    match: RetrievalMatch
+    evidence_class: EvidenceClass
+
+    @property
+    def confidence(self) -> float:
+        """The evidence class's ordinal rung — the value served as ``confidence``."""
+        return EVIDENCE_CLASS_CONFIDENCE[self.evidence_class]
+
+    @property
+    def text(self) -> str:
+        return self.match.text
+
+    @property
+    def citation_path(self) -> str | None:
+        return self.match.citation_path
+
+
+def _classify_evidence(query: str, match: RetrievalMatch) -> EvidenceClass:
+    """Classify HOW ``match`` is evidence for ``query`` (ABS-493).
+
+    Walks the :class:`EvidenceClass` ladder strongest-rung-first and returns
+    the first rung the pair reaches. The classification depends only on
+    *where* the query's terms land — citation path, citation label, or body
+    text — and never on *how many* of them land, which is what decouples the
+    zone-profile gate from query verbosity.
+
+    The loci mirror the tiers ``RetrievalService._score_fragment`` already
+    recognises (exact path, path substring, path/label/text token hits), so
+    this is an ordinalisation of signals the scorer computes rather than a
+    second, divergent notion of relevance. What it drops is the summation:
+    the scorer adds a bonus per matching token, and it was that sum — not
+    the evidence — that the old ``score / 40.0`` gate was reading.
+
+    ``BODY_PHRASE`` is the one rung sensitive to the query string as a whole,
+    and only in the safe direction: adding words can turn a verbatim phrase
+    into scattered terms (a demotion), never the reverse. The pathological
+    "more words ⇒ clears the gate" behaviour is therefore unreachable.
+    """
+    query_text = query.strip().lower()
+    tokens = set(_tokenize(query_text))
+    if not query_text or not tokens:
+        return EvidenceClass.NO_MATCH
+
+    path = (match.citation_path or "").lower()
+    label = (match.citation_label or "").lower()
+    body = (match.text or "").lower()
+
+    if query_text == path:
+        return EvidenceClass.EXACT_PATH
+    if path and (
+        query_text in path or any(_token_matches(token, path) for token in tokens)
+    ):
+        return EvidenceClass.PATH_ANCHORED
+    if label and (
+        query_text in label or any(_token_matches(token, label) for token in tokens)
+    ):
+        return EvidenceClass.LABELLED_ROW
+    if query_text in body:
+        return EvidenceClass.BODY_PHRASE
+    if any(_token_matches(token, body) for token in tokens):
+        return EvidenceClass.BODY_TERMS
+    return EvidenceClass.NO_MATCH
 
 
 def _attribute_tag_filter_clause(attribute_tags: list[str], *, dialect_name: str):
@@ -2460,8 +4140,232 @@ def _attribute_tag_filter_clause(attribute_tags: list[str], *, dialect_name: str
     return or_(*(column.cast(Text).like(f'%"{tag}"%') for tag in attribute_tags))
 
 
+# The indexed expression, verbatim from 0002_layer2_retrieval_schema.py:243.
+# Shared with scripts/eval_retrieval_experiment.py so the arm that was measured
+# and the channel that shipped cannot drift apart into two different programs.
+FTS_VECTOR_SQL = (
+    "to_tsvector('english', coalesce(citation_label, '') || ' ' || coalesce(text, ''))"
+)
+
+_FTS_TERM_RE = re.compile(r"[A-Za-z0-9]+")
+
+
+def fts_or_query(query: str) -> str:
+    """Build an OR tsquery string from a natural-language question.
+
+    ``"side setback in the ER-3 zone"`` -> ``"side | setback | in | the | er | 3 | zone"``.
+
+    Hyphenated compounds are split rather than quoted: ``er-3`` would parse as
+    a phrase (``'er-3' & 'er' & '3'``) and smuggle a conjunction into what has
+    to stay a disjunction. See ``_fts_channel_scores`` for why.
+    """
+    terms = [term.lower() for term in _FTS_TERM_RE.findall(query)]
+    return " | ".join(dict.fromkeys(terms))
+
+
+def _is_compound_artefact(part: str) -> bool:
+    """True when a hyphen-compound's part is not a word of the query alone.
+
+    "single-family" splits into two terms a by-law might write apart, and both
+    are worth matching. "HR-1" and "R-2" split into a stem and a bare ordinal
+    that means nothing on its own: "1" is a whole-word match against
+    "38BI(1)", "Table 1", "Subsection (1)" and several thousand other places,
+    and at the citation-path rung each of those is worth +12 — three times
+    what the section stating the standard earns for its own text (ABS-518).
+    The code stays addressable as the compound; only the artefact goes, along
+    with a single-letter stem ("R-1" -> "r") for the same reason. The length
+    floor mirrors ``binding._MIN_ZONE_CODE_LENGTH``, which drops those codes
+    from the zone vocabulary on the identical argument.
+    """
+    return part.isdigit() or len(part) < 2
+
+
 def _tokenize(text: str) -> list[str]:
-    return [token.lower() for token in TOKEN_RE.findall(text)]
+    """Query tokens: every hyphenated compound, plus its parts.
+
+    ``"HR-2 setback"`` -> ``["hr-2", "hr", "2", "setback"]``.
+
+    The compound is what makes a zone code addressable as one term. The
+    parts are kept because they are still genuine words of the query — a
+    fragment cited as ``Table 3 > HR-2`` legitimately matches all three.
+    They used to matter to the zone-profile gate too (each extra token
+    inflated the score the gate divided by 40); since ABS-493 that gate
+    reads an evidence class instead, so token *count* no longer moves it —
+    only ranking. What makes the parts safe is that scoring
+    now matches on word boundaries (see :func:`_token_matches`): "hr" no
+    longer hits "through", "2" no longer hits "2nd". Same reason ordinary
+    prose compounds are split — "single-family" should still match text
+    that writes "single family".
+    """
+    tokens: list[str] = []
+    for match in TOKEN_RE.findall(text):
+        tokens.append(match.lower())
+        if "-" in match:
+            tokens.extend(
+                part.lower()
+                for part in match.split("-")
+                if part and not _is_compound_artefact(part)
+            )
+    return tokens
+
+
+# The inflections a by-law freely alternates between: "setback"/"setbacks",
+# "storey"/"storeys", "exempt"/"exempted"/"exempting". Matching these is the
+# one genuinely useful thing the old substring test did, so it is kept
+# explicitly rather than lost as collateral damage of the boundary fix.
+_INFLECTION_SUFFIX = r"(?:e?s|ed|ing)?"
+
+
+@lru_cache(maxsize=2048)
+def _token_pattern(token: str) -> re.Pattern[str]:
+    """A word-boundary matcher for one query token.
+
+    Token scoring used to ask ``token in haystack``, which let "hr" hit
+    "through" and "2" hit "2nd storey" — roughly +8 of guaranteed noise on
+    nearly every fragment of a zone-scoped query (ABS-478). Anchoring the
+    token at a word boundary keeps the hit honest, and works for hyphenated
+    codes too: the hyphen is a non-word character, so ``\\bhr-2\\b`` still
+    boundaries on the "h" and the "2".
+
+    The trailing boundary tolerates an inflectional suffix so "building"
+    still hits "Buildings" — a real match the substring test used to make
+    and word boundaries alone would drop. It does not rescue "2" from
+    "2nd": "nd" is not a suffix in this set.
+    """
+    return re.compile(rf"\b{re.escape(token)}{_INFLECTION_SUFFIX}\b")
+
+
+def _token_matches(token: str, haystack: str) -> bool:
+    """True when ``token`` occurs in ``haystack`` as a whole word.
+
+    Whole word up to an inflectional suffix — see :func:`_token_pattern`.
+    """
+    return _token_pattern(token).search(haystack) is not None
+
+
+@lru_cache(maxsize=1024)
+def query_token_patterns(query_text: str) -> tuple[tuple[str, re.Pattern[str]], ...]:
+    """The query's distinct tokens, each paired with its word-boundary matcher.
+
+    Scoring asks the same question of the same query several million times per
+    request — every distinct token against every haystack of every in-scope
+    fragment — so tokenising and looking the pattern up per fragment is the
+    single largest avoidable cost in the text channel. Deriving both once per
+    query text pays for the whole provision-in-context channel and then some.
+
+    ``dict.fromkeys`` rather than ``set`` so the order is the query's own:
+    scoring is order-independent, but a deterministic order keeps a scoring
+    trace readable when someone is working out why a fragment ranked.
+    """
+    return tuple(
+        (token, _token_pattern(token))
+        for token in dict.fromkeys(_tokenize(query_text))
+    )
+
+
+# "198(1)(f)" -> ["198", "(1)", "(f)"]. Also splits the stored form,
+# "Part V > 198 > [Side Setback Requirements] > (f)" -> ["198", "(f)"].
+CITATION_TOKEN_RE = re.compile(r"\([0-9a-z]{1,6}\)|\d+(?:\.\d+)*[A-Z]*", re.IGNORECASE)
+# Segments that describe where a clause sits rather than how it is cited.
+_NON_STRUCTURAL_SEGMENT_RE = re.compile(r"^\[.*\]$|^(?:part|schedule|appendix)\b", re.IGNORECASE)
+
+
+def _citation_tokens(value: str) -> list[str]:
+    """The ordered structural tokens of a citation string."""
+    return [token.lower() for token in CITATION_TOKEN_RE.findall(value)]
+
+
+def _path_citation_tokens(path: str) -> list[str]:
+    """The structural tokens of a stored citation_path.
+
+    Heading segments (``[Side Setback Requirements]``) and Part/Schedule/
+    Appendix prefixes are dropped: they are context the ingest interposes,
+    never something a legal citation names.
+    """
+    tokens: list[str] = []
+    for segment in path.split(" > "):
+        segment = segment.strip()
+        if not segment or _NON_STRUCTURAL_SEGMENT_RE.match(segment):
+            continue
+        tokens.extend(_citation_tokens(segment))
+    return tokens
+
+
+def _ordered_match_count(query: list[str], candidate: list[str]) -> int:
+    """How many query tokens appear in ``candidate``, in order.
+
+    A query token the candidate lacks is skipped without consuming any of the
+    candidate — "198(1)(f)" has to keep matching "(f)" after the stored path
+    turns out to carry no "(1)".
+    """
+    matched = 0
+    position = 0
+    for token in query:
+        for index in range(position, len(candidate)):
+            if candidate[index] == token:
+                matched += 1
+                position = index + 1
+                break
+    return matched
+
+
+def _structural_citation_rank(requested: str, candidates: list[str]) -> list[str]:
+    """Rank candidate paths against a compact legal citation (ABS-461).
+
+    A model that has read "Clause 198(1)(f)" in the corpus asks for exactly
+    that, but the stored path is ``Part V > 198 > [Side Setback Requirements]
+    > (f)``: an interposed heading segment and, where the ingest folded the
+    subsection into its section fragment, no ``(1)`` at all. Fuzzy string
+    distance handles neither — it ranks short unrelated paths ending in
+    "(f)" above the right one.
+
+    So compare structure instead. A candidate qualifies only if its leaf
+    token equals the request's leaf (the clause letter has to be the clause
+    asked for) and it shares the request's leading number (the anchor).
+    Ranking is then by how many of the request's tokens appear in order,
+    with the least amount of extra depth breaking ties.
+
+    Returns ``[]`` for anything that isn't a numbered citation, leaving the
+    rapidfuzz ranker in sole charge of free-text lookups like "Table 1A".
+    """
+    query = _citation_tokens(requested)
+    # The anchor has to be a bare section number ("198", "94.5") — a request
+    # that opens with a parenthesised token names no section to anchor to.
+    if len(query) < 2 or query[0].startswith("("):
+        return []
+
+    scored: list[tuple[int, int, str]] = []
+    for path in candidates:
+        tokens = _path_citation_tokens(path)
+        if not tokens or tokens[-1] != query[-1] or query[0] not in tokens:
+            continue
+        matched = _ordered_match_count(query, tokens)
+        if matched < 2:
+            continue
+        scored.append((-matched, len(tokens), path))
+    return [path for _matched, _depth, path in sorted(scored)]
+
+
+def _verdict_evidence(verdict: CivicAddressVerdict) -> str:
+    """One sentence naming what proved the address does not exist.
+
+    Quoted inside the refusal caveat so the answer can say *why* rather than
+    asserting non-existence bare — a user who knows their own address needs to
+    see which municipal record was consulted before they will believe it.
+    """
+    street = verdict.street_label or "that street"
+    if verdict.method == "civic_address_points":
+        return (
+            f"The municipality's civic-address register publishes no such "
+            f"address on {street}."
+        )
+    ranges = format_ranges(verdict.valid_ranges)
+    if ranges:
+        return (
+            f"No street segment on {street} publishes an address range "
+            f"covering it (the ranges that exist are {', '.join(ranges)})."
+        )
+    return f"No street segment on {street} publishes an address range covering it."
 
 
 def _first_str(mapping: dict[str, object], *keys: str) -> str | None:
@@ -2538,6 +4442,20 @@ def _extract_far(text: str) -> float | None:
         re.IGNORECASE,
     )
     return float(match.group(1)) if match else None
+
+
+def _use_match_keys(name: str) -> set[str]:
+    """Canonical keys for matching one use name against another (ABS-484).
+
+    Matrix row labels print the bylaw's own noun phrase ("Multi-unit dwelling
+    use") while the P/N prose row writes the bare use ("multi-unit dwelling").
+    ``normalize_use`` folds the alias table but not that suffix, so both forms
+    are emitted and a hit on either is the same use.
+    """
+    normalized = normalize_use(name)
+    if normalized.endswith(" use"):
+        return {normalized, normalized[: -len(" use")]}
+    return {normalized, f"{normalized} use"}
 
 
 def _extract_uses(text: str, zone: str) -> tuple[list[str], list[str]]:

@@ -1,0 +1,38 @@
+{
+  "id": "TC-016",
+  "title": "Realtor due-diligence on a DD listing",
+  "zone": "DD",
+  "complexity": "medium",
+  "liability": "medium",
+  "model": null,
+  "grade": {
+    "verdict": "FAIL",
+    "reasons": [
+      "keyword rate None"
+    ],
+    "citation_total": 0,
+    "citation_found": 0,
+    "citation_hallucinated": 0,
+    "keyword_expected": 0,
+    "keyword_hit": 0,
+    "keyword_rate": null,
+    "hedging_failed": false
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "skipped": "empty assistant text",
+      "error": null
+    },
+    {
+      "turn": 2,
+      "skipped": "empty assistant text",
+      "error": null
+    },
+    {
+      "turn": 3,
+      "skipped": "empty assistant text",
+      "error": null
+    }
+  ]
+}

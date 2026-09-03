@@ -137,6 +137,52 @@ async def test_feasibility_answer_gets_hedge_appended():
 
 
 @pytest.mark.asyncio
+async def test_contradicting_heading_is_repaired_before_the_user_sees_it():
+    """ABS-519 (TC-026): the body correctly refuses; the heading asserts the
+    opposite. The session pipeline rewrites the heading to agree with its own
+    section, on both the returned response and the persisted turn."""
+    session = _empty_session()
+    answer = (
+        "**No** — townhouse dwelling use is not permitted in ER-2.\n\n"
+        "### 1. Townhouse Dwelling Use — Permitted in ER-2 (with conditions)\n\n"
+        "Table 1B confirms townhouse dwelling use is permitted in the ER-3 "
+        "zone, but not in ER-2.\n"
+    )
+    gateway = MockGateway(scripted=[text_response(answer)])
+
+    response = await session.send_user_message_blocking(
+        gateway, "Can I build four townhouses at 6051 Oakland Road?"
+    )
+
+    text = response.content[-1].text
+    assert "### 1. Townhouse Dwelling Use — Not Permitted in ER-2" in text
+    # The qualified-yes parenthetical goes with it.
+    assert "(with conditions)" not in text
+    # The body — the part that was already right — is untouched.
+    assert "permitted in the ER-3 zone, but not in ER-2" in text
+    assert session.messages[-1].content[-1].text == text
+
+
+@pytest.mark.asyncio
+async def test_agreeing_headings_are_left_alone():
+    """ABS-519 carve-out: an answer whose headings already agree with their
+    bodies passes through byte-for-byte."""
+    session = _empty_session()
+    answer = (
+        "### Townhouse Dwelling Use — Not Permitted in ER-2\n\n"
+        "Table 1B confirms townhouse dwelling use is permitted in the ER-3 "
+        "zone, but not in ER-2.\n"
+    )
+    gateway = MockGateway(scripted=[text_response(answer)])
+
+    response = await session.send_user_message_blocking(
+        gateway, "Can I build four townhouses?"
+    )
+
+    assert response.content[-1].text == answer
+
+
+@pytest.mark.asyncio
 async def test_simple_lookup_answer_is_not_hedged():
     """ABS-263 carve-out: a narrow single-dimension lookup stays lean —
     no hedge dance appended."""

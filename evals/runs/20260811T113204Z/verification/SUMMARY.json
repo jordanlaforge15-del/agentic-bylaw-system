@@ -1,0 +1,20 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Homeowner rear deck addition in ER-1",
+    "zone": "ER-1",
+    "complexity": "simple",
+    "liability": "low",
+    "verdict": "FAIL_APPLICABILITY",
+    "kw_rate": 1.0,
+    "reference_rate": 1.0,
+    "topic_rate": 1.0,
+    "citation_found": 7,
+    "citation_total": 7,
+    "hallucinated": 0,
+    "inapplicable": 1,
+    "reasons": [
+      "inapplicable citation: 198(1)(d) applies only where a lot line abuts CEN-1, CEN-2, COR, DD, DH land; the answer never establishes any of those zones"
+    ]
+  }
+]

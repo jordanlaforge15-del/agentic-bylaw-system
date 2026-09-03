@@ -42,6 +42,43 @@ export type WalletResponse = {
   floor_tokens: number;
   chat_enabled: boolean;
   payments_enabled: boolean;
+  // ABS-405: the payments-off self-serve way out of an empty wallet.
+  // Optional so a backend that predates it simply reads as "no refill".
+  beta_refill?: BetaRefillState;
+};
+
+// ABS-405 — whether the beta refill can be claimed right now, and if not,
+// why. `status` is the machine-readable reason behind `available`:
+//   available — POST /api/billing/wallet/refill would grant tokens now
+//   cooldown  — too soon since the last claim; next_available_at says when
+//   exhausted — the lifetime cap is spent
+//   disabled  — the feature is off, or payments are on (top up instead)
+// Turn conversion is backend-owned, as everywhere else: render
+// `approx_turns`, never divide `tokens` client-side.
+export type BetaRefillStatus =
+  | "available"
+  | "cooldown"
+  | "exhausted"
+  | "disabled";
+
+export type BetaRefillState = {
+  available: boolean;
+  status: BetaRefillStatus;
+  tokens: number;
+  approx_turns: number;
+  grants_remaining: number;
+  next_available_at: string | null;
+};
+
+// POST /api/billing/wallet/refill — always 200. `status` is "granted" when
+// the tokens landed, otherwise the same refusal vocabulary above. `wallet`
+// is the post-claim wallet, so the caller re-enables the composer without a
+// follow-up read.
+export type WalletRefillResponse = {
+  status: BetaRefillStatus | "granted";
+  tokens_granted: number;
+  approx_turns_granted: number;
+  wallet: WalletResponse;
 };
 
 // ABS-381 — one purchasable token top-up for the public pricing page.
@@ -60,10 +97,16 @@ export type TopupOption = {
 // "Pay by the turn" pricing page (ABS-387). `payments_enabled` is false
 // in the beta posture; every option is then `available: false` ("coming
 // soon") and the page shows the private-beta banner.
+// `signup_grant_approx_turns` is the free-trial card's turn count (ABS-416).
+// Backend-owned like every other turn figure — the card used to hardcode
+// "~10 turns", which was both untrue under the old conversion rate and
+// unable to track a recalibration of it.
 export type TopupCatalogResponse = {
   payments_enabled: boolean;
   currency: string;
   tokens_per_turn: number;
+  signup_grant_tokens: number;
+  signup_grant_approx_turns: number;
   options: TopupOption[];
 };
 

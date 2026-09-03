@@ -8,6 +8,7 @@ external deps (Anthropic, sqlite, etc.) are touched.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -77,6 +78,153 @@ def test_healthz_returns_ok_without_db():
     body = response.json()
     assert body["status"] == "ok"
     assert body["checks"]["database"] == "not_configured"
+
+
+def test_healthz_reports_the_gateway_provider_not_the_env_var():
+    """ABS-514: ``llm.provider`` is read off the constructed gateway.
+
+    The incident: an eval run was driven against an advisor that had
+    silently resolved to the metered ``anthropic`` provider, and
+    ``/healthz`` looked identical to a non-metered boot because it only
+    reported ``main_model``. The field has to come from the gateway
+    that is actually serving traffic — an env var can be set to one
+    thing while ``create_app`` was handed another.
+    """
+    from advisor.llm.anthropic_backend import AnthropicGateway
+
+    mock_app = _make_app()
+    with TestClient(mock_app) as client:
+        mock_llm = client.get("/healthz").json()["llm"]
+
+    anthropic_app = create_app(
+        gateway=AnthropicGateway(api_key="sk-ant-not-a-real-key"),
+        retrieval_service_factory=lambda: None,
+        session_store=InMemorySessionStore(),
+        persona_text="You are a senior urban planner.",
+    )
+    with TestClient(anthropic_app) as client:
+        anthropic_llm = client.get("/healthz").json()["llm"]
+
+    assert mock_llm["provider"] == "mock"
+    assert anthropic_llm["provider"] == "anthropic"
+    # Same env, same model — the provider is the only thing that
+    # distinguishes a metered boot from a non-metered one.
+    assert mock_llm["main_model"] == anthropic_llm["main_model"]
+
+
+def test_healthz_reports_api_key_presence_without_leaking_it(monkeypatch):
+    """ABS-514: presence boolean only — never the key itself.
+
+    Key presence is the single fact that decides whether a turn meters,
+    so it belongs in the health payload; the value never does.
+    """
+    from advisor.llm import registry
+
+    secret = "sk-ant-abs514-sentinel"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
+    registry.get_settings.cache_clear()
+    try:
+        app = _make_app()
+        with TestClient(app) as client:
+            response = client.get("/healthz")
+    finally:
+        registry.get_settings.cache_clear()
+
+    assert response.json()["llm"]["anthropic_api_key_present"] is True
+    assert secret not in response.text
+
+
+def test_healthz_reports_no_api_key_when_unset(monkeypatch):
+    """ABS-514: an advisor with no key in its environment says so."""
+    from advisor.llm import registry
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # ``AdvisorLLMSettings`` also reads ``.env``, so pin the settings
+    # object rather than the env alone — a developer's local .env key
+    # must not be able to make this test lie.
+    settings = registry.AdvisorLLMSettings(_env_file=None)
+    assert settings.anthropic_api_key is None
+    monkeypatch.setattr(registry, "get_settings", lambda: settings)
+
+    app = _make_app()
+    with TestClient(app) as client:
+        body = client.get("/healthz").json()
+
+    assert body["llm"]["anthropic_api_key_present"] is False
+
+
+def test_healthz_reports_the_gateway_it_built_and_its_billing(monkeypatch):
+    """ABS-515: /healthz answers "is this run going to cost money?".
+
+    Two properties, and the second is the one that matters.
+
+    ``provider`` reports the gateway the process actually built, NOT
+    ``ADVISOR_LLM_PROVIDER``. This app is holding a MockGateway; the env var
+    is set to ``anthropic`` here to prove the report follows the object, not
+    the intent. An advisor that answered from the env var would tell the eval
+    runner it was about to bill an app that cannot bill anything — and, run
+    the other way, would wave a metered advisor through as free.
+
+    ``metered`` is what ``scripts/run_test_prompts.py`` gates its
+    ``--allow-metered`` consent check on.
+    """
+    monkeypatch.setenv("ADVISOR_LLM_PROVIDER", "anthropic")
+
+    app = _make_app()
+    with TestClient(app) as client:
+        body = client.get("/healthz").json()
+
+    assert body["llm"]["provider"] == "mock"
+    assert body["llm"]["metered"] is False
+    # ABS-267's field is untouched — the runner still reads both.
+    assert "main_model" in body["llm"]
+
+
+def test_healthz_reports_submission_storage_ok_when_writable(tmp_path, monkeypatch):
+    """ABS-87: /healthz surfaces whether uploads can be staged on disk, so a
+    missing prod volume is caught by a curl instead of by the first user."""
+    from advisor.api import submission_storage
+
+    writable = tmp_path / "submissions"
+    writable.mkdir()
+    monkeypatch.setattr(
+        submission_storage, "resolve_storage_root", lambda *_a, **_k: writable
+    )
+    app = _make_app()
+    with TestClient(app) as client:
+        body = client.get("/healthz").json()
+    assert body["checks"]["submission_storage"] == "ok"
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="chmod cannot make a directory read-only for root",
+)
+def test_healthz_reports_submission_storage_unwritable(tmp_path, monkeypatch):
+    """The prod-without-a-volume shape: reported, but not service-fatal."""
+    import stat as _stat
+
+    from advisor.api import submission_storage
+
+    app = _make_app()
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(_stat.S_IRUSR | _stat.S_IXUSR)
+    monkeypatch.setattr(
+        submission_storage, "resolve_storage_root", lambda *_a, **_k: locked
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get("/healthz")
+    finally:
+        locked.chmod(_stat.S_IRWXU)
+
+    body = response.json()
+    assert body["checks"]["submission_storage"] == "unwritable"
+    # A degraded side feature must not take the whole service out of
+    # rotation — the availability monitor pages on a non-200 here.
+    assert response.status_code == 200
+    assert body["status"] == "ok"
 
 
 def test_healthz_returns_ok_with_healthy_db():

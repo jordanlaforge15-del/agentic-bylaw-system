@@ -17,9 +17,31 @@ class DocumentSummary(BaseModel):
     page_count: int | None = None
     parser_version: str | None = None
     ingestion_timestamp: datetime
+    retrieval_enabled: bool = False
 
 
 class AncestorFragment(BaseModel):
+    id: int
+    fragment_type: str
+    citation_label: str | None = None
+    citation_path: str | None = None
+    page_start: int
+    page_end: int
+    text: str
+
+
+class OperativeClause(BaseModel):
+    """A clause of the same provision as the match it hangs off (ABS-521).
+
+    Not context and not a near-miss: an operative clause is *part of the rule
+    the match states*. s.333(1) of the Regional Centre reads "Any new accessory
+    structure shall have no restriction on the maximum size of its footprint,
+    except:" and stops — the 60.0 m² cap is in ``333(1)(a)``, which contains no
+    word a question would use and never ranked. Returning the section without
+    its clauses hands a reader a sentence that ends on a colon; returning
+    ``(1.5)`` without its siblings hands them one of two caps that both bind.
+    """
+
     id: int
     fragment_type: str
     citation_label: str | None = None
@@ -55,6 +77,56 @@ class TableSummary(BaseModel):
     parse_status: str
     parent_fragment_id: int | None = None
     cells: list[TableCellSummary] = Field(default_factory=list)
+
+
+class TableCellMatch(BaseModel):
+    """One table cell the table channel ranked, and how to cite it (ABS-500).
+
+    A cell is not a ``source_fragment``, and ``RetrievalMatch`` is
+    fragment-shaped, so the ranked cell is cited *through* the provision that
+    introduces its table — ``anchor_fragment_id`` / ``citation_path`` — and
+    addressed by the row and column labels that name it. That is the same
+    citation rule ``get_permitted_use`` already applies to a permission matrix;
+    the reader's route to the value is "section X, table Y, row R, column C",
+    which is how a by-law table is cited on paper.
+
+    Present only on matches whose ``retrieval_channels`` include ``"table"``,
+    and present there regardless of ``include_tables``: a match that ranked
+    because of a cell is not groundable without naming the cell.
+    """
+
+    table_id: int
+    document_id: int
+    municipality: str
+    bylaw_name: str
+    caption: str | None = None
+    profile_type: str | None = Field(
+        default=None,
+        description=(
+            "The table's enrichment classification — 'dimensional_matrix', "
+            "'permission_matrix', 'parking_matrix', 'key_value_table' — or null "
+            "when the table was never classified."
+        ),
+    )
+    anchor_fragment_id: int | None = None
+    citation_path: str | None = None
+    citation_label: str | None = None
+    page_start: int
+    page_end: int
+    row_index: int
+    col_index: int
+    row_label: str | None = None
+    col_label: str | None = None
+    text: str
+    score: float
+    bound_by: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Why this cell was addressed, e.g. \"row bound to zone 'R-1'\". "
+            "Empty when the cell was reached by matching the caption and header "
+            "text alone rather than by a semantic axis binding."
+        ),
+    )
 
 
 class DatasetFeatureMatch(BaseModel):
@@ -121,13 +193,45 @@ class RetrievalMatch(BaseModel):
         default_factory=list,
         description=(
             "Which retrieval channel(s) surfaced this match — e.g. ['text'], "
-            "['spatial'], or ['text', 'spatial']. A spatial-only match means "
-            "the location intersected a linked dataset even though keyword "
-            "scoring didn't pick the fragment up."
+            "['spatial'], ['table'], or any combination. A spatial-only match "
+            "means the location intersected a linked dataset even though "
+            "keyword scoring didn't pick the fragment up; a table-only match "
+            "means a cell of a table anchored to this fragment answered the "
+            "query even though the fragment's own prose did not, and the cell "
+            "is named in 'table_matches'."
         ),
     )
     ancestor_chain: list[AncestorFragment] = Field(default_factory=list)
+    operative_clauses: list[OperativeClause] = Field(
+        default_factory=list,
+        description=(
+            "The other clauses of this match's own provision — its siblings "
+            "one path segment down from the section or subsection that governs "
+            "it, or its own clauses when the match is the provision. Populated "
+            "unconditionally, including when 'include_context' is false: an "
+            "operative clause is part of the rule, not context around it, and "
+            "a provision returned without it is incomplete rather than terse. "
+            "Empty when the match states its rule on its own."
+        ),
+    )
+    operative_clauses_omitted: int = Field(
+        default=0,
+        description=(
+            "How many further clauses of this provision were dropped by the "
+            "response cap. Non-zero means the provision is longer than what is "
+            "shown — re-read it with search_bylaw_evidence and "
+            "citation_path_prefix set to the provision's path."
+        ),
+    )
     cross_references: list[CrossReferenceSummary] = Field(default_factory=list)
+    table_matches: list[TableCellMatch] = Field(
+        default_factory=list,
+        description=(
+            "The table cell(s) that made this match rank, when the table "
+            "channel surfaced it. Distinct from 'related_tables', which is "
+            "everything near the fragment whether or not it bore on the query."
+        ),
+    )
     related_tables: list[TableSummary] = Field(default_factory=list)
     linked_datasets: list[LinkedDataset] = Field(default_factory=list)
     metadata_json: dict[str, Any] = Field(default_factory=dict)
@@ -209,9 +313,13 @@ class RetrievalRequest(BaseModel):
             "preserves prior behaviour for non-evaluator callers. Populated by "
             "the compliance evaluator (one search per submission attribute) "
             "so per-attribute retrieval is O(clauses-tagged-with-this-attribute) "
-            "instead of O(all-clauses)."
+            "instead of O(all-clauses). Valid IDs come from the Phase-1 attribute "
+            "taxonomy (``src/layer2/compliance/attributes/taxonomy.yaml``). Omit "
+            "the field to search unfiltered; an EMPTY list is a validation error, "
+            "not a no-op."
         ),
     )
+
     include_context: bool = Field(
         default=False,
         description="Include ancestor chain and related context for each match.",
@@ -238,6 +346,27 @@ class RetrievalRequest(BaseModel):
             "cap is 50. Higher values reduce iteration count at the cost of larger tool-result payloads."
         ),
     )
+
+    @model_validator(mode="after")
+    def _reject_empty_attribute_tag_filter(self) -> "RetrievalRequest":
+        """An empty ``attribute_tag_filter`` is a caller error, not "no filter".
+
+        ABS-479 exposed this field to the chat + OpenAI tool surfaces, so an
+        LLM can now send it, and ``[]`` is exactly the shape a model emits when
+        it means "no filter". The service's ``if request.attribute_tag_filter:``
+        gate would accept that silently as unfiltered — the opposite of what
+        ``_attribute_tag_filter_clause`` decided (it raises on empty precisely
+        because an empty clause set degrades into always-true/always-false).
+        Rejecting here applies the same rule to every caller as a clean
+        validation error, which the chat tool loop renders as a tool error the
+        model can correct instead of an unnoticed widening of the search.
+        """
+        if self.attribute_tag_filter is not None and not self.attribute_tag_filter:
+            raise ValueError(
+                "attribute_tag_filter must be non-empty; omit the field "
+                "entirely to search without an attribute pre-filter"
+            )
+        return self
 
 
 class RetrievalResponse(BaseModel):
@@ -475,6 +604,27 @@ class OverlayRef(BaseModel):
             "max_height_m, max_far, district_name, …) verbatim."
         ),
     )
+    # -- ABS-472: which by-law governs THIS feature ------------------------
+    governing_bylaw: str | None = Field(
+        default=None,
+        description=(
+            "The by-law that governs this particular feature, when the layer "
+            "publishes it per feature (municipality-wide layers do). May "
+            "differ from the by-law named in 'citation' — that one is the "
+            "document the layer as a whole is linked to. Null when the layer "
+            "carries no per-feature by-law attribution."
+        ),
+    )
+    governing_bylaw_held: bool | None = Field(
+        default=None,
+        description=(
+            "True when 'governing_bylaw' is a document in the active "
+            "retrieval corpus; False when it is not held, in which case "
+            "'citation' is null because there is no honest citation to give "
+            "— the overlay's value is the publisher's mapping, not something "
+            "this corpus can source. Null when unknown."
+        ),
+    )
 
 
 class CitationRef(BaseModel):
@@ -615,6 +765,29 @@ class AdjacentZoningProfile(BaseModel):
     )
 
 
+class FootnoteCondition(BaseModel):
+    """One footnote marker in a permission-matrix cell, with its legend text.
+
+    ABS-523. A cell may print several markers — Table 1B's (ER-3, Multi-unit
+    dwelling use) cell reads ``⑮ ㉒`` — and each is a separate condition on the
+    same permission. They are carried as a list of these rather than as a
+    scalar because keeping only the first stated a different rule than the
+    by-law: ⑮ is a Halifax Grain Elevator carve-out, and ㉒ is the footnote
+    that authorises more than 8 units in ER-3 under Section 63 or Subsection
+    233(3).
+    """
+
+    ordinal: int = Field(description="The circled-number ordinal, e.g. 22 for ㉒.")
+    text: str | None = Field(
+        default=None,
+        description=(
+            "The footnote legend's condition text, when the legend fragment "
+            "resolves. Null means the legend was not found — not that the "
+            "condition is absent."
+        ),
+    )
+
+
 class PermittedUseResult(BaseModel):
     """Resolved permitted-use matrix cell for a single ``(use, zone)`` pair.
 
@@ -623,13 +796,16 @@ class PermittedUseResult(BaseModel):
     caller dispatches on:
 
     * **Resolved** — ``indeterminate=False``, ``permission`` is one of
-      ``permitted`` / ``conditional`` / ``not_permitted``. ``footnote_ordinal``
-      and ``condition_text`` are populated only when ``conditional``.
-      ``citation`` traces the answer to the source table.
+      ``permitted`` / ``conditional`` / ``not_permitted``. ``footnotes``
+      is populated only when ``conditional``, and carries every condition on
+      the cell (ABS-523). ``citation`` traces the answer to the source table.
     * **Indeterminate** — ``indeterminate=True``, ``permission`` is null, and
       ``reason`` / ``reason_code`` explain why the cell could not be addressed
-      (unknown use, unknown zone, no permission matrix in scope, or an unbound
-      cell). This is a *typed* not-found, never a silent empty success.
+      (unknown use, unknown zone, no permission matrix in scope, an unbound
+      cell, or — ABS-483 — an ``unreadable_cell``: the pair addressed a cell
+      whose marker could not be extracted, which is a gap in our data and not
+      a prohibition). This is a *typed* not-found, never a silent empty
+      success.
     """
 
     use: str = Field(..., description="The use as queried (echoed).")
@@ -642,8 +818,10 @@ class PermittedUseResult(BaseModel):
         default=None,
         description=(
             "Machine-readable indeterminate cause: 'unknown_use', "
-            "'unknown_zone', 'unknown_use_and_zone', 'unbound_cell', or "
-            "'no_permission_matrix'. Null when resolved."
+            "'unknown_zone', 'unknown_use_and_zone', 'unbound_cell', "
+            "'unreadable_cell' (the cell was addressed but its marker could "
+            "not be extracted — NOT a prohibition), or 'no_permission_matrix'. "
+            "Null when resolved."
         ),
     )
     reason: str | None = Field(
@@ -664,15 +842,29 @@ class PermittedUseResult(BaseModel):
         default=None,
         description="The resolved permission; null when indeterminate.",
     )
+    footnotes: list[FootnoteCondition] = Field(
+        default_factory=list,
+        description=(
+            "EVERY footnote condition on this cell, in the order the table "
+            "prints them (ABS-523). A conditional cell frequently carries more "
+            "than one — they bind together, and answering from one of them "
+            "states a narrower rule than the by-law does. Empty unless "
+            "permission is 'conditional'."
+        ),
+    )
     footnote_ordinal: int | None = Field(
         default=None,
-        description="Footnote ordinal (e.g. 3 for ③) when permission is 'conditional'.",
+        description=(
+            "First footnote ordinal (e.g. 3 for ③) when permission is "
+            "'conditional'. LOSSY — the cell may carry more. Read 'footnotes'."
+        ),
     )
     condition_text: str | None = Field(
         default=None,
         description=(
-            "The footnote's condition text, joined from the table's footnote "
-            "fragments, when permission is 'conditional'."
+            "The first footnote's condition text, joined from the table's "
+            "footnote fragments, when permission is 'conditional'. LOSSY for "
+            "the same reason as 'footnote_ordinal' — read 'footnotes'."
         ),
     )
     citation: CitationRef | None = Field(
@@ -698,6 +890,16 @@ class AddressProfile(BaseModel):
 
     When the address cannot be geocoded/matched, ``unresolvable`` is True
     and the spatial fields stay null — the method never raises (FR-3.4).
+
+    Three outcomes are distinct and must stay distinct (ABS-466):
+
+      * ``unresolvable=True`` — no point at all; nothing was looked up.
+      * ``outside_mapped_area=True`` — a point was found, but it falls
+        outside every mapped boundary, so ``zone`` is null because the
+        corpus does not cover the location, not because the property is
+        unzoned.
+      * neither — the point was matched against the corpus, and
+        ``resolution_quality`` says how much the resulting zone is worth.
     """
 
     address: str = Field(
@@ -762,6 +964,191 @@ class AddressProfile(BaseModel):
         default=False,
         description="True when the address could not be geocoded/matched; spatial fields stay null.",
     )
+    # -- ABS-466: resolution quality -------------------------------------
+    #
+    # The zone above is only as good as the point that selected it. These
+    # fields say how that point was arrived at, so an answer built on an
+    # estimate can be qualified instead of stated flat.
+    resolution_quality: (
+        Literal["rooftop", "interpolated", "centroid", "approximate", "unknown"] | None
+    ) = Field(
+        default=None,
+        description=(
+            "How precisely the address resolved to a point: 'rooftop' (matched "
+            "the building), 'interpolated' (estimated along the street from "
+            "surrounding civic numbers — the civic number was NOT found), "
+            "'centroid' (centre of a block/route), 'approximate' (locality "
+            "only), 'unknown'. Anything other than 'rooftop' means the point "
+            "may sit on a neighbouring parcel, so the zone and every setback, "
+            "height and floor-area figure derived from it may belong to the "
+            "wrong property. QUALIFY any answer built on a non-rooftop match; "
+            "do not state the zone as fact. Null when unresolvable."
+        ),
+    )
+    location_confidence: float | None = Field(
+        default=None,
+        description=(
+            "Confidence (0..1) of the geocoded point: 0.95 rooftop, 0.85 "
+            "interpolated, 0.6 block centroid. Same scale as "
+            "LinkedDataset.location_confidence."
+        ),
+    )
+    location_type: str | None = Field(
+        default=None,
+        description=(
+            "The external geocoder's raw quality enum (ROOFTOP, "
+            "RANGE_INTERPOLATED, GEOMETRIC_CENTER, APPROXIMATE) when the point "
+            "came from it; null for in-database civic-address resolutions."
+        ),
+    )
+    location_resolver: str | None = Field(
+        default=None,
+        description=(
+            "Which resolver produced the point — a civic-address dataset name, "
+            "'google_maps', or a cache row's resolver."
+        ),
+    )
+    outside_mapped_area: bool = Field(
+        default=False,
+        description=(
+            "True when the address DID resolve to a point but that point falls "
+            "outside every mapped zoning/overlay boundary in scope, so no zone "
+            "could be assigned. Distinct from 'unresolvable' (address not "
+            "found at all) and from a genuine no-overlay answer: it means the "
+            "corpus does not cover this location. Do NOT state a zone — say "
+            "the address is outside the mapped plan area and needs "
+            "confirmation."
+        ),
+    )
+    caveats: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ready-to-quote qualifications the answer MUST carry, one per "
+            "quality problem with this resolution (non-rooftop match, point "
+            "outside the mapped area). Empty means the resolution is precise "
+            "and fully covered. When non-empty, surface the substance of these "
+            "to the user rather than answering as if the zone were certain."
+        ),
+    )
+    # -- ABS-469: does the address exist? --------------------------------
+    #
+    # A geocoder answers "100 Robie Street" by interpolating a position from
+    # the surrounding civic numbering — it never found the number, because
+    # there is no 100 Robie Street. The fields below check the number against
+    # the municipality's own data, so a fabricated address is refused and
+    # corrected rather than answered from somebody else's parcel.
+    civic_address_status: (
+        Literal["confirmed", "not_found", "unverifiable"] | None
+    ) = Field(
+        default=None,
+        description=(
+            "Whether the civic number exists in the municipality's own data: "
+            "'confirmed' (a published civic-address point, or a street segment "
+            "whose address range covers it), 'not_found' (the street is known "
+            "and NO published address or range covers this number — the "
+            "address does not exist; do NOT state a zone, tell the user and "
+            "offer 'suggested_civic_numbers'), 'unverifiable' (no municipal "
+            "address data in scope, or an unrecognised street — says nothing "
+            "about the address). Null for parcel-id and named-place lookups."
+        ),
+    )
+    civic_address_evidence: str | None = Field(
+        default=None,
+        description=(
+            "What settled 'civic_address_status' — the method and dataset, "
+            "e.g. 'street_centerline_ranges (halifax_street_centerlines)'. A "
+            "'civic_address_points' verdict is a municipal fact; a "
+            "'street_centerline_ranges' verdict is inferred from published "
+            "per-segment address ranges and is right ~99.85% of the time."
+        ),
+    )
+    valid_civic_number_ranges: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Civic-number ranges that DO exist on this street, same parity as "
+            "the number asked about, nearest first (e.g. ['820-2180']). "
+            "Populated when 'civic_address_status' is 'not_found' — quote "
+            "these back so the user can correct the address."
+        ),
+    )
+    suggested_civic_numbers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The nearest valid civic numbers on this street. Populated with "
+            "'valid_civic_number_ranges'; offer them as 'did you mean …?'."
+        ),
+    )
+    # -- ABS-469: is the zone safe to rely on? ---------------------------
+    #
+    # Orthogonal to geocoder quality: even an exact rooftop point is unsafe
+    # when the parcel abuts or straddles a zone line, which is exactly the
+    # mechanism that produces a confidently wrong setback.
+    zone_boundary_distance_m: float | None = Field(
+        default=None,
+        description=(
+            "Distance in metres from the resolved point to the nearest polygon "
+            "carrying a DIFFERENT zone code, when that is within ~25 m. Null "
+            "when no other zone is nearby (or no zoning dataset is in scope). "
+            "A small value means the zone above may belong to the neighbouring "
+            "parcel — say so and name 'nearest_other_zone'."
+        ),
+    )
+    nearest_other_zone: str | None = Field(
+        default=None,
+        description=(
+            "Zone code of the nearest polygon with a different zone, paired "
+            "with 'zone_boundary_distance_m'."
+        ),
+    )
+    parcel_zones: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Every zone the resolved parcel intersects, largest share first, "
+            "when it intersects more than one. A multi-zone parcel means the "
+            "standards differ across the lot and the governing zone depends on "
+            "where on the lot the work is proposed — never answer with one "
+            "zone as if it governed the whole parcel. Empty when the parcel "
+            "sits in a single zone or no parcel fabric is in scope."
+        ),
+    )
+    # -- ABS-472: which by-law actually governs this parcel? --------------
+    #
+    # A municipality-wide zoning layer spans many by-law areas, so a zone code
+    # says nothing about which by-law defines it. Answering a Downtown Halifax
+    # DH-1 parcel out of the Regional Centre LUB is not a hedge-worthy
+    # imprecision — it is the wrong by-law, and every standard that follows is
+    # someone else's.
+    governing_bylaw: str | None = Field(
+        default=None,
+        description=(
+            "The by-law that governs the resolved parcel's zone, read from "
+            "the zoning layer's own per-feature by-law attribution (e.g. "
+            "'Downtown Halifax Land Use By-law'). Null when the zoning layer "
+            "in scope does not publish per-feature attribution."
+        ),
+    )
+    governing_bylaw_code: str | None = Field(
+        default=None,
+        description=(
+            "Publisher-namespaced short code for 'governing_bylaw' (e.g. "
+            "'hrm:DHFX'), when the layer carries one."
+        ),
+    )
+    governing_bylaw_status: Literal["held", "not_held", "unknown"] | None = Field(
+        default=None,
+        description=(
+            "Whether the by-law that governs this parcel is in the retrieval "
+            "corpus: 'held' (it is — the zone citation points at it), "
+            "'not_held' (it is NOT — the zone code is the municipality's "
+            "published mapping, but NO standard from the governing by-law is "
+            "available here and the zone carries no citation. Do NOT answer "
+            "with permitted uses, height, setbacks, floor-area or any other "
+            "standard, and do NOT substitute another by-law's: name the "
+            "governing by-law and tell the user it must be consulted "
+            "directly), 'unknown' (the layer publishes no per-feature "
+            "attribution). Null when no zone resolved."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -779,10 +1166,93 @@ class AddressProfile(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class EvidenceClass(str, Enum):
+    """What KIND of evidence ties a retrieved value to the thing asked about (ABS-493).
+
+    Zone-profile confidence is an **ordinal evidence class**, not a
+    probability. It answers "how is this fragment addressed by the query?"
+    — never "how likely is this value correct?". Nothing in the pipeline
+    is calibrated against labelled outcomes, so a number that looked like
+    a probability could only ever be a lie dressed as one.
+
+    The ladder, strongest rung first (see
+    :data:`EVIDENCE_CLASS_CONFIDENCE` for the numeric rung each maps to,
+    and ``docs/decisions/ABS-493-CONFIDENCE-DEFINITION.md`` for the full
+    rationale):
+
+    ``EXACT_PATH``
+        The query names the fragment's ``citation_path`` verbatim. This is
+        an identity lookup, not a search.
+    ``BOUND_TABLE_CELL``
+        The value was read out of a table cell on an enrichment-bound axis
+        (the ABS-409 permission-matrix path). Structured, not keyword-matched.
+    ``PATH_ANCHORED``
+        A query term matches inside the fragment's ``citation_path`` — the
+        corpus itself files this fragment under what was asked about.
+    ``LABELLED_ROW``
+        A query term matches the fragment's ``citation_label`` — a labelled
+        row or table entry bearing the term.
+    ``BODY_PHRASE``
+        The query appears verbatim in the fragment's body text. The prose
+        is *about* the thing asked about, but nothing structural says so.
+    ``BODY_TERMS``
+        Only scattered query terms appear in the body. A brush, not a hit.
+    ``NO_MATCH``
+        Nothing matched anywhere.
+
+    Two ordering principles: structural addressing (path, label) outranks
+    textual mention (body), and within textual mention a verbatim phrase
+    outranks scattered terms.
+
+    **The class never depends on how many query terms match** — only on
+    where they land. That is the whole point: the previous
+    ``min(1.0, score / 40.0)`` normalisation made the verdict a function
+    of query word count, so ``"COR setback"`` (2 tokens) failed the gate
+    on the very same ``Table 3 > COR`` row that ``"CEN-2 setback"``
+    (4 tokens) passed it on.
+    """
+
+    EXACT_PATH = "exact_path"
+    BOUND_TABLE_CELL = "bound_table_cell"
+    PATH_ANCHORED = "path_anchored"
+    LABELLED_ROW = "labelled_row"
+    BODY_PHRASE = "body_phrase"
+    BODY_TERMS = "body_terms"
+    NO_MATCH = "no_match"
+
+
+# The rung each evidence class occupies. These are ORDINAL LABELS, not
+# probabilities: only their order (and their position relative to
+# MIN_GATED_EVIDENCE_CONFIDENCE) carries meaning. They are floats because
+# the wire contract types ``ZoneProfile.confidence`` as float — a caller
+# must not read 0.8 as "80% likely correct".
+EVIDENCE_CLASS_CONFIDENCE: dict[EvidenceClass, float] = {
+    EvidenceClass.EXACT_PATH: 1.0,
+    EvidenceClass.BOUND_TABLE_CELL: 0.9,
+    EvidenceClass.PATH_ANCHORED: 0.8,
+    EvidenceClass.LABELLED_ROW: 0.6,
+    EvidenceClass.BODY_PHRASE: 0.4,
+    EvidenceClass.BODY_TERMS: 0.2,
+    EvidenceClass.NO_MATCH: 0.0,
+}
+
+# The gate (AC-2.9, re-derived for ABS-493): a field whose evidence class
+# sits BELOW ``BODY_PHRASE`` is not confidently extracted — its value is
+# dropped to None and NO citation is emitted for it. In evidence-class
+# terms the cut is "the corpus's structure ties this fragment to the
+# query, or the fragment states the query verbatim" vs "some of the words
+# happen to co-occur in the prose".
+MIN_GATED_EVIDENCE_CONFIDENCE = EVIDENCE_CLASS_CONFIDENCE[EvidenceClass.BODY_PHRASE]
+
+
 class ZoneDimensions(BaseModel):
     """Dimensional standards for a zone. All fields optional — ``None``
     when the bylaw doesn't specify the value or it couldn't be extracted
     with sufficient confidence.
+
+    "Sufficient confidence" is the :class:`EvidenceClass` gate: a value
+    whose supporting fragment is only ``BODY_TERMS``-class evidence is
+    dropped here rather than served with a citation that doesn't back it.
     """
 
     max_height_m: float | None = Field(
@@ -811,12 +1281,26 @@ class ConditionalUse(BaseModel):
     """
 
     use: str = Field(description="The use name as the bylaw prints it.")
+    footnotes: list[FootnoteCondition] = Field(
+        default_factory=list,
+        description=(
+            "EVERY footnote condition on the cell, in print order (ABS-523). "
+            "A cell reading '⑮ ㉒' is subject to both."
+        ),
+    )
     footnote_ordinal: int | None = Field(
-        default=None, description="The circled-number footnote ordinal, e.g. 3 for ③."
+        default=None,
+        description=(
+            "The first circled-number footnote ordinal, e.g. 3 for ③. LOSSY — "
+            "read 'footnotes'."
+        ),
     )
     condition: str | None = Field(
         default=None,
-        description="The footnote legend's condition text, when resolvable.",
+        description=(
+            "The first footnote legend's condition text, when resolvable. "
+            "LOSSY — read 'footnotes'."
+        ),
     )
 
 
@@ -824,8 +1308,14 @@ class ZoneUses(BaseModel):
     """Use permissions for a zone. ``permitted`` lists explicitly
     permitted uses; ``not_permitted`` lists uses explicitly marked as
     not permitted; ``conditional`` lists uses permitted subject to a
-    footnote condition (symbol-matrix bylaws). Any may be empty when
-    retrieval found no use table for the zone.
+    footnote condition (symbol-matrix bylaws); ``undetermined`` lists uses
+    the bylaw binds but whose permission could not be read (ABS-484). Any
+    may be empty when retrieval found no use table for the zone.
+
+    ``undetermined`` is the UNKNOWN state, not a fourth permission: it says
+    the ingested source did not yield an answer for that use, so nothing in
+    the profile's citations backs it and the ``uses`` confidence never
+    covers it.
     """
 
     permitted: list[str] = Field(
@@ -845,6 +1335,18 @@ class ZoneUses(BaseModel):
     conditional: list[ConditionalUse] = Field(
         default_factory=list,
         description="Uses permitted subject to a footnote condition.",
+    )
+    undetermined: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Uses bound to this zone's matrix column whose permission could "
+            "NOT be determined from the ingested source (the cell is missing "
+            "from the parsed grid, or carries an unmapped glyph) and which the "
+            "prose fallback did not resolve either. These are extraction gaps, "
+            "NOT prohibitions: they carry no citation and no confidence. "
+            "Report them as 'not determinable from the ingested source' and "
+            "point the reader at the cited table."
+        ),
     )
 
 
@@ -910,7 +1412,17 @@ class ZoneProfile(BaseModel):
     )
     confidence: dict[str, float] = Field(
         default_factory=dict,
-        description="Per-field semantic match confidence (0..1), keyed by DTO field name, for populated fields.",
+        description=(
+            "Per-field EVIDENCE CLASS, keyed by DTO field name, for populated "
+            "fields. NOT a probability: each value is the ordinal rung of a "
+            "documented evidence ladder (see EvidenceClass) answering 'what "
+            "kind of evidence ties this value to the zone?' — 1.0 exact "
+            "citation-path match, 0.9 bound table cell, 0.8 the term is in "
+            "the fragment's citation path, 0.6 in its label, 0.4 the query "
+            "appears verbatim in its body text. Fields below 0.4 are dropped "
+            "and never appear here. Compare rungs to each other; do not read "
+            "0.8 as '80% likely correct'."
+        ),
     )
 
 
@@ -1091,3 +1603,186 @@ class CorpusCoherenceReport(BaseModel):
     checked_roles: int = Field(..., description="Number of overlay-role dataset configs evaluated.")
     bylaws_checked: int = Field(..., description="Number of distinct (municipality, bylaw_name) pairs evaluated.")
     missing: list[MissingOverlayRole] = Field(default_factory=list)
+
+
+class UnheldGoverningBylaw(BaseModel):
+    """One by-law a geo layer attributes features to but the corpus doesn't hold (ABS-472).
+
+    Municipality-wide layers span many by-law areas. Where the governing
+    by-law is missing from the retrieval corpus, every feature in that area is
+    ground we can map but cannot answer standards for — and before ABS-472 we
+    answered it anyway, citing whichever document the layer was linked to.
+    """
+
+    dataset_name: str = Field(..., description="The layer carrying the features.")
+    governing_bylaw: str = Field(
+        ..., description="The by-law the features name as governing, verbatim."
+    )
+    governing_bylaw_code: str | None = Field(
+        default=None, description="Publisher-namespaced short code, when the layer carries one."
+    )
+    feature_count: int = Field(
+        ..., description="How many of the layer's features this by-law governs."
+    )
+    detail: str = Field(..., description="Human-readable line for a CLI table or ops log.")
+
+
+class GoverningBylawCoverageReport(BaseModel):
+    """How much of each municipality-wide geo layer we can actually cite (ABS-472).
+
+    Informational, not a health tripwire: a municipality publishes far more
+    by-law areas than any corpus is likely to ingest, so ``complete=False`` is
+    the expected steady state and does NOT mean anything is broken. What it
+    quantifies is exposure — how much ground a spatial query can land on and
+    come back with a zone whose by-law we do not hold. Answers for that ground
+    are refused/caveated at request time (``AddressProfile.
+    governing_bylaw_status``); this report is what tells an operator how much
+    of it there is and which by-law to ingest next.
+    """
+
+    complete: bool = Field(
+        ...,
+        description="True when every attributed feature's governing by-law is in scope.",
+    )
+    datasets_checked: int = Field(
+        ..., description="Layers declaring per-feature governing-by-law attribution."
+    )
+    features_checked: int = Field(..., description="Attributed features evaluated.")
+    covered_features: int = Field(
+        ..., description="Features whose governing by-law IS in the retrieval corpus."
+    )
+    unheld_features: int = Field(
+        ..., description="Features whose governing by-law is NOT in the corpus."
+    )
+    unheld: list[UnheldGoverningBylaw] = Field(
+        default_factory=list,
+        description="One entry per (layer, governing by-law) gap, largest first.",
+    )
+
+
+class E2eContaminationMarker(BaseModel):
+    """One row in a non-test database that carries an e2e-suite fingerprint (ABS-432).
+
+    The three marker kinds are the exact fingerprints every
+    ``scripts/seed_e2e_*.py`` fixture stamps on the rows it creates:
+
+    * ``document_parser_version`` — ``document.parser_version = 'e2e-seed'``
+    * ``document_file_hash``      — ``document.file_hash LIKE 'e2e-%'``
+    * ``external_dataset_name``   — ``external_dataset.name LIKE 'e2e_%'``
+      (literal underscore, escaped in SQL)
+
+    A single document row matching both document markers is reported once,
+    with both kinds listed in ``marker_kinds``.
+    """
+
+    table: Literal["document", "external_dataset"] = Field(
+        ..., description="Which table the offending row lives in."
+    )
+    row_id: int = Field(..., description="Primary key of the offending row.")
+    marker_kinds: list[str] = Field(
+        ...,
+        description=(
+            "Every e2e fingerprint this row matches: 'document_parser_version', "
+            "'document_file_hash', and/or 'external_dataset_name'."
+        ),
+    )
+    detail: str = Field(
+        ...,
+        description=(
+            "Human-readable identification of the row (bylaw name + file hash "
+            "for documents, dataset name for external datasets) for a red "
+            "banner or ops log line."
+        ),
+    )
+
+
+class E2eContaminationReport(BaseModel):
+    """Result of sweeping a database for e2e-suite fixture markers (ABS-432).
+
+    Defense-in-depth behind the dev/e2e Postgres split (ABS-428) and the
+    dev-DB purge (ABS-429): if test artifacts ever reach a non-test database
+    again, this report surfaces them loudly — in the ``dev-up.sh`` preflight,
+    the ``scripts/corpus_coherence_audit.py`` CLI, and the
+    ``/v1/monitoring/corpus-coherence`` ops endpoint — instead of silently
+    polluting manual testing and real answers.
+
+    ``contaminated`` is green-only-when-zero: True the moment any marker row
+    exists. Whether that's an incident depends on the deployment — an e2e
+    stack's own database legitimately holds these rows (the caller decides;
+    see the monitoring router's markers-expected handling).
+    """
+
+    contaminated: bool = Field(..., description="True when any marker row exists.")
+    marker_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Row count per marker kind, always carrying all three keys: "
+            "'document_parser_version', 'document_file_hash', "
+            "'external_dataset_name'."
+        ),
+    )
+    markers: list[E2eContaminationMarker] = Field(
+        default_factory=list,
+        description="Every offending row, one entry per row (deduplicated across marker kinds).",
+    )
+
+
+class EnabledDocumentRef(BaseModel):
+    """One retrieval-enabled document inside a name-collision group (ABS-434)."""
+
+    id: int = Field(..., description="Document primary key.")
+    municipality: str = Field(..., description="The municipality exactly as stored.")
+    bylaw_name: str = Field(..., description="The bylaw name exactly as stored.")
+
+
+class EnabledNameCollision(BaseModel):
+    """Multiple ENABLED documents sharing one normalized bylaw identity (ABS-434).
+
+    The doc-15/38 shape: two enabled documents whose ``(municipality,
+    bylaw_name)`` differ only by case/hyphenation/whitespace ("By-law" vs
+    "By-Law"). Every exact-match pass (migration-0024 backfill,
+    ``enable-retrieval`` sibling detection/``--replace``, the ABS-355
+    relink) sees them as unrelated bylaws, so the enabled corpus silently
+    fragments. Exact duplicates (two enabled versions under the *same*
+    literal name) are also reported — >1 enabled per normalized identity is
+    the violation either way.
+    """
+
+    normalized_municipality: str = Field(
+        ..., description="The group key's municipality half (see layer1.naming.normalize_bylaw_name)."
+    )
+    normalized_bylaw_name: str = Field(
+        ..., description="The group key's bylaw-name half."
+    )
+    document_ids: list[int] = Field(
+        ..., description="Every enabled document id in the group, ascending."
+    )
+    documents: list[EnabledDocumentRef] = Field(
+        ..., description="The colliding documents with their names exactly as stored."
+    )
+    detail: str = Field(
+        ..., description="Human-readable description naming the ids and stored spellings."
+    )
+
+
+class EnabledNameCollisionReport(BaseModel):
+    """Result of auditing enabled documents for normalized-name collisions (ABS-434).
+
+    ``collision_free`` is the loud/quiet signal: True means every normalized
+    ``(municipality, bylaw_name)`` identity has at most one retrieval-enabled
+    document; False means at least one identity has several (see
+    ``collisions`` for the ids). Unlike the e2e-contamination sweep there is
+    no deployment where a collision is legitimate — red is red everywhere,
+    including the e2e stack's own database.
+    """
+
+    collision_free: bool = Field(
+        ..., description="True when no normalized identity has more than one enabled document."
+    )
+    enabled_documents: int = Field(
+        ..., description="Number of retrieval-enabled documents examined."
+    )
+    identities_checked: int = Field(
+        ..., description="Number of distinct normalized (municipality, bylaw_name) identities among them."
+    )
+    collisions: list[EnabledNameCollision] = Field(default_factory=list)

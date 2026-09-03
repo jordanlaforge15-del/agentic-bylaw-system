@@ -9,7 +9,7 @@ from bylaw_retrieval.retrieval import (
     LocationSlot,
     RetrievalRequest,
     RetrievalService,
-    latest_document_id_resolver,
+    retrieval_enabled_resolver,
 )
 from layer1.db.session import session_scope
 from layer2.compliance.evaluator import (
@@ -23,7 +23,7 @@ from layer2.compliance.db.models import SubmissionAttributeSource
 SERVER_NAME = "Bylaw Retrieval MCP"
 
 
-def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
+def create_mcp_server(db_url: str | None = None, *, all_documents: bool = False):
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:
@@ -31,16 +31,18 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             "The MCP SDK is not installed. Install the 'mcp' extra: pip install -e '.[mcp]'"
         ) from exc
 
-    scope_resolver = latest_document_id_resolver if latest_only else None
+    scope_resolver = None if all_documents else retrieval_enabled_resolver
     scope_note = (
-        " This server is launched with --latest-only: every retrieval is "
-        "hard-scoped to the most recently ingested document. The "
-        "document_id, municipality, and bylaw_name filters on requests are "
-        "still accepted but they AND with the active document — they cannot "
-        "reach a different bylaw. Queries that target a different bylaw "
-        "will return empty results."
-        if latest_only
-        else ""
+        ""
+        if all_documents
+        else (
+            " Every retrieval is hard-scoped to the set of documents "
+            "explicitly enabled for retrieval (operator-published via the "
+            "layer1 CLI). The document_id, municipality, and bylaw_name "
+            "filters on requests are still accepted but they AND with the "
+            "enabled set — they cannot reach a disabled document. If no "
+            "documents are enabled, all queries return empty results."
+        )
     )
 
     def _service(session) -> RetrievalService:
@@ -80,7 +82,11 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
             "several search_bylaw_evidence round-trips into one. Spend the "
             "rest of the tool budget on the actual question. If the profile "
             "comes back with unresolvable=true, fall back to "
-            "search_bylaw_evidence with the location slot.\n\n"
+            "search_bylaw_evidence with the location slot. If it comes back "
+            "with resolution_quality other than 'rooftop', or with "
+            "outside_mapped_area=true, the zone may be a neighbouring "
+            "parcel's — qualify the answer with the profile's caveats "
+            "instead of stating the zone as fact.\n\n"
             "WHEN TO USE evaluate_submission_against_bylaws.\n"
             "Use this fifth tool ONLY when the user has stated specific "
             "proposed attribute values (height, setbacks, use class, "
@@ -152,6 +158,15 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         key — a typed permission (permitted / conditional / not_permitted)
         plus any footnote condition, or a typed indeterminate result with a
         reason when the use or zone isn't in the matrix.
+
+        A hit carries ``operative_clauses`` (ABS-521): the other clauses of the
+        same provision — the section's own (a)/(b)/(1.5) limbs, or, when you
+        looked up a clause, its siblings. They are part of the rule, not
+        related reading. A section whose text ends on a colon states no
+        standard by itself; the numbers are in its clauses, and several of them
+        often bind at once. ``operative_clauses_omitted`` non-zero means the
+        provision is longer than what was returned — re-read it with
+        ``search_bylaw_evidence`` and ``citation_path_prefix``.
         """
         request = CitationLookupRequest(
             citation_path=citation_path,
@@ -182,7 +197,13 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         page_end: int | None = None,
         location: dict[str, Any] | None = None,
         attribute_tag_filter: list[str] | None = None,
-        include_context: bool = False,
+        # ABS-492: on by default. A fragment can now rank because of scope its
+        # containers state and it does not — that is the point of the context
+        # channel — so returning the match without its ancestor chain hands the
+        # model a stripped list item and no way to see what scopes it. The
+        # model may still turn it off per call; ``lookup_citation`` has
+        # defaulted it on since ABS-288 for the same reason.
+        include_context: bool = True,
         include_cross_references: bool = False,
         include_tables: bool = False,
         include_datasets: bool = False,
@@ -225,6 +246,29 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
           - named_place for landmarks
           - intersection_streets: list of 2+ street names
           - geometry: caller-supplied GeoJSON Point/Polygon in EPSG:4326
+
+        --------------------------------------------------------------------
+        Narrowing by regulated attribute:
+
+        ``attribute_tag_filter`` is an INDEXED hard pre-filter on the
+        candidate clause set. When the question targets a specific
+        regulated dimension, pass the matching attribute IDs and only
+        clauses tagged with at least one of them are scored — so the
+        answer comes from the provisions that actually regulate the
+        attribute rather than any prose sharing its vocabulary.
+
+            search_bylaw_evidence(
+                query="maximum building height",
+                attribute_tag_filter=["building_height_m"],
+            )
+
+        Valid IDs are the ``id`` values in the Phase-1 attribute taxonomy
+        (``src/layer2/compliance/attributes/taxonomy.yaml``) — e.g.
+        building_height_m, front_setback_m, rear_setback_m,
+        lot_coverage_percent, floor_area_ratio, parking_stalls_count.
+        Multiple IDs union (any-of). An ID outside the taxonomy matches
+        nothing, so don't invent one. Omit the argument for exploratory
+        questions; an EMPTY list is a validation error, not "no filter".
 
         --------------------------------------------------------------------
         Reading the response:
@@ -284,6 +328,62 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         If the address can't be resolved, the response carries
         ``unresolvable: true`` with empty citations rather than an error —
         fall back to the thin tools (``search_bylaw_evidence``) in that case.
+
+        READ THE RESOLUTION QUALITY BEFORE STATING THE ZONE (ABS-466).
+        ``resolution_quality`` says how the address became a point:
+        ``rooftop`` matched the building; ``interpolated`` means the civic
+        number was NOT found and the position was estimated along the street
+        from surrounding numbering; ``centroid`` / ``approximate`` are coarser
+        still. Anything below ``rooftop`` means the point may sit on a
+        neighbouring parcel, so the zone — and every setback, height and
+        floor-area figure derived from it — may belong to the wrong property.
+        The response then carries ``caveats``: surface their substance to the
+        user rather than stating the zone as fact. ``outside_mapped_area:
+        true`` means a point WAS found but falls outside every mapped
+        boundary — report that, do not report a zone.
+
+        DOES THE ADDRESS EXIST? (ABS-469) ``civic_address_status`` is checked
+        against the municipality's own data before anything is looked up.
+        ``not_found`` means the street is known and NO published civic address
+        or street-segment range covers this number — the address does not
+        exist. The response then carries no zone at all, plus
+        ``valid_civic_number_ranges`` and ``suggested_civic_numbers``: tell
+        the user the address could not be found, quote those, and ask them to
+        confirm. Do not re-issue the lookup with a geocoder — a geocoder
+        answers a fabricated address by estimating a position from the
+        surrounding numbering, which is the failure this check exists to
+        stop. ``confirmed`` means the number exists; ``unverifiable`` means no
+        municipal address data was in scope and says nothing either way.
+
+        IS THE ZONE SAFE TO RELY ON? Independent of the geocode's quality:
+        ``zone_boundary_distance_m`` (with ``nearest_other_zone``) reports
+        when the point sits within ~25 m of a different zone, and
+        ``parcel_zones`` lists every zone the parcel intersects when the lot
+        is split between more than one. A split lot has no single governing
+        zone — say so and ask where on the lot the work is proposed.
+
+        WHICH BY-LAW GOVERNS THIS PARCEL? The zoning mapping is
+        municipality-wide, so a zone code can belong to a by-law that is not
+        in this corpus. ``governing_bylaw`` names the by-law that governs the
+        resolved parcel and ``governing_bylaw_status`` says whether we hold
+        it. ``not_held`` is a hard stop, not a hedge: the zone code is the
+        municipality's own published mapping and may be stated, but NO
+        standard behind it — permitted uses, height, setbacks, floor area,
+        parking — is available here, and the standards of the by-laws that
+        ARE available do not apply to this parcel. Name the governing by-law,
+        say it must be consulted directly with HRM, and do not substitute a
+        figure from another by-law. The zone carries no citation in that
+        case, because there is no honest one to give.
+
+        THE SAME QUESTION FOR EACH OVERLAY, SEPARATELY. The height-precinct,
+        FAR and other schedule layers are municipality-wide too, so a parcel
+        whose ``governing_bylaw_status`` is ``held`` can still sit under an
+        overlay from a by-law we do not hold. Each entry in ``overlays``
+        carries its own ``governing_bylaw`` / ``governing_bylaw_held``, and
+        ``governing_bylaw_held: false`` means the same hard stop for THAT
+        overlay: state the mapped value, name the by-law it comes from, and
+        do NOT read the standard out of the equivalent schedule in a by-law
+        we do hold — that schedule does not govern this ground.
         """
         with session_scope(db_url) as session:
             service = _service(session)
@@ -328,6 +428,11 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
         permitted / not-permitted use lists under ``uses``; parking
         applicability under ``parking``; and a ``citations`` list that
         backs every populated field.
+
+        ``uses`` may also carry an ``undetermined`` list (ABS-484): uses
+        whose permission the ingested source did not yield. They are
+        extraction gaps, not prohibitions, and carry no citation — report
+        them as not determinable from the ingested source.
 
         Prefer this over issuing several ``search_bylaw_evidence`` calls
         for the same zone — it collapses that sequence into one call.
@@ -522,12 +627,12 @@ def create_mcp_server(db_url: str | None = None, *, latest_only: bool = False):
     return mcp
 
 
-def run_stdio(db_url: str | None = None, *, latest_only: bool = False) -> None:
-    create_mcp_server(db_url, latest_only=latest_only).run()
+def run_stdio(db_url: str | None = None, *, all_documents: bool = False) -> None:
+    create_mcp_server(db_url, all_documents=all_documents).run()
 
 
-def run_streamable_http(db_url: str | None = None, *, latest_only: bool = False) -> None:
-    create_mcp_server(db_url, latest_only=latest_only).run(transport="streamable-http")
+def run_streamable_http(db_url: str | None = None, *, all_documents: bool = False) -> None:
+    create_mcp_server(db_url, all_documents=all_documents).run(transport="streamable-http")
 
 
 def main() -> None:
@@ -535,21 +640,36 @@ def main() -> None:
     parser.add_argument("--db-url", default=None, help="Database URL override")
     parser.add_argument("--http", action="store_true", help="Use streamable HTTP transport")
     parser.add_argument(
-        "--latest-only",
+        "--all-documents",
         action="store_true",
         help=(
-            "Scope every retrieval to the most recently ingested document. "
-            "Useful during development when re-ingesting the same bylaw "
-            "leaves stale duplicates in the database. Explicit document_id, "
-            "municipality, or bylaw_name filters in the request override."
+            "Disable published-document scoping and expose every document "
+            "in the database, including ones not enabled for retrieval. "
+            "Dev/debug only — never use for a deployment."
         ),
+    )
+    parser.add_argument(
+        "--latest-only",
+        action="store_true",
+        help=argparse.SUPPRESS,  # deprecated no-op, kept so stale launch configs don't crash
     )
     args = parser.parse_args()
 
+    if args.latest_only:
+        import sys  # noqa: PLC0415
+
+        print(
+            "layer1-mcp: --latest-only is deprecated and ignored. Retrieval "
+            "is scoped to documents enabled via the layer1 CLI "
+            "(enable-retrieval/disable-retrieval); remove the flag from "
+            "your launch config.",
+            file=sys.stderr,
+        )
+
     if args.http:
-        run_streamable_http(args.db_url, latest_only=args.latest_only)
+        run_streamable_http(args.db_url, all_documents=args.all_documents)
         return
-    run_stdio(args.db_url, latest_only=args.latest_only)
+    run_stdio(args.db_url, all_documents=args.all_documents)
 
 
 if __name__ == "__main__":

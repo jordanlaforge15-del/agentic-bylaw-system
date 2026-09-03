@@ -38,12 +38,36 @@ import {
 } from "@/lib/cases";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
+import {
+  BetaRefillClaim,
+  canClaimRefill,
+  refillTurnsLabel,
+  refillUnlockLabel,
+} from "@/components/product/beta-refill";
 import { cn } from "@/lib/cn";
+import { TURN_APPROX_SHORT } from "@/lib/turn-copy";
 
 // Only "address" is backed by a live data source in beta (see ABS-200).
 const ANCHOR_KIND_OPTIONS: AnchorKind[] = ["address"];
 
 type Working = "idle" | "intake" | "checkout";
+
+// ABS-450: opening a case needs both an anchor and a first message. Returns
+// the guidance line naming whatever is still empty, or null once the form is
+// complete. Drives both the CTA's disabled state and the visible hint, so the
+// button never sits enabled-looking over a no-op click.
+function missingFieldsMessage(
+  anchorLabel: string,
+  question: string,
+): string | null {
+  const noAnchor = !anchorLabel.trim();
+  const noQuestion = !question.trim();
+  if (noAnchor && noQuestion)
+    return "Add a property address and your question to start.";
+  if (noAnchor) return "Add a property address to start.";
+  if (noQuestion) return "Add your question to start.";
+  return null;
+}
 
 export function OpenCaseForm({
   initialAnchorLabel = "",
@@ -179,8 +203,11 @@ export function OpenCaseForm({
   // credit) and land on /app with the question auto-sent. Idempotent on the
   // anchor server-side, so re-opening the same address reuses the case.
   async function startConversation() {
-    if (!anchorLabel.trim()) {
-      setError("Add a property address to start.");
+    // ABS-450: the CTA is disabled until both fields carry content, so this
+    // is the belt-and-braces path (keyboard/programmatic submits). It must
+    // still say *why* nothing happened rather than returning silently.
+    if (!anchorLabel.trim() || !question.trim()) {
+      setError(missingFieldsMessage(anchorLabel, question) ?? null);
       return;
     }
     setOpening(true);
@@ -388,6 +415,7 @@ export function OpenCaseForm({
 
   const busy = working !== "idle";
   const reportCount = menu?.questions.length ?? 0;
+  const missing = missingFieldsMessage(anchorLabel, question);
 
   return (
     <div className="flex flex-col">
@@ -485,18 +513,33 @@ export function OpenCaseForm({
       >
         <div className="flex justify-between items-end gap-7 flex-wrap">
           <BalanceChip wallet={wallet} />
-          <Btn
-            variant="accent"
-            size="lg"
-            onClick={startConversation}
-            disabled={opening || !anchorLabel.trim()}
-            data-testid="start-conversation-btn"
-            className="whitespace-nowrap"
-          >
-            {opening ? "Opening…" : "Start the conversation — free →"}
-          </Btn>
+          <div className="flex flex-col items-end gap-2">
+            <Btn
+              variant="accent"
+              size="lg"
+              onClick={startConversation}
+              disabled={opening || missing !== null}
+              aria-describedby={missing ? "start-conversation-hint" : undefined}
+              data-testid="start-conversation-btn"
+              className="whitespace-nowrap"
+            >
+              {opening ? "Opening…" : "Start the conversation — free →"}
+            </Btn>
+            {/* ABS-450: say what's still missing instead of leaving a dead
+                CTA. Present from first paint, so an empty-form click is
+                never a silent no-op. */}
+            {missing && (
+              <span
+                id="start-conversation-hint"
+                data-testid="start-conversation-hint"
+                className="text-[12.5px] text-text-muted text-right"
+              >
+                {missing}
+              </span>
+            )}
+          </div>
         </div>
-        <BalanceNotice wallet={wallet} />
+        <BalanceNotice wallet={wallet} onRefilled={setWallet} />
       </section>
 
       {/* Secondary: released report SKUs. Rendered only when ≥1 slug is
@@ -545,6 +588,13 @@ export function OpenCaseForm({
 // Healthy = accent dot + "~N turns left" (payments-off: "~N free trial
 // turns"); low/empty = brick border + alarm glyph; empty label is "0 turns".
 // aria-label expands the "~" to "approximately" for screen readers.
+//
+// ABS-452: a non-zero figure here is the first turn count a user ever sees, and
+// it reads as a hard count ("I have 150 turns") unless we say otherwise — one
+// multi-attribute evaluation can cost ~100 turns' worth of tokens. The standard
+// approximate disclosure rides under the chip, and on the aria-label + title so
+// it reaches assistive tech and hover. Suppressed at zero, where "0 turns" has
+// no variance to caveat.
 function BalanceChip({ wallet }: { wallet: WalletResponse | null }) {
   if (!wallet) return null;
   const turns = Math.max(0, wallet.approx_turns_remaining);
@@ -558,17 +608,21 @@ function BalanceChip({ wallet }: { wallet: WalletResponse | null }) {
     : paid
       ? `~${turns} turns left`
       : `~${turns} free trial turns`;
-  const ariaLabel = empty
+  const baseAriaLabel = empty
     ? "0 turns"
     : paid
       ? `approximately ${turns} turns left`
       : `approximately ${turns} free trial turns`;
+  const ariaLabel = empty
+    ? baseAriaLabel
+    : `${baseAriaLabel}. ${TURN_APPROX_SHORT}.`;
 
   return (
     <div className="flex flex-col gap-1.5" data-testid="balance-chip">
       <span
         role="img"
         aria-label={ariaLabel}
+        title={empty ? undefined : TURN_APPROX_SHORT}
         className={cn(
           "inline-flex items-center gap-2 self-start",
           attention ? "border-[1.5px] border-brick" : "border border-hair",
@@ -603,6 +657,14 @@ function BalanceChip({ wallet }: { wallet: WalletResponse | null }) {
       <Mono muted size={9}>
         OPENING IS FREE
       </Mono>
+      {!empty && (
+        <span
+          data-testid="balance-chip-approx-note"
+          className="text-text-muted text-[11px] leading-[1.45] max-w-[34ch]"
+        >
+          {TURN_APPROX_SHORT}
+        </span>
+      )}
     </div>
   );
 }
@@ -611,21 +673,42 @@ function BalanceChip({ wallet }: { wallet: WalletResponse | null }) {
 // or empty. Copy is exact per the design package, forked on payments-on/off
 // and low/empty. The free CTA still works in every state — this is guidance,
 // not a gate.
-function BalanceNotice({ wallet }: { wallet: WalletResponse | null }) {
+function BalanceNotice({
+  wallet,
+  onRefilled,
+}: {
+  wallet: WalletResponse | null;
+  onRefilled: (wallet: WalletResponse) => void;
+}) {
   if (!wallet) return null;
   const turns = Math.max(0, wallet.approx_turns_remaining);
   const empty = turns <= 0;
   const low = wallet.low_balance && !empty;
   if (!empty && !low) return null;
   const paid = wallet.payments_enabled;
+  // ABS-405: an empty wallet on the payments-off beta is the state this
+  // page used to leave as a flat "open it anyway and see a dead composer".
+  // Offer the same self-serve claim the chat prompt does — this is the
+  // primary entry flow, so a fix that skipped it would still strand the
+  // user one screen later.
+  const refill = canClaimRefill(wallet) ? wallet.beta_refill : undefined;
+  const cooldownUntil =
+    !paid && wallet.beta_refill?.status === "cooldown"
+      ? refillUnlockLabel(wallet.beta_refill.next_available_at)
+      : null;
 
   let body: string;
   if (empty && paid) {
     body =
       "Opening is free, but replies need turns and you're out. Top up now or after you open.";
+  } else if (empty && !paid && refill) {
+    body =
+      "Opening is free, but replies need turns and your free trial is used up. " +
+      `You can add ${refillTurnsLabel(refill)} to this account right now.`;
   } else if (empty && !paid) {
     body =
-      "Opening is free, but replies need turns and your free trial is used up. Paid top-ups open soon.";
+      "Opening is free, but replies need turns and your free trial is used up. Paid top-ups open soon." +
+      (cooldownUntil ? ` More turns unlock ${cooldownUntil}.` : "");
   } else if (low && paid) {
     body =
       "You're running low. Opening is free; your first reply will draw on your last turns.";
@@ -653,6 +736,7 @@ function BalanceNotice({ wallet }: { wallet: WalletResponse | null }) {
           Top up turns →
         </Btn>
       )}
+      {empty && refill && <BetaRefillClaim onRefilled={onRefilled} />}
     </div>
   );
 }

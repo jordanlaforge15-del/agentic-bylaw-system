@@ -4,6 +4,8 @@
 // no hiring CTA. ABS is a single-operator project in private beta and
 // this page reflects that.
 
+import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { Mono } from "@/components/mono";
 import { Btn } from "@/components/btn";
@@ -32,6 +34,13 @@ const PRINCIPLES = [
     d: "ABS is research, not a permit. Verify every reading with HRM Planning before relying on it for a permit application.",
   },
 ];
+
+export const metadata: Metadata = pageMetadata({
+  path: "/about",
+  title: "About — ABS°",
+  description:
+    "Why ABS exists: a research tool that reads the Halifax Regional Centre Land Use By-law against one parcel and cites every assertion. Built in Halifax.",
+});
 
 export default function AboutPage() {
   return (

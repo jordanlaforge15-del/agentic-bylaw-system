@@ -1,7 +1,8 @@
 // Functional: ABS-163 — Permission tables are found by the retrieval layer
 // when they carry proper captions (e.g. "Table 1A: Permitted uses by zone").
 //
-// Seeds two SourceTable rows (Table 1A, Table 1B) via the e2e seed script,
+// Seeds the unified RC-LUB e2e document (ABS-433) whose Table 1A / 1B
+// SourceTable rows carry proper captions,
 // then hits the /v1/_test/search-tables endpoint to confirm the retrieval
 // layer's _structured_permission_table_candidates() finds them by caption
 // pattern and returns the correct cells for a given use + zone query.
@@ -10,23 +11,24 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { E2E_API_URL, expect, test } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
+
+// ABS-433: the single unified RC-LUB e2e document (scripts/seed_e2e_rclub_unified.py).
+const RCLUB_UNIFIED_BYLAW_NAME = "Regional Centre Land Use By-Law (Unified RC-LUB E2E)";
 
 
 function runSeeds(): void {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT for the parallel-worktree case.
-  const pgPort = process.env.PG_PORT || "5432";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   const env = {
     ...process.env,
     DATABASE_URL: databaseUrl,
     PYTHONPATH: `${path.join(repoRoot, "src")}:${process.env.PYTHONPATH || ""}`,
   };
   execSync(
-    `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_permission_tables.py")}"`,
+    `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_rclub_unified.py")}"`,
     { env, stdio: "inherit" },
   );
 }
@@ -41,7 +43,7 @@ test("retrieval finds permission tables by caption", async ({ request }) => {
   const response = await request.post(`${E2E_API_URL}/v1/_test/search-tables`, {
     headers: { "Content-Type": "application/json" },
     data: {
-      bylaw_name: "Regional Centre Land Use By-law",
+      bylaw_name: RCLUB_UNIFIED_BYLAW_NAME,
       use_name: "Restaurant use",
     },
   });
@@ -58,7 +60,7 @@ test("retrieval returns zone-specific cell for restaurant use", async ({ request
   const response = await request.post(`${E2E_API_URL}/v1/_test/search-tables`, {
     headers: { "Content-Type": "application/json" },
     data: {
-      bylaw_name: "Regional Centre Land Use By-law",
+      bylaw_name: RCLUB_UNIFIED_BYLAW_NAME,
       use_name: "Restaurant use",
       zone: "DH",
     },
@@ -84,7 +86,7 @@ test("recovers symbol-font permission markers into permission_marker", async ({
   const response = await request.post(`${E2E_API_URL}/v1/_test/search-tables`, {
     headers: { "Content-Type": "application/json" },
     data: {
-      bylaw_name: "Regional Centre Land Use By-law",
+      bylaw_name: RCLUB_UNIFIED_BYLAW_NAME,
       use_name: "Home occupation use",
     },
   });
@@ -123,7 +125,7 @@ test("retrieval returns candidates for office use in CEN-2", async ({ request })
   const response = await request.post(`${E2E_API_URL}/v1/_test/search-tables`, {
     headers: { "Content-Type": "application/json" },
     data: {
-      bylaw_name: "Regional Centre Land Use By-law",
+      bylaw_name: RCLUB_UNIFIED_BYLAW_NAME,
       use_name: "Office use",
       zone: "CEN-2",
     },

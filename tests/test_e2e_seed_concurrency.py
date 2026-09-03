@@ -33,18 +33,57 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Playwright worker, so they must serialise via advisory lock.
 SPEC_BEFORE_ALL_SEEDS: tuple[str, ...] = (
     "seed_e2e_abs270_structured.py",
-    "seed_e2e_address_profile.py",
+    "seed_e2e_abs478_tokenization.py",
+    # ABS-480 / ABS-488: both rebuild their fragments from the real parser, so
+    # the lock also keeps one worker's get-or-create from overlapping another's.
+    "seed_e2e_abs480_citation_collision.py",
+    "seed_e2e_abs488_citation_repath.py",
+    # ABS-492: the provision-in-context probe tree (chapter > section > list
+    # item, plus the repathed decoy the fix demotes).
+    "seed_e2e_abs492_provision_context.py",
+    # ABS-523: the multi-marker permission cell ("⑮ ㉒") plus s.233's stemless
+    # rear-addition limb — the only fixture carrying either shape.
+    "seed_e2e_abs523_footnote_retention.py",
+    # ABS-524: the parented permission matrix — the only matrix fixture whose
+    # citation carries a path, which is the shape that used to suppress the
+    # label the answer has to quote.
+    "seed_e2e_abs524_use_attribution.py",
+    # ABS-500: the dimensional-retrieval probe — a height matrix bound to its
+    # zone rows, a parentless table, and a zone-declaring chapter.
+    "seed_e2e_abs500_table_channel.py",
+    "seed_e2e_amendment_relink.py",
+    "seed_e2e_axis_binding.py",
+    "seed_e2e_contamination_marker.py",
     "seed_e2e_corpus_coherence.py",
     "seed_e2e_evaluator_bylaws.py",
     "seed_e2e_groundtruth_bylaws.py",
     "seed_e2e_mainland_permitted_use.py",
+    # ABS-434: the enabled-name-collision pair fixture (per-test, uniquely
+    # slugged, so races are impossible by construction; the lock keeps it
+    # within the fleet-wide pattern anyway).
+    "seed_e2e_name_collision.py",
+    # ABS-461: rebuilds its fragments from the real parser on every run, so
+    # the lock also keeps one worker's delete-and-rebuild from overlapping
+    # another's.
+    "seed_e2e_page_break_split.py",
     "seed_e2e_parcels.py",
-    "seed_e2e_permission_tables.py",
+    "seed_e2e_permitted_use.py",
+    # ABS-520: the ragged, geometry-bearing matrix — a row the parser
+    # right-truncated beside a row it lost outright.
+    "seed_e2e_ragged_permission_grid.py",
+    # ABS-433: the unified RC-LUB corpus seed — replaces the retired
+    # seed_e2e_permission_tables / seed_e2e_address_profile / seed_e2e_pocs /
+    # seed_e2e_zone_profile quartet.
+    "seed_e2e_rclub_unified.py",
     "seed_e2e_submission_pdf.py",
+    "seed_e2e_table_citations.py",
+    "seed_e2e_tc005_permitted_use.py",
     "seed_e2e_tier_credits.py",
+    # ABS-484: the matrix-with-holes zone corpus (undetermined uses).
+    "seed_e2e_undetermined_uses.py",
+    "seed_e2e_unknown_permission.py",
     "seed_e2e_user.py",
     "seed_e2e_verify_coverage.py",
-    "seed_e2e_zone_profile.py",
     "seed_e2e_zoning.py",
 )
 

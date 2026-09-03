@@ -5,10 +5,19 @@
 // not want to publish a polished "v0.x" release log that doesn't match
 // the commit log a reader can verify.
 
+import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { Mono } from "@/components/mono";
 import { Btn } from "@/components/btn";
 import { Page, PageHead } from "@/components/marketing/page-shell";
+
+export const metadata: Metadata = pageMetadata({
+  path: "/changelog",
+  title: "Changelog — ABS°",
+  description:
+    "What's changed in ABS. Public release notes begin at general availability; during private beta the product changes daily and the log lives in git.",
+});
 
 export default function ChangelogPage() {
   return (

@@ -38,6 +38,10 @@ class PruneResult:
     dry_run: bool
     entries: list[PruneEntry] = field(default_factory=list)
     deleted_count: int = 0
+    # Superseded-by-recency documents that were NOT targeted because they are
+    # retrieval-enabled (ABS-413): the published corpus is operator-curated,
+    # so prune never deletes an enabled document regardless of age.
+    skipped_enabled: list[PruneEntry] = field(default_factory=list)
 
 
 def prune_superseded_documents(
@@ -52,9 +56,12 @@ def prune_superseded_documents(
 
     Groups documents by (municipality, bylaw_name), keeps the newest
     ``keep_latest`` rows per group, and targets the rest for deletion.
-    Cascade is handled by the ORM relationships (``cascade="all,
-    delete-orphan"``) and by the database-level ``ondelete="CASCADE"``
-    on SourceImage's FK.
+    Retrieval-enabled documents are never deleted (ABS-413) — the published
+    corpus is operator-curated, so an old-but-enabled version outlives any
+    newer unpublished ingest; such documents are reported in
+    ``PruneResult.skipped_enabled`` instead. Cascade is handled by the ORM
+    relationships (``cascade="all, delete-orphan"``) and by the
+    database-level ``ondelete="CASCADE"`` on SourceImage's FK.
     """
     query = session.query(Document)
     if municipality:
@@ -79,10 +86,13 @@ def prune_superseded_documents(
         key = (doc.municipality, doc.bylaw_name)
         groups.setdefault(key, []).append(doc)
 
-    # Collect superseded docs (beyond the keep_latest window).
+    # Collect superseded docs (beyond the keep_latest window), shielding
+    # retrieval-enabled documents from deletion.
     to_delete: list[Document] = []
+    skipped: list[Document] = []
     for group_docs in groups.values():
-        to_delete.extend(group_docs[keep_latest:])
+        for doc in group_docs[keep_latest:]:
+            (skipped if doc.retrieval_enabled else to_delete).append(doc)
 
     entries: list[PruneEntry] = []
     for doc in to_delete:
@@ -133,10 +143,29 @@ def prune_superseded_documents(
             )
         )
 
+    skipped_entries = [
+        PruneEntry(
+            id=doc.id,
+            ingestion_timestamp=doc.ingestion_timestamp,
+            file_hash=doc.file_hash,
+            page_count=doc.page_count,
+            municipality=doc.municipality,
+            bylaw_name=doc.bylaw_name,
+        )
+        for doc in skipped
+    ]
+
     if dry_run:
-        return PruneResult(dry_run=True, entries=entries, deleted_count=0)
+        return PruneResult(
+            dry_run=True, entries=entries, deleted_count=0, skipped_enabled=skipped_entries
+        )
 
     for doc in to_delete:
         session.delete(doc)
 
-    return PruneResult(dry_run=False, entries=entries, deleted_count=len(to_delete))
+    return PruneResult(
+        dry_run=False,
+        entries=entries,
+        deleted_count=len(to_delete),
+        skipped_enabled=skipped_entries,
+    )

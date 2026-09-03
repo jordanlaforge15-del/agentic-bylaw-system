@@ -12,7 +12,7 @@
 //   * the free CTA opens a case and routes into the chat product
 //   * the first message auto-sends and the SSE stream renders a reply
 
-import { expect, test } from "../fixtures/test-env";
+import { expect, startConversationViaForm, test } from "../fixtures/test-env";
 
 test("the free CTA opens a case and auto-sends the first message into chat", async ({
   page,
@@ -27,12 +27,10 @@ test("the free CTA opens a case and auto-sends the first message into chat", asy
 
   // Anchor + question, then start the (free) conversation.
   const anchor = `123 Smoke St ${Date.now()}`;
-  await page.getByPlaceholder(/1234 Main St, Halifax/).fill(anchor);
-  await page
-    .getByPlaceholder(/Ask your question/)
-    .fill("What is the minimum front yard setback?");
-
-  await page.getByTestId("start-conversation-btn").click();
+  await startConversationViaForm(page, {
+    anchor,
+    question: "What is the minimum front yard setback?",
+  });
 
   // We land in the chat product with a fresh case bound.
   await page.waitForURL(/\/app\?case_id=\d+/);

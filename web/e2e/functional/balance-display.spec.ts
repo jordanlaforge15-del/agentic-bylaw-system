@@ -17,10 +17,12 @@ import {
   signInAs,
   test,
 } from "../auth/fixtures";
+import {
+  SIGNUP_GRANT,
+  SIGNUP_GRANT_TURNS,
+} from "../fixtures/wallet-params";
 
-const SIGNUP_GRANT = 25_000;
-const TOKENS_PER_TURN = 2_500;
-const INITIAL_TURNS = SIGNUP_GRANT / TOKENS_PER_TURN; // 10
+const INITIAL_TURNS = SIGNUP_GRANT_TURNS; // 10
 
 // Tier display names the strip must never render (retired vocabulary). The
 // word "complex" on its own is intentionally NOT matched — it appears
@@ -51,8 +53,35 @@ test("strip shows Case # and ~turns seeded from the wallet, no token/tier copy",
     /Counts are approximate — complex questions use more/i,
   );
   // No raw token counts and no tier vocabulary anywhere in the DOM copy.
-  await expect(strip).not.toContainText(/25[,.]?000|tokens?\b/i);
+  // Raw token counts never appear — neither the grant nor the divisor.
+  await expect(strip).not.toContainText(
+    new RegExp(`${SIGNUP_GRANT.toLocaleString("en-CA")}|tokens?\\b`, "i"),
+  );
   await expect(strip).not.toContainText(TIER_VOCAB);
+});
+
+// ABS-452: the disclosure used to be `hidden md:inline`, so the one surface
+// where the balance visibly drops mid-conversation showed no caveat at all on a
+// phone — the `title` tooltip that was meant to cover it never fires on touch.
+test("strip keeps the approximate disclosure at a phone viewport", async ({
+  context,
+  page,
+}) => {
+  const identity = mintTestIdentity("abs452strip");
+  await signInAs(context, identity);
+  await acceptCurrentTermsAs(context, identity);
+  const { caseId } = await openCaseAsIdentity(context, identity, {
+    anchorLabel: `abs452strip-${identity.subUserId}`,
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/app?case_id=${caseId}`);
+
+  const strip = page.getByTestId("balance-strip");
+  await expect(strip).toBeVisible({ timeout: 10_000 });
+  // Both the figure and its caveat are on screen, not one without the other.
+  await expect(strip).toContainText(/~\d+ turns? left/i);
+  await expect(page.getByTestId("balance-approx-note")).toBeVisible();
 });
 
 test("strip decrements live on the token_balance SSE event (no reload)", async ({

@@ -23,6 +23,10 @@ reset to the orphan state first — the e2e database persists across runs.
 """
 from __future__ import annotations
 
+# ABS-428: must precede any advisor/layer1 import so the cached settings
+# resolve DATABASE_URL to the dedicated e2e Postgres instance, never dev.
+import e2e_db_default  # noqa: F401  isort: skip
+
 import sys
 
 from sqlalchemy import select
@@ -150,6 +154,15 @@ def _reset_existing(session, document: Document) -> None:
 
 def main() -> int:
     with session_scope() as session:
+        if session.bind.dialect.name == "postgresql":
+            from sqlalchemy import text as sa_text
+
+            # Playwright runs this seed once per worker concurrently; the
+            # lock serialises the check-then-insert on DOCUMENT_FILE_HASH.
+            session.execute(
+                sa_text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=2604601409)
+            )
+
         existing = session.execute(
             select(Document).where(Document.file_hash == DOCUMENT_FILE_HASH)
         ).scalar_one_or_none()
@@ -166,6 +179,7 @@ def main() -> int:
             mime_type="application/pdf",
             page_count=60,
             parser_version="e2e-seed",
+            retrieval_enabled=True,
             ingestion_timestamp=utcnow(),
         )
         session.add(document)

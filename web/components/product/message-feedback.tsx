@@ -36,6 +36,26 @@ export function MessageFeedback({ sessionId, messageId, savedFeedback }: Props) 
   const [flagSubmitted, setFlagSubmitted] = useState(savedFeedback?.flag_reason != null);
   const [toastType, setToastType] = useState<ToastType>(null);
 
+  // Re-hydrate from the server-supplied feedback whenever the message this
+  // widget represents changes identity. Callers should also key this component
+  // on session+message, but a client-side case switch that reuses the instance
+  // must never leave another case's selection rendered as ours. Adjusting state
+  // during render (rather than in an effect) means no frame ever paints the
+  // stale selection. ABS-421.
+  const identity = `${sessionId}:${messageId}`;
+  const [hydratedFor, setHydratedFor] = useState(identity);
+  if (hydratedFor !== identity) {
+    setHydratedFor(identity);
+    setRating(savedFeedback?.rating ?? null);
+    setFlagReason(savedFeedback?.flag_reason ?? null);
+    setFlagNotes(savedFeedback?.flag_notes ?? "");
+    setFlagSubmitted(savedFeedback?.flag_reason != null);
+    setFlagOpen(false);
+    setFlagOpenedViaThumbsDown(false);
+    setSubmitting(false);
+    setToastType(null);
+  }
+
   useEffect(() => {
     if (!toastType) return;
     const timer = setTimeout(() => setToastType(null), 2500);

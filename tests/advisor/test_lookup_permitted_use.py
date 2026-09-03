@@ -190,6 +190,124 @@ def test_ac4_unknown_zone_is_typed_indeterminate(matrix_db):
 
 
 # --------------------------------------------------------------------------
+# ABS-483 — an unreadable cell is an extraction gap, never a prohibition
+# --------------------------------------------------------------------------
+
+
+def _drop_cell(session, table_id: int, row_index: int, col_index: int) -> None:
+    session.query(SourceTableCell).filter(
+        SourceTableCell.table_id == table_id,
+        SourceTableCell.row_index == row_index,
+        SourceTableCell.col_index == col_index,
+    ).delete(synchronize_session=False)
+    session.flush()
+
+
+def test_abs483_missing_cell_is_indeterminate_not_not_permitted(matrix_db):
+    """(Multi-unit dwelling use, COR) addresses a cell the parser lost. The
+    answer must be a typed indeterminate — the old three-value vocabulary was
+    forced to call it ``not_permitted``, i.e. to invent a prohibition."""
+    with session_scope(matrix_db["db_url"]) as session:
+        _drop_cell(session, matrix_db["table_id"], 3, 3)
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(
+            use="Multi-unit dwelling use", zone="COR"
+        )
+
+    assert result.permission is None
+    assert result.indeterminate is True
+    assert result.reason_code == "unreadable_cell"
+    # The reason has to say WHY, so the model doesn't restate it as a refusal.
+    assert "does NOT mean the use is prohibited" in result.reason
+    # Still grounded: the caller can go read the table it came from.
+    assert result.citation is not None
+    assert result.table_id == matrix_db["table_id"]
+
+
+def test_abs483_unmapped_glyph_cell_is_indeterminate(matrix_db):
+    """Same contract for the other producer: a symbol-font glyph this bylaw's
+    profile does not map. We read *something*, we just can't decode it."""
+    with session_scope(matrix_db["db_url"]) as session:
+        cell = (
+            session.query(SourceTableCell)
+            .filter(
+                SourceTableCell.table_id == matrix_db["table_id"],
+                SourceTableCell.row_index == 3,
+                SourceTableCell.col_index == 3,
+            )
+            .one()
+        )
+        cell.text = chr(0xF0AA)  # unmapped private-use codepoint
+        cell.metadata_json = {}
+        session.flush()
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(
+            use="Multi-unit dwelling use", zone="COR"
+        )
+
+    assert result.indeterminate is True
+    assert result.permission is None
+    assert result.reason_code == "unreadable_cell"
+
+
+def test_abs483_a_gap_in_one_matrix_slice_falls_through_to_the_next(matrix_db):
+    """Table 1A spans several ``source_table`` rows. A gap in the slice that
+    happens to be scanned first must not end the search — the slice that DOES
+    carry the cell answers."""
+    with session_scope(matrix_db["db_url"]) as session:
+        document_id = matrix_db["document_id"]
+        # A second slice of the same logical matrix, carrying a ● where the
+        # first slice's cell is about to go missing.
+        second = SourceTable(
+            document_id=document_id,
+            caption="Table 1A: Permitted uses by zone — Commercial",
+            page_start=47,
+            page_end=47,
+            parse_status=ParseStatus.PARSED,
+            metadata_json={},
+        )
+        session.add(second)
+        session.flush()
+        for row_index, row in enumerate(
+            [["Use", "COR"], ["Multi-unit dwelling use", "●"]]
+        ):
+            for col_index, text in enumerate(row):
+                session.add(
+                    SourceTableCell(
+                        table_id=second.id,
+                        row_index=row_index,
+                        col_index=col_index,
+                        row_header_path=row[0] if row_index else None,
+                        col_header_path="COR" if row_index and col_index else None,
+                        text=text,
+                        metadata_json={},
+                    )
+                )
+        _drop_cell(session, matrix_db["table_id"], 3, 3)
+        enrich_document_semantics(session, document_id=document_id)
+
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(
+            use="Multi-unit dwelling use", zone="COR"
+        )
+
+    assert result.indeterminate is False
+    assert result.permission == "permitted"
+    assert result.table_id == second.id
+
+
+def test_abs483_blank_cell_still_resolves_to_not_permitted(matrix_db):
+    """Guard the other side of the line: the blank-cell convention is real
+    bylaw content and must NOT be swept into the new indeterminate branch."""
+    with session_scope(matrix_db["db_url"]) as session:
+        service = RetrievalService(session)
+        result = service.lookup_permitted_use(use="Restaurant use", zone="COR")
+
+    assert result.indeterminate is False
+    assert result.permission == "not_permitted"
+
+
+# --------------------------------------------------------------------------
 # ABS-351 — near-miss use terms resolve or suggest, never silently mis-pick
 # --------------------------------------------------------------------------
 
@@ -415,5 +533,8 @@ async def test_ac5_tool_dispatch_resolves_permitted_use_end_to_end(matrix_db):
     parsed = json.loads(output)
     assert "permitted_use" in parsed
     assert parsed["permitted_use"]["permission"] == "conditional"
-    assert parsed["permitted_use"]["footnote_ordinal"] == 3
-    assert "condition_text" in parsed["permitted_use"]
+    # ABS-523: the compact projection carries the whole condition list, never
+    # the lossy first-only scalars.
+    conditions = parsed["permitted_use"]["conditions"]
+    assert [c["footnote"] for c in conditions] == [3]
+    assert "text" in conditions[0]

@@ -49,8 +49,11 @@ from advisor.db.models import (
     User,
 )
 from advisor.db.wallet import (
+    BetaRefillState,
     adjust_tokens,
+    beta_refill_state,
     burn_tokens,
+    claim_beta_refill,
     credit_topup,
     get_balance,
     grant_signup_tokens_if_needed,
@@ -84,8 +87,11 @@ __all__ = [
     "UsageEvent",
     "User",
     # Token wallet service
+    "BetaRefillState",
     "adjust_tokens",
+    "beta_refill_state",
     "burn_tokens",
+    "claim_beta_refill",
     "credit_topup",
     "get_balance",
     "grant_signup_tokens_if_needed",

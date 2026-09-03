@@ -54,6 +54,20 @@ CANONICAL_FIELDS: dict[str, str] = {
     "civic_number": "string",
     "street_name": "string",
     "parcel_id": "string",
+    # Street-segment address ranges — populated by datasets with
+    # role=road_centerlines so the civic-address verifier (ABS-469) can ask
+    # whether any segment of a street actually carries the civic number the
+    # user gave, instead of trusting a geocoder that interpolates one.
+    # ``street_type`` is separate from ``street_name`` because municipal
+    # street networks store them apart (HRM: STR_NAME "JUBILEE" + STR_TYPE
+    # "RD"), and Jubilee Road, Jubilee Court and Jubilee Lane have different
+    # address ranges. The four range fields are per side of the segment;
+    # aggregating them across a street makes the check useless.
+    "street_type": "string",
+    "civic_from_left": "int",
+    "civic_to_left": "int",
+    "civic_from_right": "int",
+    "civic_to_right": "int",
 }
 
 

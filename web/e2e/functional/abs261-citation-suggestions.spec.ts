@@ -32,6 +32,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { test, expect, E2E_API_URL, DEMO_USER_ID } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 // The "4.2" citation_path these tests exercise is owned by the Coverage
 // E2E Bylaw, seeded by scripts/seed_e2e_verify_coverage.py. That seed is
@@ -48,10 +49,7 @@ test.beforeAll(() => {
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT so the seed lands in the right Postgres when a
   // parallel worktree runs on a non-default port triplet.
-  const pgPort = process.env.PG_PORT || "5432";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   const env = {
     ...process.env,
     DATABASE_URL: databaseUrl,
@@ -83,9 +81,9 @@ test.describe("ABS-261: lookup_citation returns suggestions instead of raising",
   test("exact citation_path hit returns 200 with match payload", async ({
     request,
   }) => {
-    // "4.2" is carried by the latest-ingested e2e seed doc (Coverage
-    // E2E Bylaw), which the service's latest-only document_id resolver
-    // hard-scopes us to. If this fails, the seed didn't run — see
+    // "4.2" is carried by the retrieval-enabled e2e seed docs (Coverage
+    // E2E Bylaw et al. — since ABS-413 the scope is the enabled-documents
+    // set, not the latest ingest). If this fails, the seed didn't run — see
     // scripts/seed_e2e_evaluator_bylaws.py / seed_e2e_verify_coverage.py.
     const res = await fetchCitation(request, "4.2");
     expect(

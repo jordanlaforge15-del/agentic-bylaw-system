@@ -18,20 +18,21 @@
 //     come back — both question and response must be visible (baseline,
 //     verifies no regression in the common path).
 
-import { expect, openCaseViaApi, test } from "../fixtures/test-env";
+import {
+  expect,
+  expectCaseIdInUrl,
+  openCaseViaApi,
+  test,
+  waitForHydration,
+  waitForSessionListed,
+} from "../fixtures/test-env";
 
 // Helper: fill the composer and press Enter to submit.
 async function submitQuestion(page: import("@playwright/test").Page, text: string) {
   const textarea = page.getByPlaceholder(/Ask about this parcel/);
   await expect(textarea).toBeVisible();
   await textarea.scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => {
-    const el = document.querySelector(
-      'textarea[placeholder^="Ask about this parcel"]',
-    );
-    if (!el) return false;
-    return Object.keys(el).some((k) => k.startsWith("__reactProps"));
-  });
+  await waitForHydration(page, 'textarea[placeholder^="Ask about this parcel"]');
   await textarea.fill(text);
   await textarea.press("Enter");
 }
@@ -83,17 +84,20 @@ test(
       { timeout: 5_000 },
     );
 
+    // Case A's session row is committed when the turn opens — but the sidebar
+    // only refetches once, in the aborted turn's finally, so the switch below
+    // races that commit. Wait for the server to list A first; we are still
+    // mid-stream (the answer has not arrived) but the refetch can no longer
+    // miss A and strand us with nothing to click back to (ABS-460).
+    await waitForSessionListed(page, `Alpha St ${ts}`);
+
     // Switch to case B while the stream is still in progress.
     await clickSidebarSession(page, `Beta St ${ts}`);
-    await expect(page).toHaveURL(new RegExp(`case_id=${caseB}`), {
-      timeout: 5_000,
-    });
+    await expectCaseIdInUrl(page, caseB);
 
     // Navigate back to case A by clicking its sidebar entry.
     await clickSidebarSession(page, `Alpha St ${ts}`);
-    await expect(page).toHaveURL(new RegExp(`case_id=${caseA}`), {
-      timeout: 5_000,
-    });
+    await expectCaseIdInUrl(page, caseA);
 
     // The user's question must be visible — it should never disappear.
     await expect(page.getByTestId("chat-thread")).toContainText(
@@ -134,15 +138,11 @@ test(
 
     // Switch to case B.
     await clickSidebarSession(page, `Beta Ave ${ts}`);
-    await expect(page).toHaveURL(new RegExp(`case_id=${caseB}`), {
-      timeout: 5_000,
-    });
+    await expectCaseIdInUrl(page, caseB);
 
     // Navigate back to case A.
     await clickSidebarSession(page, `Alpha Ave ${ts}`);
-    await expect(page).toHaveURL(new RegExp(`case_id=${caseA}`), {
-      timeout: 5_000,
-    });
+    await expectCaseIdInUrl(page, caseA);
 
     // Both the question and the response must be restored.
     const thread = page.getByTestId("chat-thread");

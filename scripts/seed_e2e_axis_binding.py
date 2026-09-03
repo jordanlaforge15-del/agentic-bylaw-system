@@ -20,6 +20,10 @@ Idempotent: re-running is a no-op when the rows already exist.
 """
 from __future__ import annotations
 
+# ABS-428: must precede any advisor/layer1 import so the cached settings
+# resolve DATABASE_URL to the dedicated e2e Postgres instance, never dev.
+import e2e_db_default  # noqa: F401  isort: skip
+
 import sys
 
 from sqlalchemy import select
@@ -80,6 +84,11 @@ def _get_or_create_document(session) -> Document:
         .first()
     )
     if document is not None:
+        # Converge the publish flag on re-seed: rows created before
+        # ABS-413 (or left disabled by the migration backfill) must
+        # still end up retrieval-enabled in the persistent e2e DB.
+        document.retrieval_enabled = True
+        session.flush()
         return document
     document = Document(
         municipality=DOCUMENT_MUNICIPALITY,
@@ -89,6 +98,7 @@ def _get_or_create_document(session) -> Document:
         mime_type="application/pdf",
         page_count=80,
         parser_version="e2e-seed",
+        retrieval_enabled=True,
         ingestion_timestamp=utcnow(),
     )
     session.add(document)

@@ -39,6 +39,8 @@ import { Composer } from "@/components/product/composer";
 import { BalanceStrip } from "@/components/product/balance-strip";
 import { TopUpPrompt } from "@/components/product/top-up-prompt";
 import { ParcelPane } from "@/components/product/parcel-pane";
+import { CitationViewerProvider } from "@/components/product/citation-viewer";
+import type { CitationRef } from "@/lib/citations";
 import { AddressPill } from "@/components/product/address-pill";
 import { ParcelFab } from "@/components/product/parcel-fab";
 import { ChatDisclaimerBar } from "@/components/product/chat-disclaimer-bar";
@@ -48,6 +50,7 @@ import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { useMediaQuery, BREAKPOINTS } from "@/lib/use-media-query";
 import type { AgentMessage, Message } from "@/lib/mock";
 import {
+  collectCitations,
   extractParcelContext,
   type BackendMessage,
   type ParcelContext,
@@ -74,6 +77,72 @@ const OPENING: Message = {
     "height/FAR/heritage/bonus schedules loaded · Google geocoder online. " +
     "Ask about a specific HRM address or about the bylaw text directly.",
 };
+
+// The mutable slice of the wallet that rides on the per-turn
+// ``token_balance`` SSE event. Everything else on ``WalletResponse``
+// (``floor_tokens``, ``payments_enabled``, ``tokens_per_turn``) is static for
+// the session and only ever comes from the seed fetch.
+type BalancePatch = {
+  balance_tokens?: number;
+  approx_turns_remaining?: number;
+  low_balance?: boolean;
+};
+
+/** Fold a per-turn ``token_balance`` patch onto a wallet snapshot.
+ *
+ * ``chat_enabled`` is recomputed from the patched balance against the
+ * snapshot's floor because the SSE payload carries neither the floor nor
+ * ``payments_enabled`` — that's what flips the workspace into (and out of)
+ * the out-of-turns state without a reload. */
+function applyBalancePatch(
+  wallet: WalletResponse,
+  patch: BalancePatch,
+): WalletResponse {
+  const next = { ...wallet };
+  if (typeof patch.balance_tokens === "number") {
+    next.balance_tokens = patch.balance_tokens;
+    next.chat_enabled = patch.balance_tokens > wallet.floor_tokens;
+  }
+  if (typeof patch.approx_turns_remaining === "number") {
+    next.approx_turns_remaining = patch.approx_turns_remaining;
+  }
+  if (typeof patch.low_balance === "boolean") {
+    next.low_balance = patch.low_balance;
+  }
+  return next;
+}
+
+type CaseRecord = {
+  id: number;
+  user_case_number: number;
+  anchor_kind: string;
+  anchor_label: string;
+  // ABS-423: terminal outcome of the case-open spatial join. Optional
+  // because a backend that predates it simply omits the fields.
+  spatial_status?: string | null;
+  spatial_reason?: string | null;
+};
+
+/**
+ * Resolve one case's record — anchor + user-facing case number (ABS-424).
+ *
+ * Prefers GET /api/cases/{id}, which always resolves for a case the caller
+ * owns. Falls back to scanning the capped case list so the shell still works
+ * against a backend that predates the single-case route. Returns null when
+ * neither source can identify the case; the caller leaves state untouched
+ * rather than painting a guess.
+ */
+async function fetchCaseRecord(caseId: number): Promise<CaseRecord | null> {
+  const one = await fetch(`/api/cases/${caseId}`, { cache: "no-store" });
+  if (one.ok) {
+    const body = (await one.json()) as { case?: CaseRecord | null };
+    if (body.case) return body.case;
+  }
+  const list = await fetch("/api/cases", { cache: "no-store" });
+  if (!list.ok) return null;
+  const data = (await list.json()) as { cases: CaseRecord[] };
+  return data.cases.find((c) => c.id === caseId) ?? null;
+}
 
 // Top-level page wraps the inner component in Suspense because
 // ``useSearchParams`` opts the tree into client-side rendering for
@@ -112,6 +181,13 @@ function ProductAppPageInner() {
   // session's spatial-join tool results; null when the conversation
   // has no address-bearing question yet.
   const [parcel, setParcel] = useState<ParcelContext | null>(null);
+  // Every clause the agent retrieved in this session, uncapped (ABS-451).
+  // Feeds the inline-citation index so "(Section 442)" written in a reply
+  // or a table cell opens the same clause drawer as the rail card. Kept
+  // separate from `parcel.cited` because the parcel context only exists
+  // once a spatial join lands — a pure bylaw-text question has citations
+  // but no parcel.
+  const [citations, setCitations] = useState<CitationRef[]>([]);
   const [feedbackMap, setFeedbackMap] = useState<Record<number, SavedFeedback>>({});
   const abortRef = useRef<AbortController | null>(null);
   // Per-case message snapshot. Saved when the user navigates away from a case
@@ -124,6 +200,15 @@ function ProductAppPageInner() {
   // double-invoke and normal re-renders. Declared here (before the effect that
   // reads it) so the binding is initialized before the effect callback runs.
   const restoredCaseIdRef = useRef<number | null>(null);
+  // Case whose ``?first_message=`` auto-send has already fired (ABS-449).
+  // The restore effect skips that case: send() is the owner of its
+  // transcript until the turn settles. Declared here for the same reason as
+  // the ref above — the effect that reads it is defined earlier in the body.
+  const autoSendCaseIdRef = useRef<number | null>(null);
+  // True while an abort we asked for is in flight (case switch / "+ New
+  // reading"). Lets send() tell an expected cancellation apart from a turn
+  // that died on its own, which must surface an error + retry (ABS-449).
+  const intentionalAbortRef = useRef(false);
   // Mobile/tablet overlay state. Both default closed; opening one
   // doesn't close the other (parcel sheet on mobile sits above the
   // chat which sits behind the sidebar drawer when both happen, but
@@ -194,25 +279,49 @@ function ProductAppPageInner() {
 
   const [caseId, setCaseId] = useState<number | null>(caseIdFromUrl);
   const caseIdRef = useRef<number | null>(caseIdFromUrl);
+  const [caseNumber, setCaseNumber] = useState<number | null>(caseNumberFromUrl);
   const setCaseIdBoth = (id: number | null) => {
+    // ABS-453: binding to a different case invalidates the current case
+    // number. Clearing it here means the badge hides rather than showing the
+    // *previous* case's number until the new one resolves.
+    if (id !== caseIdRef.current) setCaseNumber(null);
     caseIdRef.current = id;
     setCaseId(id);
   };
-  const [caseNumber, setCaseNumber] = useState<number | null>(caseNumberFromUrl);
   const [caseAnchor, setCaseAnchor] = useState<{
     kind: string;
     label: string;
+    // ABS-423: terminal outcome of the case-open spatial join, so the
+    // parcel pane shows the failure instead of a permanent "pending".
+    spatialStatus?: string | null;
+    spatialReason?: string | null;
   } | null>(null);
   // Token wallet (ABS-386). Seeded from /api/billing/wallet on mount, then
   // decremented live off the per-turn ``token_balance`` SSE event. Null while
   // the seed is in flight.
   const [wallet, setWallet] = useState<WalletResponse | null>(null);
+  // ABS-460: the seed fetch and the first turn's ``token_balance`` event race.
+  // The composer is live as soon as the shell paints, so a turn can settle
+  // while the seed is still in flight — and then the seed lands carrying a
+  // balance from *before* the burn. Two ways that used to lose the decrement:
+  // the SSE patch arrived with ``wallet`` still null and was dropped on the
+  // floor, or the seed's ``setWallet`` overwrote the patched snapshot. Either
+  // way the strip painted the pre-burn turn count and the out-of-turns prompt
+  // never appeared until a reload. Keep the last patch (and a counter of how
+  // many have landed) in refs so a seed that resolves late can re-apply it.
+  const lastBalancePatchRef = useRef<BalancePatch | null>(null);
+  const balancePatchSeqRef = useRef(0);
   // Set when a send is refused for lack of tokens — either the client
   // pre-flight (wallet at/below floor) or a backend 402 ``insufficient_tokens``
   // that raced the client state. Reset on each accepted send and on a fresh
   // mount (e.g. returning from a top-up checkout). Derived ``outOfTokens``
   // below OR's it with the wallet's own ``chat_enabled`` flag.
   const [refused, setRefused] = useState(false);
+  // Text of the last turn that failed (network error, backend error, empty
+  // or truncated stream, or an abort we didn't ask for). Non-null means the
+  // error block below renders a Retry button, so a dropped question is never
+  // an unrecoverable dead end (ABS-449).
+  const [failedSend, setFailedSend] = useState<string | null>(null);
   const outOfTokens = refused || (wallet !== null && !wallet.chat_enabled);
   // Keep the URL-derived caseId in sync when the user navigates with
   // a different ?case_id= without a full reload.
@@ -240,10 +349,21 @@ function ProductAppPageInner() {
   // the initial paint + the source of truth for ``payments_enabled`` and the
   // pre-flight floor, neither of which rides on the SSE payload.
   const refreshWallet = async () => {
+    const patchSeqAtStart = balancePatchSeqRef.current;
     try {
       const res = await fetch("/api/billing/wallet", { cache: "no-store" });
       if (!res.ok) return;
-      const w = (await res.json()) as WalletResponse;
+      const seeded = (await res.json()) as WalletResponse;
+      // A turn settled while this fetch was in flight, so its ``token_balance``
+      // is newer than the body we just received — re-apply it rather than
+      // painting a stale pre-burn balance over it (ABS-460). When no patch
+      // landed during the fetch the seed is authoritative and goes in as-is,
+      // which is what makes a post-top-up refresh still raise the balance.
+      const racedPatch =
+        balancePatchSeqRef.current !== patchSeqAtStart
+          ? lastBalancePatchRef.current
+          : null;
+      const w = racedPatch ? applyBalancePatch(seeded, racedPatch) : seeded;
       setWallet(w);
       // A fresh, chat-enabled wallet clears any prior refusal (e.g. the user
       // topped up and came back).
@@ -257,35 +377,60 @@ function ProductAppPageInner() {
     void refreshWallet();
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ABS-405: a claimed beta refill hands back the post-claim wallet, so the
+  // workspace leaves the out-of-turns state in place — no reload, no second
+  // read. Safe to trust over a refetch: this only fires while the composer
+  // is disabled, so no turn can be settling underneath it.
+  const applyRefilledWallet = (refilled: WalletResponse) => {
+    setWallet(refilled);
+    if (refilled.chat_enabled) setRefused(false);
+  };
+
   // Fetch the case anchor (kind + label) whenever caseId changes so
   // the parcel pane can show the address even before a spatial lookup.
+  // ABS-453: the same response carries ``user_case_number``, so this is also
+  // the earliest reliable source for the badge's case number on a direct URL
+  // load that omits ?case_number= (the SSE ``session`` event only arrives on
+  // the first turn). Picking it up here means the badge paints the
+  // user-facing number rather than flashing the internal id first.
   useEffect(() => {
     if (!caseId) {
       setCaseAnchor(null);
       return;
     }
+    let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/api/cases", { cache: "no-store" });
-        if (!res.ok) return;
-        const data = (await res.json()) as {
-          cases: Array<{
-            id: number;
-            anchor_kind: string;
-            anchor_label: string;
-          }>;
-        };
-        const matched = data.cases.find((c) => c.id === caseId);
-        if (matched) {
-          setCaseAnchor({
-            kind: matched.anchor_kind,
-            label: matched.anchor_label,
-          });
+        // ABS-424: ask for *this* case directly. GET /api/cases is capped at
+        // the newest N, so a user deep in their case history could open an
+        // older case and never find it in the list — leaving the footer
+        // without a number until the first turn's SSE ``session`` event
+        // supplied one, which read as the case number changing identity
+        // mid-conversation. The single-case route always resolves. The list
+        // stays as a fallback for a deployment whose backend predates it.
+        const detail = await fetchCaseRecord(caseId);
+        // A newer caseId won the race while this was in flight — its own
+        // run of this effect owns the state now.
+        if (cancelled || !detail) return;
+        setCaseAnchor({
+          kind: detail.anchor_kind,
+          label: detail.anchor_label,
+          // ABS-423: both sources project ``CaseOut``, so the terminal
+          // spatial-join outcome rides along and the parcel pane can render
+          // a real failure instead of an eternal "geocoding pending".
+          spatialStatus: detail.spatial_status ?? null,
+          spatialReason: detail.spatial_reason ?? null,
+        });
+        if (typeof detail.user_case_number === "number") {
+          setCaseNumber(detail.user_case_number);
         }
       } catch {
         // Non-critical — parcel pane falls back to generic empty state.
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [caseId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // On direct URL load (reload, share link, browser back/forward) with
@@ -296,6 +441,21 @@ function ProductAppPageInner() {
   useEffect(() => {
     if (caseIdFromUrl === null) return;
     if (searchParams.get("first_message")) return;
+    // ABS-449: never restore over a turn that is already in flight. The
+    // auto-send below strips ``first_message`` with router.replace BEFORE
+    // awaiting send(), so this effect re-runs one render later with the
+    // param gone — and by then POST /v1/chat has already created the (still
+    // empty) chat session row server-side. Without this guard the fetch
+    // below finds that row, calls selectSession(), and selectSession's
+    // ``abortRef.current?.abort()`` kills the very stream that created it.
+    // The user's opening question was then never persisted and no error
+    // ever surfaced: the case sat with an unanswered question forever.
+    if (abortRef.current !== null) return;
+    // Same race, slower variant: if the auto-send for THIS case already
+    // fired, send() owns hydration for it (it calls refreshFromSession when
+    // the turn settles). Restoring here would either abort the stream or
+    // clobber the optimistic transcript with an empty server copy.
+    if (autoSendCaseIdRef.current === caseIdFromUrl) return;
     // Guard against running twice for the same case (React Strict Mode
     // double-invoke, or a re-render triggered by state settling).
     if (restoredCaseIdRef.current === caseIdFromUrl) return;
@@ -334,6 +494,7 @@ function ProductAppPageInner() {
     const firstMessage = searchParams.get("first_message");
     if (!firstMessage) return;
     autoSentFirstMessageRef.current = true;
+    autoSendCaseIdRef.current = caseIdFromUrl;
     const cleaned = new URLSearchParams(searchParams.toString());
     cleaned.delete("first_message");
     const nextUrl =
@@ -370,6 +531,7 @@ function ProductAppPageInner() {
   const refreshFromSession = async (sessionId: string | null) => {
     if (!sessionId) {
       setParcel(null);
+      setCitations([]);
       return;
     }
     try {
@@ -409,6 +571,7 @@ function ProductAppPageInner() {
       };
       const enriched = attachDbIds(data.messages, data.message_db_ids);
       setParcel(extractParcelContext(enriched));
+      setCitations(collectCitations(enriched));
       setMessages(translateHistory(enriched));
       setFeedbackMap(fbMap);
       // Keep the case-billing context aligned with the authoritative
@@ -448,19 +611,33 @@ function ProductAppPageInner() {
     setThinking(true);
     setThinkLabel("Reading bylaw…");
     setError(null);
+    setFailedSend(null);
 
     const stopThinking = () => {
       setThinking(false);
     };
 
+    // Every way this turn can end without an answer routes through here, so
+    // the user always gets both a reason and a way to try again (ABS-449).
+    const failTurn = (message: string) => {
+      setError(message);
+      setFailedSend(text);
+    };
+
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    intentionalAbortRef.current = false;
 
     // Set when the turn is refused out-of-tokens (402). Guards the post-turn
     // refreshFromSession in the finally: reloading server history for a
     // resumed session would otherwise drop the optimistic user bubble and
     // lose the typed message.
     let refusedThisTurn = false;
+    // Set when the turn ends via abort. Also guards the post-turn
+    // refreshFromSession: an aborted turn wrote nothing server-side, so
+    // reloading history would erase the optimistic user bubble we're asking
+    // the user to retry.
+    let abortedThisTurn = false;
 
     try {
       const res = await fetch("/api/chat", {
@@ -507,7 +684,7 @@ function ProductAppPageInner() {
           );
           return;
         }
-        setError(
+        failTurn(
           `Backend error (${res.status}). ${detail.slice(0, 240) || "No body."}`,
         );
         return;
@@ -562,26 +739,16 @@ function ProductAppPageInner() {
             // balance vs. the seed floor to flip into/out of the out-of-turns
             // state.
             try {
-              const data = JSON.parse(ev.data) as {
-                balance_tokens?: number;
-                approx_turns_remaining?: number;
-                low_balance?: boolean;
-              };
-              setWallet((prev) => {
-                if (!prev) return prev;
-                const next = { ...prev };
-                if (typeof data.balance_tokens === "number") {
-                  next.balance_tokens = data.balance_tokens;
-                  next.chat_enabled = data.balance_tokens > prev.floor_tokens;
-                }
-                if (typeof data.approx_turns_remaining === "number") {
-                  next.approx_turns_remaining = data.approx_turns_remaining;
-                }
-                if (typeof data.low_balance === "boolean") {
-                  next.low_balance = data.low_balance;
-                }
-                return next;
-              });
+              const data = JSON.parse(ev.data) as BalancePatch;
+              // Record the patch before applying it: if the seed is still in
+              // flight there is no snapshot to fold it into yet, and this ref
+              // is how ``refreshWallet`` learns it must re-apply the burn when
+              // its (older) body finally lands (ABS-460).
+              lastBalancePatchRef.current = data;
+              balancePatchSeqRef.current += 1;
+              setWallet((prev) =>
+                prev ? applyBalancePatch(prev, data) : prev,
+              );
             } catch {
               // ignore malformed token_balance event
             }
@@ -644,22 +811,35 @@ function ProductAppPageInner() {
       //   3. stream ended with no content    → flag it
       stopThinking();
       if (backendError) {
-        setError(humanizeBackendError(backendError));
+        failTurn(humanizeBackendError(backendError));
       } else if (!agentStarted) {
-        setError(
+        failTurn(
           "The agent didn't return any text. Try rephrasing — for an " +
             "address question, include the civic number and street " +
             "(e.g. \"What's the zone of 1967 Woodlawn Terrace?\").",
         );
       } else if (!messageStopped) {
-        setError(
+        failTurn(
           "The agent's response was cut off before completion. Try " +
             "asking again, or simplify the question.",
         );
       }
     } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        setError(`Network error: ${(e as Error).message}`);
+      if ((e as Error).name === "AbortError") {
+        abortedThisTurn = true;
+        // An abort we asked for (case switch, "+ New reading") is expected
+        // — the user moved on, so stay quiet. Any other abort means the
+        // request died with the question unanswered, which used to be
+        // completely silent (ABS-449).
+        if (!intentionalAbortRef.current) {
+          stopThinking();
+          failTurn(
+            "Your question wasn't sent — the request was interrupted " +
+              "before the agent could answer it. Nothing was charged.",
+          );
+        }
+      } else {
+        failTurn(`Network error: ${(e as Error).message}`);
       }
     } finally {
       stopThinking();
@@ -673,14 +853,51 @@ function ProductAppPageInner() {
       // always see the post-stream value the SSE handler set. Skipped on an
       // out-of-tokens refusal — nothing changed server-side, and reloading
       // history would drop the optimistic (still-typed) user message.
-      if (!refusedThisTurn) {
+      // Also skipped on an abort: the turn wrote nothing, so the server copy
+      // is behind the optimistic transcript and reloading it would drop the
+      // question the user is being asked to retry (ABS-449).
+      if (!refusedThisTurn && !abortedThisTurn) {
         void refreshFromSession(sessionIdRef.current);
       }
     }
   };
 
+  // Abort the turn in flight because the user asked for something else
+  // (switching cases, starting a new reading). Flagged so send() doesn't
+  // report it as a failure.
+  const abortActiveTurn = () => {
+    if (!abortRef.current) return;
+    intentionalAbortRef.current = true;
+    abortRef.current.abort();
+  };
+
+  // Re-send the question from a failed turn. The failed attempt left an
+  // optimistic user bubble (and possibly a partial reply) in the thread, so
+  // trim from that bubble onward before re-sending — otherwise the retry
+  // posts the same question twice in the transcript.
+  const retryFailedSend = () => {
+    const text = failedSend;
+    if (text === null || thinking) return;
+    setFailedSend(null);
+    setError(null);
+    setMessages((prev) => {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const m = prev[i];
+        if (m.kind === "user" && m.body === text) return prev.slice(0, i);
+      }
+      return prev;
+    });
+    void send(text);
+  };
+
   const selectSession = async (id: string, { updateUrl = false }: { updateUrl?: boolean } = {}) => {
     if (id === activeSessionId) return;
+    // Compare against the ref too: the streaming SSE handler writes the new
+    // session id to the ref immediately, while the state copy lands a render
+    // later. Without this, a caller that races a live stream (the restore
+    // effect, a double sidebar click) would abort the stream and reload the
+    // session it is already on (ABS-449).
+    if (id === sessionIdRef.current) return;
 
     // Snapshot current case messages before switching away. This preserves
     // the user's in-flight question (and any partial streaming reply) so
@@ -691,8 +908,9 @@ function ProductAppPageInner() {
       caseMessageCacheRef.current.set(caseIdRef.current, messages);
     }
 
-    abortRef.current?.abort();
+    abortActiveTurn();
     setError(null);
+    setFailedSend(null);
     setThinking(false);
     try {
       const [res, fbMap] = await Promise.all([
@@ -736,8 +954,14 @@ function ProductAppPageInner() {
       setFeedbackMap(fbMap);
       setSessionId(id);
       setCaseIdBoth(newCaseId);
-      setCaseNumber(typeof data.case_number === "number" ? data.case_number : null);
+      // ABS-453: only overwrite when the restore actually carried a number —
+      // blanking it would drop a number the case list already resolved and
+      // make the badge disappear after a restore.
+      if (typeof data.case_number === "number") {
+        setCaseNumber(data.case_number);
+      }
       setParcel(extractParcelContext(enriched));
+      setCitations(collectCitations(enriched));
       // Keep URL in sync so reloads and shared links land on the right case.
       // Only user-initiated calls (updateUrl=true) update the URL; the
       // restore effect passes updateUrl=false so it never races with a
@@ -777,7 +1001,7 @@ function ProductAppPageInner() {
     // chat" but actually kept billing on the prior case). Abort any
     // in-flight stream so it doesn't keep mutating state after we
     // navigate; the next /app mount starts fresh.
-    abortRef.current?.abort();
+    abortActiveTurn();
     setSidebarOpen(false);
     router.push("/cases/new");
   };
@@ -849,6 +1073,11 @@ function ProductAppPageInner() {
   // else the case anchor.
   const paneAnchorLabel = reportContent?.address ?? caseAnchor?.label;
   const paneAnchorKind = reportContent ? "address" : caseAnchor?.kind;
+  // ABS-423: the spatial status describes the *case anchor*. A report-backed
+  // pane may be showing the report's subject address instead, so the failure
+  // note only applies when the pane is rendering the case anchor itself.
+  const paneSpatialStatus = reportContent ? null : caseAnchor?.spatialStatus;
+  const paneSpatialReason = reportContent ? null : caseAnchor?.spatialReason;
 
   // ABS-346: the report's "Export PDF" renders the ReportDocument (letterhead
   // → findings → verification footer) via the dedicated report print surface —
@@ -875,9 +1104,13 @@ function ProductAppPageInner() {
   };
 
   return (
-    // dvh tracks the iOS dynamic viewport so the composer doesn't
-    // disappear behind the URL bar collapse/expand. overflow-hidden
-    // keeps the chat thread's scroll contained.
+    // The citation viewer wraps the whole workspace so the clause drawer
+    // is a single shared surface: rail cards, inline references in agent
+    // prose, and table cells all open the same panel (ABS-451).
+    <CitationViewerProvider citations={citations}>
+    {/* dvh tracks the iOS dynamic viewport so the composer doesn't
+      * disappear behind the URL bar collapse/expand. overflow-hidden
+      * keeps the chat thread's scroll contained. */}
     <div className="h-dvh flex flex-col bg-surface text-text overflow-hidden">
       <AppHeader
         reading={headerReading}
@@ -948,6 +1181,7 @@ function ProductAppPageInner() {
                 thinking={thinking}
                 thinkLabel={thinkLabel}
                 error={error}
+                onRetry={failedSend !== null ? retryFailedSend : undefined}
                 sessionId={activeSessionId}
                 feedbackMap={feedbackMap}
               />
@@ -961,7 +1195,11 @@ function ProductAppPageInner() {
                 />
               )}
               {caseId !== null && outOfTokens && (
-                <TopUpPrompt paymentsEnabled={wallet?.payments_enabled ?? false} />
+                <TopUpPrompt
+                  paymentsEnabled={wallet?.payments_enabled ?? false}
+                  betaRefill={wallet?.beta_refill}
+                  onRefilled={applyRefilledWallet}
+                />
               )}
               <ChatDisclaimerBar />
               {caseId === null ? (
@@ -1015,6 +1253,8 @@ function ProductAppPageInner() {
             caseId={caseId}
             anchorLabel={paneAnchorLabel}
             anchorKind={paneAnchorKind}
+            spatialStatus={paneSpatialStatus}
+            spatialReason={paneSpatialReason}
             appendix={isReportBacked}
           />
         </div>
@@ -1072,6 +1312,8 @@ function ProductAppPageInner() {
             caseId={caseId}
             anchorLabel={paneAnchorLabel}
             anchorKind={paneAnchorKind}
+            spatialStatus={paneSpatialStatus}
+            spatialReason={paneSpatialReason}
             appendix={isReportBacked}
             inSheet
           />
@@ -1091,12 +1333,15 @@ function ProductAppPageInner() {
             caseId={caseId}
             anchorLabel={paneAnchorLabel}
             anchorKind={paneAnchorKind}
+            spatialStatus={paneSpatialStatus}
+            spatialReason={paneSpatialReason}
             appendix={isReportBacked}
             inSheet
           />
         </Drawer>
       )}
     </div>
+    </CitationViewerProvider>
   );
 }
 

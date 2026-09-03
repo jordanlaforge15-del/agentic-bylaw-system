@@ -21,6 +21,7 @@
 "use client";
 
 import { Mono } from "@/components/mono";
+import { TURN_APPROX_SHORT } from "@/lib/turn-copy";
 
 type Props = {
   caseId: number | null;
@@ -32,7 +33,7 @@ type Props = {
   paymentsEnabled: boolean;
 };
 
-const APPROX_DISCLOSURE = "Counts are approximate — complex questions use more";
+const APPROX_DISCLOSURE = TURN_APPROX_SHORT;
 
 export function BalanceStrip({
   caseId,
@@ -51,14 +52,23 @@ export function BalanceStrip({
       data-testid="balance-strip"
       role="status"
       aria-live="polite"
-      className="border-t border-hair px-4 py-2 bg-surface-alt flex items-center gap-2.5 text-[12px]"
+      className="border-t border-hair px-4 py-2 bg-surface-alt flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px]"
     >
-      <Mono muted size={10.5}>
-        Case #{caseNumber ?? caseId}
-      </Mono>
-      <span aria-hidden className="text-text-muted">
-        ·
-      </span>
+      {/* ABS-453: the badge shows the durable, user-facing case number only.
+       * It used to fall back to ``caseId`` (the internal DB id) while the
+       * number was still resolving, so a load briefly flashed "Case #17"
+       * before settling on "Case #7". Two different numbers in one element
+       * is worse than none — hold the segment back until it's known. */}
+      {caseNumber !== null && (
+        <>
+          <Mono muted size={10.5}>
+            Case #{caseNumber}
+          </Mono>
+          <span aria-hidden className="text-text-muted">
+            ·
+          </span>
+        </>
+      )}
       {lowBalance && (
         <span
           data-testid="balance-low-glyph"
@@ -78,11 +88,14 @@ export function BalanceStrip({
       >
         ~{turns} {turnWord} left
       </span>
-      {/* Standard disclosure, visible on wider screens; the `~` + title carry
-       * it on mobile where horizontal room is tight. */}
+      {/* Standard disclosure. ABS-452: this used to be `hidden md:inline`, so
+       * on mobile the only carrier was the `title` tooltip — which never fires
+       * on touch, leaving the surface where the balance visibly drops with no
+       * caveat at all. The strip wraps instead, so the note takes a second line
+       * rather than disappearing. */}
       <span
         data-testid="balance-approx-note"
-        className="hidden md:inline text-text-muted text-[11px]"
+        className="text-text-muted text-[11px]"
       >
         {APPROX_DISCLOSURE}
       </span>

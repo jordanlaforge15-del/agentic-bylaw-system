@@ -15,13 +15,15 @@
 //   - an unknown zone returns unknown_zone=true and NO server error
 //     (FR-2.5 — graceful, no exception)
 //
-// Data dependency: the spec seeds its own Regional-Centre-shaped bylaw
-// via ``scripts/seed_e2e_zone_profile.py`` (idempotent get-or-create).
+// Data dependency: the zone corpus lives on the single unified RC-LUB e2e
+// document seeded via ``scripts/seed_e2e_rclub_unified.py`` (ABS-433,
+// idempotent get-or-create).
 
 import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { test, expect, E2E_API_URL, DEMO_USER_ID } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 // Seeded zone-profile document id, captured in beforeAll and used to scope
 // every get_zone_profile call to this spec's own bylaw — the shared e2e
@@ -31,20 +33,17 @@ let zoneDocumentId: number | null = null;
 test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5432";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   const env = {
     ...process.env,
     DATABASE_URL: databaseUrl,
     PYTHONPATH: `${path.join(repoRoot, "src")}:${path.join(repoRoot, "mcp")}:${process.env.PYTHONPATH || ""}`,
   };
   const output = execSync(
-    `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_zone_profile.py")}"`,
+    `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_rclub_unified.py")}"`,
     { env, encoding: "utf-8" },
   );
-  const m = output.match(/document=(\d+)/);
+  const m = output.match(/"document_id": (\d+)/);
   zoneDocumentId = m ? parseInt(m[1], 10) : null;
 });
 

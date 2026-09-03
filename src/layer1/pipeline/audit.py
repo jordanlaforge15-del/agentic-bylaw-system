@@ -246,12 +246,15 @@ def score_page_risk(
     ]
     if duplicate_citation_fragments:
         score += len(duplicate_citation_fragments) * 4
-        reasons.append(f"{len(duplicate_citation_fragments)} duplicate citation path downgrades")
+        reasons.append(f"{len(duplicate_citation_fragments)} duplicate citation paths")
         checks.append(
             DeterministicPageCheck(
                 name="duplicate_citation_downgrade",
                 severity="warning",
-                detail="One or more fragments had duplicate derived citation paths and were downgraded to uncertain.",
+                detail=(
+                    "One or more fragments had duplicate derived citation paths, so their "
+                    "citation_path was blanked and recorded in metadata_json."
+                ),
             )
         )
 

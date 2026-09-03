@@ -18,6 +18,7 @@ import {
   E2E_API_URL,
   expect,
   openCaseViaApi,
+  startConversationViaForm,
   test,
 } from "../fixtures/test-env";
 
@@ -75,11 +76,10 @@ test("re-opening an anchor via the free CTA reuses the same case", async ({
   await page.goto("/cases/new");
 
   // Fill the same anchor + a question and start the (free) conversation.
-  await page.getByPlaceholder(/1234 Main St, Halifax/).fill(anchor);
-  await page
-    .getByPlaceholder(/Ask your question/)
-    .fill("Is a duplex allowed here?");
-  await page.getByTestId("start-conversation-btn").click();
+  await startConversationViaForm(page, {
+    anchor,
+    question: "Is a duplex allowed here?",
+  });
 
   // Lands on /app with the *same* case_id — POST /api/cases reused the
   // existing case; it was never re-created.

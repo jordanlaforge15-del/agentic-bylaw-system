@@ -18,6 +18,63 @@ The test prompt database simulates real end-user conversation turns with the byl
 
 ---
 
+## Provenance limitation — read this before quoting a pass rate
+
+**These cases are not ground truth.** `generate_regional_centre_test_prompts.py`
+authors every field of a case via `claude -p`: the question, the persona, the
+`expected_answer_keywords`, the `expected_bylaw_references`, the
+`expected_topics`. The system under test is a Claude model.
+
+So a case that passes establishes that the advisor **agrees with what a Claude
+model guessed the answer was**. It does not establish that the answer is
+correct under the by-law. "18/20 passing" is a consistency measure, not an
+accuracy measure, and it must never be reported as one.
+
+Later work grounded parts of a case without changing that: the references
+resolve against the real corpus (ABS-463), the keywords were recalibrated
+against the real ingest (ABS-265), cited clauses are checked for applicability
+against the by-law's own trigger conditions (ABS-462), and the address now
+derives from the zoning schedule and is verified against it (ABS-467). None of
+those touch the question a model chose to ask or the answer a model decided was
+correct.
+
+The independent tier is the golden subset at
+[`evals/golden/golden_cases.json`](../evals/golden/golden_cases.json): six cases
+whose correct answers and governing provisions a qualified human records, graded
+into `verification/GOLDEN_SUMMARY.json`. It is the only evidence in the project
+that does not originate from a model, it is what blocks a production deploy, and
+its results are **never** summed with the generated ones. Rationale and the
+gating decision: [ABS-468-EVAL-GROUND-TRUTH.md](ABS-468-EVAL-GROUND-TRUTH.md).
+
+**Grade a run with one command** (ABS-516):
+
+```bash
+python scripts/verify_run.py evals/runs/<ts>
+```
+
+```
+GOLDEN (human-attested, gates deploy)     3 PASS  1 PARTIAL  4 FAIL   [GATE: CLOSED]
+GENERATED (model-authored, advisory)      5 PASS  3 PARTIAL  0 FAIL   [gates nothing]
+```
+
+Golden first because it is the tier that gates; the exit status comes from it
+alone. `scripts/verify_test_prompts.py` and `scripts/verify_golden_cases.py` are
+still there as internals, but neither on its own answers "did this run pass?" —
+running the generated grader alone and reporting no failures is the mistake this
+entry point exists to prevent, and it is what happened in
+the `zone-typology-all8` run on the `docs/zone-typology-test-questions`
+branch. Details in
+[`evals/golden/README.md`](../evals/golden/README.md#grading-a-run).
+
+What the generated suite is genuinely good for: regression detection (did an
+answer that used to cite Section 198 stop doing so?), hallucination and
+applicability checks (both graded against the corpus, not against the
+generator), retrieval and cost measurement, and breadth of coverage no
+professional has time to hand-author. That is worth having. It is just not a
+correctness measure.
+
+---
+
 ## Test Case Schema
 
 Each record in the JSON array has the following fields:
@@ -29,8 +86,9 @@ Each record in the JSON array has the following fields:
 | `persona.type` | string | Persona type (see valid values below) |
 | `persona.subtype` | string \| null | Sub-role (e.g. `architect`, `planner`) |
 | `persona.description` | string | One-line description of the individual |
-| `address` | string | Full civic address within the Regional Centre Plan Area |
-| `zone` | string | Zone code from the bylaw (e.g. `ER-1`, `CEN-1`) |
+| `address` | string | Full civic address, **derived from `zone`** and verified to resolve to it (ABS-467) |
+| `address_resolution` | object | Evidence the address was verified against: `resolved_zone`, `resolution_quality`, `location_type`, `location_confidence`, `location_resolver`, `parcel_pid` |
+| `zone` | string | Zone code the schedule actually maps (e.g. `ER-2`, `CEN-1`). Not `ER-1` — the by-law defines it but no polygon carries it |
 | `complexity` | `simple` \| `medium` \| `complex` | Complexity of the scenario |
 | `liability` | `low` \| `medium` \| `high` | Liability level driven by project scale and risk |
 | `tags` | string[] | Queryable scenario tags |
@@ -124,7 +182,16 @@ Note: Only `"user"` role turns are stored. The assistant's responses are not pre
 
 Tags are freeform strings used for thematic grouping. Established tags:
 
-`renovation`, `new_construction`, `residential`, `commercial`, `mixed_use`, `multi_unit`, `secondary_suite`, `high_rise`, `downtown`, `heritage`, `corridor`, `institutional`, `due_diligence`, `redevelopment`, `feasibility`, `accessory_structure`, `accessory_dwelling`, `demolition`, `overlay`, `conversion`
+`renovation`, `new_construction`, `residential`, `commercial`, `mixed_use`, `multi_unit`, `two_unit_dwelling`, `backyard_suite`, `internal_conversion`, `high_rise`, `downtown`, `heritage`, `corridor`, `institutional`, `due_diligence`, `redevelopment`, `feasibility`, `accessory_structure`, `accessory_dwelling`, `demolition`, `overlay`, `conversion`
+
+Retired: `secondary_suite`. "Secondary suite" is not a use in the Regional
+Centre Land Use By-Law — the phrase does not appear once in the ingest, and
+`lookup_citation` answers `unknown_use` for it. Table 1B's residential rows are
+`Two-unit dwelling use` (a second unit inside the existing building) and
+`Backyard suite use` (a detached unit in the rear yard), which is why the two
+tags above replace it. Historical run archives under `evals/runs/` still carry
+the old tag; they are records of what was asked at the time and are not
+rewritten (ABS-470).
 
 ---
 
@@ -132,9 +199,17 @@ Tags are freeform strings used for thematic grouping. Established tags:
 
 All addresses must be within the **Regional Centre Plan Area**: the Halifax Peninsula and Dartmouth inside the Circumferential Highway (bylaw Section 2).
 
-**Halifax Peninsula examples**: Oxford Street, Windsor Street, Robie Street, Barrington Street, Hollis Street, Gottingen Street, Quinpool Road, Sackville Street, Jubilee Road, Bayers Road.
+Do not pick a street from a list and hope. The plan area is not the constraint
+that bit — being in the *zone* is, and a plausible peninsula address is exactly
+how 17 of the first 20 cases ended up in the wrong zone or in no zone at all.
+The generator derives the address from the zone and verifies it through the
+production `get_address_profile` path; see
+[ABS-467-EVAL-ADDRESS-DERIVATION.md](ABS-467-EVAL-ADDRESS-DERIVATION.md).
 
-**Dartmouth examples**: Wyse Road, King Street, Portland Street, Alderney Drive (inside the Circumferential Highway).
+Use `--on-street` when the scenario leans on a particular street (an arterial,
+a transit corridor, a viewplane). It biases which real address is chosen; it
+cannot override the verification, and the search falls back to the whole zone
+when that street carries no parcel in it.
 
 ---
 
@@ -215,17 +290,44 @@ python scripts/generate_regional_centre_test_prompts.py \
   --liability medium \
   --tags institutional setbacks development_permit \
   --bylaw-features setbacks development_permit \
-  --address "1741 Brunswick Street, Halifax, NS" \
   --title "Building official reviewing institutional setbacks in INS" \
   --turns 3 \
   --append
 ```
 
-Set `ANTHROPIC_API_KEY` to use the Claude API for generating realistic messages. Without it, the script produces stub messages that can be filled in manually.
+There is no `--address`. The zone picks a real parcel, the parcel is
+reverse-geocoded to candidate civic addresses, each candidate is checked
+against HRM's civic-address register for that parcel, and the survivor is
+resolved back through `get_address_profile` before the case is written — so a
+new case cannot reintroduce the zone/address mismatch ABS-467 fixed. This needs
+`DATABASE_URL` pointing at a database with the HRM zoning and parcel datasets,
+and `GOOGLE_MAPS_API_KEY`.
+
+**The register check is not optional, and the zone round-trip cannot replace
+it (ABS-474).** An earlier revision of this document said "the parcel yields a
+real civic address". It could not: `halifax_property_parcels` carries `PID`,
+`AAN` and `ASSESSMENT` and no address field at all, so the address came from
+Google's *reverse* geocoder — which returns the nearest street address to a
+point, not the address the municipality assigns to the parcel. On a corner lot
+that is the civic number from one street and the route from another; on a
+multi-frontage parcel it is a number interpolated between two real ones. Five
+of twenty cases were fabricated that way and passed every check, because a
+string composed from a parcel's interior point forward-geocodes straight back
+onto that parcel: the zone confirms and the confidence reads ROOFTOP.
+
+`scripts/verify_eval_address_zones.py --backfill-civics` records the
+municipality's answer for each case's parcel in `address_resolution.registered_civics`,
+so the guards can re-assert it offline. The register itself is not ingested —
+that has prerequisites in the production resolver, tracked as ABS-475.
+
+Messages come from `claude -p` (billed to the Claude Code subscription). If the
+`claude` binary is missing, the script produces stub messages to fill in
+manually.
 
 ### Batch mode
 
-Create a spec file `scripts/test_prompt_specs_new.json` as a JSON array of spec objects (see the script docstring for the schema), then:
+Create a spec file `scripts/test_prompt_specs_new.json` as a JSON array of spec
+objects (see the script docstring for the schema), then:
 
 ```bash
 python scripts/generate_regional_centre_test_prompts.py \
@@ -243,7 +345,10 @@ For large-scale expansion (covering many new zones or personas at once), use the
 
 Before committing new test cases:
 
-- [ ] All required fields present (`id`, `title`, `persona`, `address`, `zone`, `complexity`, `liability`, `tags`, `bylaw_features`, `turns`, `expected_bylaw_references`, `expected_answer_keywords`, `expected_topics`, `notes`)
+- [ ] All required fields present (`id`, `title`, `persona`, `address`, `address_resolution`, `zone`, `complexity`, `liability`, `tags`, `bylaw_features`, `turns`, `expected_bylaw_references`, `expected_answer_keywords`, `expected_topics`, `notes`)
+- [ ] `python scripts/verify_eval_address_zones.py --check` passes — every address resolves to its case's zone **and** is registered on its parcel
+- [ ] `python scripts/verify_eval_address_zones.py --backfill-civics` passes — every address is a civic HRM assigns to the parcel the case was derived from
+- [ ] `address_resolution.resolution_quality` is `rooftop`, or the notes say why it is not
 - [ ] No `[STUB]` placeholder messages remain in `turns`
 - [ ] `expected_bylaw_references` match real section/table labels in the bylaw fixture
 - [ ] `id` values are unique and sequential
@@ -252,6 +357,69 @@ Before committing new test cases:
 - [ ] Address is plausibly within the Regional Centre Plan Area
 
 Run the validation snippet from the skill doc to check programmatically.
+
+---
+
+## Running the corpus: every eval run bills real money (ABS-515)
+
+There is no free way to run this corpus. The `claude_code` provider — the
+CLI backend that billed an operator's Claude Code subscription instead of
+API credits — was removed in ABS-522 because on an otherwise identical
+eight-case run it scored **0/8 golden passes against the API backend's
+3/8**, stopping its research roughly four times sooner. Every advisor that
+can answer a question is metered.
+
+So the gate is *consent*, not provider selection. Two commands:
+
+```bash
+# shell 1 — one documented way to start an eval advisor
+make advisor-eval
+# or: make advisor-eval ADVISOR_EVAL_MODEL=claude-haiku-4-5 ADVISOR_EVAL_PORT=8010
+
+# shell 2 — the runner, with the consent flag
+.venv/bin/python scripts/run_test_prompts.py \
+  --base-url http://127.0.0.1:8000 \
+  --model claude-opus-4-5 \
+  --allow-metered --ids TC-001
+```
+
+`make advisor-eval` pins `ADVISOR_LLM_PROVIDER` and `ADVISOR_LLM_MAIN_MODEL`
+explicitly, prints the billing banner, and echoes the runner command to
+paste. `run_test_prompts.py` reads `GET /healthz` **before the first turn**
+and aborts unless either the advisor reports an unmetered gateway
+(`llm.metered: false` — only the mock gateway the e2e stack runs) or you
+passed `--allow-metered`. An advisor too old to report `llm.metered` is
+treated as metered: the expensive guess is the one that has to be wrong on
+purpose.
+
+**Probe with one case first.** A single case, then multiply. A full eight-case
+Opus sweep runs roughly $1.50–$2.00.
+
+### The `.env`-sourcing trap
+
+The ~$1.70 nobody agreed to spend started here:
+
+```bash
+set -a; . ./.env; set +a       # ← do not do this to start an eval advisor
+.venv/bin/uvicorn advisor.api.dev:app
+```
+
+`set -a` marks every name in `.env` for export, which does two things at
+once:
+
+1. It leaves `ADVISOR_LLM_PROVIDER` at its default. `.env` almost never
+   sets it, so the advisor comes up metered and nothing in the boot log
+   says so.
+2. It promotes `ANTHROPIC_API_KEY` from a file-scoped value to an
+   **inheritable process-environment** one. A key that lives only in
+   `.env` is read by the settings loader and goes no further; an exported
+   one is inherited by every subprocess the advisor spawns.
+
+`scripts/advisor-eval.sh` reads `.env` in an `env -i` subshell and
+re-exports only the handful of names the advisor needs, so nothing else in
+that file leaks into the process environment. `scripts/dev-up.sh` still
+uses `set -a` — that is the manual-testing stack, which needs the whole
+file, and it is not what you point an eval runner at.
 
 ---
 
@@ -271,6 +439,16 @@ export PG_PORT=5433 E2E_FASTAPI_PORT=8002 E2E_WEB_PORT=3002
 export E2E_API_URL=http://127.0.0.1:8002 E2E_BASE_URL=http://localhost:3002
 cd web && npx playwright test e2e/functional/abs203-test-prompts.spec.ts
 ```
+
+Grading is CLI-only, so its coverage drives the scripts through `spawnSync`
+against the committed corpus snapshot — no stack, no database:
+
+| Spec | Covers |
+|---|---|
+| `web/e2e/functional/abs516-single-eval-entry-point.spec.ts` | `verify_run.py`: both tiers from one call, golden printed first, exit status from the golden tier alone, unattested announced, no summed numbers, advisory-only warning |
+| `web/e2e/functional/abs468-golden-subset.spec.ts` | the golden subset itself and the separation of the two artifacts |
+| `web/e2e/functional/abs462-eval-grader.spec.ts` | the generated grader's applicability check |
+| `web/e2e/functional/abs515-eval-billing-preflight.spec.ts` | `run_test_prompts.py`'s billing pre-flight, and the live advisor's `/healthz` billing report |
 
 ---
 

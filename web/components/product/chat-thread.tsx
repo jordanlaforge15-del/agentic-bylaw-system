@@ -25,6 +25,10 @@ type Props = {
   thinking: boolean;
   thinkLabel: string;
   error?: string | null;
+  /** Present when the failed turn can be re-sent — renders a Retry button
+   * inside the error block (ABS-449). Omitted for errors with nothing to
+   * retry (e.g. a stale-pane refresh warning). */
+  onRetry?: () => void;
   sessionId?: string | null;
   feedbackMap?: Record<number, SavedFeedback>;
 };
@@ -34,6 +38,7 @@ export function ChatThread({
   thinking,
   thinkLabel,
   error,
+  onRetry,
   sessionId,
   feedbackMap,
 }: Props) {
@@ -58,14 +63,15 @@ export function ChatThread({
         return <AgentMsg key={i} msg={m} idx={i} sessionId={sessionId} feedbackMap={feedbackMap} />;
       })}
       {thinking && <ReadingIndicator label={thinkLabel} />}
-      {error && <ErrorMsg body={error} />}
+      {error && <ErrorMsg body={error} onRetry={onRetry} />}
     </div>
   );
 }
 
-function ErrorMsg({ body }: { body: string }) {
+function ErrorMsg({ body, onRetry }: { body: string; onRetry?: () => void }) {
   return (
     <div
+      data-testid="chat-error"
       className="self-center w-full max-w-[680px] text-[12px] sm:text-[12.5px] font-mono px-3 py-2.5 sm:px-3.5 sm:py-2.5"
       style={{
         color: "var(--brick)",
@@ -74,6 +80,22 @@ function ErrorMsg({ body }: { body: string }) {
       }}
     >
       {body}
+      {onRetry && (
+        <button
+          type="button"
+          data-testid="chat-retry"
+          onClick={onRetry}
+          className="mt-2.5 block cursor-pointer bg-transparent uppercase px-2.5 py-[6px]"
+          style={{
+            border: "1px solid var(--brick)",
+            color: "var(--brick)",
+            fontSize: 10.5,
+            letterSpacing: "0.08em",
+          }}
+        >
+          Retry question
+        </button>
+      )}
     </div>
   );
 }
@@ -93,7 +115,7 @@ function SystemMsg({ msg }: { msg: SystemMessage }) {
 
 function UserMsg({ msg }: { msg: UserMessage }) {
   return (
-    <div className="flex justify-end mb-1">
+    <div className="flex justify-end mb-1" data-testid="user-message">
       <div
         className="bg-text text-surface text-[13.5px] sm:text-[14px] leading-[1.45] sm:leading-[1.5] px-3 sm:px-4 py-2.5 sm:py-3 max-w-[85%] sm:max-w-[80%] lg:max-w-[78%]"
       >
@@ -208,7 +230,12 @@ function AgentMsg({ msg, idx, sessionId, feedbackMap }: { msg: AgentMessage; idx
         )}
 
         {msg.messageDbId != null && sessionId != null && (
+          // Keyed on session + message so a client-side case switch (which
+          // reuses this component instance — thread messages are keyed by
+          // array index) remounts the widget instead of keeping the previous
+          // case's selected thumbs/flag state. ABS-421.
           <MessageFeedback
+            key={`${sessionId}:${msg.messageDbId}`}
             sessionId={sessionId}
             messageId={msg.messageDbId}
             savedFeedback={feedbackMap?.[msg.messageDbId]}

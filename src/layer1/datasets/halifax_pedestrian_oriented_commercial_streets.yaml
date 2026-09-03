@@ -11,14 +11,28 @@ format: geojson
 # streets — so no retrieval call can answer "does this address abut a POCS
 # street" without a spatial layer.
 #
-# This dataset supplies that missing layer. The geometry here is digitized
-# from Schedule 7 / Map 19: one LineString per designated corridor, keyed by
-# a stable SEGMENT_ID. It is deliberately committed as a repo GeoJSON
+# This dataset supplies that missing layer: one MultiLineString per designated
+# corridor, keyed by a stable SEGMENT_ID. It is committed as a repo GeoJSON
 # (source_path) rather than fetched from a URL because the map-only schedule
-# has no machine-readable upstream to pull from. Replace with surveyor-grade
-# centreline geometry (or a flagged subset of halifax_street_centerlines) if
-# HRM ever publishes the segments as open data — the SEGMENT_ID feature_key
-# keeps re-ingest idempotent for downstream consumers.
+# has no machine-readable upstream to pull from.
+#
+# ABS-435 — provenance upgrade. The original (ABS-349) geometry was traced by
+# eye off the schedule raster and drifted up to ~200 m from the real roadway;
+# near civic 6321 Quinpool Road the drift was 130 m, which made the abuts
+# predicate report abuts_pedestrian_street=false for an address squarely on the
+# corridor. Schedule 7 designates ordinary HRM streets over stated extents, so
+# the corridors are now DERIVED from the surveyor-grade halifax_street_centerlines
+# layer rather than traced: scripts/rebuild_pocs_from_centerlines.py resolves
+# each corridor's bounding cross-streets against the centreline network and
+# emits the run between them. Re-run that generator (against a database with
+# halifax_street_centerlines ingested) whenever HRM refreshes the centreline
+# layer or the schedule's designated extents change; the SEGMENT_ID feature_key
+# keeps re-ingest idempotent for downstream consumers either way.
+#
+# Deployment note: the corrected geometry only reaches an existing database
+# once this dataset is re-ingested there —
+#   layer1 ingest-dataset src/layer1/datasets/halifax_pedestrian_oriented_commercial_streets.yaml
+# Until then that database keeps serving the drifted ABS-349 lines.
 source_path: data/geo-datasets/pedestrian_oriented_commercial_streets_schedule7.geojson
 crs: EPSG:4326
 

@@ -12,23 +12,22 @@
 //   - address_lookup (100 Robie Street) -> AddressProfile with zone HR-2
 //   - an unrecognised intent -> unrecognized_intent=true, NO 500 (FR-4.2)
 //
-// Data dependencies: the zone-intent tests seed their own Regional-Centre
-// bylaw via scripts/seed_e2e_zone_profile.py (scoped by document_id); the
-// address_lookup test reuses scripts/seed_e2e_address_profile.py.
+// Data dependencies: both the zone-intent corpus (scoped by document_id)
+// and the address_lookup corpus (100 Robie Street -> zone HR-2) live on the
+// single unified RC-LUB e2e document (scripts/seed_e2e_rclub_unified.py,
+// ABS-433).
 
 import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { test, expect, E2E_API_URL, DEMO_USER_ID } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 let zoneDocumentId: number | null = null;
 
 function repoEnv() {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
-  const pgPort = process.env.PG_PORT || "5432";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   return {
     repoRoot,
     venvPython: path.join(repoRoot, ".venv", "bin", "python"),
@@ -42,19 +41,15 @@ function repoEnv() {
 
 test.beforeAll(() => {
   const { repoRoot, venvPython, env } = repoEnv();
-  // Zone-intent corpus (scoped by document_id below).
-  const zoneOut = execSync(
-    `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_zone_profile.py")}"`,
+  // The unified RC-LUB corpus: zone-profile fragments (scoped by document_id
+  // below) AND the address-lookup overlays ("100 Robie Street" -> HR-2) ride
+  // one document (ABS-433).
+  const seedOut = execSync(
+    `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_rclub_unified.py")}"`,
     { env, encoding: "utf-8" },
   );
-  const m = zoneOut.match(/document=(\d+)/);
+  const m = seedOut.match(/"document_id": (\d+)/);
   zoneDocumentId = m ? parseInt(m[1], 10) : null;
-
-  // Address-lookup corpus (resolves "100 Robie Street" -> zone HR-2).
-  execSync(
-    `"${venvPython}" "${path.join(repoRoot, "scripts", "seed_e2e_address_profile.py")}"`,
-    { env, stdio: "inherit" },
-  );
 });
 
 async function bylawQuery(

@@ -29,7 +29,13 @@ import json
 import sys
 from pathlib import Path
 
-from bylaw_retrieval.retrieval import audit_corpus_coherence, latest_per_bylaw_resolver
+from bylaw_retrieval.retrieval import (
+    audit_corpus_coherence,
+    audit_e2e_contamination,
+    audit_enabled_name_collisions,
+    audit_governing_bylaw_coverage,
+    retrieval_enabled_resolver,
+)
 from bylaw_retrieval.retrieval.coherence_audit import DEFAULT_DATASET_CONFIG_DIR
 from layer1.db.session import session_scope
 
@@ -47,20 +53,37 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--unscoped",
         action="store_true",
-        help="Audit against every ingested document instead of the latest-per-bylaw scope "
+        help="Audit against every ingested document instead of the retrieval-enabled scope "
         "(diagnostic: shows raw linker state, not what a real request would see).",
     )
     args = parser.parse_args(argv)
 
-    resolver = None if args.unscoped else latest_per_bylaw_resolver
+    resolver = None if args.unscoped else retrieval_enabled_resolver
     with session_scope(args.db_url) as session:
         report = audit_corpus_coherence(
             session,
             dataset_config_dir=args.config_dir,
             default_document_id_resolver=resolver,
         )
+        # ABS-432: sweep for e2e fixture markers in the same pass. This CLI
+        # is an ops tool pointed at dev/prod databases, where any marker row
+        # is contamination (the e2e suite runs on its own instance, ABS-428).
+        contamination = audit_e2e_contamination(session)
+        # ABS-434: at most one ENABLED document per normalized bylaw identity
+        # — the doc-15/38 double-enable ("By-law" vs "By-Law") tripwire.
+        name_collisions = audit_enabled_name_collisions(session)
+        # ABS-472: how much mapped ground is governed by a by-law we do not
+        # hold. Informational, never a failure — a municipality publishes far
+        # more by-law areas than any corpus ingests — but it is the number
+        # that says which by-law to ingest next.
+        coverage = audit_governing_bylaw_coverage(
+            session, default_document_id_resolver=resolver
+        )
 
     payload = report.model_dump(mode="json")
+    payload["e2e_contamination"] = contamination.model_dump(mode="json")
+    payload["enabled_name_collisions"] = name_collisions.model_dump(mode="json")
+    payload["governing_bylaw_coverage"] = coverage.model_dump(mode="json")
     text = json.dumps(payload, indent=2)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +92,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(text)
 
+    failed = False
     if not report.coherent:
+        failed = True
         print(
             f"corpus-coherence audit FAILED: {len(report.missing)} overlay role(s) "
             f"missing from active retrieval scope",
@@ -77,9 +102,48 @@ def main(argv: list[str] | None = None) -> int:
         )
         for entry in report.missing:
             print(f"  - [{entry.reason}] {entry.role} ({entry.bylaw_name}): {entry.detail}", file=sys.stderr)
+
+    if contamination.contaminated:
+        failed = True
+        print(
+            f"e2e-contamination sweep FAILED (ABS-432): {len(contamination.markers)} "
+            "row(s) carry e2e fixture markers — this is not a clean non-test database",
+            file=sys.stderr,
+        )
+        for marker in contamination.markers:
+            print(f"  - [{' + '.join(marker.marker_kinds)}] {marker.detail}", file=sys.stderr)
+
+    if not name_collisions.collision_free:
+        failed = True
+        print(
+            f"enabled-name-collision audit FAILED (ABS-434): "
+            f"{len(name_collisions.collisions)} normalized bylaw identit(ies) have "
+            "more than one retrieval-enabled document",
+            file=sys.stderr,
+        )
+        for collision in name_collisions.collisions:
+            print(f"  - {collision.detail}", file=sys.stderr)
+
+    if not coverage.complete:
+        print(
+            f"governing-by-law coverage (ABS-472): {coverage.unheld_features} of "
+            f"{coverage.features_checked} attributed feature(s) are governed by a "
+            "by-law outside the corpus — answers for that ground are refused, not "
+            "cited:",
+            file=sys.stderr,
+        )
+        for gap in coverage.unheld:
+            print(f"  - {gap.detail}", file=sys.stderr)
+
+    if failed:
         return 1
 
-    print(f"corpus-coherence audit passed: {report.checked_roles} role(s) across {report.bylaws_checked} bylaw(s)")
+    print(
+        f"corpus-coherence audit passed: {report.checked_roles} role(s) across "
+        f"{report.bylaws_checked} bylaw(s); e2e-contamination sweep clean; "
+        f"{name_collisions.enabled_documents} enabled document(s) across "
+        f"{name_collisions.identities_checked} normalized identit(ies), no name collisions"
+    )
     return 0
 
 

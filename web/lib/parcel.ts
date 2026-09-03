@@ -230,7 +230,7 @@ function projectToolResult(
     shadow: shadowDs
       ? { area: pickStr(shadowDs.attrs, "impact_area") || "—" }
       : null,
-    cited: collectCitations(allMessages),
+    cited: collectCitations(allMessages, 6),
   };
 }
 
@@ -269,8 +269,15 @@ function pickNum(
 // in the conversation. We keep only the first hit per citation_path
 // because the LLM tends to repeat the same fragment across follow-up
 // queries.
-function collectCitations(
+//
+// ``limit`` caps what the right rail shows (six cards is all that fits
+// before the pane turns into a list). Inline citation linking (ABS-451)
+// asks for the uncapped set — every clause the agent actually retrieved
+// is a legitimate target for an inline reference, whether or not it made
+// the rail's top six.
+export function collectCitations(
   messages: BackendMessage[],
+  limit?: number,
 ): ParcelContext["cited"] {
   const seen = new Map<string, ParcelContext["cited"][number]>();
   for (const m of messages) {
@@ -301,5 +308,6 @@ function collectCitations(
       }
     }
   }
-  return Array.from(seen.values()).slice(0, 6);
+  const all = Array.from(seen.values());
+  return limit === undefined ? all : all.slice(0, limit);
 }

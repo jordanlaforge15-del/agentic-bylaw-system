@@ -191,6 +191,7 @@ def test_reserve_credit_for_session_raises_402_when_nothing_available(
         user = s.get(User, user_id)
         # No credits granted.
         case = Case(
+            user_case_number=1,
             user_id=user_id,
             anchor_label="addr",
             anchor_key="addr",

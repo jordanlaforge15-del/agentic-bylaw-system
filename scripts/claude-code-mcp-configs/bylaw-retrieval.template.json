@@ -2,7 +2,7 @@
   "mcpServers": {
     "bylaw_retrieval": {
       "command": "${WORKTREE_ROOT}/.venv/bin/layer1-mcp",
-      "args": [],
+      "args": ["--all-documents"],
       "env": {
         "DATABASE_URL": "${DATABASE_URL}"
       }

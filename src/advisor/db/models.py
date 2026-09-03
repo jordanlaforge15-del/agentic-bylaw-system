@@ -180,6 +180,27 @@ class TokenTransaction(Base):
             "user_id",
             "id",
         ),
+        # ABS-415: the signup free-trial grant is one per user, forever, and
+        # the database is what says so. The application check-and-set in
+        # ``wallet.grant_signup_tokens_if_needed`` is serialised on the user
+        # row (ABS-404), but that only binds callers that take the lock;
+        # production shipped two ``+25,000`` grants for one user on
+        # 2026-07-17 precisely because an app-level guard was the only guard.
+        # This is the same defence-in-depth the top-up path already gets from
+        # UNIQUE(stripe_checkout_session_id): a second signup grant is not
+        # "unlikely", it is impossible. Scoped to the signup reason so admin
+        # gifts (also ``grant`` rows) stay unconstrained.
+        Index(
+            "uq_advisor_token_transaction_signup_grant",
+            "user_id",
+            unique=True,
+            postgresql_where=text(
+                "entry_type = 'grant' AND reason = 'signup_grant'"
+            ),
+            sqlite_where=text(
+                "entry_type = 'grant' AND reason = 'signup_grant'"
+            ),
+        ),
     )
 
     # BigInteger PK on Postgres (this ledger is high-volume and append-only),
@@ -291,6 +312,28 @@ class Case(Base):
     metadata_json: Mapped[dict] = mapped_column(
         MutableDict.as_mutable(json_type()), nullable=False, default=dict
     )
+
+    # ABS-423: the parcel panel needs to tell "the spatial join hasn't
+    # run yet" apart from "it ran and definitively failed". The full
+    # ``metadata_json`` stays off the wire (it carries internal feature
+    # ids and provenance); these two narrow reads are what ``CaseOut``
+    # exposes so the UI can stop promising data that will never arrive.
+    @property
+    def spatial_status(self) -> str | None:
+        """``spatial_facts.status`` ('ok' / 'unresolved'), or None."""
+        return self._spatial_fact("status")
+
+    @property
+    def spatial_reason(self) -> str | None:
+        """Why resolution failed, when ``spatial_status`` is unresolved."""
+        return self._spatial_fact("reason")
+
+    def _spatial_fact(self, key: str) -> str | None:
+        facts = (self.metadata_json or {}).get("spatial_facts")
+        if not isinstance(facts, dict):
+            return None
+        value = facts.get(key)
+        return value if isinstance(value, str) else None
 
     user: Mapped[User] = relationship(back_populates="cases")
     sessions: Mapped[list["ChatSession"]] = relationship(

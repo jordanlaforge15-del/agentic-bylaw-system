@@ -6,9 +6,12 @@
 // "Backend error (402)" toast appears. Copy is turns-based.
 //
 // Two payment postures:
-//   * payments OFF (the DORMANT e2e stack, driven for real): a kind dead-end —
-//     no purchase CTA, reassurance that the case + history stay saved. Driven
-//     by MOCK_BURN_ALL, which overdraws the signup grant in one turn.
+//   * payments OFF (the DORMANT e2e stack, driven for real): no purchase CTA,
+//     and the self-serve refill claim instead (ABS-405 — a fresh account
+//     still holds its refill allowance). Driven by MOCK_BURN_ALL, which
+//     overdraws the signup grant in one turn. The refill's own behaviour
+//     (claiming, cooldown) lives in abs405-beta-refill.spec.ts; here we only
+//     pin that the refusal itself is clean.
 //   * payments ON: a purchase CTA ("Top up →"). The e2e stack can't run
 //     payments-on, so the wallet read the strip seeds from is stubbed.
 
@@ -20,14 +23,19 @@ import {
   signInAs,
   test,
 } from "../auth/fixtures";
+import {
+  CHAT_MIN_BALANCE,
+  LOW_BALANCE_WARN,
+  TOKENS_PER_TURN,
+} from "../fixtures/wallet-params";
 
 const OUT_OF_TOKENS_WALLET_PAYMENTS_ON = {
   balance_tokens: 0,
   approx_turns_remaining: 0,
-  tokens_per_turn: 2500,
+  tokens_per_turn: TOKENS_PER_TURN,
   low_balance: true,
-  warn_threshold_tokens: 5000,
-  floor_tokens: 0,
+  warn_threshold_tokens: LOW_BALANCE_WARN,
+  floor_tokens: CHAT_MIN_BALANCE,
   chat_enabled: false,
   payments_enabled: true,
 };
@@ -65,9 +73,11 @@ test("payments off: draining the wallet shows the out-of-turns dead-end and disa
   await expect(prompt).toBeVisible({ timeout: 10_000 });
   await expect(prompt).toContainText(/out of turns/i);
 
-  // Payments off → dead-end reassurance, NO purchase CTA.
-  await expect(page.getByTestId("top-up-deadend")).toBeVisible();
+  // Payments off → NO purchase CTA. A first-time exhaustion still has its
+  // refill allowance, so the prompt offers the self-serve claim (ABS-405)
+  // rather than the old flat dead-end.
   await expect(page.getByTestId("top-up-btn")).toHaveCount(0);
+  await expect(page.getByTestId("beta-refill-btn")).toBeVisible();
 
   // Composer disabled with the top-up placeholder.
   await expect(page.getByPlaceholder(/Top up to continue/i)).toBeDisabled();

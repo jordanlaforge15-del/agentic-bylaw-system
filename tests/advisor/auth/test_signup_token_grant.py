@@ -13,7 +13,8 @@ from pathlib import Path
 from advisor.api.auth import resolve_or_create_user
 from advisor.auth.clerk_backend import ClerkUserProfile
 from advisor.auth.session import ClerkSession
-from advisor.db import User, burn_tokens
+from advisor.billing.turns import signup_token_grant
+from advisor.db import User, burn_tokens, grant_signup_tokens_if_needed
 from advisor.db.models import TokenTransaction
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
@@ -61,7 +62,7 @@ def test_new_user_gets_signup_token_grant(tmp_path: Path) -> None:
             s, _make_session(), backend_client=_StubBackendClient()  # type: ignore[arg-type]
         )
         s.commit()
-        assert user.token_balance == 25_000
+        assert user.token_balance == signup_token_grant()
         assert user.metadata_json.get("token_grant_issued") is True
         grants = _grant_rows(s, user.id)
         assert len(grants) == 1
@@ -95,7 +96,7 @@ def test_pre_wallet_user_self_heals_once(tmp_path: Path) -> None:
             s, _make_session(), backend_client=_StubBackendClient()  # type: ignore[arg-type]
         )
         s.commit()
-        assert user.token_balance == 25_000
+        assert user.token_balance == signup_token_grant()
         assert len(_grant_rows(s, user.id)) == 1
 
 
@@ -111,7 +112,7 @@ def test_no_second_grant_after_burning_to_zero(tmp_path: Path) -> None:
         uid = user.id
     # User burns the whole grant.
     with session_scope(db_url) as s:
-        burn_tokens(s, user=s.get(User, uid), amount=25_000)
+        burn_tokens(s, user=s.get(User, uid), amount=signup_token_grant())
         s.commit()
     # Next sign-in must NOT re-grant.
     with session_scope(db_url) as s:
@@ -145,5 +146,72 @@ def test_invite_path_user_also_gets_grant(tmp_path: Path) -> None:
             s, _make_session(), backend_client=_StubBackendClient()  # type: ignore[arg-type]
         )
         s.commit()
-        assert user.token_balance == 25_000
+        assert user.token_balance == signup_token_grant()
         assert len(_grant_rows(s, user.id)) == 1
+
+
+def test_stale_in_memory_user_does_not_regrant(tmp_path: Path) -> None:
+    """A ``User`` instance whose in-memory ``metadata_json`` predates the
+    grant must NOT produce a second one (ABS-404).
+
+    This is the half of the double-grant defect that reproduces without
+    Postgres. The gate used to be a plain read of the caller's
+    already-loaded ``user.metadata_json``; whenever that instance was
+    stale relative to the row — which is exactly the state a losing
+    racer is left in — the check passed and a second grant was written.
+    Production recorded two ``+25,000`` entries for one user on
+    2026-07-17 this way.
+
+    The fix re-reads the flag from a ``FOR UPDATE``-locked row with
+    ``populate_existing=True``. Here we force the staleness explicitly:
+    load the user, let a separate session issue the grant and commit,
+    then call the helper with the stale instance. The full concurrent
+    race needs real row locks and is pinned in
+    ``test_wallet_concurrency_pg.py``.
+    """
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    with session_scope(db_url) as s:
+        s.add(User(clerk_user_id="user_stale", email="stale@x.com"))
+        s.commit()
+
+    with session_scope(db_url) as reader:
+        stale = (
+            reader.query(User).filter(User.clerk_user_id == "user_stale").one()
+        )
+        uid = stale.id
+        assert stale.metadata_json.get("token_grant_issued") is None
+
+        # Another session grants and commits behind the reader's back.
+        with session_scope(db_url) as writer:
+            grant_signup_tokens_if_needed(writer, user=writer.get(User, uid))
+            writer.commit()
+
+        # The stale instance still says "no grant issued" in memory, but
+        # the helper must consult the row, not the instance.
+        assert grant_signup_tokens_if_needed(reader, user=stale) is False
+        reader.commit()
+
+    with session_scope(db_url) as s:
+        user = s.get(User, uid)
+        assert len(_grant_rows(s, uid)) == 1
+        assert user.token_balance == signup_token_grant()
+
+
+def test_repeat_calls_in_one_session_grant_once(tmp_path: Path) -> None:
+    """Back-to-back calls inside a single session still grant once — the
+    locked re-read must not lose the flag written moments earlier by an
+    unflushed sibling call."""
+    db_url = _db_url(tmp_path)
+    create_all(db_url)
+    with session_scope(db_url) as s:
+        s.add(User(clerk_user_id="user_twice", email="twice@x.com"))
+        s.commit()
+        user = s.query(User).filter(User.clerk_user_id == "user_twice").one()
+
+        assert grant_signup_tokens_if_needed(s, user=user) is True
+        assert grant_signup_tokens_if_needed(s, user=user) is False
+        s.commit()
+
+        assert len(_grant_rows(s, user.id)) == 1
+        assert user.token_balance == signup_token_grant()

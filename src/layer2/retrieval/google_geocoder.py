@@ -6,21 +6,49 @@ from typing import Any, Protocol
 import httpx
 
 from layer2.retrieval.location import LocationReference
+from layer2.retrieval.resolution_quality import CONFIDENCE_BY_LOCATION_TYPE
 from layer2.retrieval.spatial import ResolvedLocation
 
 
-# Confidence is mapped from Google's location_type enum. ROOFTOP means the
-# response is a precise rooftop match; RANGE_INTERPOLATED is interpolated
-# along a street; GEOMETRIC_CENTER and APPROXIMATE are progressively coarser.
-# We don't promote results below RANGE_INTERPOLATED because address-typed
-# questions deserve precise matches, not "somewhere in this neighbourhood".
-_CONFIDENCE_BY_TYPE = {
-    "ROOFTOP": 0.95,
-    "RANGE_INTERPOLATED": 0.85,
-    "GEOMETRIC_CENTER": 0.6,
-    "APPROXIMATE": 0.4,
+# Confidence is mapped from Google's location_type enum (the mapping lives in
+# ``resolution_quality`` because the classifier has to invert it for rows that
+# carry a confidence but no type). ROOFTOP means the response is a precise
+# rooftop match; RANGE_INTERPOLATED is interpolated along a street;
+# GEOMETRIC_CENTER and APPROXIMATE are progressively coarser.
+#
+# ABS-466 — which location_types we accept, decided by NAME rather than by a
+# float comparison. The previous rule was ``confidence < 0.6`` against a
+# GEOMETRIC_CENTER worth exactly 0.6, so the "somewhere in this neighbourhood"
+# case the comment claimed to exclude passed by equality. Two live cache rows
+# (567 Windsor Street, 89 Jubilee Road) were linked at 0.6 because of it.
+#
+# The decision, deliberately, is kind-aware:
+#
+#   * A civic address names a *building*. Google returning GEOMETRIC_CENTER
+#     for one means it never found the civic number and fell back to the
+#     centre of a block or route — the point can sit on any parcel on the
+#     block, so it cannot be trusted to select a zoning polygon. Rejected.
+#   * A named place or an intersection has no rooftop to match. GEOMETRIC_CENTER
+#     is the *best available* answer for "Barrington and Spring Garden", and
+#     refusing it would remove those question kinds entirely. Accepted, and the
+#     resolution is reported as centroid-quality so callers still qualify it.
+#
+# APPROXIMATE is never accepted (locality-level, useless for parcel work), and
+# neither is an unrecognised/missing type. Membership in a named set can't
+# drift by a rounding change the way the old float boundary could; the four
+# location_types are pinned by test in tests/datasets/test_google_geocoder.py.
+_ACCEPTED_LOCATION_TYPES_BY_KIND: dict[str, frozenset[str]] = {
+    "civic_address": frozenset({"ROOFTOP", "RANGE_INTERPOLATED"}),
+    "named_place": frozenset({"ROOFTOP", "RANGE_INTERPOLATED", "GEOMETRIC_CENTER"}),
+    "intersection": frozenset({"ROOFTOP", "RANGE_INTERPOLATED", "GEOMETRIC_CENTER"}),
 }
-_MIN_ACCEPTED_TYPE_CONFIDENCE = 0.6
+
+
+def accepted_location_types(kind: str) -> frozenset[str]:
+    """The location_types a reference of ``kind`` may resolve through."""
+    return _ACCEPTED_LOCATION_TYPES_BY_KIND.get(kind, frozenset({"ROOFTOP"}))
+
+
 _DEFAULT_ENDPOINT = "https://maps.googleapis.com/maps/api/geocode/json"
 
 
@@ -119,14 +147,17 @@ class GoogleGeocoder:
             return None
 
         best = payload["results"][0]
-        location_type = (best.get("geometry") or {}).get("location_type") or ""
-        confidence = _CONFIDENCE_BY_TYPE.get(location_type, 0.5)
-        if confidence < _MIN_ACCEPTED_TYPE_CONFIDENCE:
+        location_type = ((best.get("geometry") or {}).get("location_type") or "").upper()
+        accepted = accepted_location_types(ref.kind)
+        if location_type not in accepted:
             self._record_failure(
                 "LOW_CONFIDENCE",
-                f"location_type={location_type!r} below threshold {_MIN_ACCEPTED_TYPE_CONFIDENCE}",
+                f"location_type={location_type!r} is not accepted for "
+                f"kind={ref.kind!r} (accepted: {', '.join(sorted(accepted))})",
             )
             return None
+        # Every accepted type is in the mapping, so this can't miss.
+        confidence = CONFIDENCE_BY_LOCATION_TYPE[location_type]
         loc = (best.get("geometry") or {}).get("location") or {}
         if "lat" not in loc or "lng" not in loc:
             self._record_failure("MISSING_GEOMETRY")
@@ -137,6 +168,11 @@ class GoogleGeocoder:
             confidence=confidence,
             source=self.name,
             reference_text=ref.raw_text,
+            # ABS-466: carry Google's own verdict forward. A bare float can't
+            # distinguish "estimated along the street" from "matched the
+            # building", and everything downstream — the cache row, the
+            # AddressProfile, the answer-time qualifier — needs that word.
+            location_type=location_type,
         )
 
 

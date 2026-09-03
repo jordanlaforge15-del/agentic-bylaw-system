@@ -24,7 +24,10 @@ Everything production lives under `/srv/bylaw/`:
 ├── Caddyfile               # reverse proxy + TLS + rate-limit config
 ├── Dockerfile.caddy        # custom Caddy build with caddy-ratelimit plugin
 ├── Dockerfile.postgres     # custom Postgres build with pgvector + PostGIS
-└── backups/                # nightly pg_dump targets (manual for now)
+├── backup.env              # backup config sourced by cron (chmod 600)
+├── backup.pass             # gpg passphrase (chmod 600 — also in the password manager)
+├── scripts/                # backup-prod-db.sh, verify-prod-backup.sh, installer
+└── backups/                # rotation dir + backup.log + cron.log (ABS-131)
 ```
 
 The repo's `docker-compose.yml` at root is the **local dev** compose (postgres + codex container); it's NOT used in production. The repo's `Caddyfile`, `Dockerfile.advisor`, `Dockerfile.caddy`, `Dockerfile.postgres`, `web/Dockerfile`, and root `.dockerignore` *are* the source-of-truth that the server-side copies mirror — sync them via `scp` when the repo versions change.
@@ -37,7 +40,7 @@ Four containers, all in the default Docker network so they reach each other by s
 |---|---|---|---|
 | `caddy` | `bylaw-caddy:latest` (built from `Dockerfile.caddy`) | 80, 443 public | Terminates TLS, routes by host, enforces rate limits |
 | `web` | `ghcr.io/jordanlaforge15-del/bylaw-web:X.Y.Z` | 3000 internal | Next.js standalone build. Reaches advisor at `http://advisor:8000` |
-| `advisor` | `ghcr.io/jordanlaforge15-del/bylaw-advisor:X.Y.Z` | 8000 internal | FastAPI / uvicorn. Reads/writes Postgres at `postgres:5432` |
+| `advisor` | `ghcr.io/jordanlaforge15-del/bylaw-advisor:X.Y.Z` | 8000 internal | FastAPI / uvicorn. Reads/writes Postgres at `postgres:5432`. Uploaded submission artefacts go to the `bylaw_submissions` volume at `/var/lib/bylaw/submissions` — the container's only writable non-tmpfs path (ABS-87) |
 | `postgres` | `bylaw-postgres:latest` (built from `Dockerfile.postgres`) | 5432 internal | PG16 + pgvector + PostGIS 3.4. Data in Docker named volume `bylaw_bylaw_postgres_data` |
 
 All containers run as non-root inside (UID 1000 advisor, UID 1001 nextjs), with `cap_drop: [ALL]`, `read_only: true` filesystems, `no-new-privileges:true`, and `mem_limit` / `pids_limit` caps. See `docker-compose.yml` on the server for the canonical config.
@@ -140,7 +143,11 @@ Standard recipe for a code change to web or advisor:
     # filesystem violation — do NOT proceed to step 6.
     ```
     See `scripts/preflight_advisor_image.sh` for the canonical script form with
-    help text and override env vars.
+    help text and override env vars. **Prefer the script**: the one-liner above
+    only proves the app imports. The script additionally loads every runtime
+    data file the wheel must carry and the corpus-coherence audit's overlay
+    declarations — the class of gap that let `/v1/monitoring/corpus-coherence`
+    report a green while checking zero roles (ABS-412, ABS-420).
 6. **Pull & restart just that service**:
    ```bash
    ssh bylaw-prod "cd /srv/bylaw && docker compose pull web && docker compose up -d web"
@@ -148,6 +155,12 @@ Standard recipe for a code change to web or advisor:
    ssh bylaw-prod "cd /srv/bylaw && docker compose up -d advisor"
    ```
 7. **Verify**: `curl` against the public endpoint, check `docker compose ps`, tail logs (`docker compose logs --tail 30 <svc>`). For chat changes, send a real query.
+   - The release carrying migration `0024_document_retrieval_enabled` has its own
+     post-deploy procedure — the retrieval scope switches from newest-per-by-law
+     to an explicit per-document flag, and nothing looks different if the backfill
+     ran against a corpus that moved. Run
+     `scripts/apply-abs420-retrieval-rollout.sh verify` and follow
+     [ABS-420-RETRIEVAL-ENABLED-ROLLOUT.md](ABS-420-RETRIEVAL-ENABLED-ROLLOUT.md).
 8. **Merge to main** and push: `git checkout main && git merge --no-ff fix/... && git push origin main`.
 9. **Delete the feature branch**: `git branch -d fix/...`.
 
@@ -213,13 +226,23 @@ ADVISOR_BILLING_SUCCESS_URL, ADVISOR_BILLING_CANCEL_URL
 # them; POST /v1/billing/checkout/pack now answers 410 packs_retired. Do NOT
 # configure them — they sell nothing.
 
-# Token wallet / turns parameters (ABS-380). Read fresh per request — a
-# re-calibration takes effect on `docker compose up -d advisor`, no rebuild.
-ADVISOR_TOKENS_PER_TURN=2500          # display divisor (backend-owned "~N turns")
-ADVISOR_SIGNUP_TOKEN_GRANT=25000      # one-time new-user wallet grant (~10 turns)
-ADVISOR_CHAT_MIN_BALANCE_TOKENS=0     # pre-flight floor: chat 402s at balance <= floor
-ADVISOR_LOW_BALANCE_WARN_TOKENS=5000  # wallet flips to "low balance" at <= warn
-ADVISOR_CHAT_MAX_ITERATIONS=20        # tool-loop cap per chat turn
+# Token wallet / turns parameters (ABS-380, recalibrated ABS-416). Read fresh
+# per request — a re-calibration takes effect on `docker compose up -d advisor`,
+# no rebuild. Defaults below are measured against prod burn: a real grounded
+# question costs 103k-248k tokens (src/advisor/billing/turns.py has the sample).
+ADVISOR_TOKENS_PER_TURN=175000          # display divisor (backend-owned "~N turns")
+ADVISOR_SIGNUP_TOKEN_GRANT=525000       # one-time new-user wallet grant (3 turns)
+ADVISOR_CHAT_MIN_BALANCE_TOKENS=0       # pre-flight floor: chat 402s at balance <= floor
+ADVISOR_LOW_BALANCE_WARN_TOKENS=175000  # "low balance" at <= warn (1 turn)
+# ABS-405 self-serve beta refill: the payments-off way out of an overdrawn
+# wallet. Without it an exhausted tester needs a manual grant_tokens by an
+# operator. Ignored once ADVISOR_PAYMENTS_ENABLED is true.
+ADVISOR_BETA_REFILL_ENABLED=true         # off => back to the manual-grant dead-end
+ADVISOR_BETA_REFILL_TOKENS=175000        # per claim (1 turn)
+ADVISOR_BETA_REFILL_COOLDOWN_HOURS=6     # 0 = no cooldown; the cap still applies
+ADVISOR_BETA_REFILL_MAX_GRANTS=3         # lifetime cap per account; 0 disables
+ADVISOR_CHAT_MAX_ITERATIONS=20          # tool-loop cap per chat turn
+ADVISOR_TURN_MAX_WALLET_TOKENS=350000   # per-turn ceiling on MEASURED burn (2 turns)
 
 # Per-report gate (ABS-384): which of the five report SKUs are on sale
 ADVISOR_ENABLED_QUESTIONS   # csv slugs; `*` = all; unset/empty = NONE (deny-by-default)
@@ -227,6 +250,24 @@ ADVISOR_ENABLED_QUESTIONS   # csv slugs; `*` = all; unset/empty = NONE (deny-by-
 # Shared-password gate
 DEMO_PASSWORD=$$<password>    # NB: literal $ in value must be escaped as $$ for compose
 ```
+
+> **Signup-grant cost note (resized on ABS-404).** The `~$0.55 USD per 100k
+> wallet-token` anchor this note used to quote was wrong by ~5x. The wallet
+> counts `input + output` only, while cache writes and reads are 35% of the
+> dollar cost — so the real figure is cost per *wallet-counted* token, measured
+> at **~$28.9/MTok USD** (`docs/COST_MODEL.md`, ABS-303 real-API run). One 175k
+> turn is therefore ~$5.05, not ~$0.96, and the old 10-turn grant was ~$50 of
+> API spend per free, no-card signup rather than ~$9.60. The default is now 3
+> turns (~$15). Both knobs are read fresh per request, so retuning either is
+> `docker compose up -d advisor` — no code change or rebuild — and the "~N
+> turns" the free-trial card advertises follows the env value automatically.
+
+> **Do not set `ADVISOR_TURN_MAX_WALLET_TOKENS=0`.** Non-positive values fall
+> back to the derived default by design: zero would otherwise disable the only
+> breaker that bounds a turn in the unit the wallet charges, restoring the
+> unbounded burn ABS-404 fixed. Raise it if grounded answers are being
+> truncated; the trip is auditable as `trip_reason=wallet_cap_trip` on the
+> `llm_call` UsageEvent's `metadata_json`.
 
 ### Compose variable substitution
 
@@ -237,6 +278,58 @@ Values referenced from the YAML as `${VAR}` are interpolated from `.env`. **Any 
 1. Add to `/srv/bylaw/.env`.
 2. **Advisor / postgres:** nothing else to do — both use `env_file: .env`. `docker compose up -d advisor` recreates the container with the new var. (Note: editing `.env` causes compose to also recreate `postgres` on the next `up -d` because it shares the same `env_file`. Postgres data lives in a named volume, so there's no data loss, but expect a brief DB restart.)
 3. **Web:** add to the `environment:` block in `/srv/bylaw/docker-compose.yml` *and* rebuild the image if it's a `NEXT_PUBLIC_*` value (those are baked at build time). Server-only web env vars only need a `docker compose up -d web`.
+
+### Submission artefact storage (ABS-87)
+
+The submission upload endpoints (`POST /v1/submissions` for the web UI,
+`POST /v1/integrations/submissions` for API-key/Speckle callers) stage the
+uploaded `.ifc` / `.pdf` on disk before the extractors read it — the IFC and
+APS parsers want a real path, not a stream. The advisor container is
+`read_only: true`, so that write needs a mounted volume; without one, every
+upload returns `503 {code:"submission_storage_unavailable"}`. (Before ABS-87
+the router `mkdir`'d its storage root at app construction and the whole
+container failed to boot — that's the ABS-70 / v0.8.4 incident.)
+
+Two moving parts, both mirrored in the repo's `docker-compose.production.yml`:
+
+* a `bylaw_submissions` named volume mounted at `/var/lib/bylaw/submissions`
+  on the `advisor` service;
+* `SUBMISSION_STORAGE_DIR=/var/lib/bylaw/submissions` in `/srv/bylaw/.env`.
+
+**One-time rollout on a running deployment:**
+
+```bash
+# 1. Add the volume mount + env var to the server's compose file to match
+#    docker-compose.production.yml (advisor service: `volumes:` entry;
+#    file bottom: the `bylaw-submissions` volume with `name: bylaw_submissions`).
+ssh bylaw-prod "vi /srv/bylaw/docker-compose.yml"
+
+# 2. Point the app at the mount.
+ssh bylaw-prod "echo 'SUBMISSION_STORAGE_DIR=/var/lib/bylaw/submissions' >> /srv/bylaw/.env"
+
+# 3. Recreate the advisor. Docker creates the named volume on first use,
+#    owned by root — the container runs as UID 1000 and cannot write to it
+#    until it's chowned, so do that before declaring victory.
+ssh bylaw-prod "cd /srv/bylaw && docker compose up -d advisor"
+ssh bylaw-prod "docker run --rm -v bylaw_submissions:/mnt alpine chown -R 1000:1000 /mnt"
+
+# 4. Verify — this is the check that would have caught the gap pre-deploy.
+ssh bylaw-prod "curl -s localhost:8000/healthz" | jq .checks.submission_storage
+# → "ok"   (a missing/unwritable mount reports "unwritable")
+```
+
+`checks.submission_storage` is deliberately **not** fatal to `/healthz` —
+`status` stays `ok` and the endpoint stays 200, because the availability
+monitor pages on a non-200 and a degraded upload feature shouldn't take the
+chat product out of rotation. Read the field, don't rely on the status code.
+
+**Backups: the volume is intentionally out of the backup story.** Uploaded
+artefacts are reproducible inputs, not system of record — the extracted
+attributes, overrides, approval decisions and audit trail are all in Postgres,
+and nothing re-reads the file after ingest. The nightly `pg_dump` therefore
+remains a complete backup; losing this volume costs an architect a re-upload
+and nothing else. Revisit if a feature ever re-parses the original artefact
+(e.g. re-running an improved extractor over historical submissions).
 
 ### Enabling / disabling a report SKU (ABS-384)
 
@@ -273,6 +366,32 @@ ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor ale
 
 # Verify current revision
 ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor alembic current"
+```
+
+### Data migrations (corpus repairs)
+
+Some migrations repair *content*, not shape — `0027_permission_grid_backfill`
+materializes the blank permission-matrix cells the PDF parser drops
+([ABS-520](ABS-520-RAGGED-PERMISSION-GRID.md)). They ride in the same
+`alembic upgrade head` for one reason: ABS-520's repair shipped as code plus a
+hand-run script, the script was only ever run against dev, and production spent
+a release cycle telling users a prohibition "could not be extracted" while every
+test stayed green. A repair with no delivery mechanism is not deployed.
+
+Two things behave differently for them:
+
+* **`--sql` shows nothing.** The statements depend on what the corpus geometry
+  says, so a data migration cannot be rendered offline. It logs a warning under
+  `alembic upgrade head --sql` and does its work only against a live database.
+* **They are corpus-sized, not row-sized.** Read the summary line the migration
+  logs (`filled=… refused=…`) rather than assuming success — the refused count
+  is real extraction debt that stays `unknown` on purpose.
+
+Verify a corpus repair after the upgrade:
+
+```bash
+ssh bylaw-prod "docker compose -f /srv/bylaw/docker-compose.yml exec advisor \
+  python scripts/verify_permission_grid_integrity.py --zone ER-2"
 ```
 
 ### Expand/contract discipline
@@ -340,15 +459,37 @@ See the commit `[advisor] Fix session-detail 404 caused by user_id format mismat
 
 Adding a single `external_dataset` (e.g. a new geo layer) doesn't need the full-reload sledgehammer. Use `psql \COPY (SELECT … WHERE external_dataset_id = N)` to scope the dump to just the new rows, then `\COPY … FROM` to insert on prod. After insert, re-derive the PostGIS `geometry` column with `UPDATE … SET geometry = ST_GeomFromGeoJSON(geometry_geojson::text)` — mirroring migration 0009's pattern. The two user/billing rules above still apply (a surgical insert never overwrites; a TRUNCATE-and-replace on `external_dataset_feature` would, so don't).
 
-### Backups (manual, ~no automation yet)
+### Backups (automated — ABS-131)
+
+Nightly at 02:30 the host dumps `layer1`, verifies the archive is readable
+and carries the four system-of-record tables, encrypts it, rotates it
+through 7 daily + 4 weekly slots, and mirrors that set to a Hetzner
+Storage Box. At 04:00 on Sundays it restores the newest artifact into a
+throwaway Postgres and counts rows, so a week of silently corrupt dumps
+surfaces within seven days instead of during an outage.
+
+Full runbook — Storage Box setup, the passphrase, the restore procedure —
+in **[PROD_DB_BACKUP.md](PROD_DB_BACKUP.md)**. The short version:
 
 ```bash
-# Run on the server
-docker compose -f /srv/bylaw/docker-compose.yml exec -T postgres \
-  pg_dump -U layer1 layer1 | gzip > /srv/bylaw/backups/layer1-$(date +%F).sql.gz
+# Check on it
+tail -n 40 /srv/bylaw/backups/backup.log
+/srv/bylaw/scripts/verify-prod-backup.sh            # fast archive check
+
+# Take an extra dump by hand before a risky migration. Name it outside the
+# rotation patterns so the prune never touches it.
+set -a; . /srv/bylaw/backup.env; set +a
+docker exec -i bylaw-postgres pg_dump -U layer1 -d layer1 -Fc \
+  > /srv/bylaw/backups/layer1-prod-pre-migration-$(date +%F).dump.manual
 ```
 
-Tracked as a deploy follow-up: schedule this in cron and ship to a Hetzner Storage Box. For now, run by hand before risky migrations.
+The gpg passphrase lives in `/srv/bylaw/backup.pass` **and** in the
+operator's password manager. If it only ever lived on the server, the
+offsite copies are unreadable the day the server dies.
+
+This dump is the *complete* backup. The only other stateful volume,
+`bylaw_submissions` (uploaded IFC/PDF artefacts), is deliberately excluded —
+see [Submission artefact storage](#submission-artefact-storage-abs-87) for why.
 
 ### Running ops scripts
 
@@ -580,7 +721,7 @@ The shared-password gate is enabled whenever Clerk isn't configured — includin
 ## Open follow-ups
 
 1. **Move production `docker-compose.yml` into the repo** (perhaps as `compose.prod.yml`) so server config is also version-controlled.
-2. **Automate backups** — cron + Hetzner Storage Box upload, encrypted with `age` or `gpg`.
+2. **Automate backups** — DONE (ABS-131). Cron + verification + gpg + Hetzner Storage Box mirror; see [PROD_DB_BACKUP.md](PROD_DB_BACKUP.md).
 3. **Switch to real Clerk auth** — DONE. Live at `pk_test_` dev instance (`stunning-goshawk-55.clerk.accounts.dev`). Flip to a Production instance before public launch (no code work — same env-var swap as the runbook).
 
 ### Invite-only access flow

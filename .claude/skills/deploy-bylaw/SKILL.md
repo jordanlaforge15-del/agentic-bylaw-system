@@ -39,6 +39,7 @@ This skill assumes the caller has already:
 
 1. Merged all intended work into `main` via the promotion gate.
 2. Tagged the promotion commit with `vX.Y.Z` and pushed the tag (`git push origin vX.Y.Z`).
+3. Cleared the **golden-case deploy gate** — `evals/golden/golden_cases.json` declares that a production deploy requires every entry to be attested by a qualified human and to grade GOLDEN_PASS (ABS-485).
 
 If called from `test-and-deploy-bylaw`, both preconditions are guaranteed by Steps 7.3–7.4 of that skill. If called directly, verify:
 
@@ -46,9 +47,16 @@ If called from `test-and-deploy-bylaw`, both preconditions are guaranteed by Ste
 git rev-parse --abbrev-ref HEAD   # must be main
 git status --porcelain             # must be empty
 git describe --tags --exact-match  # must return a vX.Y.Z tag
+python scripts/check_deploy_gate.py  # must exit 0 — the golden-case gate
 ```
 
-Halt if any check fails. Do not build from an untagged or dirty state.
+Halt if any check fails. Do not build from an untagged or dirty state, and do not build past a held gate.
+
+`check_deploy_gate.py` exits **0** open, **1** held (do not promote), **2** could not be evaluated — which is also not a pass. Its output names why: `unattested` means no qualified human has recorded the correct answer yet, `graded_failing` means the advisor gave a different answer than one did. The procedure for opening it is [evals/golden/README.md](../../../evals/golden/README.md) § "Filling in an attestation", performed by a human.
+
+> **The gate is held today (0/6 attested).** That is the designed behaviour. Never author, draft, or backfill an attestation to clear it — a model-authored attestation is not evidence and destroys the only non-model ground truth the project has. If the user wants to ship past a held gate, that is their explicit call: surface the hold and ask.
+
+`test-and-deploy-bylaw` Step 7.0 runs this same check before promoting, and the `golden-gate` job in `.github/workflows/ci.yml` is a `needs` of both image builds. This precondition is the third, independent place it is enforced — for the case where this skill is invoked directly.
 
 ---
 

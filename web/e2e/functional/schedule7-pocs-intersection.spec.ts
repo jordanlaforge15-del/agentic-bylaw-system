@@ -12,11 +12,12 @@
 // This spec proves the ingested POCS layer is spatially queryable on the real
 // Postgres/PostGIS stack:
 //
-//   beforeAll  -> scripts/seed_e2e_pocs.py ingests the POCS dataset (a
+//   beforeAll  -> scripts/seed_e2e_rclub_unified.py (ABS-433) ingests the
+//                 unified RC-LUB corpus, including the POCS dataset (a
 //                 Quinpool Road segment + a control Gottingen Street segment)
 //                 through ingest_geo_dataset — populating the PostGIS
 //                 `geometry` column, not just geometry_geojson — links it to
-//                 the Regional Centre LUB "Schedule 7" fragment, and seeds
+//                 the unified document's "Schedule 7" fragment, and seeds
 //                 geocode-cache rows for "6184 Quinpool Road" (~10 m off the
 //                 centreline) and a far-away "500 Nowhere Road" control.
 //   probe      -> scripts/inspect_pocs_intersection.py resolves the address
@@ -35,6 +36,7 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { expect, test } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 
 type ProbeResult = {
@@ -59,10 +61,7 @@ function venvPython(): string {
 function scriptEnv(): NodeJS.ProcessEnv {
   // ABS-207: honor PG_PORT so the parallel-worktree case lands in the right
   // Postgres; fall back to the standard layer1_test URL otherwise.
-  const pgPort = process.env.PG_PORT || "5432";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   return {
     ...process.env,
     DATABASE_URL: databaseUrl,
@@ -72,7 +71,7 @@ function scriptEnv(): NodeJS.ProcessEnv {
 
 
 function runSeed(): void {
-  const seed = path.join(repoRoot(), "scripts", "seed_e2e_pocs.py");
+  const seed = path.join(repoRoot(), "scripts", "seed_e2e_rclub_unified.py");
   execSync(`"${venvPython()}" "${seed}"`, { env: scriptEnv(), stdio: "inherit" });
 }
 

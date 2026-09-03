@@ -6,9 +6,6 @@ hand-crafted three-feature fixture so we catch:
 
 * idempotency — re-running picks up existing parcels and updates FKs
   instead of inserting duplicates.
-* zone-code lookup — the parcel's centroid is intersected against
-  the synthetic zoning polygon and the resulting zone_code lands on
-  the parcel row.
 * unmatched / bad-geometry features — the script logs them in stats
   without crashing the run.
 * dry-run mode — computes stats but writes nothing.
@@ -42,7 +39,10 @@ _spec.loader.exec_module(_backfill_mod)
 
 HALIFAX_JURISDICTION = _backfill_mod.HALIFAX_JURISDICTION
 HALIFAX_PARCELS_DATASET_NAME = _backfill_mod.HALIFAX_PARCELS_DATASET_NAME
-HALIFAX_ZONING_DATASET_NAME = _backfill_mod.HALIFAX_ZONING_DATASET_NAME
+# The script stopped naming the zoning dataset when ABS-481 removed
+# ``parcel.zone_code``; the fixtures still seed one so we prove the
+# backfill ignores unrelated datasets rather than scanning them.
+HALIFAX_ZONING_DATASET_NAME = "halifax_zoning_boundaries"
 backfill = _backfill_mod.backfill
 
 
@@ -75,6 +75,11 @@ def _seed(session) -> dict:
     Parcel A and B sit inside it; parcel C has a missing identifier.
     Feature D has malformed geometry so we exercise the bad-geometry
     branch.
+
+    The zoning dataset is kept in the fixture after ABS-481 dropped
+    ``parcel.zone_code``: the backfill must now ignore it entirely
+    rather than scan it, and a co-resident second dataset is exactly
+    what would surface a regression there.
     """
     parcels_dataset = ExternalDataset(
         name=HALIFAX_PARCELS_DATASET_NAME,
@@ -198,12 +203,10 @@ def test_backfill_inserts_parcels_and_links_features(tmp_path: Path) -> None:
     assert stats.missing_identifier == 1
     assert stats.bad_geometry == 1
     assert stats.unmatched_features == 2
-    assert stats.zone_lookups_successful == 2
 
     with session_scope(db_url) as session:
         parcels = session.execute(select(Parcel).order_by(Parcel.parcel_identifier)).scalars().all()
         assert [p.parcel_identifier for p in parcels] == ["00099101", "00099102"]
-        assert {p.zone_code for p in parcels} == {"ER-1"}
         for parcel in parcels:
             assert parcel.jurisdiction == HALIFAX_JURISDICTION
             assert parcel.area_m2 is not None and float(parcel.area_m2) > 0

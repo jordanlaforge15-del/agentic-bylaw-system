@@ -1,0 +1,58 @@
+# HRM's authoritative civic-address register — ABS-469 tier 3.
+#
+# NOT INGESTED YET, ON PURPOSE. This config is the finished half of the tier-3
+# investigation: the layer exists, is reachable, and this is how it maps. Two
+# things in src/layer2/retrieval/geocode.py must be fixed before ingesting it,
+# because that module resolves a civic address by loading EVERY feature of
+# every role=civic_address dataset into Python and comparing street names that
+# include their suffix:
+#
+#   1. _find_by_civic_address / _find_by_parcel_id need the SQL-side street
+#      filter layer2.retrieval.civic_address._features_on_street uses. 158,523
+#      points is unusable on the per-question path otherwise.
+#   2. They compare normalize_street(street_name) against "robie st". HRM
+#      splits the name and the type (STR_NAME "ROBIE" + STR_TYPE "ST"), so the
+#      resolver has to compare the split form — the ABS-469 verifier already
+#      does.
+#
+# Ingesting this also makes the in-database resolver, rather than Google, the
+# source of every civic-address point: a corpus-wide behaviour change that
+# wants its own issue and its own before/after measurement. Rationale and the
+# spot-checks that established the layer's contents:
+# docs/ABS-469-CIVIC-ADDRESS-RESOLUTION.md.
+name: halifax_civic_addresses
+publisher: Halifax Regional Municipality
+format: geojson
+# 158,523 point features. HRM describes this layer as "the source of civic
+# address information for internal and external service providers such as
+# NSPI, E-911, Property Online and NSCAF" — presence or absence of a row here
+# is a municipal fact about whether an address exists, not an inference from a
+# street's published address ranges. maxRecordCount is 2000; the ingest
+# pipeline pages transparently. outSR=4326 avoids a client-side reproject.
+source_url: https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/CivicAddresses/FeatureServer/0/query?where=CIV_NUM%3E0&outFields=*&outSR=4326&f=geojson
+crs: EPSG:4326
+
+# role=civic_address is what the geocoder (and the ABS-469 verifier) look for.
+# Base geography rather than a bylaw schedule, so links_to is omitted.
+role: civic_address
+
+attributes:
+  # CIV_ID is HRM's per-address identifier and survives full reloads of the
+  # layer; OBJECTID does not, which would break feature_key idempotency.
+  feature_key: CIV_ID
+  canonical:
+    # CIV_NUM is published as an integer; the canonical vocabulary carries
+    # civic numbers as strings because civic numbers are not arithmetic.
+    civic_number: { from: CIV_NUM, type: string }
+    # Name and type stay separate, exactly as HRM publishes them: Jubilee
+    # Road, Jubilee Court and Jubilee Lane are different streets with
+    # different numbering.
+    street_name: { from: STR_NAME, type: string }
+    street_type: { from: STR_TYPE, type: string, optional: true }
+    # The PID is what makes this layer worth more than a point: it links an
+    # address straight to the parcel fabric (dataset halifax_property_parcels)
+    # without a spatial join or a geocoder.
+    parcel_id: { from: PID, type: string, optional: true }
+  ignore:
+    - OBJECTID
+    - GLOBALID

@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
@@ -20,6 +21,7 @@ from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
+from layer1.db.geometry import postgis_geometry_type
 from layer1.models.enums import (
     BlockType,
     FragmentType,
@@ -56,6 +58,13 @@ class Document(Base):
     page_count: Mapped[int | None] = mapped_column(Integer)
     ingestion_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     parser_version: Mapped[str | None] = mapped_column(String(255))
+    # Opt-in publish gate for the retrieval API (ABS-413). Ingestion never
+    # sets this; an operator enables documents explicitly (layer1 CLI
+    # enable-retrieval / disable-retrieval). Retrieval scoping is the set of
+    # enabled documents — nothing is derived from ingestion recency.
+    retrieval_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default=false()
+    )
 
     runs: Mapped[list["IngestionRun"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     page_blocks: Mapped[list["PageBlock"]] = relationship(back_populates="document", cascade="all, delete-orphan")
@@ -355,6 +364,17 @@ class ExternalDatasetFeature(Base):
     canonical_attributes_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
     geometry_geojson: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
     geometry_bbox_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
+    # The authoritative spatial column (ABS-491). Added by migration
+    # 0009_postgis_spatial_index and, until now, invisible to the ORM —
+    # which is how three separate raw-SQL writers ended up maintaining it
+    # independently. It is a denormalization of ``geometry_geojson``:
+    # derive it only through ``layer1.db.geometry.sync_feature_geometry``,
+    # never by assigning this attribute. Deferred because the WKB payload
+    # dwarfs the rest of the row (11k Halifax polygons) and no ORM read
+    # path wants it — the spatial hot path queries it in SQL, by index.
+    geometry: Mapped[object | None] = mapped_column(
+        postgis_geometry_type(), deferred=True
+    )
     parse_status: Mapped[ParseStatus] = mapped_column(SAEnum(ParseStatus), nullable=False)
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
     # Phase-1 link to the cadastral parcel this feature corresponds to,
@@ -424,6 +444,13 @@ class Parcel(Base):
     geometry column added by ``0009_postgis_spatial_index``) already
     cover the indexed-lookup hot path, so we don't need a duplicate
     geometry column here in Phase 1.
+
+    Zoning is deliberately *not* denormalised onto this table. A
+    ``zone_code`` column lived here until ABS-481: the backfill wrote it
+    by intersecting zone polygons and nothing ever read it back, so it
+    was a stale-able copy with no refresh contract. The zone of record is
+    the intersecting zoning ``external_dataset_feature``'s
+    ``canonical_attributes_json['zone_code']``.
     """
 
     __tablename__ = "parcel"
@@ -439,11 +466,6 @@ class Parcel(Base):
     geometry_geojson: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(json_type()))
     centroid_geojson: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(json_type()))
     area_m2: Mapped[float | None] = mapped_column(Numeric(14, 2))
-    # ``zone_code`` is a denormalised convenience for the evaluator's
-    # zone-applicability filter. Source of truth remains the linked
-    # zoning ``external_dataset_feature``; this column is populated by
-    # the parcel backfill from intersecting zone polygons.
-    zone_code: Mapped[str | None] = mapped_column(String(64), index=True)
     metadata_json: Mapped[dict] = mapped_column(MutableDict.as_mutable(json_type()), default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

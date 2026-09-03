@@ -12,6 +12,12 @@
 
 import { expect, test } from "../fixtures/test-env";
 import type { Page } from "@playwright/test";
+import {
+  CHAT_MIN_BALANCE,
+  LOW_BALANCE_WARN,
+  TOKENS_PER_TURN,
+  turnsToTokens,
+} from "../fixtures/wallet-params";
 
 type Wallet = {
   balance_tokens: number;
@@ -24,14 +30,19 @@ type Wallet = {
   payments_enabled: boolean;
 };
 
+// Stubbed wallet payloads. `balance_tokens` is DERIVED from the turn count
+// rather than hardcoded (ABS-416): a stub that pairs a turn count with a
+// token balance the backend's own conversion would never produce is a stub
+// that can stay green through a broken recalibration.
 function wallet(overrides: Partial<Wallet>): Wallet {
+  const turns = overrides.approx_turns_remaining ?? 12;
   return {
-    balance_tokens: 30_000,
-    approx_turns_remaining: 12,
-    tokens_per_turn: 2_500,
+    balance_tokens: turnsToTokens(turns),
+    approx_turns_remaining: turns,
+    tokens_per_turn: TOKENS_PER_TURN,
     low_balance: false,
-    warn_threshold_tokens: 5_000,
-    floor_tokens: 0,
+    warn_threshold_tokens: LOW_BALANCE_WARN,
+    floor_tokens: CHAT_MIN_BALANCE,
     chat_enabled: true,
     payments_enabled: false,
     ...overrides,
@@ -69,7 +80,7 @@ test("low (payments off): brick alarm + running-low notice, no top-up ghost", as
 }) => {
   await stubWallet(
     page,
-    wallet({ approx_turns_remaining: 2, low_balance: true, balance_tokens: 4_000 }),
+    wallet({ approx_turns_remaining: 2, low_balance: true }),
   );
   await page.goto("/cases/new");
 
@@ -93,7 +104,7 @@ test("empty (payments off): 0 turns + used-up notice, no ghost, CTA usable", asy
 }) => {
   await stubWallet(
     page,
-    wallet({ approx_turns_remaining: 0, low_balance: true, balance_tokens: 0 }),
+    wallet({ approx_turns_remaining: 0, low_balance: true }),
   );
   await page.goto("/cases/new");
 
@@ -104,8 +115,10 @@ test("empty (payments off): 0 turns + used-up notice, no ghost, CTA usable", asy
   );
   await expect(page.getByTestId("top-up-turns-btn")).toHaveCount(0);
 
-  // Free CTA works in every state: enabled once an anchor is present.
+  // Free CTA works in every state: enabled once the form is complete
+  // (ABS-450 — anchor *and* question).
   await page.getByPlaceholder(/1234 Main St, Halifax/).fill("500 Test Ave");
+  await page.getByPlaceholder(/Ask your question/).fill("Can I add a unit?");
   await expect(page.getByTestId("start-conversation-btn")).toBeEnabled();
 });
 
@@ -117,7 +130,6 @@ test("empty (payments on): out-of-turns notice with a top-up ghost to billing", 
     wallet({
       approx_turns_remaining: 0,
       low_balance: true,
-      balance_tokens: 0,
       payments_enabled: true,
     }),
   );
@@ -138,7 +150,6 @@ test("low (payments on): running-low notice draws on last turns, top-up ghost", 
     wallet({
       approx_turns_remaining: 1,
       low_balance: true,
-      balance_tokens: 2_500,
       payments_enabled: true,
     }),
   );

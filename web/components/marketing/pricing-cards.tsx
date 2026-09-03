@@ -27,6 +27,7 @@ import {
   type TopupCatalogResponse,
   type TopupOption,
 } from "@/lib/cases";
+import { TURN_APPROX_LONG } from "@/lib/turn-copy";
 
 // Real support address (not the mockup placeholder).
 const SUPPORT_EMAIL = "info@agenticbylawsystems.com";
@@ -90,7 +91,7 @@ export function PricingCards() {
 
       {/* 4-up: inverted TrialCard + three TopUpCards. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-3.5">
-        <TrialCard />
+        <TrialCard approxTurns={topups.signup_grant_approx_turns} />
         {topups.options.map((opt) => (
           <TopUpCard
             key={opt.sku}
@@ -146,7 +147,12 @@ const TRIAL_FEATURES = [
   "No card required to start",
 ];
 
-function TrialCard() {
+// `approxTurns` is the backend's own floor(signup grant / tokens_per_turn)
+// off GET /api/billing/topups — never a hardcoded count and never divided
+// client-side (design spec D6). ABS-416: this card advertised "~10 turns"
+// against a grant that covered under a quarter of one real question.
+function TrialCard({ approxTurns }: { approxTurns: number }) {
+  const turnWord = approxTurns === 1 ? "turn" : "turns";
   return (
     <div
       className="bg-surface-ink text-surface border-[1.5px] border-surface-ink p-5 flex flex-col gap-4 min-h-[300px]"
@@ -156,8 +162,11 @@ function TrialCard() {
         <span className="font-mono uppercase text-[10px] tracking-[0.14em] opacity-70">
           ON SIGNUP
         </span>
-        <span className="font-mono uppercase text-[10px] tracking-[0.14em] opacity-70">
-          ~10 turns
+        <span
+          data-testid="trial-card-turns"
+          className="font-mono uppercase text-[10px] tracking-[0.14em] opacity-70"
+        >
+          ~{approxTurns} {turnWord}
         </span>
       </div>
       <div>
@@ -241,8 +250,7 @@ function TopUpCard({
         </div>
       </div>
       <div className="flex-1 text-[12.5px] text-text-muted leading-[1.5]">
-        Turn counts are approximate — a longer, more complex reply draws more
-        from your balance than a short one.
+        {TURN_APPROX_LONG}
       </div>
       <TopUpButton
         sku={option.sku}

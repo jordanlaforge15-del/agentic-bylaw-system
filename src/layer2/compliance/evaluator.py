@@ -110,7 +110,8 @@ class DocumentFilters:
     re-use shapes they already build for retrieval. Each is optional;
     when None, the evaluator queries the union of all ingested
     bylaws (subject to whatever default the retrieval service is
-    configured with — e.g. ``--latest-only``).
+    configured with — in deployments, the set of retrieval-enabled
+    documents).
     """
 
     municipality: str | None = None
@@ -353,6 +354,9 @@ class EvaluatorService:
         taxonomy: Taxonomy | None = None,
     ) -> None:
         self.session = session
+        # Unscoped fallback by design (ABS-413): production paths inject a
+        # RetrievalService already scoped to retrieval-enabled documents;
+        # this default only serves tests/scripts operating on a raw session.
         self.retrieval = retrieval_service or RetrievalService(session)
         self.extractor = constraint_extractor or RegexConstraintExtractor()
         self.taxonomy = taxonomy or load_taxonomy()

@@ -2,32 +2,60 @@
 // token wallet is at or below the floor (ABS-386). Replaces the retired
 // CaseUpgradePrompt (the tier/credit machinery is gone).
 //
-// Two postures, matching the /cases/new empty-notice variants:
+// Three postures:
 //
 //   * payments ON  → a purchase CTA that starts a top-up checkout
 //     (POST /api/billing/checkout/topup → Stripe URL, MockStripe in e2e) and
 //     redirects. On return, the /app mount refetches the wallet and the
 //     composer re-enables.
-//   * payments OFF → a kind dead-end: no purchase CTA, reassurance that the
-//     case and its history stay saved (trial-exhausted, "coming soon").
+//   * payments OFF, refill available (ABS-405) → a self-serve claim CTA. One
+//     POST to /api/billing/wallet/refill credits a capped, cooldown-gated
+//     grant and hands back the post-claim wallet, so the composer re-enables
+//     in place with no reload and no support ticket. This is the whole point
+//     of the feature: before it, an overdrawn beta tester's only way back
+//     into chat was an operator running grant_tokens by hand.
+//   * payments OFF, no refill (cooldown / cap spent / feature off) → a kind
+//     dead-end: no CTA, reassurance that the case and its history stay
+//     saved. On cooldown we say *when* more turns unlock rather than a bare
+//     "no", so the user knows to come back instead of emailing support.
 //
 // Copy is turns-based ("You're out of turns…") — never token counts, never
 // tier vocabulary. Attention uses the BRICK colour + alarm glyph (never
-// colour alone); the lime ACCENT is reserved for the positive top-up action.
+// colour alone); the lime ACCENT is reserved for the positive actions
+// (top up, claim a refill).
 
 "use client";
 
 import { useState } from "react";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
+import {
+  BetaRefillClaim,
+  refillTurnsLabel,
+  refillUnlockLabel,
+} from "@/components/product/beta-refill";
+import type { BetaRefillState, WalletResponse } from "@/lib/cases";
 
 type Props = {
   paymentsEnabled: boolean;
   /** Default top-up SKU to start checkout with. */
   sku?: string;
+  /**
+   * ABS-405 refill availability, straight off the wallet read. Undefined
+   * when the backend predates the feature — treated as "no refill", which
+   * lands on the original dead-end copy.
+   */
+  betaRefill?: BetaRefillState;
+  /** Called with the post-claim wallet so the shell re-enables the composer. */
+  onRefilled?: (wallet: WalletResponse) => void;
 };
 
-export function TopUpPrompt({ paymentsEnabled, sku = "small" }: Props) {
+export function TopUpPrompt({
+  paymentsEnabled,
+  sku = "small",
+  betaRefill,
+  onRefilled,
+}: Props) {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +85,12 @@ export function TopUpPrompt({ paymentsEnabled, sku = "small" }: Props) {
       setWorking(false);
     }
   }
+
+  const refillAvailable = !paymentsEnabled && betaRefill?.available === true;
+  const cooldownUntil =
+    !paymentsEnabled && betaRefill?.status === "cooldown"
+      ? refillUnlockLabel(betaRefill.next_available_at)
+      : null;
 
   return (
     <div
@@ -97,12 +131,22 @@ export function TopUpPrompt({ paymentsEnabled, sku = "small" }: Props) {
             </div>
           )}
         </>
+      ) : refillAvailable && betaRefill ? (
+        <>
+          <div className="text-[14px]" data-testid="beta-refill-offer">
+            You&rsquo;re out of turns. Paid top-ups are coming soon — until
+            then you can add {refillTurnsLabel(betaRefill)} to this account
+            yourself.
+          </div>
+          <BetaRefillClaim onRefilled={(w) => onRefilled?.(w)} />
+        </>
       ) : (
         <div
           className="text-[12.5px] text-text-muted max-w-[440px]"
           data-testid="top-up-deadend"
         >
-          You&rsquo;re out of turns for now — paid top-ups are coming soon. Your
+          You&rsquo;re out of turns for now — paid top-ups are coming soon.
+          {cooldownUntil ? ` More turns unlock ${cooldownUntil}.` : ""} Your
           case and its full history stay saved, so you can pick up right where
           you left off.
         </div>

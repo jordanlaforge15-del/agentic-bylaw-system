@@ -1,14 +1,14 @@
 [
   {
     "id": "TC-001",
-    "title": "Homeowner rear deck addition in ER-1",
+    "title": "Homeowner rear deck addition in HR-1 (user misstates the zone as ER-1)",
     "persona": {
       "type": "homeowner",
       "subtype": null,
       "description": "Retired homeowner planning a modest backyard deck"
     },
-    "address": "1234 Oxford Street, Halifax, NS",
-    "zone": "ER-1",
+    "address": "1222 Robie Street, Halifax, NS",
+    "zone": "HR-1",
     "complexity": "simple",
     "liability": "low",
     "tags": [
@@ -26,7 +26,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hi, I own a home at 1234 Oxford Street in Halifax \u2014 it\u2019s in the ER-1 zone. I want to build an attached wooden deck off the back of my house. My plan puts the deck edge about 4 metres from my rear property line. Do I need a development permit for this, and is 4 metres enough clearance from the rear lot line?"
+        "message": "Hi, I own a home at 1222 Robie Street in Halifax \u2014 it\u2019s in the ER-1 zone. I want to build an attached wooden deck off the back of my house. My plan puts the deck edge about 4 metres from my rear property line. Do I need a development permit for this, and is 4 metres enough clearance from the rear lot line?"
       },
       {
         "turn": 2,
@@ -35,14 +35,14 @@
       }
     ],
     "expected_bylaw_references": [
-      "Table 3",
-      "Section 9(a)",
-      "Section 9(d)"
+      "Section 9(1)(c)",
+      "Section 198",
+      "Section 199"
     ],
     "expected_answer_keywords": [
       "HR-1",
-      "6.0 m",
       "3.0 m",
+      "2.5 m",
       "0.6 m",
       "rear setback",
       "side setback"
@@ -52,26 +52,37 @@
       "side_setback",
       "development_permit_exemption"
     ],
-    "notes": "Tests basic dimensional lookups (rear + side setback) plus permit exemption. Single-parameter complexity. Low construction cost."
+    "notes": "Tests basic dimensional lookups (rear + side setback) plus permit exemption. Single-parameter complexity. Low construction cost. ADVERSARIAL ZONE PREMISE: the turn-1 message asserts ER-1, but 1222 Robie Street resolves at ROOFTOP into the HR-1 zone polygon (PID 00055764). The `zone` field records the real zone; the advisor is expected to correct the user's premise and apply the HR-1 setback sections (198/199), not the ER-1 ones. Do not \"fix\" the turn text to say HR-1 -- the misstatement is the test. (ABS-463; address re-derived from the zone under ABS-467, which also sharpens the premise: ER-1 is not mapped anywhere in the Regional Centre schedule, so the zone the user names does not exist on the ground.) SETBACK BRANCH RE-DERIVED (ABS-470): in the HR chapter s.198 is the SIDE setback and s.199 is the REAR setback -- not the reverse. Both are branched on what the lot abuts, and 1222 Robie abuts no ER, CH, PCF or RPK lot (nearest ER-2 polygon 57 m away, nearest PCF 75 m), so the operative clauses are s.199(1)(b) rear = 3.0 m and s.198(1)(f) side = 2.5 m. The keywords previously expected `6.0 m` (s.199(1)(a), the abutting-ER branch, which does not apply here) and `3.0 m` for the side yard (s.198(1)(b)(ii), which applies only to a townhouse dwelling use), so a correct answer to turn 2 graded as a miss. `0.6 m` is s.9(1)(c) -- uncovered structures under 0.6 m are permit-exempt -- and stays.",
+    "address_resolution": {
+      "resolved_zone": "HR-1",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00055764",
+      "registered_civics": [
+        "1222 Robie Street, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-002",
-    "title": "Homeowner secondary suite legality in ER-2",
+    "title": "Homeowner two-unit dwelling legality in ER-2",
     "persona": {
       "type": "homeowner",
       "subtype": null,
       "description": "Young couple exploring income suite to offset mortgage"
     },
-    "address": "567 Windsor Street, Halifax, NS",
+    "address": "65 Wentworth Street, Dartmouth, NS",
     "zone": "ER-2",
     "complexity": "simple",
     "liability": "low",
     "tags": [
       "renovation",
       "residential",
-      "secondary_suite",
+      "two_unit_dwelling",
       "permitted_use",
-      "accessory_dwelling"
+      "internal_conversion"
     ],
     "bylaw_features": [
       "use_permission",
@@ -81,28 +92,30 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "We\u2019re on Windsor Street in Halifax in the ER-2 zone. We\u2019re thinking of converting our basement into a secondary suite to rent out. Is a secondary suite a permitted use in ER-2?"
+        "message": "We\u2019re at 65 Wentworth Street in Dartmouth, in the ER-2 zone. We\u2019re thinking of converting our basement into a second self-contained dwelling unit to rent out \u2014 so the house would become a two-unit dwelling. Is that a permitted use in ER-2?"
       },
       {
         "turn": 2,
         "role": "user",
-        "message": "Perfect. Can we also run a small home-based tutoring business from the house at the same time as having the secondary suite, or does that create any issue under the bylaw?"
+        "message": "Perfect. Can we also run a small home-based tutoring business from the house at the same time as having the second unit, or does that create any issue under the bylaw?"
       },
       {
         "turn": 3,
         "role": "user",
-        "message": "One more thing \u2014 would adding the suite change our setback requirements at all, or do the existing ER-2 setback standards still apply?"
+        "message": "One more thing \u2014 would adding the second unit change our setback requirements at all, or do the existing ER-2 setback standards still apply?"
       }
     ],
     "expected_bylaw_references": [
-      "Table 1A",
+      "Table 1B",
       "Section 49",
-      "Table 3"
+      "Section 51",
+      "Section 229",
+      "Section 230"
     ],
     "expected_answer_keywords": [
       "ER-2",
       "two-unit dwelling",
-      "secondary suite",
+      "Table 1B",
       "permitted"
     ],
     "expected_topics": [
@@ -110,7 +123,18 @@
       "combination_of_uses",
       "setbacks"
     ],
-    "notes": "Tests use permission lookup, combination-of-uses provision, and baseline setback standards. Three turns escalating breadth."
+    "notes": "Tests use permission lookup, combination-of-uses provision, and baseline setback standards. Three turns escalating breadth. TERMINOLOGY CORRECTED (ABS-470): the case previously asked about a \"secondary suite\" and graded on that phrase. `secondary suite` is not a use anywhere in the Regional Centre Land Use By-Law -- the string does not occur once in the ingest, `lookup_citation` answers `unknown_use` for it, and Table 1B's residential rows carry `Two-unit dwelling use` and `Backyard suite use` instead. A converted basement unit inside the existing house is a two-unit dwelling use (Table 1B, ER-2 column, footnotes 6, 14, 15); a backyard suite is the detached rear-yard form and is a different row. The turns and keywords now use the by-law's own term so a correct answer is gradeable and the citation lookup resolves.",
+    "address_resolution": {
+      "resolved_zone": "ER-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00109439",
+      "registered_civics": [
+        "65 Wentworth Street, Dartmouth, NS"
+      ]
+    }
   },
   {
     "id": "TC-003",
@@ -120,7 +144,7 @@
       "subtype": null,
       "description": "Property owner looking to convert a larger home into a duplex or triplex"
     },
-    "address": "89 Jubilee Road, Halifax, NS",
+    "address": "6457 Jubilee Road, Halifax, NS",
     "zone": "ER-3",
     "complexity": "medium",
     "liability": "medium",
@@ -142,7 +166,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I have a large older home on Jubilee Road in the ER-3 zone in Halifax. I\u2019m thinking of converting it into a three-unit building \u2014 two upper units and a ground floor unit. Is a multi-unit dwelling permitted in ER-3?"
+        "message": "I have a large older home at 6457 Jubilee Road in the ER-3 zone in Halifax. I\u2019m thinking of converting it into a three-unit building \u2014 two upper units and a ground floor unit. Is a multi-unit dwelling permitted in ER-3?"
       },
       {
         "turn": 2,
@@ -161,10 +185,13 @@
       }
     ],
     "expected_bylaw_references": [
-      "Table 1A",
-      "Table 3",
-      "Table 5",
-      "Section 9"
+      "Table 1B",
+      "Section 63",
+      "Section 227",
+      "Section 229",
+      "Section 230",
+      "Section 231",
+      "Schedule 15"
     ],
     "expected_answer_keywords": [
       "ER-3",
@@ -179,7 +206,18 @@
       "height",
       "development_permit"
     ],
-    "notes": "Medium complexity: four distinct parameters across four turns. Construction risk is moderate (structural conversion + dormer)."
+    "notes": "Medium complexity: four distinct parameters across four turns. Construction risk is moderate (structural conversion + dormer).",
+    "address_resolution": {
+      "resolved_zone": "ER-3",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00023176",
+      "registered_civics": [
+        "6457 Jubilee Road, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-004",
@@ -189,7 +227,7 @@
       "subtype": "architect",
       "description": "Registered architect in schematic design for a mid-rise residential client"
     },
-    "address": "200 Bayers Road, Halifax, NS",
+    "address": "249 Windmill Road, Dartmouth, NS",
     "zone": "HR-1",
     "complexity": "complex",
     "liability": "high",
@@ -213,7 +251,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I\u2019m an architect working on a new mid-rise residential building at 200 Bayers Road in Halifax \u2014 the site is zoned HR-1. We\u2019re targeting a multi-unit dwelling. First pass: what are the permitted uses and key dimensional standards \u2014 height, setbacks, and lot coverage \u2014 for HR-1?"
+        "message": "I\u2019m an architect working on a new mid-rise residential building at 249 Windmill Road in Dartmouth \u2014 the site is zoned HR-1. We\u2019re targeting a multi-unit dwelling. First pass: what are the permitted uses and key dimensional standards \u2014 height, setbacks, and lot coverage \u2014 for HR-1?"
       },
       {
         "turn": 2,
@@ -238,9 +276,16 @@
     ],
     "expected_bylaw_references": [
       "Table 1A",
-      "Table 3",
-      "Table 5",
-      "Section 120"
+      "Section 196",
+      "Section 197",
+      "Section 198",
+      "Section 199",
+      "Section 204",
+      "Section 433",
+      "Table 15",
+      "Section 449",
+      "Table 16",
+      "Schedule 15"
     ],
     "expected_answer_keywords": [
       "HR-1",
@@ -257,7 +302,20 @@
       "lot_coverage",
       "parking"
     ],
-    "notes": "High complexity: five parameters, five turns, synthesis confirmation in final turn. High construction cost and public occupancy (daycare)."
+    "notes": "High complexity: five parameters, five turns, synthesis confirmation in final turn. High construction cost and public occupancy (daycare).",
+    "address_resolution": {
+      "resolved_zone": "HR-1",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "40811085",
+      "registered_civics": [
+        "249 Windmill Road, Dartmouth, NS",
+        "257 Windmill Road, Dartmouth, NS",
+        "251 Windmill Road, Dartmouth, NS"
+      ]
+    }
   },
   {
     "id": "TC-005",
@@ -267,7 +325,7 @@
       "subtype": null,
       "description": "Mid-size developer running a quick feasibility pass before purchasing a site"
     },
-    "address": "100 Robie Street, Halifax, NS",
+    "address": "10 Joseph Young Street, Dartmouth, NS",
     "zone": "HR-2",
     "complexity": "complex",
     "liability": "high",
@@ -291,7 +349,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "We\u2019re looking at a site on Robie Street zoned HR-2 for a high-rise residential development \u2014 likely 60\u201380 units. What are the base zoning standards: height, lot coverage, setbacks?"
+        "message": "We\u2019re looking at a site at 10 Joseph Young Street in Dartmouth zoned HR-2 for a high-rise residential development \u2014 likely 60\u201380 units. What are the base zoning standards: height, lot coverage, setbacks?"
       },
       {
         "turn": 2,
@@ -321,10 +379,15 @@
     ],
     "expected_bylaw_references": [
       "Table 1A",
-      "Table 3",
-      "Table 5",
-      "Section 120(a)",
-      "Section 120(b)"
+      "Section 51",
+      "Section 196",
+      "Section 197",
+      "Section 198",
+      "Section 199",
+      "Section 204",
+      "Section 433",
+      "Table 15",
+      "Schedule 15"
     ],
     "expected_answer_keywords": [
       "HR-2",
@@ -341,7 +404,18 @@
       "use_permission",
       "parking"
     ],
-    "notes": "Six-turn developer feasibility session. Tests that agent correctly identifies home occupation is NOT permitted in HR-2 (Table 1A). High liability: 60-80 unit building."
+    "notes": "Six-turn developer feasibility session. Tests that agent correctly identifies home occupation is NOT permitted in HR-2 (Table 1A). High liability: 60-80 unit building.",
+    "address_resolution": {
+      "resolved_zone": "HR-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "40542839",
+      "registered_civics": [
+        "10 Joseph Young Street, Dartmouth, NS"
+      ]
+    }
   },
   {
     "id": "TC-006",
@@ -351,7 +425,7 @@
       "subtype": null,
       "description": "Large-scale developer working with a consultant team on a downtown Halifax mixed-use tower"
     },
-    "address": "1505 Barrington Street, Halifax, NS",
+    "address": "5531 Nora Bernard Street, Halifax, NS",
     "zone": "CEN-1",
     "complexity": "complex",
     "liability": "high",
@@ -378,7 +452,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "We\u2019re proposing a mixed-use tower at 1505 Barrington Street in downtown Halifax \u2014 CEN-1 zone. The program is residential units on the upper floors with retail at grade. Is multi-unit dwelling a permitted use in CEN-1, and is commercial/retail included?"
+        "message": "We\u2019re proposing a mixed-use tower at 5531 Nora Bernard Street in Halifax \u2014 CEN-1 zone. The program is residential units on the upper floors with retail at grade. Is multi-unit dwelling a permitted use in CEN-1, and is commercial/retail included?"
       },
       {
         "turn": 2,
@@ -398,7 +472,7 @@
       {
         "turn": 5,
         "role": "user",
-        "message": "Our site is near some older heritage buildings on Barrington Street. Is there a heritage overlay we need to worry about, and how does it interact with our development permit?"
+        "message": "Our site is near some older heritage buildings on Nora Bernard Street. Is there a heritage overlay we need to worry about, and how does it interact with our development permit?"
       },
       {
         "turn": 6,
@@ -407,13 +481,17 @@
       }
     ],
     "expected_bylaw_references": [
-      "Table 1B",
-      "Table 4",
-      "Table 5",
-      "Section 111",
-      "Section 112",
-      "Section 110",
-      "Section 120(b)",
+      "Table 1A",
+      "Section 81",
+      "Section 88",
+      "Section 157",
+      "Section 158",
+      "Section 159",
+      "Section 162",
+      "Section 163",
+      "Section 168",
+      "Section 433",
+      "Table 15",
       "Schedule 15",
       "Schedule 17",
       "Schedule 22"
@@ -439,7 +517,18 @@
       "heritage_overlay",
       "parking"
     ],
-    "notes": "Six-turn complex downtown scenario. Tests three overlay interactions (height, FAR, heritage) plus base zone standards. Highest liability: 100+ unit high-rise in heritage area."
+    "notes": "Six-turn complex downtown scenario. Tests three overlay interactions (height, FAR, heritage) plus base zone standards. Highest liability: 100+ unit high-rise in heritage area.",
+    "address_resolution": {
+      "resolved_zone": "CEN-1",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00155622",
+      "registered_civics": [
+        "5531 Nora Bernard Street, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-007",
@@ -449,7 +538,7 @@
       "subtype": null,
       "description": "Commercial realtor advising a buyer on development potential before making an offer"
     },
-    "address": "5236 Sackville Street, Halifax, NS",
+    "address": "118 Wyse Road, Dartmouth, NS",
     "zone": "CEN-2",
     "complexity": "medium",
     "liability": "medium",
@@ -471,7 +560,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I\u2019m a realtor advising a client who\u2019s considering buying a property on Sackville Street in the CEN-2 zone. Before they make an offer, I want to understand the redevelopment potential. Is multi-unit residential a permitted use in CEN-2?"
+        "message": "I\u2019m a realtor advising a client who\u2019s considering buying a property at 118 Wyse Road in Dartmouth, in the CEN-2 zone. Before they make an offer, I want to understand the redevelopment potential. Is multi-unit residential a permitted use in CEN-2?"
       },
       {
         "turn": 2,
@@ -485,10 +574,12 @@
       }
     ],
     "expected_bylaw_references": [
-      "Table 1B",
-      "Table 4",
-      "Table 5",
-      "Section 111",
+      "Table 1A",
+      "Section 157",
+      "Section 159",
+      "Section 162",
+      "Section 163",
+      "Section 168",
       "Schedule 15"
     ],
     "expected_answer_keywords": [
@@ -498,8 +589,7 @@
       "Schedule 15",
       "height precinct",
       "0.0 m",
-      "3.0 m",
-      "80%"
+      "3.0 m"
     ],
     "expected_topics": [
       "use_permission",
@@ -507,7 +597,18 @@
       "lot_coverage",
       "height_overlay"
     ],
-    "notes": "Three-turn realtor due diligence. Tests height overlay awareness (Schedule 15 reference vs fixed number). Medium liability: advisory role, pre-offer stage."
+    "notes": "Three-turn realtor due diligence. Tests height overlay awareness (Schedule 15 reference vs fixed number). Medium liability: advisory role, pre-offer stage. LOT-COVERAGE KEYWORD REMOVED (ABS-470): the case expected `80%` while citing s.168, which reads in full \"No maximum required lot coverage applies.\" The CEN chapter sets no lot coverage cap at all -- nor do the DD (121), DH (142), COR (187), HR (204) or CLI (221) equivalents. `80%` is the LI/HRI figure (s.251). A correct CEN-2 answer was therefore graded as a miss, and an answer that invented a cap was rewarded.",
+    "address_resolution": {
+      "resolved_zone": "CEN-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "41546813",
+      "registered_civics": [
+        "118 Wyse Road, Dartmouth, NS"
+      ]
+    }
   },
   {
     "id": "TC-008",
@@ -565,15 +666,18 @@
       }
     ],
     "expected_bylaw_references": [
-      "Table 1B",
-      "Table 4",
-      "Table 5",
-      "Section 110",
-      "Section 111",
-      "Section 112",
-      "Section 120(b)",
+      "Table 1A",
+      "Section 79",
+      "Section 80",
+      "Section 81",
+      "Section 131",
+      "Section 132",
+      "Section 135",
+      "Section 136",
+      "Section 142",
+      "Section 433",
+      "Table 15",
       "Schedule 15",
-      "Schedule 17",
       "Schedule 22"
     ],
     "expected_answer_keywords": [
@@ -597,7 +701,18 @@
       "parking",
       "FAR_overlay"
     ],
-    "notes": "Complex five-turn city planner workflow. Tests heritage demolition gate (HAC approval required), overlay hierarchy, and downtown parking exemption. High public liability: heritage demolition in downtown core."
+    "notes": "Complex five-turn city planner workflow. Tests heritage demolition gate (HAC approval required), overlay hierarchy, and downtown parking exemption. High public liability: heritage demolition in downtown core.",
+    "address_resolution": {
+      "resolved_zone": "DH",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "40634602",
+      "registered_civics": [
+        "1801 Hollis Street, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-009",
@@ -607,7 +722,7 @@
       "subtype": null,
       "description": "Real estate lawyer conducting zoning due diligence for a client acquiring a downtown Dartmouth commercial property"
     },
-    "address": "100 Wyse Road, Dartmouth, NS",
+    "address": "16 Kings Wharf Place, Dartmouth, NS",
     "zone": "DD",
     "complexity": "medium",
     "liability": "medium",
@@ -630,7 +745,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I\u2019m a real estate lawyer conducting zoning due diligence on a property at 100 Wyse Road in Dartmouth \u2014 it\u2019s in the DD zone. My client is acquiring it to redevelop as a mixed-use building with ground-floor retail and apartments above. Confirm: is multi-unit residential permitted in the DD zone?"
+        "message": "I\u2019m a real estate lawyer conducting zoning due diligence on a property at 16 Kings Wharf Place in Dartmouth \u2014 it\u2019s in the DD zone. My client is acquiring it to redevelop as a mixed-use building with ground-floor retail and apartments above. Confirm: is multi-unit residential permitted in the DD zone?"
       },
       {
         "turn": 2,
@@ -649,10 +764,13 @@
       }
     ],
     "expected_bylaw_references": [
-      "Table 1B",
-      "Table 4",
-      "Table 5",
-      "Section 120(b)"
+      "Table 1A",
+      "Section 111",
+      "Section 115",
+      "Section 116",
+      "Section 121",
+      "Section 433",
+      "Table 15"
     ],
     "expected_answer_keywords": [
       "DD",
@@ -661,7 +779,6 @@
       "not required",
       "0.0 m",
       "3.0 m",
-      "80%",
       "daycare"
     ],
     "expected_topics": [
@@ -670,7 +787,19 @@
       "setbacks",
       "lot_coverage"
     ],
-    "notes": "Four-turn legal due diligence. Tests no-parking exemption scope (Section 120(b) lists DD explicitly). Daycare permitted in DD via Table 1B. Medium liability: advisory professional role."
+    "notes": "Four-turn legal due diligence. Tests no-parking exemption scope (Section 120(b) lists DD explicitly). Daycare permitted in DD via Table 1B. Medium liability: advisory professional role. LOT-COVERAGE KEYWORD REMOVED (ABS-470): the case expected `80%` while citing s.121, which reads in full \"No maximum required lot coverage applies.\" The DD chapter sets no cap; `80%` is the LI/HRI figure (s.251). See TC-007 and TC-010 for the same defect in the CEN and COR chapters.",
+    "address_resolution": {
+      "resolved_zone": "DD",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "41488750",
+      "registered_civics": [
+        "12 Cutwater, Dartmouth, NS",
+        "16 Kings Wharf Place, Dartmouth, NS"
+      ]
+    }
   },
   {
     "id": "TC-010",
@@ -680,7 +809,7 @@
       "subtype": "planner",
       "description": "Urban planner consulting on a medium-density mixed-use development along a corridor"
     },
-    "address": "1959 Gottingen Street, Halifax, NS",
+    "address": "2368 Gottingen Street, Halifax, NS",
     "zone": "COR",
     "complexity": "complex",
     "liability": "high",
@@ -706,7 +835,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I\u2019m an urban planner working on a mixed-use development on Gottingen Street in the COR zone. The client wants a building with ground-floor commercial and multi-unit residential above. What are the use permissions in COR \u2014 is multi-unit dwelling permitted, and what about commercial/retail uses?"
+        "message": "I\u2019m an urban planner working on a mixed-use development at 2368 Gottingen Street in the COR zone. The client wants a building with ground-floor commercial and multi-unit residential above. What are the use permissions in COR \u2014 is multi-unit dwelling permitted, and what about commercial/retail uses?"
       },
       {
         "turn": 2,
@@ -730,14 +859,15 @@
       }
     ],
     "expected_bylaw_references": [
-      "Table 1B",
-      "Table 4",
-      "Table 5",
-      "Section 111",
-      "Section 112",
-      "Section 120(a)",
-      "Schedule 15",
-      "Schedule 17"
+      "Table 1A",
+      "Section 177",
+      "Section 178",
+      "Section 181",
+      "Section 182",
+      "Section 187",
+      "Section 433",
+      "Table 15",
+      "Schedule 15"
     ],
     "expected_answer_keywords": [
       "COR",
@@ -748,8 +878,7 @@
       "floor area ratio",
       "3.0 m",
       "front setback",
-      "0.0 m",
-      "70%"
+      "0.0 m"
     ],
     "expected_topics": [
       "use_permission",
@@ -759,7 +888,19 @@
       "lot_coverage",
       "parking"
     ],
-    "notes": "Five-turn planner scenario. Tests COR front setback (3 m, unlike CEN-1/CEN-2 at 0 m) and that COR does NOT get the no-parking exemption (Section 120(b) lists only CEN-1, CEN-2, DH, DD). High liability: full mixed-use building program."
+    "notes": "Five-turn planner scenario. Tests COR setbacks and that COR does NOT get the no-parking exemption (Section 120(b) lists only CEN-1, CEN-2, DH, DD). High liability: full mixed-use building program. LOT-COVERAGE KEYWORD REMOVED (ABS-470): the case expected `70%` while citing s.187, which reads in full \"No maximum required lot coverage applies.\" `70%` appears nowhere in the by-law as a lot coverage figure -- the only numbered caps are ER 231, CH 243, LI/HRI 251 (80%) and INS 262 (60%). The surviving `0.0 m` and `3.0 m` were re-checked against the corrected address: 2368 Gottingen abuts no ER, CH, PCF or RPK lot (nearest ER-3 polygon 37 m away, behind intervening HR-1 lots), so s.181(1)(d) side = 0.0 m and s.182(1)(b) rear = 3.0 m are the operative branches.",
+    "address_resolution": {
+      "resolved_zone": "COR",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00148858",
+      "registered_civics": [
+        "2368 Gottingen Street, Halifax, NS",
+        "2370 Gottingen Street, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-011",
@@ -769,7 +910,7 @@
       "subtype": "planner",
       "description": "Senior planner triaging a proposed lab/research building addition on an institutional campus"
     },
-    "address": "5980 University Avenue, Halifax, NS",
+    "address": "5421 Nora Bernard Street, Halifax, NS",
     "zone": "INS",
     "complexity": "medium",
     "liability": "medium",
@@ -790,7 +931,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm reviewing a development application for 5980 University Avenue \u2014 that's in the INS zone. The applicant is proposing to expand an existing university research lab. Before I get into the standards, can you confirm that a university laboratory use is a permitted use as-of-right in the INS zone under the Regional Centre Land Use By-Law?"
+        "message": "I'm reviewing a development application for 5421 Nora Bernard Street \u2014 that's in the INS zone. The applicant is proposing to expand an existing university research lab. Before I get into the standards, can you confirm that a university laboratory use is a permitted use as-of-right in the INS zone under the Regional Centre Land Use By-Law?"
       },
       {
         "turn": 2,
@@ -808,28 +949,53 @@
         "message": "Last piece \u2014 the expansion adds about 2,800 square metres of new floor area to an existing building on a lot that's approximately 1.2 hectares. What's the maximum lot coverage allowed in the INS zone, and does the by-law have any gross floor area or FAR cap I should be cross-referencing before I prepare my planner's report?"
       }
     ],
-    "expected_bylaw_references": [],
+    "expected_bylaw_references": [
+      "Table 1C",
+      "Section 254",
+      "Section 255",
+      "Section 256",
+      "Section 257",
+      "Section 262",
+      "Section 264",
+      "Schedule 15"
+    ],
     "expected_answer_keywords": [
       "INS",
       "permitted",
       "Schedule 15",
       "height precinct",
       "setback",
-      "Section 196",
+      "Section 254",
       "lot coverage"
     ],
-    "expected_topics": [],
-    "notes": "Tests INS use permissions for research/laboratory uses, dimensional standards in an institutional zone, and how the bylaw handles campus-style master sites. Underrepresented zone."
+    "expected_topics": [
+      "use_permission",
+      "setbacks",
+      "height",
+      "lot_coverage"
+    ],
+    "notes": "Tests INS use permissions for research/laboratory uses, dimensional standards in an institutional zone, and how the bylaw handles campus-style master sites. Underrepresented zone. KEYWORD RECHAPTERED (ABS-470): the case expected `Section 196`, which is the HR-2/HR-1 maximum building height section and has no application to an INS site. The INS chapter is ss.253-267, and its height section -- already carried in expected_bylaw_references -- is s.254. Turn 3 asks for the INS height limit, so citing 196 would have been the wrong answer scoring as the right one.",
+    "address_resolution": {
+      "resolved_zone": "INS",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "41212366",
+      "registered_civics": [
+        "5421 Nora Bernard Street, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-012",
-    "title": "Lawyer advising adjoining owner on RPK encroachment risk",
+    "title": "Lawyer advising abutting owner on RPK encroachment risk",
     "persona": {
       "type": "real_estate_law_professional",
       "subtype": null,
       "description": "Real-estate lawyer fielding a question about a deck that may overhang into an RPK-zoned park parcel"
     },
-    "address": "Halifax Common, North Park Street side, Halifax, NS",
+    "address": "65 Georges Island Road, Halifax, NS",
     "zone": "RPK",
     "complexity": "medium",
     "liability": "medium",
@@ -848,7 +1014,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm acting for an adjoining property owner on the North Park Street side of Halifax Common. The land there falls under the RPK \u2014 Regional Park Zone. I need to confirm what uses are actually permitted as-of-right in that zone, because a neighbouring party appears to be operating some kind of accessory structure right up against the common boundary. Can you tell me what Table 1A or 1B says about permitted uses in RPK, and whether any residential or commercial use can be established there as-of-right?"
+        "message": "I'm acting for a client whose interest abuts the RPK \u2014 Regional Park Zone \u2014 land at 65 Georges Island Road in Halifax. I need to confirm what uses are actually permitted as-of-right in that zone, because a neighbouring party appears to be operating some kind of accessory structure right up against the park boundary. Can you tell me what Table 1A or 1B says about permitted uses in RPK, and whether any residential or commercial use can be established there as-of-right?"
       },
       {
         "turn": 2,
@@ -861,17 +1027,43 @@
         "message": "That distinction matters a lot for my advice. If the permit exemption can't be invoked because there's no lawful principal use on RPK land to which the accessory structure is subordinate, then the structure has no regulatory footing at all. Now, for the setback question \u2014 the bylaw excerpt I have shows setback standards for ER and presumably other residential zones in Table 3, but I don't see RPK listed. Does the RPK zone carry any prescribed side or rear setback standards under the Regional Centre Land Use By-Law, and if no setbacks are enumerated, what's the legal implication for an encroachment claim \u2014 does the absence of a setback standard mean there's no minimum, or does it reinforce that no development is contemplated in the zone at all?"
       }
     ],
-    "expected_bylaw_references": [],
+    "expected_bylaw_references": [
+      "Table 1C",
+      "Section 9",
+      "Section 32",
+      "Section 33",
+      "Section 308",
+      "Section 309",
+      "Section 310",
+      "Section 329",
+      "Section 332"
+    ],
     "expected_answer_keywords": [
       "RPK",
       "permitted",
-      "Table 1A",
+      "Table 1C",
       "setback",
       "development permit",
       "Section 9"
     ],
-    "expected_topics": [],
-    "notes": "Tests RPK permitted/accessory uses and what the bylaw says (or doesn't say) about private encroachments into park-zoned land. Underrepresented zone."
+    "expected_topics": [
+      "use_permission",
+      "setbacks",
+      "accessory_uses",
+      "development_permit_exemption"
+    ],
+    "notes": "Tests RPK permitted/accessory uses and what the bylaw says (or doesn't say) about private encroachments into park-zoned land. Underrepresented zone. ADDRESS RE-DERIVED (ABS-467): the case previously placed itself on the North Park Street side of Halifax Common and asserted that land is RPK. It is not \u2014 the Common resolves to PCF, INS and H depending on where you stand, and the Regional Centre's entire RPK extent is Georges Island. The address now names a parcel that actually carries the zone. KEYWORD RETABLED (ABS-470): the case expected `Table 1A` in the answer. RPK is not in Table 1A -- it is one of the zones in Table 1C (CLI, LI, HRI, INS, UC-2, UC-1, DND, H, PCF, RPK, WA), which is what expected_bylaw_references already cited. Turn 1 deliberately misframes the question as \"what does Table 1A or 1B say about RPK\" and the right answer is that neither governs it, so grading on `Table 1A` rewarded repeating the user's framing rather than correcting it.",
+    "address_resolution": {
+      "resolved_zone": "RPK",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "41336363",
+      "registered_civics": [
+        "65 Georges Island Road, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-013",
@@ -881,7 +1073,7 @@
       "subtype": "architect",
       "description": "Architect doing a feasibility study on a 6\u20138 storey residential infill"
     },
-    "address": "5455 Spring Garden Road, Halifax, NS",
+    "address": "30 Joseph Young Street, Dartmouth, NS",
     "zone": "HR-2",
     "complexity": "complex",
     "liability": "high",
@@ -905,17 +1097,17 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm scoping a mid-rise residential infill project at 5455 Spring Garden Road \u2014 it's in HR-2 under the Regional Centre Land Use By-law. Can you confirm that multi-unit dwelling is a permitted as-of-right use in HR-2, and are there any use conditions I should be aware of before I start massing?"
+        "message": "I'm scoping a mid-rise residential infill project at 30 Joseph Young Street in Dartmouth \u2014 it's in HR-2 under the Regional Centre Land Use By-law. Can you confirm that multi-unit dwelling is a permitted as-of-right use in HR-2, and are there any use conditions I should be aware of before I start massing?"
       },
       {
         "turn": 2,
         "role": "user",
-        "message": "Good. Now let's get into the envelope. What's the base FAR allowance for HR-2, and is there any height overlay that applies along Spring Garden Road specifically? I want to know if I'm working with a hard height cap or if there's a bonus or overlay that could push it higher."
+        "message": "Good. Now let's get into the envelope. What's the base FAR allowance for HR-2, and is there any height overlay that applies along Joseph Young Street specifically? I want to know if I'm working with a hard height cap or if there's a bonus or overlay that could push it higher."
       },
       {
         "turn": 3,
         "role": "user",
-        "message": "Understood on the height. What are the streetwall requirements for HR-2 along an arterial like Spring Garden? I need to know the minimum and maximum streetwall height, and whether there's a mandatory build-to line or a range for the front setback \u2014 I'm trying to lock in the podium before I model the stepback."
+        "message": "Understood on the height. What are the streetwall requirements for HR-2 along a street like Joseph Young? I need to know the minimum and maximum streetwall height, and whether there's a mandatory build-to line or a range for the front setback \u2014 I'm trying to lock in the podium before I model the stepback."
       },
       {
         "turn": 4,
@@ -928,7 +1120,21 @@
         "message": "Last piece for now \u2014 parking. For a multi-unit residential building in HR-2 at this address, what's the minimum parking ratio per unit, and is there any reduction available given the proximity to transit or the downtown core? Also, does the parking layout trigger site plan approval under section 15(a), and if so, what does that process typically require for a project of this scale?"
       }
     ],
-    "expected_bylaw_references": [],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Section 15",
+      "Section 196",
+      "Section 197",
+      "Section 198",
+      "Section 199",
+      "Section 200",
+      "Section 201",
+      "Section 202",
+      "Section 208",
+      "Section 433",
+      "Table 15",
+      "Schedule 15"
+    ],
     "expected_answer_keywords": [
       "HR-2",
       "permitted",
@@ -945,10 +1151,30 @@
       "not required",
       "Section 198",
       "Section 199",
-      "6.0 m"
+      "3.0 m",
+      "2.5 m"
     ],
-    "expected_topics": [],
-    "notes": "Tests HR-2 FAR, height overlay map (precincts), streetwall + stepback requirements, and parking minimums. Spring Garden corridor is heavily overlaid."
+    "expected_topics": [
+      "use_permission",
+      "height_overlay",
+      "streetwall",
+      "stepback",
+      "setbacks",
+      "parking",
+      "site_plan_approval"
+    ],
+    "notes": "Tests HR-2 FAR, height overlay map (precincts), streetwall + stepback requirements, and parking minimums. SETBACK BRANCH RE-DERIVED (ABS-470): same defect as TC-001, caught by re-running that analysis across the corpus rather than only on the cases the original audit listed \u2014 the audit predates the ABS-467 address re-derivation, so it saw this case at a different address. Turn 4 asks for the HR-2 side and rear setbacks. Both s.198 (side) and s.199 (rear) branch on what the lot abuts, and 30 Joseph Young abuts no ER, CH, PCF or RPK lot (nearest PCF polygon 119 m away), so the operative clauses are s.199(1)(b) rear = 3.0 m and s.198(1)(f) side = 2.5 m. The keyword was `6.0 m`, which is s.199(1)(a) \u2014 the abutting-ER branch, which does not apply here.",
+    "address_resolution": {
+      "resolved_zone": "HR-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "40542813",
+      "registered_civics": [
+        "30 Joseph Young Street, Dartmouth, NS"
+      ]
+    }
   },
   {
     "id": "TC-014",
@@ -958,7 +1184,7 @@
       "subtype": null,
       "description": "Developer exploring bonus zoning provisions to push height and FAR above as-of-right"
     },
-    "address": "1657 Barrington Street, Halifax, NS",
+    "address": "6049 Young Street, Halifax, NS",
     "zone": "CEN-2",
     "complexity": "complex",
     "liability": "high",
@@ -980,7 +1206,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "We're looking at 1657 Barrington Street in Halifax \u2014 it's zoned CEN-2. We want to develop a mixed-use building and we've heard there are bonus density provisions available in that zone. Can you give me a rundown of what the base FAR and height allowances are for CEN-2, and what the ceiling looks like if we can trigger the bonusing?"
+        "message": "We're looking at 6049 Young Street in Halifax \u2014 it's zoned CEN-2. We want to develop a mixed-use building and we've heard there are bonus density provisions available in that zone. Can you give me a rundown of what the base FAR and height allowances are for CEN-2, and what the ceiling looks like if we can trigger the bonusing?"
       },
       {
         "turn": 2,
@@ -990,12 +1216,12 @@
       {
         "turn": 3,
         "role": "user",
-        "message": "Let's talk about ground floor use requirements on Barrington Street specifically. I know CEN-2 typically has active-use mandates at grade \u2014 what uses are required, what's the minimum depth or frontage that has to be commercial or active, and are there any restrictions on things like parking garage entrances breaking up the streetwall?"
+        "message": "Let's talk about ground floor use requirements on Young Street specifically. I know CEN-2 typically has active-use mandates at grade \u2014 what uses are required, what's the minimum depth or frontage that has to be commercial or active, and are there any restrictions on things like parking garage entrances breaking up the streetwall?"
       },
       {
         "turn": 4,
         "role": "user",
-        "message": "On the streetwall piece \u2014 what's the required streetwall height and percentage of frontage coverage on a primary street like Barrington? If we're going for bonus height, does the bylaw impose any additional stepback requirements above the streetwall level, and at what floor does that kick in?"
+        "message": "On the streetwall piece \u2014 what's the required streetwall height and percentage of frontage coverage on a primary street like Young Street? If we're going for bonus height, does the bylaw impose any additional stepback requirements above the streetwall level, and at what floor does that kick in?"
       },
       {
         "turn": 5,
@@ -1008,7 +1234,26 @@
         "message": "Last question \u2014 if we go through site plan approval under Section 15 for this project, does the approval process give the municipality any ability to claw back or condition the bonus density we'd otherwise be entitled to as-of-right under the bonus zoning provisions? I want to understand our exposure before we commit to the pro forma."
       }
     ],
-    "expected_bylaw_references": [],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Section 15",
+      "Section 69",
+      "Section 157",
+      "Section 158",
+      "Section 164",
+      "Section 165",
+      "Section 166",
+      "Section 169",
+      "Section 472",
+      "Section 473",
+      "Section 475",
+      "Section 479",
+      "Section 480",
+      "Table 18",
+      "Schedule 15",
+      "Schedule 17",
+      "Schedule 50"
+    ],
     "expected_answer_keywords": [
       "CEN-2",
       "permitted",
@@ -1017,14 +1262,32 @@
       "bonus",
       "floor area ratio",
       "height precinct",
-      "Section 196",
+      "Section 157",
       "ground floor",
       "active use",
       "streetwall",
-      "Section 200"
+      "Section 164"
     ],
-    "expected_topics": [],
-    "notes": "Tests CEN-2 base FAR/height, bonus-zoning trigger menu, ground-floor active-use requirement, and streetwall standards. Adversarial \u2014 user pushes for max possible scenario and assumes bonuses are stackable."
+    "expected_topics": [
+      "FAR_overlay",
+      "height_overlay",
+      "bonus_zoning",
+      "ground_floor_use",
+      "streetwall",
+      "site_plan_approval"
+    ],
+    "notes": "Tests CEN-2 base FAR/height, bonus-zoning trigger menu, ground-floor active-use requirement, and streetwall standards. Adversarial \u2014 user pushes for max possible scenario and assumes bonuses are stackable. DECISION RECORDED (ABS-470): this case is KEPT AS CEN-2 AND REPOINTED, not dropped. It previously sat at 1657 Barrington Street, which HRM's zoning layer places in DH-1 \u2014 a zone governed by the Downtown Halifax Land Use By-law, which this system has not ingested (ABS-472). Answering it against the Regional Centre by-law would have cited the wrong instrument entirely. The alternative was to park the case until ABS-472 lands, but the case exists to exercise bonus zoning, ground-floor active use and streetwall in a CEN-2 setting, and all of that is testable today, so the address was moved to 3123 Kempt Road \u2014 a genuine CEN-2 parcel confirmed rooftop against the live zoning layer (ABS-467). Re-check this decision when ABS-472 ingests the Downtown Halifax LUB: a DH-1 case is then worth adding, but as a new case, not by moving this one back. KEYWORDS RECHAPTERED (ABS-470): the case expected `Section 196` and `Section 200`, both HR-2/HR-1 sections, in a CEN-2 case. The CEN chapter is ss.156-175; its height section is s.157 and its maximum streetwall height section is s.164, both already carried in expected_bylaw_references.",
+    "address_resolution": {
+      "resolved_zone": "CEN-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "40795999",
+      "registered_civics": [
+        "6049 Young Street, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-015",
@@ -1034,7 +1297,7 @@
       "subtype": null,
       "description": "Developer pricing the cost of building behind a retained facade in DH"
     },
-    "address": "1547 Birmingham Street, Halifax, NS",
+    "address": "5512 Spring Garden Road, Halifax, NS",
     "zone": "DH",
     "complexity": "complex",
     "liability": "high",
@@ -1056,12 +1319,12 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm pricing out a heritage retention infill project at 1547 Birmingham Street in Halifax. The property is in the DH zone and I understand there's a heritage overlay in play. Before I go too deep on numbers, can you confirm whether this site falls within a heritage conservation district and what that means for demolition control \u2014 specifically, can I demolish the existing structure outright or am I looking at mandatory facade retention?"
+        "message": "I'm pricing out a heritage retention infill project at 5512 Spring Garden Road in Halifax. The property is in the DH zone and I understand there's a heritage overlay in play. Before I go too deep on numbers, can you confirm whether this site falls within a heritage conservation district and what that means for demolition control \u2014 specifically, can I demolish the existing structure outright or am I looking at mandatory facade retention?"
       },
       {
         "turn": 2,
         "role": "user",
-        "message": "Okay, so assuming facade retention is required, what are the streetwall height and continuity rules I'd be working with on Birmingham Street in the DH zone? I need to understand how much of the existing building envelope I have to preserve versus where I have flexibility to go taller with a new infill addition behind or above the retained facade."
+        "message": "Okay, so assuming facade retention is required, what are the streetwall height and continuity rules I'd be working with on Spring Garden Road in the DH zone? I need to understand how much of the existing building envelope I have to preserve versus where I have flexibility to go taller with a new infill addition behind or above the retained facade."
       },
       {
         "turn": 3,
@@ -1071,7 +1334,7 @@
       {
         "turn": 4,
         "role": "user",
-        "message": "Let's talk setbacks. The lot runs pretty deep off Birmingham Street. What are the front, side, and rear setback requirements for new construction in the DH zone, and does the heritage overlay modify any of those \u2014 particularly the front setback given that the retained facade essentially sets my build-to line? Also, does site plan approval under section 15 get triggered here for building design in a heritage conservation district, and if so, what does that process look like in terms of timeline and discretionary risk?"
+        "message": "Let's talk setbacks. The lot runs pretty deep off Spring Garden Road. What are the front, side, and rear setback requirements for new construction in the DH zone, and does the heritage overlay modify any of those \u2014 particularly the front setback given that the retained facade essentially sets my build-to line? Also, does site plan approval under section 15 get triggered here for building design in a heritage conservation district, and if so, what does that process look like in terms of timeline and discretionary risk?"
       },
       {
         "turn": 5,
@@ -1079,7 +1342,21 @@
         "message": "Last piece \u2014 I need to stress-test the demolition control risk on this deal. If the heritage designation means I can't get a demolition permit for the main structure, what's my exposure if the retained facade is structurally compromised during construction? Is there a heritage alteration permit pathway that would let me remove and reconstruct the facade in kind, or am I looking at a full Heritage Advisory Committee review that could blow my pro forma timeline? I need to understand the worst-case regulatory scenario before I commit to this acquisition."
       }
     ],
-    "expected_bylaw_references": [],
+    "expected_bylaw_references": [
+      "Section 15",
+      "Section 81",
+      "Section 88",
+      "Section 131",
+      "Section 132",
+      "Section 135",
+      "Section 136",
+      "Section 137",
+      "Section 138",
+      "Section 139",
+      "Section 337",
+      "Schedule 15",
+      "Schedule 22"
+    ],
     "expected_answer_keywords": [
       "DH",
       "permitted",
@@ -1087,12 +1364,33 @@
       "heritage conservation district",
       "Schedule 22",
       "demolition",
-      "Section 111",
+      "Section 132",
       "Schedule 15",
       "streetwall"
     ],
-    "expected_topics": [],
-    "notes": "Tests Downtown Halifax heritage demolition/retention rules, viewplanes, height precincts, and what triggers heritage review. Adversarial \u2014 user asks if they can demolish if facade is structurally unsound."
+    "expected_topics": [
+      "heritage_overlay",
+      "height_overlay",
+      "streetwall",
+      "setbacks",
+      "site_plan_approval"
+    ],
+    "notes": "Tests Downtown Halifax heritage demolition/retention rules, viewplanes, height precincts, and what triggers heritage review. Adversarial \u2014 user asks if they can demolish if facade is structurally unsound. KEYWORD RECHAPTERED (ABS-470): the case expected `Section 111`, which is the DD front/flanking setback section, in a DH case. The DH chapter is ss.129-148 and its front/flanking setback section is s.132, already carried in expected_bylaw_references. Turn 4 asks specifically about the DH front setback and how the heritage overlay modifies it, so the wrong-chapter citation sat directly on the question being graded.",
+    "address_resolution": {
+      "resolved_zone": "DH",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00077909",
+      "registered_civics": [
+        "5520 Spring Garden Road, Halifax, NS",
+        "5518 Spring Garden Road, Halifax, NS",
+        "5516 Spring Garden Road, Halifax, NS",
+        "5514 Spring Garden Road, Halifax, NS",
+        "5512 Spring Garden Road, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-016",
@@ -1102,7 +1400,7 @@
       "subtype": null,
       "description": "Realtor preparing a marketing package for a downtown Dartmouth property"
     },
-    "address": "100 Wyse Road, Dartmouth, NS",
+    "address": "155 Ochterloney Street, Dartmouth, NS",
     "zone": "DD",
     "complexity": "medium",
     "liability": "medium",
@@ -1122,7 +1420,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I'm doing due diligence on a listing at 100 Wyse Road in Dartmouth \u2014 it's in the DD zone. The current building has ground-floor retail with residential above. Can you confirm that mixed-use setup is actually permitted as-of-right in DD, and are there any restrictions on what types of commercial uses are allowed on the ground floor specifically?"
+        "message": "Hey, I'm doing due diligence on a listing at 155 Ochterloney Street in Dartmouth \u2014 it's in the DD zone. The current building has ground-floor retail with residential above. Can you confirm that mixed-use setup is actually permitted as-of-right in DD, and are there any restrictions on what types of commercial uses are allowed on the ground floor specifically?"
       },
       {
         "turn": 2,
@@ -1135,7 +1433,17 @@
         "message": "One more thing \u2014 the current building has a vacant ground-floor commercial unit and the owner was thinking of converting it to residential before selling to boost the income profile. Is that kind of internal conversion from commercial to residential something that would need a full development permit in DD, or does it fall under one of the exemptions? I saw something about internal conversions in DD being potentially exempt but I want to make sure I'm reading that right."
       }
     ],
-    "expected_bylaw_references": [],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Section 9(1)(r)",
+      "Section 38",
+      "Section 69",
+      "Section 109",
+      "Section 117",
+      "Section 118",
+      "Section 122",
+      "Schedule 15"
+    ],
     "expected_answer_keywords": [
       "DD",
       "permitted",
@@ -1145,23 +1453,40 @@
       "ground floor",
       "active use",
       "height precinct",
-      "Section 196",
+      "Section 109",
       "streetwall",
-      "Section 200"
+      "Section 117"
     ],
-    "expected_topics": [],
-    "notes": "Tests Downtown Dartmouth use permissions, ground-floor active-use requirements, and base height standards. Underrepresented use case."
+    "expected_topics": [
+      "use_permission",
+      "ground_floor_use",
+      "height_overlay",
+      "streetwall",
+      "development_permit_exemption"
+    ],
+    "notes": "Tests Downtown Dartmouth use permissions, ground-floor active-use requirements, and base height standards. Underrepresented use case. KEYWORDS RECHAPTERED (ABS-470): the case expected `Section 196` and `Section 200`, both HR-2/HR-1 sections, in a DD case. The DD chapter is ss.107-128; its maximum building height section is s.109 and its maximum streetwall height section is s.117, both already carried in expected_bylaw_references. Turn 2 asks for exactly those two standards.",
+    "address_resolution": {
+      "resolved_zone": "DD",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00128637",
+      "registered_civics": [
+        "155 Ochterloney Street, Dartmouth, NS"
+      ]
+    }
   },
   {
     "id": "TC-017",
-    "title": "Homeowner expanding a legally non-conforming duplex in ER-1",
+    "title": "Homeowner expanding a legally non-conforming duplex in ER-2",
     "persona": {
       "type": "homeowner",
       "subtype": null,
-      "description": "Owner of a duplex predating current ER-1 zoning that only permits single-unit dwellings"
+      "description": "Owner of a duplex predating current ER-2 zoning that only permits single-unit dwellings"
     },
-    "address": "2147 Maynard Street, Halifax, NS",
-    "zone": "ER-1",
+    "address": "5562 Nora Bernard Street, Halifax, NS",
+    "zone": "ER-2",
     "complexity": "complex",
     "liability": "medium",
     "tags": [
@@ -1178,40 +1503,64 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I own a duplex at 2147 Maynard Street in Halifax \u2014 it's in the ER-1 zone. The duplex was already there when I bought it, and I know ER-1 only permits single-unit dwellings plus a secondary suite. So I'm guessing it's considered a legally non-conforming use? Just want to make sure I understand what that actually means for me before I start planning anything."
+        "message": "Hey, I own a duplex at 5562 Nora Bernard Street in Halifax \u2014 it's in the ER-2 zone. The duplex was already there when I bought it, and I know ER-2 only permits single-unit dwellings plus a secondary suite. So I'm guessing it's considered a legally non-conforming use? Just want to make sure I understand what that actually means for me before I start planning anything."
       },
       {
         "turn": 2,
         "role": "user",
-        "message": "Okay so assuming it is legally non-conforming, I'm looking at adding a rear addition \u2014 probably around 30 square metres \u2014 to expand the lower unit. Does the bylaw allow me to expand a non-conforming duplex like this, or does doing any construction basically mean I lose my non-conforming status and have to comply with current ER-1 use permissions?"
+        "message": "Okay so assuming it is legally non-conforming, I'm looking at adding a rear addition \u2014 probably around 90 square metres \u2014 to expand the lower unit. Does the bylaw allow me to expand a non-conforming duplex like this, or does doing any construction basically mean I lose my non-conforming status and have to comply with current ER-2 use permissions?"
       },
       {
         "turn": 3,
         "role": "user",
-        "message": "Good to know. Now let's say I can proceed with the addition \u2014 what are the actual setback numbers I need to hit in ER-1? I'm most concerned about the rear setback since that's where the addition would go, and the side setback on the east side where the lot is pretty narrow. Also, what's the lot coverage limit I'd need to stay under? The lot is roughly 420 square metres and the existing building footprint is already around 140 square metres."
+        "message": "Good to know. Now let's say I can proceed with the addition \u2014 what are the actual setback numbers I need to hit in ER-2? I'm most concerned about the rear setback since that's where the addition would go, and the side setback on the east side where the lot is pretty narrow. Also, what's the lot coverage limit I'd need to stay under? The lot is roughly 420 square metres and the existing building footprint is already around 140 square metres."
       },
       {
         "turn": 4,
         "role": "user",
-        "message": "So if my existing building is already sitting at about 33% lot coverage and the addition would push me to maybe 40%, does that create a separate non-conformity issue on top of the use issue? Like, am I dealing with two different non-conformity problems here \u2014 one for the duplex use and one potentially for lot coverage \u2014 and would those be treated differently under the bylaw? Do I need a development permit for this addition, or could it fall under any of the exemptions?"
+        "message": "So if my existing building is already sitting at about 33% lot coverage and the addition would push me to roughly 55%, does that create a separate non-conformity issue on top of the use issue? Like, am I dealing with two different non-conformity problems here \u2014 one for the duplex use and one potentially for lot coverage \u2014 and would those be treated differently under the bylaw? Do I need a development permit for this addition, or could it fall under any of the exemptions?"
       }
     ],
-    "expected_bylaw_references": [],
+    "expected_bylaw_references": [
+      "Table 1B",
+      "Section 9",
+      "Section 23",
+      "Section 24",
+      "Section 229",
+      "Section 230",
+      "Section 231"
+    ],
     "expected_answer_keywords": [
-      "ER-1",
+      "ER-2",
       "permitted",
-      "Schedule 15",
       "Schedule 18",
       "non-conforming",
       "lawful non-conforming",
       "Section 229",
       "Section 230",
       "6.0 m",
-      "40%",
+      "50%",
       "Section 231"
     ],
-    "expected_topics": [],
-    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here."
+    "expected_topics": [
+      "non_conforming",
+      "use_permission",
+      "setbacks",
+      "lot_coverage",
+      "development_permit"
+    ],
+    "notes": "Adversarial. Tests how the bylaw treats expansion of a legally non-conforming use and whether the homeowner can add a third unit or just renovate within existing footprint. Easy to hallucinate permission here. ZONE RETARGETED ER-1 -> ER-2 (ABS-467): the Regional Centre zoning schedule maps no ER-1 polygon at all \u2014 0 of 11,069 features in halifax_zoning_boundaries carry ZONE=ER-1 \u2014 so no address could ever confirm this case's zone, and the eval would grade every answer against a zone the map does not place anywhere. ER-2 carries the same use permissions the premise depends on, so the non-conforming-duplex question is unchanged. TERMINOLOGY AND AN OPEN QUESTION (ABS-470): that ABS-467 note originally recorded the ER-2 permissions as \"single-unit dwelling P, secondary suite P, multi-unit N\". `secondary suite` is not a use in this by-law at all \u2014 the string does not occur once in the ingest; Table 1B's rows are `Single-unit dwelling use`, `Two-unit dwelling use` and `Backyard suite use` (see TC-002). The turn-1 wording is left as written because it is the user's own framing in an adversarial case and nothing is graded on it. Left unresolved, and NOT rewritten here: Table 1B's ER-2 column marks Two-unit dwelling use with footnotes 6, 14 and 15, and footnote 15 reads \"Use is permitted, except within the Halifax Grain Elevator (HGE) Special Area\" \u2014 which would mean a two-unit dwelling is permitted in ER-2 and this case has no non-conformity to test. It cannot be settled from the corpus as ingested: the Table 1 cells carry only footnote glyphs, the P/N letters having been dropped in extraction, so a blank cell is indistinguishable from a permitted-without-footnote cell. That is an ingest-fidelity defect rather than an eval-data one and needs its own ticket before this case's premise is either confirmed or retired. The lot-coverage arithmetic in turns 2 and 4 was rescaled to keep the second, separate non-conformity the case was designed to probe: Section 231 caps a non-single-unit use on a lot over 325 m\u00b2 at 50%, so the old 140 m\u00b2 + 30 m\u00b2 on 420 m\u00b2 (40%) stayed comfortably inside it.",
+    "address_resolution": {
+      "resolved_zone": "ER-2",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00158865",
+      "registered_civics": [
+        "5562 Nora Bernard Street, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-018",
@@ -1221,7 +1570,7 @@
       "subtype": null,
       "description": "Developer evaluating a 5\u20137 storey mixed-use building near a major bus terminal"
     },
-    "address": "6960 Mumford Road, Halifax, NS",
+    "address": "5249 Smith Street, Halifax, NS",
     "zone": "COR",
     "complexity": "complex",
     "liability": "high",
@@ -1245,17 +1594,17 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I'm scoping a mixed-use infill project at 6960 Mumford Road in Halifax \u2014 it's zoned COR under the Regional Centre Land Use By-Law. Before I go too deep into design, can you confirm what the maximum FAR and building height limits are for this site? I need to understand the envelope before I talk to my architect."
+        "message": "Hey, I'm scoping a mixed-use infill project at 5249 Smith Street in Halifax \u2014 it's zoned COR under the Regional Centre Land Use By-Law. Before I go too deep into design, can you confirm what the maximum FAR and building height limits are for this site? I need to understand the envelope before I talk to my architect."
       },
       {
         "turn": 2,
         "role": "user",
-        "message": "Got it on the envelope. Now, Mumford Road is a major transit corridor so I'm planning ground-floor retail or service commercial with residential above. What are the ground floor use requirements in the COR zone \u2014 is active commercial frontage mandatory, or just permitted? I want to know if I'm locked into it or if I have flexibility."
+        "message": "Got it on the envelope. Now, Smith Street sits on a busy inner-city transit corridor so I'm planning ground-floor retail or service commercial with residential above. What are the ground floor use requirements in the COR zone \u2014 is active commercial frontage mandatory, or just permitted? I want to know if I'm locked into it or if I have flexibility."
       },
       {
         "turn": 3,
         "role": "user",
-        "message": "Good to know. What about the streetwall requirements along the Mumford Road frontage? I'm thinking of a podium-and-tower form \u2014 is there a minimum streetwall height or a build-to-line that would affect how close I need to push the building face to the street? And what are the front and side setback standards for COR specifically?"
+        "message": "Good to know. What about the streetwall requirements along the Smith Street frontage? I'm thinking of a podium-and-tower form \u2014 is there a minimum streetwall height or a build-to-line that would affect how close I need to push the building face to the street? And what are the front and side setback standards for COR specifically?"
       },
       {
         "turn": 4,
@@ -1268,7 +1617,20 @@
         "message": "One more critical piece \u2014 the parking layout and access will need site plan approval based on section 15(a) of the by-law. What else on this project would trigger site plan approval, and is there any discretionary approval or variance process I should be aware of if my proposed FAR or height pushes above the as-of-right limits? I need to map out the full approval timeline for my investors."
       }
     ],
-    "expected_bylaw_references": [],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Section 15",
+      "Section 69",
+      "Section 177",
+      "Section 178",
+      "Section 181",
+      "Section 183",
+      "Section 184",
+      "Section 188",
+      "Section 433",
+      "Table 15",
+      "Schedule 15"
+    ],
     "expected_answer_keywords": [
       "COR",
       "permitted",
@@ -1276,21 +1638,40 @@
       "Schedule 17",
       "floor area ratio",
       "height precinct",
-      "Section 196",
+      "Section 177",
       "ground floor",
       "active use",
       "Section 433",
       "Table 15",
       "not required",
       "streetwall",
-      "Section 200",
+      "Section 183",
       "front setback",
       "3.0 m",
       "side setback",
       "0.0 m"
     ],
-    "expected_topics": [],
-    "notes": "Tests COR corridor standards: height precincts along corridors, ground-floor use, parking reductions near transit. Adversarial \u2014 user asks about reducing parking based on transit proximity."
+    "expected_topics": [
+      "height_overlay",
+      "ground_floor_use",
+      "streetwall",
+      "setbacks",
+      "parking",
+      "site_plan_approval"
+    ],
+    "notes": "Tests COR corridor standards: height precincts along corridors, ground-floor use, parking reductions near transit. Adversarial \u2014 user asks about reducing parking based on transit proximity. KEYWORDS RECHAPTERED (ABS-470): the case expected `Section 196` and `Section 200`, both HR-2/HR-1 sections, in a COR case. The COR chapter is ss.176-194; its maximum building height section is s.177 and its maximum streetwall height section is s.183, both already carried in expected_bylaw_references. The surviving `0.0 m` and `3.0 m` were re-checked against the corrected address: 5249 Smith abuts no ER, CH, PCF or RPK lot (nearest ER-3 polygon 40 m away), so s.181(1)(d) side = 0.0 m and s.182(1)(b) rear = 3.0 m are the operative branches.",
+    "address_resolution": {
+      "resolved_zone": "COR",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00103762",
+      "registered_civics": [
+        "5280 Green Street, Halifax, NS",
+        "5249 Smith Street, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-019",
@@ -1300,7 +1681,7 @@
       "subtype": null,
       "description": "Owner of a single-unit lot adding a detached backyard suite over a garage"
     },
-    "address": "2563 Maitland Street, Halifax, NS",
+    "address": "1485 Birchdale Avenue, Halifax, NS",
     "zone": "ER-3",
     "complexity": "medium",
     "liability": "low",
@@ -1320,7 +1701,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "Hey, I own a house at 2563 Maitland Street in Halifax \u2014 I believe it's zoned ER-3. I'm thinking about building a backyard suite, like a small standalone unit in my rear yard for a family member. Is that even allowed in ER-3, or do I need some kind of special approval?"
+        "message": "Hey, I own a house at 1485 Birchdale Avenue in Halifax \u2014 I believe it's zoned ER-3. I'm thinking about building a backyard suite, like a small standalone unit in my rear yard for a family member. Is that even allowed in ER-3, or do I need some kind of special approval?"
       },
       {
         "turn": 2,
@@ -1333,14 +1714,23 @@
         "message": "Okay that helps a lot with placement. One more thing \u2014 my main house already takes up a decent chunk of the lot. Is there a lot coverage limit I need to stay under when I add the suite, and is there a maximum height for the backyard structure? I don't want to go through the whole design process only to find out I've exceeded some cap."
       }
     ],
-    "expected_bylaw_references": [],
+    "expected_bylaw_references": [
+      "Table 1B",
+      "Section 56",
+      "Section 227",
+      "Section 231",
+      "Section 329",
+      "Section 331",
+      "Section 332",
+      "Schedule 15"
+    ],
     "expected_answer_keywords": [
       "ER-3",
       "permitted",
-      "Section 63",
       "Schedule 15",
       "backyard suite",
-      "Section 344",
+      "Section 56",
+      "Section 331",
       "Section 229",
       "1.25 m",
       "Section 230",
@@ -1349,8 +1739,25 @@
       "50%",
       "Section 231"
     ],
-    "expected_topics": [],
-    "notes": "Tests backyard suite provisions specifically \u2014 separate from secondary suite rules. Often confused. Confirms model distinguishes between the two."
+    "expected_topics": [
+      "use_permission",
+      "backyard_suite",
+      "setbacks",
+      "lot_coverage",
+      "height"
+    ],
+    "notes": "Tests backyard suite provisions specifically \u2014 the detached rear-yard form, as distinct from an internal conversion to a two-unit dwelling use (TC-002). Often confused. Confirms model distinguishes between the two. KEYWORDS CORRECTED (ABS-470): two citations were pointing away from the rule the case is about. `Section 344` is in Part VI, Chapter 2 \u2014 the Schmidtville Heritage Conservation District, HCD-SV zone \u2014 and has nothing to do with an ER-3 backyard suite; the height cap the case actually asks about in turn 3 is s.331 (accessory structure height, 7.7 m), already carried in expected_bylaw_references. `Section 63` is the ER internal-conversion rule for three-, four- and multi-unit dwellings, which is a different question; the backyard suite permission is s.56, also already in the references. `1.25 m` (s.329), `6.0 m` (s.230) and `50%` (s.231(1)(b)(i), lots over 325 m\u00b2) were re-checked and are correct.",
+    "address_resolution": {
+      "resolved_zone": "ER-3",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "00078246",
+      "registered_civics": [
+        "1485 Birchdale Avenue, Halifax, NS"
+      ]
+    }
   },
   {
     "id": "TC-020",
@@ -1360,7 +1767,7 @@
       "subtype": "planner",
       "description": "Senior planner triaging an application that may impinge on a protected viewplane"
     },
-    "address": "1577 Brunswick Street, Halifax, NS",
+    "address": "2162 Brunswick Street, Halifax, NS",
     "zone": "HR-1",
     "complexity": "complex",
     "liability": "high",
@@ -1382,7 +1789,7 @@
       {
         "turn": 1,
         "role": "user",
-        "message": "I'm reviewing a site plan approval application for 1577 Brunswick Street \u2014 it's zoned HR-1. The proposal is for a new mid-rise multi-unit residential building. Can you confirm what matters are subject to site plan approval under the Regional Centre Land Use By-Law, and whether this type of development would trigger the full SPA process?"
+        "message": "I'm reviewing a site plan approval application for 2162 Brunswick Street \u2014 it's zoned HR-1. The proposal is for a new mid-rise multi-unit residential building. Can you confirm what matters are subject to site plan approval under the Regional Centre Land Use By-Law, and whether this type of development would trigger the full SPA process?"
       },
       {
         "turn": 2,
@@ -1405,7 +1812,20 @@
         "message": "Pulling this all together for the staff report \u2014 if the proposed building exceeds the viewplane height limit even though it meets the base HR-1 zone standard, what's the regulatory pathway? Is there a variance or relaxation mechanism available, or does the viewplane restriction function as an absolute ceiling that can't be varied through the SPA process? I need to be precise about this for the report given the liability implications of recommending approval."
       }
     ],
-    "expected_bylaw_references": [],
+    "expected_bylaw_references": [
+      "Table 1A",
+      "Section 10",
+      "Section 15",
+      "Section 16",
+      "Section 196",
+      "Section 200",
+      "Section 201",
+      "Section 398",
+      "Section 399",
+      "Appendix 2",
+      "Schedule 15",
+      "Schedule 51"
+    ],
     "expected_answer_keywords": [
       "HR-1",
       "permitted",
@@ -1420,7 +1840,35 @@
       "streetwall",
       "Section 200"
     ],
-    "expected_topics": [],
-    "notes": "Tests viewplane mapping, height limits derived from viewplanes (not just zone), site-plan-approval triggers, shadow impact. High liability \u2014 easy to miss the viewplane constraint."
+    "expected_topics": [
+      "site_plan_approval",
+      "viewplanes",
+      "height_overlay",
+      "streetwall",
+      "shadow_impact"
+    ],
+    "notes": "Tests viewplane mapping, height limits derived from viewplanes (not just zone), site-plan-approval triggers, shadow impact. High liability \u2014 easy to miss the viewplane constraint.",
+    "address_resolution": {
+      "resolved_zone": "HR-1",
+      "resolution_quality": "rooftop",
+      "location_type": "ROOFTOP",
+      "location_confidence": 0.95,
+      "location_resolver": "google_maps",
+      "parcel_pid": "41263179",
+      "registered_civics": [
+        "2154 Brunswick Street, Halifax, NS",
+        "2166 Brunswick Street, Halifax, NS",
+        "2156 Brunswick Street, Halifax, NS",
+        "2152 Brunswick Street, Halifax, NS",
+        "2164 Brunswick Street, Halifax, NS",
+        "2162 Brunswick Street, Halifax, NS",
+        "2160 Brunswick Street, Halifax, NS",
+        "2168 Brunswick Street, Halifax, NS",
+        "2174 Brunswick Street, Halifax, NS",
+        "2158 Brunswick Street, Halifax, NS",
+        "2170 Brunswick Street, Halifax, NS",
+        "2172 Brunswick Street, Halifax, NS"
+      ]
+    }
   }
 ]

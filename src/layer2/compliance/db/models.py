@@ -5,9 +5,9 @@ reads or writes. Their lifecycle:
 
 * ``parcel`` — owned by the spatial side. Created by the one-time
   Halifax backfill (``scripts/backfill_parcels.py``) and, going
-  forward, by any new municipal ingest. The denormalised
-  ``zone_code`` is a convenience for the evaluator; the source of
-  truth remains the linked ``external_dataset_feature``.
+  forward, by any new municipal ingest. It carries identity and
+  geometry only — a parcel's zone is read from the intersecting
+  zoning ``external_dataset_feature``, never cached here (ABS-481).
 * ``submission`` — one row per development proposal. ``submitter_id``
   is intentionally nullable because Phase 1 has no tenancy concept —
   it lights up when the advisor wires submissions to advisor users.

@@ -6,6 +6,8 @@
 // third parties that receive user data) without naming infrastructure
 // brands.
 
+import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import { LegalShell, Section } from "@/components/marketing/legal-shell";
 
 const SECTIONS: Section[] = [
@@ -92,7 +94,11 @@ const SECTIONS: Section[] = [
       },
       {
         k: "p",
-        v: "We retain reading history for the life of your account so you can re-open past cases. Deleting a thread from the app removes it from the live database. We do not currently publish a backup-purge SLA — during beta our backups are manual and short-lived.",
+        v: "We retain reading history for the life of your account so you can re-open past cases. Deleting a thread from the app removes it from the live database.",
+      },
+      {
+        k: "p",
+        v: "Backups are taken automatically each night, encrypted, and held in a separate storage facility in the European Union. Because a deletion cannot reach a backup that was already written, deleted data can persist in those backups until they age out. We keep seven daily and four weekly backups, so the outer limit is roughly one month from the date you delete.",
       },
     ],
   },
@@ -138,6 +144,13 @@ const SECTIONS: Section[] = [
     ],
   },
 ];
+
+export const metadata: Metadata = pageMetadata({
+  path: "/privacy",
+  title: "Privacy Policy — ABS°",
+  description:
+    "How ABS handles your account details, the parcels and questions you research, and diagnostic data: what we keep, for how long, and who receives it.",
+});
 
 export default function PrivacyPage() {
   return (

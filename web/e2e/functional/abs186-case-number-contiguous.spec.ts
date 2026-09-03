@@ -17,6 +17,7 @@ import {
   expect,
   test,
 } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 type OpenCaseBody = {
   case: {
@@ -56,10 +57,7 @@ test.beforeAll(() => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const seed = path.join(repoRoot, "scripts", "seed_e2e_user.py");
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const pgPort = process.env.PG_PORT || "5432";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   execSync(
     `"${venvPython}" "${seed}" --user-id "${SEQ_USER_ID}" ` +
       `--email "${SEQ_USER_ID}@e2e.test" --credits-per-tier 5`,

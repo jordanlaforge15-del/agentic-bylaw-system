@@ -48,16 +48,36 @@ graduate to "quality" and be turned on without a redeploy.
    "Counts are approximate — complex questions use more." Calibrate the factor
    by replaying the ABS-305 estimator over persisted transcripts before launch.
 
-### Business parameters (defaults; confirm before launch copy freezes)
+### Business parameters (calibrated ABS-416, resized ABS-404, 2026-08-08)
 
-| Parameter | Default |
-| -- | -- |
-| `ADVISOR_TOKENS_PER_TURN` | 2,500 (calibrate from transcript replay) |
-| `ADVISOR_SIGNUP_TOKEN_GRANT` | 25,000 ≈ ~10 turns |
-| Top-ups (CAD) | small $15 → 20k ≈ ~8 turns · medium $50 → 75k ≈ ~30 · large $120 → 200k ≈ ~80 |
-| `ADVISOR_CHAT_MIN_BALANCE_TOKENS` (floor) | 0 |
-| `ADVISOR_LOW_BALANCE_WARN_TOKENS` (warn) | 5,000 |
-| `ADVISOR_CHAT_MAX_ITERATIONS` | 20 |
+| Parameter | Default | ABS-416 | Was (placeholder) |
+| -- | -- | -- | -- |
+| `ADVISOR_TOKENS_PER_TURN` | 175,000 | 175,000 | 2,500 |
+| `ADVISOR_SIGNUP_TOKEN_GRANT` | **525,000 = 3 turns** | 1,750,000 = 10 | 25,000 |
+| Top-ups (CAD) | small $15 → 1.4M = 8 turns · medium $50 → 5.25M = 30 · large $120 → 14M = 80 | same | 20k / 75k / 200k |
+| `ADVISOR_CHAT_MIN_BALANCE_TOKENS` (floor) | 0 | 0 | 0 |
+| `ADVISOR_LOW_BALANCE_WARN_TOKENS` (warn) | **175,000 = 1 turn** | 350,000 = 2 | 5,000 |
+| `ADVISOR_TURN_MAX_WALLET_TOKENS` (ABS-404) | **350,000 = 2 turns** | — | — |
+| `ADVISOR_CHAT_MAX_ITERATIONS` | 20 | 20 | 20 |
+
+The 2,500 placeholder was ~70x low: measured against prod, a real grounded
+question burns 103k–248k tokens, so every surface promised dozens-to-hundreds
+of questions against a wallet worth a handful. 175,000 is the midpoint of the
+two full-research prod questions and sits above the recent all-turn mean, so
+the advertised count errs toward under-promising. The token-denominated knobs
+were all sized in *turns* against the old rate, so each is rescaled by the same
+factor and the turn counts the product advertises are unchanged. Full sample
+and derivation: `src/advisor/billing/turns.py`.
+
+**ABS-404 corrected the cost anchor those turn counts were priced against.**
+ABS-416 assumed ~$0.55 USD per 100k wallet tokens. The wallet counts
+`input + output` only, and cache writes plus reads are 35% of the dollar cost,
+so the honest denominator is cost per *wallet-counted* token — measured at
+**~$28.9/MTok USD** in `docs/COST_MODEL.md` (ABS-303, real API, N=8). A 175k
+turn is ~$5.05, not ~$0.96. Consequences: the grant drops to 3 turns (~$15 per
+free no-card signup, down from ~$50), the warn threshold drops to 1 turn
+(2 turns of a 3-turn grant would have warned on every user's first question),
+and the price ladder is now a known-blocking open question (below).
 
 ## Design specification (D1–D8)
 
@@ -88,6 +108,22 @@ warn_threshold_tokens}` **every turn**; remove
 `case_budget_warning` / `case_upgrade_offer` + unregister the
 `request_tier_upgrade` tool. `token_budget_remaining` stays None; cost circuit
 breakers stay; `max_iterations` uses the env default when tier is None.
+
+**Amended by ABS-404.** D1's "the last allowed turn may overdraw negative" was
+unbounded in practice: the floor is 0, so any positive balance starts a turn,
+and the only ceilings on that turn were pre-flight *estimates* of *input*
+tokens. The char heuristic under-counts JSON tool_results and never models
+output at all, so a prod turn burned 247,566 wallet tokens under a 165k
+cumulative cap. `run_tool_loop` now carries a third breaker fed by **measured**
+`input + output` — the wallet's own unit — tripping `wallet_cap_trip` at
+`ADVISOR_TURN_MAX_WALLET_TOKENS` (default 2 turns). Overdraw stays by design;
+it is now bounded at roughly one extra turn rather than arbitrarily deep. The
+breaker is off on the paid-report rail (`answers.run_turn` passes 0), which is
+priced per slug in Stripe and never touches the wallet.
+
+Also amended: `grant_signup_tokens_if_needed` (D2) takes the user row's write
+lock around its check-and-set. The metadata flag alone was a TOCTOU gate, and
+prod issued two grants to one user on 2026-07-17 through it.
 
 ### D4 — Top-up checkout + webhook
 Fixed SKUs; env `STRIPE_PRICE_TOPUP_{SMALL,MEDIUM,LARGE}`; catalog
@@ -188,13 +224,41 @@ backend before web** — the 0023 migration is additive / zero-downtime.
 
 ## Open decisions (confirm before launch copy freezes)
 
-1. **`ADVISOR_TOKENS_PER_TURN` value** — 2,500 is a placeholder; calibrate from
-   the ABS-305 estimator replay over persisted `transcript_json` (zero API
-   spend) before the pricing copy freezes.
-2. **Top-up amounts / prices** — the $15 / $50 / $120 ladder is a default; the
-   token grants per SKU depend on the calibrated factor above.
-3. **Signup grant size** — 25,000 (~10 turns) is generous for a trial; revisit
-   against trial-to-paid conversion once the factor is calibrated.
+1. ~~**`ADVISOR_TOKENS_PER_TURN` value**~~ — **RESOLVED (ABS-416, 2026-08-08):**
+   175,000, calibrated against measured prod burn rather than transcript
+   replay. Prod's `advisor_usage_event` already records one row per assistant
+   turn whose totals match the wallet burn exactly, so the ground truth was
+   directly available and no replay was needed.
+2. **Top-up price ladder** — **OPEN, and now BLOCKING `ADVISOR_PAYMENTS_ENABLED
+   =true`.** ABS-416 rescaled the token grants so each SKU still credits the
+   turns it advertises (8 / 30 / 80), and judged the margin "real but thin"
+   against the ~$0.55/100k anchor. That anchor was wrong by ~5x (see the
+   parameters section). At the measured ~$28.9/MTok wallet-counted cost:
+
+   | SKU | Price (CAD) | Turns | Revenue/turn (USD ≈) | Cost/turn (USD) |
+   | -- | -- | -- | -- | -- |
+   | small | $15 | 8 | ~$1.37 | ~$5.05 |
+   | medium | $50 | 30 | ~$1.22 | ~$5.05 |
+   | large | $120 | 80 | ~$1.10 | ~$5.05 |
+
+   Every SKU sells turns for roughly a quarter of what they cost, before
+   Stripe fees. ABS-404 deliberately did **not** change these: list prices are
+   a revenue decision, and the fix could equally be raising prices, shrinking
+   the turn counts per SKU, or cutting per-turn cost (caching, retrieval
+   trimming, a cheaper model for shallow turns). It is harmless only while
+   payments are off — nothing can be sold below cost if nothing can be sold.
+   **Settle before flipping payments on.**
+3. ~~**Signup grant size**~~ — **RESOLVED (ABS-404):** 3 turns (525,000),
+   down from 10. At the corrected anchor, 10 turns was ~$50 of API spend per
+   free, no-card signup, not the ~$9.60 previously believed. Three turns is
+   enough to evaluate the product — the harm ABS-404 was filed for was a new
+   account locked out after *one* question — at ~$15 exposure.
+   `ADVISOR_SIGNUP_TOKEN_GRANT` remains a no-restart env knob, so
+   trial-to-paid conversion data can move it either way as an ops flip.
+4. **Per-turn cost reduction** — newly implied by the corrected anchor. A 175k
+   turn at ~$5 is the input to every pricing question above, and it is the one
+   variable that improves both margin and grant exposure at once. Not scoped
+   anywhere yet.
 
 ## Not doing (in this pivot)
 

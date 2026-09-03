@@ -65,6 +65,39 @@ load-bearing cost primitive for the priced-question-catalog ("buy an
 answer") model: it bounds the cost of each PAID answer so a fixed-price
 question cannot overspend.
 
+Measured wallet-token ceiling (ABS-404)
+---------------------------------------
+Both breakers above are *predictive* and denominated in
+billed-equivalent **input** tokens. The chat wallet is neither: it burns
+``usage.input_tokens + usage.output_tokens`` as *measured* by the
+provider (see ``_settle_token_burn``). The two units diverge badly:
+
+* the char heuristic under-counts JSON-heavy tool_result payloads
+  (real BPE on JSON is nearer 2.5–3 chars/token than 4), and
+* output tokens are never estimated at all.
+
+The consequence showed up in production on ABS-404: a turn that never
+tripped the 165k cumulative breaker still burned **247,566** wallet
+tokens, and with the pre-flight floor at 0 a user holding a single token
+may start it. Nothing bounded how deep one turn could bury a wallet, so
+no signup-grant size could guarantee a new user more than one question.
+
+``run_tool_loop`` therefore carries a **third** breaker denominated in
+the wallet's own unit and fed by *measured* usage accumulated so far,
+tripping ``terminated_reason="wallet_cap_trip"``. Because the check runs
+between iterations, the loop is still owed its one forced-synthesis
+call, so the effective bound is ``ceiling + one synthesis request`` —
+not ``ceiling`` exactly. It is a bound where previously there was none.
+
+The default is ``2 x ADVISOR_TOKENS_PER_TURN`` (350,000 at the ABS-416
+calibration) rather than a literal: the ceiling is a statement about
+"how many turns' worth may one turn burn", so it has to follow a
+re-calibration of the turn size. Override with
+``ADVISOR_TURN_MAX_WALLET_TOKENS``. Like the wallet parameters in
+``advisor.billing.turns`` — and unlike the two budgets below — it is
+read at call time rather than ``lru_cache``d, so an operator can retune
+it without a process restart.
+
 Configuration
 -------------
 The default budget is read once from the ``ADVISOR_TURN_INPUT_TOKEN_BUDGET``
@@ -130,18 +163,36 @@ _DEFAULT_TURN_INPUT_TOKEN_BUDGET = 150_000
 # accumulate (the runaway-deep-loop tail risk).
 _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET = 165_000
 
+# ABS-404: how many turns' worth of *measured* wallet tokens
+# (input + output) a single turn may burn before the wallet breaker
+# forces synthesis. Expressed as a multiple of
+# ``ADVISOR_TOKENS_PER_TURN`` rather than a literal so it tracks a
+# re-calibration of the turn size (ABS-416 moved that by 70x).
+#
+# 2 is deliberately loose: the ABS-416 sample puts a full-research turn
+# at 103k–248k against a 175k turn size, so a 2x ceiling clears every
+# legitimate turn measured in production and only catches the runaway
+# tail. Tightening it below ~1.5x would start truncating real answers.
+_DEFAULT_TURN_WALLET_TOKEN_MULTIPLE = 2
+
 
 @dataclass(frozen=True)
 class CircuitTripInfo:
     """Records a cost-circuit trip so callers can audit it.
 
-    ``estimated_input_tokens`` is the pre-flight estimate that crossed
-    the budget. For the per-request breaker (``cost_circuit_trip``)
-    this is the single request that was too big; for the cumulative
-    breaker (``cumulative_cost_trip``, ABS-305) it is the *running
-    total* across the turn that would have crossed the ceiling.
+    ``estimated_input_tokens`` is the token count that crossed the
+    budget. For the per-request breaker (``cost_circuit_trip``) this is
+    the pre-flight estimate of the single request that was too big; for
+    the cumulative breaker (``cumulative_cost_trip``, ABS-305) it is the
+    estimated *running total* across the turn that would have crossed
+    the ceiling. For the wallet breaker (``wallet_cap_trip``, ABS-404)
+    it is not an estimate at all but the turn's **measured** wallet
+    tokens (input + output) so far — the field name predates that third
+    breaker and is kept for ledger/analytics compatibility; the
+    companion ``terminated_reason`` is what disambiguates the unit.
     ``budget`` is the value the loop was configured with — the
-    per-request cap or the cumulative cap respectively; persisted
+    per-request cap, the cumulative cap, or the wallet ceiling
+    respectively; persisted
     alongside so a future threshold change doesn't make old trip
     records ambiguous, and so the two breakers' records stay
     distinguishable by their companion ``terminated_reason``.
@@ -246,6 +297,57 @@ def default_cumulative_token_budget() -> int:
             _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET,
         )
         return _DEFAULT_TURN_CUMULATIVE_TOKEN_BUDGET
+    return value
+
+
+def default_wallet_token_ceiling() -> int:
+    """Return the per-turn ceiling on *measured* wallet tokens (ABS-404).
+
+    Unlike the two budgets above this is deliberately NOT ``lru_cache``d
+    and NOT a literal default:
+
+    * not cached, because ``advisor.billing.turns`` treats every wallet
+      parameter as retunable without a process restart, and a ceiling
+      expressed in turns has to honour the same contract;
+    * not a literal, because the value means "two turns' worth" — it has
+      to follow ``ADVISOR_TOKENS_PER_TURN`` when that is recalibrated,
+      or a future calibration would silently re-scale how many turns one
+      turn is allowed to burn.
+
+    ``ADVISOR_TURN_MAX_WALLET_TOKENS`` overrides it with an absolute
+    token count. A non-integer or non-positive override falls back to
+    the derived default with a warning rather than crashing the chat
+    layer — a misconfigured env var must not take chat down, and a
+    ceiling of 0 would truncate every turn after its first iteration.
+    """
+    # Lazy import: ``advisor.billing.turns`` pulls in the
+    # ``advisor.billing`` package, whose ``__init__`` imports the router
+    # -> ``cases.py`` -> this module's ``CircuitTripInfo``. Same cycle
+    # ``case_budget_for`` above dodges the same way.
+    from advisor.billing.turns import tokens_per_turn  # noqa: PLC0415
+
+    derived = _DEFAULT_TURN_WALLET_TOKEN_MULTIPLE * tokens_per_turn()
+    raw = os.environ.get("ADVISOR_TURN_MAX_WALLET_TOKENS")
+    if raw is None or raw.strip() == "":
+        return derived
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        logger.warning(
+            "ADVISOR_TURN_MAX_WALLET_TOKENS=%r is not an integer; "
+            "falling back to the derived default %d",
+            raw,
+            derived,
+        )
+        return derived
+    if value <= 0:
+        logger.warning(
+            "ADVISOR_TURN_MAX_WALLET_TOKENS=%d is non-positive; "
+            "falling back to the derived default %d",
+            value,
+            derived,
+        )
+        return derived
     return value
 
 

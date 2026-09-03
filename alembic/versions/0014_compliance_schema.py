@@ -29,7 +29,9 @@ Indexes added:
   for the obvious filter paths.
 * B-tree on ``parcel(jurisdiction, parcel_identifier)`` via the
   unique constraint; an extra index on ``zone_code`` for the
-  zone-lookup convenience field.
+  zone-lookup convenience field (both the column and this index were
+  dropped again by ``0026_drop_parcel_zone_code`` — the field turned
+  out to be write-only).
 
 SQLite safety: postgres-specific bits (GIN index, JSONB-array
 ``server_default``) are dialect-gated. Without that the test suite

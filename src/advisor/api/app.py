@@ -8,7 +8,8 @@ gateway, in-memory sessions, RetrievalService bound to the configured
 DB URL).
 
 Endpoints:
-* ``GET /healthz`` — deep health check (DB connectivity via SELECT 1); no auth required.
+* ``GET /healthz`` — deep health check (DB connectivity via SELECT 1, plus a
+  writability probe of the submission storage root); no auth required.
 * ``GET /readyz`` — readiness probe (requires DB reachable); no auth required.
 * ``POST /v1/chat`` — send a message, get an SSE stream of events.
 * ``GET /v1/chat/sessions/{session_id}`` — debug endpoint that
@@ -85,7 +86,7 @@ def _default_retrieval_service_factory() -> Callable[[], Any]:
     """
     from bylaw_retrieval.retrieval import (  # noqa: PLC0415 — lazy import
         RetrievalService,
-        latest_per_bylaw_resolver,
+        retrieval_enabled_resolver,
     )
     from layer1.db.session import session_scope  # noqa: PLC0415
 
@@ -94,7 +95,7 @@ def _default_retrieval_service_factory() -> Callable[[], Any]:
         with session_scope() as session:
             yield RetrievalService(
                 session,
-                default_document_id_resolver=latest_per_bylaw_resolver,
+                default_document_id_resolver=retrieval_enabled_resolver,
             )
 
     return factory
@@ -281,7 +282,31 @@ def create_app(
         get_settings as _get_llm_settings,
     )
 
-    _chat_main_model = _get_llm_settings().main_model
+    _llm_settings = _get_llm_settings()
+    _chat_main_model = _llm_settings.main_model
+
+    # ABS-514: the provider that is actually serving traffic, taken off
+    # the gateway instance we were handed rather than by re-reading
+    # ``ADVISOR_LLM_PROVIDER``. The env var describes intent; the
+    # gateway's ``name`` describes reality, and the two can disagree
+    # (a test wiring ``MockGateway``, a caller passing an explicitly
+    # constructed backend). ``/healthz`` should report reality — the
+    # whole point of the field is to answer "is this run being
+    # metered?" without trusting configuration.
+    _gateway_provider = getattr(gateway, "name", "unknown")
+    # Presence only, never the value. This single boolean is what
+    # decides whether a turn bills against the metered Messages API.
+    _anthropic_key_present = bool(_llm_settings.anthropic_api_key)
+
+    # ABS-515: key presence says a turn *could* be billed; it does not say
+    # this advisor's gateway bills at all. Derive that from the same
+    # ``gateway.name`` ABS-514 reports, so the runner's consent gate and
+    # the human-readable provider can never disagree. ``is_metered`` fails
+    # closed, which is also what makes the ``"unknown"`` fallback above
+    # safe: a gateway we cannot name is assumed to spend money.
+    from advisor.llm.registry import is_metered as _is_metered  # noqa: PLC0415
+
+    _chat_metered = _is_metered(_gateway_provider)
 
     app = FastAPI(title="Halifax Bylaw Advisor", version="0.1.0")
 
@@ -543,6 +568,32 @@ def create_app(
             logger.warning("healthz: database connectivity check failed", exc_info=True)
             return "unreachable"
 
+    def _check_submission_storage() -> str:
+        """Return ``"ok"`` if uploads can be staged on disk, else ``"unwritable"``.
+
+        ABS-87: the advisor runs read-only in production, so the upload
+        endpoints only work when a writable volume is mounted at
+        ``SUBMISSION_STORAGE_DIR``. Reporting it here makes a missing
+        volume a one-curl post-deploy check instead of something the
+        first real uploader discovers. Deliberately does NOT flip the
+        overall status to 503 — submissions are not on the chat critical
+        path, and paging the whole service (the availability monitor
+        polls this endpoint) for a degraded side feature is the wrong
+        trade.
+        """
+        from advisor.api.submission_storage import (  # noqa: PLC0415
+            STORAGE_UNWRITABLE,
+            probe_storage_root,
+        )
+
+        try:
+            return probe_storage_root()
+        except Exception:  # noqa: BLE001 — health checks never raise
+            logger.warning(
+                "healthz: submission storage check failed", exc_info=True
+            )
+            return STORAGE_UNWRITABLE
+
     @app.get("/healthz", response_model=None)
     async def healthz():
         from fastapi.responses import JSONResponse  # noqa: PLC0415
@@ -553,6 +604,7 @@ def create_app(
         checks = {
             "database": db_status,
             "error_tracking": "sentry" if is_sentry_enabled() else "disabled",
+            "submission_storage": _check_submission_storage(),
         }
 
         try:
@@ -565,11 +617,26 @@ def create_app(
         # ABS-267: surface the active chat model so out-of-band runners
         # can verify they're hitting the model they expected before
         # spending money on an Opus run when they meant Haiku, etc.
+        #
+        # ABS-514: the model alone doesn't say whether a run is billed.
+        # ``provider`` comes off the constructed gateway, and
+        # ``anthropic_api_key_present`` reports the one fact that
+        # decides metering — as a boolean, never the key itself.
         body: dict[str, Any] = {
             "status": "ok",
             "checks": checks,
             "sli": sli,
-            "llm": {"main_model": _chat_main_model},
+            #
+            # ABS-515: ``metered`` states the billing consequence outright
+            # instead of leaving each caller to infer it from the provider
+            # name. ``scripts/run_test_prompts.py`` gates its
+            # ``--allow-metered`` consent check on this field.
+            "llm": {
+                "provider": _gateway_provider,
+                "main_model": _chat_main_model,
+                "anthropic_api_key_present": _anthropic_key_present,
+                "metered": _chat_metered,
+            },
         }
 
         if db_status == "unreachable":
@@ -1233,18 +1300,32 @@ def _patch_usage_event_tokens(
         return
     metadata: dict | None = None
     if trip is not None:
-        # ABS-305: both cost breakers (per-request and cumulative) record
-        # a ``CircuitTripInfo`` on ``last_turn_circuit_trip``. Carry the
+        # ABS-305 / ABS-404: all three cost breakers (per-request,
+        # cumulative, and the measured wallet ceiling) record a
+        # ``CircuitTripInfo`` on ``last_turn_circuit_trip``. Carry the
         # tool loop's ``terminated_reason`` so analytics can tell a
-        # single-oversized-request trip (``cost_circuit_trip``) apart
-        # from a whole-turn cumulative trip (``cumulative_cost_trip``);
-        # both still set the flat ``cost_circuit_trip`` boolean so the
+        # single-oversized-request trip (``cost_circuit_trip``) from a
+        # whole-turn cumulative trip (``cumulative_cost_trip``) from a
+        # measured wallet-ceiling trip (``wallet_cap_trip``); all three
+        # still set the flat ``cost_circuit_trip`` boolean so the
         # existing "any trip" query keeps working.
+        #
+        # ABS-404 note on units: for a ``wallet_cap_trip`` the
+        # ``estimated_input_tokens`` / ``turn_input_token_budget`` keys
+        # hold *measured wallet tokens* (input + output) rather than an
+        # input-token estimate. The key names are kept for backwards
+        # compatibility with existing analytics; ``trip_reason`` is the
+        # discriminator, and ``trip_unit`` states the unit outright so a
+        # query never has to infer it.
         metrics = chat_session.last_tool_loop_metrics
+        trip_reason = metrics.terminated_reason if metrics is not None else None
         metadata = {
             "cost_circuit_trip": True,
-            "trip_reason": (
-                metrics.terminated_reason if metrics is not None else None
+            "trip_reason": trip_reason,
+            "trip_unit": (
+                "measured_wallet_tokens"
+                if trip_reason == "wallet_cap_trip"
+                else "estimated_input_tokens"
             ),
             "estimated_input_tokens": trip.estimated_input_tokens,
             "turn_input_token_budget": trip.budget,

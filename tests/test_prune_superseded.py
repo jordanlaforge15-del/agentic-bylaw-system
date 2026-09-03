@@ -350,3 +350,50 @@ def test_no_delete_when_nothing_superseded(tmp_path):
     assert result.deleted_count == 0
     with session_scope(db_url) as session:
         assert session.query(Document).count() == 1
+
+
+def test_enabled_document_is_never_pruned(tmp_path):
+    # ABS-413: the published corpus is operator-curated — a superseded-by-
+    # recency document that is retrieval-enabled must survive the prune and
+    # be reported as skipped, not deleted.
+    db_url = f"sqlite:///{tmp_path / 'test.db'}"
+    create_all(db_url)
+    with session_scope(db_url) as session:
+        old = _seed_doc(session, ingestion_timestamp=_ts(2020), file_hash="old")
+        old.retrieval_enabled = True
+        old_id = old.id
+        _seed_doc(session, ingestion_timestamp=_ts(2025), file_hash="new")
+
+        dry = prune_superseded_documents(session, keep_latest=1, dry_run=True)
+        assert dry.entries == []
+        assert [e.id for e in dry.skipped_enabled] == [old_id]
+
+        wet = prune_superseded_documents(session, keep_latest=1, dry_run=False)
+        assert wet.deleted_count == 0
+        assert [e.id for e in wet.skipped_enabled] == [old_id]
+
+    with session_scope(db_url) as session:
+        assert session.query(Document).count() == 2
+
+
+def test_disabled_sibling_still_prunes_alongside_enabled_survivor(tmp_path):
+    # Three ingests: newest kept by recency, an enabled middle one shielded
+    # by the flag, and a disabled oldest one that prunes normally.
+    db_url = f"sqlite:///{tmp_path / 'test.db'}"
+    create_all(db_url)
+    with session_scope(db_url) as session:
+        oldest = _seed_doc(session, ingestion_timestamp=_ts(2019), file_hash="oldest")
+        oldest_id = oldest.id
+        middle = _seed_doc(session, ingestion_timestamp=_ts(2022), file_hash="middle")
+        middle.retrieval_enabled = True
+        middle_id = middle.id
+        _seed_doc(session, ingestion_timestamp=_ts(2025), file_hash="newest")
+
+        result = prune_superseded_documents(session, keep_latest=1, dry_run=False)
+        assert result.deleted_count == 1
+        assert [e.id for e in result.entries] == [oldest_id]
+        assert [e.id for e in result.skipped_enabled] == [middle_id]
+
+    with session_scope(db_url) as session:
+        remaining = {d.file_hash for d in session.query(Document).all()}
+        assert remaining == {"middle", "newest"}

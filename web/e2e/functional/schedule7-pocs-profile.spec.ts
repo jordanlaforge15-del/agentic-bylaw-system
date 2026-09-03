@@ -21,35 +21,47 @@
 //
 // Approach
 // --------
-// 1. beforeAll — scripts/seed_e2e_pocs.py ingests the POCS dataset (a Quinpool
-//    Road segment + a control Gottingen Street segment) through
-//    ingest_geo_dataset (populating the PostGIS geometry column), links it to
-//    the Regional Centre LUB "Schedule 7" fragment, and seeds geocode-cache
-//    rows for "6184 Quinpool Road" (~10 m off the centreline) and a far-away
-//    "500 Nowhere Road" control.
+// 1. beforeAll — scripts/seed_e2e_rclub_unified.py (ABS-433) ingests the POCS
+//    dataset (a Quinpool Road segment + a control Gottingen Street segment)
+//    through ingest_geo_dataset (populating the PostGIS geometry column),
+//    links it to the unified Regional Centre LUB document's "Schedule 7"
+//    fragment, and seeds geocode-cache rows for "6184 Quinpool Road" (~10 m
+//    off the centreline) and a far-away "500 Nowhere Road" control.
 // 2. Each test posts to POST /v1/_test/address-profile and asserts on the
 //    AddressProfile's abuts_pedestrian_street branch.
+//
+// Lot-depth measurement (ABS-435)
+// -------------------------------
+// The seed also ingests a parcel fabric (role property_parcels) with two
+// lot-depth fixtures, because abutment is measured from the parcel boundary
+// rather than the geocoded rooftop point — see the 6321 Quinpool Road and
+// 12 Backlot Lane tests for the full rationale. That path is PostGIS-specific
+// (an ST_Contains parcel lookup feeding an ST_DWithin against the corridor),
+// so e2e is where the two queries are proven to compose.
 //
 // Shared-document regression (ABS-350 seed fix, commits 4f58978 / 24b3803)
 // ------------------------------------------------------------------------
 // Schedule 7 is part of the Regional Centre Land Use By-Law, the same bylaw the
-// address-profile seed uses for its zone/height/FAR/heritage overlays. The
-// production advisor scopes retrieval with latest_per_bylaw_resolver — only the
-// newest document per (municipality, bylaw_name) stays in scope. An earlier
+// address-profile seed uses for its zone/height/FAR/heritage overlays. At the
+// time the production advisor scoped retrieval with latest_per_bylaw_resolver —
+// only the newest document per (municipality, bylaw_name) stayed in scope
+// (since ABS-413 the scope is the operator-enabled document set). An earlier
 // version of this seed minted a SECOND, newer "Regional Centre Land Use By-Law"
 // document, which evicted the zone-overlay document and regressed 100 Robie
 // Street to zone=null (breaking abs274-bylaw-query / address-profile-mcp-tool
-// post-merge). The seed now binds to the shared document and purges the stale
-// one. This spec runs BOTH seeds — address-profile first, then POCS (the
-// eviction ordering) — and the third test asserts the zone and the Schedule 7
-// overlay cite the SAME document id, the invariant the fix restores. (The
-// /v1/_test endpoint is unscoped, so it observes the shared-document invariant
-// rather than the scoped eviction itself; see that test for the full rationale.)
+// post-merge). Since ABS-433 the whole Regional Centre corpus — zone overlays
+// AND the Schedule 7 layer — is composed onto the SINGLE unified document by
+// one seed, so the fragmentation cannot recur; the third test asserts the
+// zone and the Schedule 7 overlay cite the SAME document id, the invariant
+// the unification guarantees. (The /v1/_test endpoint is unscoped, so it
+// observes the shared-document invariant rather than the scoped eviction
+// itself; see that test for the full rationale.)
 
 import { execSync } from "node:child_process";
 import * as path from "node:path";
 
 import { E2E_API_URL, expect, test } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 
 type Citation = {
@@ -87,10 +99,7 @@ function runSeed(scriptName: string): void {
   const venvPython = path.join(repoRoot, ".venv", "bin", "python");
   // ABS-207: honor PG_PORT so this seed lands in the right Postgres when a
   // worktree overrides ports for parallel `make e2e`.
-  const pgPort = process.env.PG_PORT || "5432";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
 
   execSync(`"${venvPython}" "${seed}"`, {
     env: {
@@ -120,13 +129,11 @@ async function postProfile(
 
 
 test.beforeAll(() => {
-  // Order matters for the non-eviction regression: seed the address-profile
-  // document (zone/height/FAR/heritage overlays) FIRST, then the POCS layer.
-  // Under the pre-fix seed the POCS document was newer and would evict the
-  // zone document from latest_per_bylaw scope; the fix binds both to one shared
-  // document, so this ordering must now leave the zone resolvable.
-  runSeed("seed_e2e_address_profile.py");
-  runSeed("seed_e2e_pocs.py");
+  // ABS-433: one composed seed produces the zone/height/FAR/heritage/bonus
+  // overlays AND the POCS layer on a single retrieval-enabled document, so
+  // the historical eviction ordering (address-profile first, then POCS) no
+  // longer exists to get wrong.
+  runSeed("seed_e2e_rclub_unified.py");
 });
 
 
@@ -151,7 +158,63 @@ test("6184 Quinpool Rd abuts a Schedule 7 pedestrian-oriented commercial street"
   const pocsCitation = profile.citations.find((c) => c.backs.includes("pedestrian_street"));
   expect(pocsCitation, "expected a pedestrian_street citation").toBeTruthy();
   expect(pocsCitation?.citation_path).toBe("schedule_7");
-  expect(pocsCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law");
+  expect(pocsCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law (Unified RC-LUB E2E)");
+});
+
+
+test("6321 Quinpool Rd — a deep lot on the corridor abuts it (ABS-435)", async ({
+  request,
+}) => {
+  // ABS-435 regression, on the real PostGIS stack.
+  //
+  // A civic geocode returns a rooftop/centroid point, so its distance to the
+  // street centreline is dominated by lot depth, not by whether the lot fronts
+  // the street. Over the HRM parcels along Quinpool Road that distance runs
+  // 0.1-283 m for parcels that genuinely front it and starts at 26.5 m for
+  // parcels that don't — the populations overlap, so no point threshold
+  // separates them. 6321 Quinpool Rd (rooftop 36.7 m out, squarely on the
+  // designated corridor) therefore reported abuts_pedestrian_street=false, and
+  // that flag picks between s.38(2) (ground-floor office prohibited on a POCS
+  // street) and s.69(d) (permitted otherwise) — so the false negative produces
+  // the wrong permitted-use answer.
+  //
+  // The fix measures from the parcel polygon instead. The seeded fixture
+  // mirrors the real address: rooftop 37 m off the corridor (outside the 30 m
+  // point buffer), front lot line 9 m off (inside the 15 m parcel buffer).
+  // Only the parcel path can make this true, and only against the corrected
+  // corridor geometry — the pre-ABS-435 hand-traced Quinpool line ran 130 m
+  // from this address.
+  const profile = await postProfile(request, "6321 Quinpool Road");
+
+  expect(profile.unresolvable).toBe(false);
+  expect(profile.abuts_pedestrian_street).toBe(true);
+
+  const pocs = profile.overlays.find((o) => o.kind === "pedestrian_street");
+  expect(pocs, "expected a pedestrian_street overlay").toBeTruthy();
+  expect(pocs?.label).toBe("Quinpool Road");
+  expect(pocs?.citation).toBe("Schedule 7");
+
+  const pocsCitation = profile.citations.find((c) => c.backs.includes("pedestrian_street"));
+  expect(pocsCitation, "expected a pedestrian_street citation").toBeTruthy();
+  expect(pocsCitation?.citation_path).toBe("schedule_7");
+});
+
+
+test("a back lot inside the point buffer does not abut (ABS-435 guard)", async ({
+  request,
+}) => {
+  // The guard that keeps ABS-435 a measurement fix rather than a threshold
+  // bump. This lot's rooftop point is 28 m from the corridor — INSIDE the 30 m
+  // point buffer, so the pre-fix code called it abutting — but its front lot
+  // line is 25 m out, so it does not front the designated street. Simply
+  // widening the point buffer to catch 6321 Quinpool would have entrenched
+  // this false positive; measuring from the parcel keeps it a definitive
+  // false, which is what lets the agent apply s.69(d).
+  const profile = await postProfile(request, "12 Backlot Lane");
+
+  expect(profile.unresolvable).toBe(false);
+  expect(profile.abuts_pedestrian_street).toBe(false);
+  expect(profile.overlays.some((o) => o.kind === "pedestrian_street")).toBe(false);
 });
 
 
@@ -177,7 +240,7 @@ test("Schedule 7 and the zone overlays share one Regional Centre LUB document", 
   // Schedule 7 IS part of the Regional Centre Land Use By-Law that also carries
   // the zoning/height/FAR/heritage overlays. The pre-fix POCS seed minted a
   // SECOND "Regional Centre Land Use By-Law" document (its own file_hash) with a
-  // newer ingestion_timestamp. Under the production latest_per_bylaw_resolver
+  // newer ingestion_timestamp. Under the then-production latest_per_bylaw_resolver
   // that newer document evicted the zone document from scope, regressing
   // address_lookup for 100 Robie Street to zone=null on dev post-merge
   // (abs274-bylaw-query / address-profile-mcp-tool). The fix binds the POCS seed
@@ -196,7 +259,7 @@ test("Schedule 7 and the zone overlays share one Regional Centre LUB document", 
 
   const zoneCitation = robie.citations.find((c) => c.backs.includes("zone"));
   expect(zoneCitation, "expected a zone citation").toBeTruthy();
-  expect(zoneCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law");
+  expect(zoneCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law (Unified RC-LUB E2E)");
   expect(zoneCitation?.document_id).toBeGreaterThan(0);
 
   const quinpool = await postProfile(request, "6184 Quinpool Road");
@@ -204,7 +267,7 @@ test("Schedule 7 and the zone overlays share one Regional Centre LUB document", 
     c.backs.includes("pedestrian_street"),
   );
   expect(pocsCitation, "expected a pedestrian_street citation").toBeTruthy();
-  expect(pocsCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law");
+  expect(pocsCitation?.bylaw_name).toBe("Regional Centre Land Use By-Law (Unified RC-LUB E2E)");
 
   // The invariant the seed fix restores: one document holds both overlays.
   expect(pocsCitation?.document_id).toBe(zoneCitation?.document_id);

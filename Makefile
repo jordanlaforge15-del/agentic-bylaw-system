@@ -1,4 +1,4 @@
-.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland
+.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate check-migration-drift init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland eval-retrieval-baseline check-retrieval-baseline advisor-eval
 
 DB_URL ?= postgresql+psycopg://layer1:layer1@localhost:5432/layer1
 
@@ -27,6 +27,12 @@ db-down:
 
 migrate:
 	DATABASE_URL="$(DB_URL)" alembic upgrade head
+
+# Is the target DB behind the migrations on this branch? Exits 1 when it is.
+# Run it before a data migration: applying data migrations on top of a pending
+# schema migration is the split state ABS-499 exists to surface.
+check-migration-drift:
+	DATABASE_URL="$(DB_URL)" python scripts/check_migration_drift.py
 
 init-db:
 	layer1 init-db --db-url "$(DB_URL)"
@@ -62,10 +68,13 @@ learn-city-hrm-mainland:
 	  --output "$(LEARN_CITY_OUTPUT)"
 
 # --- Instrumented UI tests (Playwright) -----------------------------------
-# `make e2e-up` boots the test stack (Postgres test DB + uvicorn:8001 +
-# next dev:3001) and seeds a demo user. `make e2e` runs the full Playwright
-# suite end-to-end and tears the stack down; `make e2e-smoke` runs the
-# smoke subset across all viewport projects.
+# `make e2e-up` boots the test stack: the DEDICATED ephemeral e2e Postgres
+# (compose service postgres-e2e, host :5433 by default — never the dev
+# instance on :5432) + uvicorn:8001 + next dev:3001, then migrates and
+# seeds a demo user. `make e2e` runs the full Playwright suite end-to-end
+# and tears the stack down; `make e2e-down` destroys the e2e Postgres
+# container AND its volume, so every run starts from a pristine instance
+# (ABS-428). `make e2e-smoke` runs the smoke subset across all viewports.
 
 e2e-install:
 	cd web && npm install
@@ -84,3 +93,33 @@ e2e-smoke: e2e-up
 e2e: e2e-up
 	cd web && NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true npx playwright test
 	./scripts/e2e-down.sh
+
+# --- Retrieval eval baseline (ABS-502) -----------------------------------
+# `make eval-retrieval-baseline` is THE documented way to re-record
+# evals/retrieval/BASELINE.json. It needs the dev corpus, so it takes an
+# explicit DSN rather than the ambient one: a worktree shell set up for a
+# parallel e2e run exports DATABASE_URL / PG_PORT pointing at that worktree's
+# ephemeral, empty database, and the harness would then measure nothing.
+# Override with `make eval-retrieval-baseline EVAL_DB_URL=…`.
+#
+# `make check-retrieval-baseline` is the gate: it fails when the retrieval code
+# has moved and the baseline has not. It needs no database.
+
+EVAL_DB_URL ?= $(DB_URL)
+PYTHON ?= $(shell test -x .venv/bin/python && echo .venv/bin/python || echo python)
+
+eval-retrieval-baseline:
+	$(PYTHON) scripts/eval_retrieval_recall.py --database-url "$(EVAL_DB_URL)"
+
+# The one documented way to bring up an advisor for a prompt-corpus eval
+# run (ABS-515). Pins the provider and model explicitly instead of
+# inheriting them from .env, states the billing mode in a banner, and
+# prints the run_test_prompts.py command — with its --allow-metered
+# consent flag — to paste in a second shell. Foreground; Ctrl+C stops it.
+#   make advisor-eval
+#   make advisor-eval ADVISOR_EVAL_MODEL=claude-haiku-4-5 ADVISOR_EVAL_PORT=8010
+advisor-eval:
+	./scripts/advisor-eval.sh
+
+check-retrieval-baseline:
+	$(PYTHON) scripts/check_retrieval_baseline.py

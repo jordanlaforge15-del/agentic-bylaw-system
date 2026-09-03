@@ -114,7 +114,7 @@ def test_footnote_like_numeric_line_is_not_treated_as_section():
     assert fragments[0].fragment_type.value == "footnote"
 
 
-def test_duplicate_citation_paths_are_downgraded_to_uncertain():
+def test_duplicate_citation_paths_are_blanked_and_recorded():
     fragments = reconstruct_hierarchy(
         [
             block("26 Parking", 0, BlockType.HEADING),
@@ -125,8 +125,36 @@ def test_duplicate_citation_paths_are_downgraded_to_uncertain():
     duplicate_clauses = [fragment for fragment in fragments if fragment.citation_label == "(g)"]
     assert len(duplicate_clauses) == 2
     assert all(fragment.citation_path is None for fragment in duplicate_clauses)
-    assert all(fragment.parse_status == ParseStatus.UNCERTAIN for fragment in duplicate_clauses)
     assert all(fragment.metadata.get("duplicate_citation_path") == "26 > (g)" for fragment in duplicate_clauses)
+
+
+def test_duplicate_citation_paths_keep_parse_status_and_confidence():
+    """ABS-480: a path collision is a naming failure, not a parse failure.
+
+    The demotion this used to apply is read by the retrieval scorer as a
+    quality signal (+1.0 parsed becomes -2.0), so a cleanly-parsed provision
+    was penalised in ranking for the fact that a *sibling* shared its address.
+    The control fragment ``(h)`` never collides, so its status and confidence
+    are what the colliding clauses would have carried without the collision.
+    """
+    blocks = [
+        block("26 Parking", 0, BlockType.HEADING),
+        block("(g) First clause under section 26.", 1, BlockType.LIST_ITEM),
+        block("(g) Second clause under section 26.", 2, BlockType.LIST_ITEM),
+        block("(h) A clause whose path is unique.", 3, BlockType.LIST_ITEM),
+    ]
+    fragments = reconstruct_hierarchy(blocks)
+
+    control = next(fragment for fragment in fragments if fragment.citation_label == "(h)")
+    assert control.citation_path == "26 > (h)"
+    assert control.parse_status == ParseStatus.PARSED
+    assert control.confidence is not None and control.confidence > 0.6
+
+    duplicate_clauses = [fragment for fragment in fragments if fragment.citation_label == "(g)"]
+    assert len(duplicate_clauses) == 2
+    for fragment in duplicate_clauses:
+        assert fragment.parse_status == ParseStatus.PARSED
+        assert fragment.confidence == control.confidence
 
 
 def test_footer_blocks_are_not_converted_to_fragments():
@@ -692,3 +720,75 @@ def test_roman_numeral_parts_i_through_xx_all_captured():
     expected = {f"Part {r}" for r in roman_parts}
     missing = expected - part_labels
     assert not missing, f"These Part labels were not captured: {sorted(missing)}"
+
+
+# --- ABS-488: the missing discriminator ------------------------------------
+
+
+def test_part_chapters_get_distinct_citation_paths():
+    """All eight of Part I's chapters used to compute the bare "Part I" and collide."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("Part I: Administration", 0, BlockType.HEADING),
+            block("Part I, Chapter 1: General Administration", 1, BlockType.HEADING),
+            block("Part I, Chapter 2: Development Permit", 2, BlockType.HEADING),
+        ]
+    )
+    assert [f.citation_path for f in fragments] == [
+        "Part I",
+        "Part I, Chapter 1",
+        "Part I, Chapter 2",
+    ]
+
+
+def test_sections_under_a_chapter_keep_citing_the_bare_part():
+    """The chapter discriminates the heading, not every section beneath it."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("Part I, Chapter 2: Development Permit", 0, BlockType.HEADING),
+            block("9 Subject to Section 10, no person shall undertake any development.", 1, BlockType.HEADING),
+        ]
+    )
+    assert fragments[0].citation_path == "Part I, Chapter 2"
+    assert fragments[1].citation_path == "Part I > 9"
+
+
+def test_repeated_clause_groups_under_one_section_stay_addressable():
+    """9(1)(a) and 9(2)(a) both computed "Part I > 9 > [heading] > (a)" (ABS-488)."""
+    fragments = reconstruct_hierarchy(
+        [
+            block("Part I: Administration", 0, BlockType.HEADING),
+            block("Development Permit Exemptions", 1, BlockType.HEADING),
+            block("9 (1) The following developments are exempt:", 2, BlockType.HEADING),
+            block("(a) accessory structures of 20.0 square metres or less;", 3, BlockType.LIST_ITEM),
+            block("(b) kiosks of 20.0 square metres or less.", 4, BlockType.LIST_ITEM),
+            block(
+                "On a registered heritage property, a development permit is required for:",
+                5,
+                BlockType.LIST_ITEM,
+            ),
+            block("(a) uncovered structures less than 0.6 metre in height;", 6, BlockType.LIST_ITEM),
+            block("(b) fences.", 7, BlockType.LIST_ITEM),
+        ]
+    )
+    clauses = [f for f in fragments if f.fragment_type == FragmentType.CLAUSE]
+    assert len(clauses) == 4
+    paths = [f.citation_path for f in clauses]
+    assert None not in paths, "every labelled clause must keep a path"
+    assert len(set(paths)) == 4, f"clause paths collided: {paths}"
+    assert paths[0] == "Part I > 9(1) > (a)"
+    assert all(f.parse_status == ParseStatus.PARSED for f in clauses)
+
+
+def test_unreachable_clause_is_still_capped_and_marked_uncertain():
+    fragments = reconstruct_hierarchy(
+        [
+            block("Some floating stem with no addressable ancestor:", 0, BlockType.LIST_ITEM),
+            block("(a) a requirement.", 1, BlockType.LIST_ITEM),
+        ]
+    )
+    clause = fragments[1]
+    assert clause.fragment_type == FragmentType.CLAUSE
+    assert clause.citation_path is None
+    assert clause.parse_status == ParseStatus.UNCERTAIN
+    assert clause.confidence is not None and clause.confidence <= 0.6

@@ -3,6 +3,8 @@ import { Inter_Tight, JetBrains_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { SentryInit } from "../components/sentry-init";
 import { GeneralFeedback } from "../components/GeneralFeedback";
+import { siteUrl } from "../lib/site-url";
+import { pageMetadata } from "../lib/page-metadata";
 import "./globals.css";
 
 const interTight = Inter_Tight({
@@ -19,11 +21,39 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
-export const metadata: Metadata = {
-  title: "ABS° — Agentic Bylaw System",
-  description:
-    "An expert planner integrated into your workflow. ABS° reads the Halifax Regional Centre Land Use By-law, applied to your specific parcel. More HRM bylaws coming.",
-};
+// Root metadata (ABS-510).
+//
+// `generateMetadata` rather than a static `metadata` const so that
+// `metadataBase` is resolved when the page renders, not when the module
+// is first evaluated. SITE_URL is a plain server-side env var set on the
+// container (see web/lib/site-url.ts for why it is not NEXT_PUBLIC_*),
+// and robots.ts / sitemap.ts already read it per request for the same
+// reason. Statically prerendered routes still bake the value at build
+// time — that is a framework limit, not a choice — but the fallback in
+// siteUrl() is the production hostname, so a build with no SITE_URL
+// emits the right origin anyway.
+//
+// Everything downstream (canonical, og:url, og:image, twitter:image) is
+// declared as a root-relative path and resolved against this base, so
+// the hostname is never repeated anywhere.
+//
+// The `canonical: "/"` here is correct only for the home page. Every
+// other indexable route overrides it via pageMetadata() in
+// web/lib/page-metadata.ts — a page that forgets to would declare
+// itself a duplicate of "/". The ABS-510 spec asserts a
+// self-referencing canonical on every route in PUBLIC_ROUTES, which is
+// what catches that omission.
+export function generateMetadata(): Metadata {
+  return {
+    metadataBase: new URL(siteUrl()),
+    ...pageMetadata({
+      path: "/",
+      title: "ABS° — Agentic Bylaw System",
+      description:
+        "An expert planner integrated into your workflow. ABS° reads the Halifax Regional Centre Land Use By-law, applied to your specific parcel. More HRM bylaws coming.",
+    }),
+  };
+}
 
 // Mobile-first viewport. `viewportFit: "cover"` lets the page paint into
 // the iPhone notch / home-indicator areas; pages that need to dodge those

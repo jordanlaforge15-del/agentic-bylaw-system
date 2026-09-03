@@ -30,7 +30,7 @@ import layer1.parsers.ifc_submission  # noqa: F401
 
 from advisor.db.models import User
 from advisor.api.api_key_auth import api_key_user_dependency
-from layer1.config import get_settings
+from advisor.api.submission_storage import resolve_storage_root, stage_upload
 from layer1.models.submission_schemas import (
     SubmissionIngestConfig,
     SubmissionIngestResult,
@@ -71,11 +71,7 @@ def build_integrations_router(
     ``evaluator_factory`` is optional; the /evaluate endpoint returns
     503 when it's absent (matching the submissions router behaviour).
     """
-    storage_root = (
-        Path(storage_dir)
-        if storage_dir is not None
-        else Path(get_settings().submission_storage_dir)
-    )
+    storage_root = resolve_storage_root(storage_dir)
 
     require_api_key_user = api_key_user_dependency(db_session_factory)
 
@@ -126,15 +122,14 @@ def build_integrations_router(
         with _open_db() as db:
             parcel = _resolve_parcel(db, parcel_id=parcel_id, parcel_address=parcel_address)
 
-            user_dir = storage_root / f"user-{user.id}"
-            user_dir.mkdir(parents=True, exist_ok=True)
-            target_path = user_dir / file.filename
-            with target_path.open("wb") as out:
-                while True:
-                    chunk = file.file.read(1 << 20)
-                    if not chunk:
-                        break
-                    out.write(chunk)
+            # Same staging helper as the Clerk-authenticated router: an
+            # unwritable storage root surfaces as 503, not a 500 (ABS-87).
+            target_path = stage_upload(
+                storage_root,
+                user_id=user.id,
+                filename=file.filename or "",
+                fileobj=file.file,
+            )
 
             try:
                 result: SubmissionIngestResult = ingest_submission(

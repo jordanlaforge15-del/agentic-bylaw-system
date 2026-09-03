@@ -26,6 +26,7 @@ import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 
 import { E2E_API_URL } from "../fixtures/test-env";
+import { resolveDatabaseUrl } from "../helpers/database-url";
 
 // FREE_QUESTION_GRANT in src/advisor/db/cases.py.
 const FREE_QUESTION_GRANT = 3;
@@ -40,10 +41,7 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const VENV_PYTHON = path.join(REPO_ROOT, ".venv", "bin", "python");
 
 function pyEnv(): NodeJS.ProcessEnv {
-  const pgPort = process.env.PG_PORT || "5432";
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
+  const databaseUrl = resolveDatabaseUrl();
   return {
     ...process.env,
     DATABASE_URL: databaseUrl,

@@ -37,6 +37,10 @@ Usage::
 """
 from __future__ import annotations
 
+# ABS-428: must precede any advisor/layer1 import so the cached settings
+# resolve DATABASE_URL to the dedicated e2e Postgres instance, never dev.
+import e2e_db_default  # noqa: F401  isort: skip
+
 import json
 import math
 import sys
@@ -50,6 +54,7 @@ from layer1.db.base import (
     GeocodeCache,
     utcnow,
 )
+from layer1.db.geometry import sync_feature_geometry
 from layer1.db.session import session_scope
 from layer1.models.enums import ParseStatus
 
@@ -277,27 +282,14 @@ def _ensure_feature(
 
 
 def _populate_postgis_geometry(db, dataset_id: int) -> None:
-    """Mirror the geometry-on-ingest step in ``ingest_dataset.py``.
+    """Run the same single writer ``ingest_dataset.py`` uses (ABS-491).
 
     Migration 0009 added the ``geometry`` PostGIS column and backfilled
     rows present at upgrade time. New rows inserted by this script need
     the column populated themselves or every ``ST_Contains`` /
     ``ST_Intersects`` against them will miss.
     """
-    bind = getattr(db, "bind", None)
-    if bind is None or bind.dialect.name != "postgresql":
-        return
-    db.execute(
-        text(
-            """
-            UPDATE external_dataset_feature
-               SET geometry = ST_GeomFromGeoJSON(geometry_geojson::text)
-             WHERE external_dataset_id = :ds_id AND geometry IS NULL
-            """
-        ),
-        {"ds_id": dataset_id},
-    )
-    db.flush()
+    sync_feature_geometry(db, dataset_id=dataset_id)
 
 
 def _ensure_geocode_cache(

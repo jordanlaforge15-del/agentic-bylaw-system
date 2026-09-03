@@ -15,12 +15,16 @@ from pathlib import Path
 import pytest
 
 from bylaw_retrieval.retrieval import (
+    EVIDENCE_CLASS_CONFIDENCE,
+    MIN_GATED_EVIDENCE_CONFIDENCE,
     CitationLookupRequest,
+    EvidenceClass,
+    RetrievalMatch,
     RetrievalRequest,
     RetrievalService,
     ZoneProfile,
 )
-from bylaw_retrieval.retrieval.service import _extract_height_m
+from bylaw_retrieval.retrieval.service import _classify_evidence, _extract_height_m
 from layer1.db.base import Document, SourceFragment
 from layer1.db.init_db import create_all
 from layer1.db.session import session_scope
@@ -364,16 +368,20 @@ def test_get_zone_profile_low_confidence_returns_null_field(tmp_path: Path):
         doc = _add_document(session)
         # Zone code lives only in the fragment body, and the citation
         # path/label carry no dimension keywords — a weak (low-score)
-        # match for "LOWC-1 maximum height lot coverage". The height
+        # match for "LOWC maximum height lot coverage". The height
         # value IS extractable from the prose, so this isolates the
         # confidence gate rather than a missing value.
         _add_fragment(
             session,
             doc.id,
-            text="In LOWC-1 the maximum permitted height is 12.0 metres.",
-            # Digit-free path/label so the zone's '1' token can't anchor
+            text="In LOWC the maximum permitted height is 12.0 metres.",
+            # Digit-free zone code and path/label, so nothing can anchor
             # the score via a citation_path match — the only signal is the
             # weak body-text overlap, keeping confidence below threshold.
+            # (Before ABS-478 this fixture used "LOWC-1"; the zone's '1'
+            # token then substring-matched the "12.0" in its own body text,
+            # so the gate was being tested against a token that only fired
+            # by accident. A digit-free code isolates the gate for real.)
             citation_path="General Standards",
             citation_label="General Standards",
             page=5,
@@ -381,7 +389,7 @@ def test_get_zone_profile_low_confidence_returns_null_field(tmp_path: Path):
         )
 
     with session_scope(db_url) as session:
-        profile = RetrievalService(session).get_zone_profile("LOWC-1")
+        profile = RetrievalService(session).get_zone_profile("LOWC")
 
     # Zone is found (not unknown) but the height field was gated out.
     assert profile.unknown_zone is False
@@ -515,6 +523,174 @@ def test_abs409_matrix_only_zone_is_known(tmp_path: Path):
         assert "Restaurant use" in profile.uses.permitted
 
 
+# ---------------------------------------------------------------------------
+# ABS-484 — UNKNOWN absorbs: a cell we could not read is undetermined, never
+# a prohibition, and it is never cited
+# ---------------------------------------------------------------------------
+
+
+# Row index of each MATRIX_409 use row, and the column index of each zone.
+_MATRIX_ROW = {label: idx for idx, (label, *_rest) in enumerate(MATRIX_409)}
+_MATRIX_COL = {zone: idx for idx, zone in enumerate(MATRIX_409[0])}
+
+
+def _punch_hole(session, *, use: str, zone: str) -> None:
+    """Delete a cell so the bound row has nothing to read in ``zone``'s column.
+
+    This is the extraction failure ABS-483 made producible: the row binding
+    survives (the bylaw HAS this use row), the cell does not.
+    """
+    from layer1.db.base import SourceTable, SourceTableCell
+
+    table_id = session.query(SourceTable).first().id
+    session.query(SourceTableCell).filter(
+        SourceTableCell.table_id == table_id,
+        SourceTableCell.row_index == _MATRIX_ROW[use],
+        SourceTableCell.col_index == _MATRIX_COL[zone],
+    ).delete(synchronize_session=False)
+    session.flush()
+
+
+def _add_use_prose(session, document_id: int, text: str, *, zone: str) -> None:
+    """A P/N prose use row — the other reading of the same permissions."""
+    _add_fragment(
+        session,
+        document_id,
+        text=text,
+        citation_path=f"Table 1B > {zone}",
+        citation_label=zone,
+        page=3,
+        order=500,
+    )
+    session.flush()
+
+
+def test_abs484_missing_cell_is_undetermined_not_not_permitted(tmp_path: Path):
+    """The headline bug: a hole in the COR column used to be served as an
+    authoritative prohibition. It must land in ``undetermined`` instead, while
+    the genuinely blank cell beside it keeps meaning not-permitted."""
+    db_url = f"sqlite:///{tmp_path / 'hole.db'}"
+    _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        _punch_hole(session, use="Multi-unit dwelling use", zone="COR")
+        profile = _service(db_url, session).get_zone_profile("COR")
+
+    assert profile.uses is not None
+    assert "Multi-unit dwelling use" in profile.uses.undetermined
+    assert "Multi-unit dwelling use" not in profile.uses.not_permitted
+    assert "Multi-unit dwelling use" not in profile.uses.permitted
+    # The blank-cell convention is real bylaw content and survives untouched.
+    assert "Restaurant use" in profile.uses.not_permitted
+    assert "Office use" in profile.uses.permitted
+
+
+def test_abs484_all_unknown_column_carries_no_citation_and_no_confidence(
+    tmp_path: Path,
+):
+    """When every cell in the column is a hole the profile asserts nothing, so
+    it must claim nothing: no 0.9 confidence, and no citation backing ``uses``
+    (a citation beside an UNKNOWN reads as evidence for a verdict)."""
+    db_url = f"sqlite:///{tmp_path / 'all_holes.db'}"
+    _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        for use in ("Restaurant use", "Office use", "Multi-unit dwelling use"):
+            _punch_hole(session, use=use, zone="COR")
+        profile = _service(db_url, session).get_zone_profile("COR")
+
+    assert profile.uses is not None
+    assert sorted(profile.uses.undetermined) == [
+        "Multi-unit dwelling use",
+        "Office use",
+        "Restaurant use",
+    ]
+    assert profile.uses.permitted == []
+    assert profile.uses.not_permitted == []
+    assert profile.uses.conditional == []
+    assert "uses" not in profile.confidence
+    assert [c for c in profile.citations if "uses" in c.backs] == []
+
+
+def test_abs484_prose_fallback_wins_for_an_undetermined_use(tmp_path: Path):
+    """The matrix path may no longer short-circuit while it holds UNKNOWNs: the
+    prose row states what the lost cell would have, so the use moves into
+    ``permitted`` and carries the prose fragment's citation."""
+    db_url = f"sqlite:///{tmp_path / 'prose_wins.db'}"
+    doc_id = _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        _punch_hole(session, use="Multi-unit dwelling use", zone="COR")
+        _add_use_prose(
+            session,
+            doc_id,
+            "Use Permissions COR multi-unit dwelling P daycare P",
+            zone="COR",
+        )
+        profile = _service(db_url, session).get_zone_profile("COR")
+
+    assert profile.uses is not None
+    assert "Multi-unit dwelling use" in profile.uses.permitted
+    assert profile.uses.undetermined == []
+    uses_paths = {c.citation_path for c in profile.citations if "uses" in c.backs}
+    assert "Table 1B > COR" in uses_paths
+    # The block now mixes a matrix reading with a weaker prose one, so the
+    # matrix's 0.9 no longer stands for the whole thing.
+    assert profile.confidence["uses"] < 0.9
+
+
+def test_abs484_prose_fallback_can_resolve_to_not_permitted(tmp_path: Path):
+    """Prose wins in both directions — an explicit 'N' is a real prohibition,
+    unlike the hole it replaces."""
+    db_url = f"sqlite:///{tmp_path / 'prose_n.db'}"
+    doc_id = _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        _punch_hole(session, use="Multi-unit dwelling use", zone="COR")
+        _add_use_prose(
+            session,
+            doc_id,
+            "Use Permissions COR multi-unit dwelling N daycare P",
+            zone="COR",
+        )
+        profile = _service(db_url, session).get_zone_profile("COR")
+
+    assert profile.uses is not None
+    assert "Multi-unit dwelling use" in profile.uses.not_permitted
+    assert profile.uses.undetermined == []
+
+
+def test_abs484_prose_silence_leaves_the_use_undetermined(tmp_path: Path):
+    """A prose row that simply doesn't mention the use resolves nothing — the
+    gap stays a gap rather than being read as an omission-is-prohibition."""
+    db_url = f"sqlite:///{tmp_path / 'prose_silent.db'}"
+    doc_id = _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        _punch_hole(session, use="Multi-unit dwelling use", zone="COR")
+        _add_use_prose(
+            session,
+            doc_id,
+            "Use Permissions COR daycare P single-unit dwelling N",
+            zone="COR",
+        )
+        profile = _service(db_url, session).get_zone_profile("COR")
+
+    assert profile.uses is not None
+    assert profile.uses.undetermined == ["Multi-unit dwelling use"]
+    assert "Multi-unit dwelling use" not in profile.uses.not_permitted
+    # Nothing prose-derived entered the block, so the matrix claim stands.
+    assert profile.confidence["uses"] == 0.9
+
+
+def test_abs484_determinate_zone_reports_no_undetermined(tmp_path: Path):
+    """Regression guard: the ABS-409 happy path must not grow a phantom
+    undetermined list."""
+    db_url = f"sqlite:///{tmp_path / 'clean.db'}"
+    _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        profile = _service(db_url, session).get_zone_profile("DH")
+
+    assert profile.uses is not None
+    assert profile.uses.undetermined == []
+    assert profile.confidence["uses"] == 0.9
+
+
 def test_abs409_caption_linked_citation_carries_path(tmp_path: Path):
     """After the ABS-409 caption linking pass, the uses citation resolves to
     the caption fragment's citation_path."""
@@ -550,3 +726,269 @@ def test_abs409_caption_linked_citation_carries_path(tmp_path: Path):
         assert uses_refs
         assert uses_refs[0].citation_path is not None
         assert uses_refs[0].citation_path.endswith("[Table 1A]")
+
+
+# ---------------------------------------------------------------------------
+# ABS-493 — confidence is an ordinal evidence class, not a function of how
+# many words the internal query happened to contain.
+#
+# See docs/decisions/ABS-493-CONFIDENCE-DEFINITION.md. The gate's *instinct*
+# (drop the value AND its citation below threshold) is unchanged; what these
+# tests pin down is that the threshold now reads WHERE the query's terms land
+# rather than HOW MANY of them land.
+# ---------------------------------------------------------------------------
+
+
+def _row_match(text: str, *, citation_path: str, citation_label: str) -> RetrievalMatch:
+    """A minimal match standing in for one retrieved fragment.
+
+    ``_classify_evidence`` reads only text / citation_path / citation_label, so
+    the rest is filler — deliberately including a ``score`` the classifier must
+    ignore.
+    """
+    return RetrievalMatch(
+        fragment_id=1,
+        document_id=1,
+        municipality="Halifax Regional Municipality",
+        bylaw_name="Regional Centre Land Use By-Law",
+        fragment_type="section",
+        citation_label=citation_label,
+        citation_path=citation_path,
+        page_start=4,
+        page_end=4,
+        parse_status="parsed",
+        text=text,
+        score=999.0,
+    )
+
+
+# The headline invariant (ABS-493 DoD #1): equal evidence, different query
+# word counts, same class — therefore the same gating outcome. "HR-2 setback"
+# tokenizes to 4 terms and "HR-2 floor area ratio" to 6, which is exactly the
+# spread that used to flip the old score/40 gate from 0.325 to 0.525 on one
+# and the same fragment.
+@pytest.mark.parametrize(
+    "path, label, expected_class, gated_in",
+    [
+        # Structurally addressed by the corpus: the row is FILED under HR-2.
+        ("Table 3 > HR-2", "HR-2", EvidenceClass.PATH_ANCHORED, True),
+        # Addressed only by its label.
+        ("Part V > 120", "HR-2", EvidenceClass.LABELLED_ROW, True),
+        # Not addressed at all — the zone is a word in the prose, nothing more.
+        ("General Standards", "General Standards", EvidenceClass.BODY_TERMS, False),
+    ],
+)
+def test_abs493_equal_evidence_gates_the_same_at_any_query_length(
+    path: str, label: str, expected_class: EvidenceClass, gated_in: bool
+):
+    body = (
+        "HR-2 Front Setback 3.0 m Side Setback 3.0 m Rear Setback 3.0 m "
+        "Floor Area Ratio 2.0"
+    )
+    match = _row_match(body, citation_path=path, citation_label=label)
+
+    short = _classify_evidence("HR-2 setback", match)
+    long = _classify_evidence("HR-2 floor area ratio", match)
+
+    assert short == long == expected_class
+    rung = EVIDENCE_CLASS_CONFIDENCE[expected_class]
+    assert (rung >= MIN_GATED_EVIDENCE_CONFIDENCE) is gated_in
+
+
+def test_abs493_evidence_class_ignores_the_match_score():
+    """The class is a property of (query, fragment), not of the score.
+
+    Two fragments with the same locus classify identically no matter what the
+    scorer summed — which is the whole point of taking the score out of the
+    gate.
+    """
+    strong = _row_match("HR-2 Front Setback 3.0 m", citation_path="Table 3 > HR-2", citation_label="HR-2")
+    weak = strong.model_copy(update={"score": 0.5})
+
+    assert _classify_evidence("HR-2 setback", strong) == EvidenceClass.PATH_ANCHORED
+    assert _classify_evidence("HR-2 setback", weak) == EvidenceClass.PATH_ANCHORED
+
+
+def test_abs493_ladder_is_walked_strongest_rung_first():
+    """Each rung, and the strict ordering between them."""
+    body = "off-street parking requirements apply to every development"
+
+    exact = _row_match(body, citation_path="Part V > 120", citation_label="Section 120")
+    assert _classify_evidence("Part V > 120", exact) == EvidenceClass.EXACT_PATH
+    # Path beats label beats body: the same query, three fragments.
+    assert (
+        _classify_evidence(
+            "off-street parking", _row_match(body, citation_path="Part V > Parking", citation_label="Section 120")
+        )
+        == EvidenceClass.PATH_ANCHORED
+    )
+    assert (
+        _classify_evidence(
+            "off-street parking", _row_match(body, citation_path="Part V > 120", citation_label="Parking rules")
+        )
+        == EvidenceClass.LABELLED_ROW
+    )
+    # Verbatim phrase in the body outranks scattered terms in the body.
+    assert _classify_evidence("off-street parking", exact) == EvidenceClass.BODY_PHRASE
+    assert _classify_evidence("off-street bicycle storage", exact) == EvidenceClass.BODY_TERMS
+    assert _classify_evidence("heritage conservation district", exact) == EvidenceClass.NO_MATCH
+
+    rungs = [
+        EVIDENCE_CLASS_CONFIDENCE[c]
+        for c in (
+            EvidenceClass.EXACT_PATH,
+            EvidenceClass.BOUND_TABLE_CELL,
+            EvidenceClass.PATH_ANCHORED,
+            EvidenceClass.LABELLED_ROW,
+            EvidenceClass.BODY_PHRASE,
+            EvidenceClass.BODY_TERMS,
+            EvidenceClass.NO_MATCH,
+        )
+    ]
+    assert rungs == sorted(rungs, reverse=True)
+    assert len(set(rungs)) == len(rungs), "rungs must be distinguishable"
+
+
+def test_abs493_cor_keeps_the_setbacks_its_two_token_query_used_to_lose(
+    tmp_path: Path,
+):
+    """The regression this issue was raised on, end to end.
+
+    Every zone in the fixture carries the identical ``Table 3 > <zone>``
+    setback row. Under ``score / 40.0`` the gate read query length instead of
+    evidence, so COR — whose code has no hyphen to split into extra tokens —
+    silently lost all three setbacks while CEN-2 kept them off the same row
+    shape. Same evidence must now mean same outcome AND the same rung.
+    """
+    db_url = f"sqlite:///{tmp_path / 'verbosity.db'}"
+    _seed_regional_centre(db_url)
+
+    setback_fields = ("front_setback_m", "side_setback_m", "rear_setback_m")
+    with session_scope(db_url) as session:
+        service = RetrievalService(session)
+        profiles = {
+            zone: service.get_zone_profile(zone, include=["dimensions"])
+            for zone in ("HR-2", "HR-1", "COR", "CEN-2")
+        }
+
+    for zone, profile in profiles.items():
+        assert profile.dimensions is not None
+        for field in setback_fields:
+            assert getattr(profile.dimensions, field) is not None, (
+                f"{zone}.{field} was gated out despite a Table 3 > {zone} row"
+            )
+            assert profile.confidence[field] == EVIDENCE_CLASS_CONFIDENCE[
+                EvidenceClass.PATH_ANCHORED
+            ]
+
+    # And the rungs agree across zones — not merely "all above threshold".
+    per_zone = [
+        tuple(profile.confidence[field] for field in setback_fields)
+        for profile in profiles.values()
+    ]
+    assert len(set(per_zone)) == 1, f"identical evidence produced differing rungs: {per_zone}"
+
+
+def test_abs493_body_text_prose_still_clears_the_gate_when_it_states_the_query(
+    tmp_path: Path,
+):
+    """Not every real answer is a table row.
+
+    The Part V parking rule is prose whose citation path ("Part V > 120") says
+    nothing about parking — it clears the gate on ``body_phrase`` because the
+    section states the query verbatim. Tightening the gate to structural
+    anchors alone would have silently dropped it, so this pins the rung.
+    """
+    db_url = f"sqlite:///{tmp_path / 'prose_gate.db'}"
+    _seed_regional_centre(db_url)
+
+    with session_scope(db_url) as session:
+        profile = RetrievalService(session).get_zone_profile("HR-2", include=["parking"])
+
+    assert profile.parking is not None
+    assert profile.parking.min_spaces_per_dwelling_unit == 1.0
+    assert profile.confidence["parking"] == EVIDENCE_CLASS_CONFIDENCE[
+        EvidenceClass.BODY_PHRASE
+    ]
+    assert "parking" in [field for c in profile.citations for field in c.backs]
+
+
+def test_abs493_matrix_uses_report_the_bound_table_cell_rung(tmp_path: Path):
+    """The ABS-409 matrix path's 0.9 is now a named rung on the same ladder,
+    not a free-floating constant — and it outranks every keyword-derived rung
+    below an outright citation-path identity match."""
+    db_url = f"sqlite:///{tmp_path / 'matrix_rung.db'}"
+    _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        profile = _service(db_url, session).get_zone_profile("DH")
+
+    assert profile.confidence["uses"] == EVIDENCE_CLASS_CONFIDENCE[
+        EvidenceClass.BOUND_TABLE_CELL
+    ]
+    assert (
+        EVIDENCE_CLASS_CONFIDENCE[EvidenceClass.BOUND_TABLE_CELL]
+        > EVIDENCE_CLASS_CONFIDENCE[EvidenceClass.PATH_ANCHORED]
+    )
+
+
+def _parent_the_matrix_table(session, document_id: int) -> None:
+    """Give the seeded matrix a caption fragment, the way a backfilled corpus
+    has one — which is what gives its citation a ``citation_path`` (ABS-524).
+
+    Every other matrix fixture here leaves the table unparented, so its
+    citation comes back path-less and exercises the ABS-409 label+pages
+    fallback. The live Regional Centre corpus is the other shape: Table 1B has
+    a parent, so its citation carries a path *and* a label — and the projection
+    used to drop the label whenever the path was there.
+    """
+    from layer1.db.base import SourceTable
+
+    fragment = SourceFragment(
+        document_id=document_id,
+        fragment_type=FragmentType.SECTION,
+        citation_label="Table 1A",
+        citation_path="Part I > [Table 1A]",
+        page_start=45,
+        page_end=45,
+        reading_order_start=800,
+        reading_order_end=800,
+        text="Part I — Table 1A: uses permitted in each zone.",
+        parse_status=ParseStatus.PARSED,
+        confidence=1.0,
+    )
+    session.add(fragment)
+    session.flush()
+    table = (
+        session.query(SourceTable).filter(SourceTable.document_id == document_id).first()
+    )
+    table.parent_fragment_id = fragment.id
+    session.flush()
+
+
+def test_abs524_parented_table_citation_keeps_both_path_and_label(tmp_path: Path):
+    """A use permission has to arrive quotable.
+
+    ``compact_zone_profile`` emitted the path alone when one was present, so
+    the model had to recover "Table 1A" by parsing "Part I > [Table 1A]" — and
+    in 2 of 5 recorded TC-022 runs it stated the permission and named no table
+    at all. Both fields now travel, and the permission table is bound to the
+    ``uses`` block rather than only to the citations list at the payload tail.
+    """
+    from advisor.chat.compact import compact_zone_profile
+
+    db_url = f"sqlite:///{tmp_path / 'parented_matrix.db'}"
+    document_id = _seed_matrix_corpus(db_url)
+    with session_scope(db_url) as session:
+        _parent_the_matrix_table(session, document_id)
+    with session_scope(db_url) as session:
+        profile = _service(db_url, session).get_zone_profile("DH")
+        compact = compact_zone_profile(profile)
+
+    uses_refs = [c for c in compact["citations"] if "uses" in (c.get("backs") or [])]
+    assert uses_refs, "the permission must be citable"
+    assert uses_refs[0]["citation_path"] == "Part I > [Table 1A]"
+    assert uses_refs[0]["citation_label"] == "Table 1A"
+
+    cite_as = compact["uses"]["cite_as"]
+    assert [c["citation_label"] for c in cite_as] == ["Table 1A"]
+    assert compact["uses"]["citation_instruction"]

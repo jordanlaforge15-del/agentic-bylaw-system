@@ -45,6 +45,7 @@ from advisor.llm.budget import (
     CircuitTripInfo,
     default_cumulative_token_budget,
     default_token_budget,
+    default_wallet_token_ceiling,
     estimate_request_input_tokens,
 )
 
@@ -80,17 +81,20 @@ class ToolLoopResult:
     natural text response, ``"iteration_cap"`` when we hit
     ``max_iterations`` and forced a text-only synthesis turn,
     ``"cost_circuit_trip"`` when the pre-flight token estimator caught a
-    single oversized request before it shipped, or
+    single oversized request before it shipped,
     ``"cumulative_cost_trip"`` (ABS-305) when the turn's running
     billed-equivalent total would have crossed the cumulative per-turn
+    ceiling, or ``"wallet_cap_trip"`` (ABS-404) when the turn's
+    *measured* wallet burn (input + output) reached the per-turn wallet
     ceiling. Callers can surface a UI hint when the answer was forced
     rather than organic, and persist the distinction in the audit trail.
 
-    ``circuit_trip`` carries the estimate and budget when either cost
-    breaker fired (the single request for ``cost_circuit_trip``, the
-    running turn total for ``cumulative_cost_trip``), so the chat route
-    can record both in the UsageEvent metadata. ``None`` when the turn
-    terminated normally.
+    ``circuit_trip`` carries the token count and budget when any cost
+    breaker fired (the estimated single request for
+    ``cost_circuit_trip``, the estimated running turn total for
+    ``cumulative_cost_trip``, the measured wallet burn for
+    ``wallet_cap_trip``), so the chat route can record all three in the
+    UsageEvent metadata. ``None`` when the turn terminated normally.
     """
 
     final_response: CompletionResponse
@@ -178,6 +182,31 @@ _COST_CIRCUIT_NUDGE = (
 # per-request ceiling, so the wording matches ``_COST_CIRCUIT_NUDGE``.
 _CUMULATIVE_COST_NUDGE = _COST_CIRCUIT_NUDGE
 
+# ABS-404: appended when the turn's MEASURED wallet burn (input +
+# output, as reported by the provider) has reached the per-turn
+# ceiling. The model-facing instruction is identical to the two
+# estimator breakers — stop retrieving, answer from what you have — so
+# the nudge is shared. Only the audit trail distinguishes them, because
+# only the audit trail cares which unit ran out.
+_WALLET_CAP_NUDGE = _COST_CIRCUIT_NUDGE
+
+
+def _measured_wallet_tokens(usage: TokenUsage | None) -> int:
+    """Wallet tokens burned so far this turn (ABS-404).
+
+    Must stay byte-identical in definition to the chat route's
+    settlement arithmetic (``_settle_token_burn``:
+    ``usage.input_tokens + usage.output_tokens``) — the whole point of
+    this breaker is that it is denominated in the unit the wallet
+    actually charges, so a divergence here would silently reintroduce
+    the unbounded burn it exists to prevent. Cache-read and
+    cache-creation tokens are excluded for exactly that reason: the
+    wallet does not charge for them either.
+    """
+    if usage is None:
+        return 0
+    return usage.input_tokens + usage.output_tokens
+
 
 async def run_tool_loop(
     gateway: LLMGateway,
@@ -187,6 +216,7 @@ async def run_tool_loop(
     max_iterations: int = 10,
     token_budget: int | None = None,
     cumulative_token_budget: int | None = None,
+    wallet_token_ceiling: int | None = None,
 ) -> ToolLoopResult:
     """Drive a Messages API conversation through any number of tool-use
     rounds and return when the LLM stops asking for tools.
@@ -231,6 +261,35 @@ async def run_tool_loop(
     cost primitive that bounds each PAID answer in the
     priced-question-catalog ("buy an answer") model.
 
+    ``wallet_token_ceiling`` (ABS-404) is the third and only *measured*
+    breaker: the running sum of the provider-reported
+    ``input_tokens + output_tokens`` — the exact unit the chat wallet
+    burns — checked between iterations. The two budgets above are
+    pre-flight estimates of INPUT tokens only, and the char heuristic
+    under-counts JSON tool_result payloads, so they let a turn through
+    that measured 247,566 wallet tokens against a 165k cumulative cap in
+    production. That is the ABS-404 defect: with the pre-flight floor at
+    0, one turn could bury a wallet arbitrarily deep and no signup-grant
+    size could guarantee a new user a second question. ``None`` reads
+    ``default_wallet_token_ceiling()``
+    (``ADVISOR_TURN_MAX_WALLET_TOKENS``-overridable, default two turns'
+    worth). Trips as ``terminated_reason="wallet_cap_trip"``.
+
+    Pass ``0`` (or any non-positive value) to **disable** the wallet
+    breaker for callers that are not wallet-billed. The paid-report rail
+    (``advisor.billing.answers.run_turn``) does exactly that: a report is
+    priced per slug in Stripe and bounded by its own, often deliberately
+    raised, ``cumulative_token_budget``, so a chat wallet ceiling has no
+    business truncating an answer the user already paid for. This
+    escape hatch is code-level only — the env override cannot disable
+    the breaker, since an operator zeroing it would silently restore the
+    unbounded burn.
+
+    The three breakers are checked measured-first: a turn that has
+    already overspent is reported as ``wallet_cap_trip`` even if the
+    next request would also have tripped an estimator, because the
+    measured overspend is the ground truth and the estimate is not.
+
     NOTE: WI-1 (rolling cache breakpoint placement) and WI-4 (in-flight
     tool_result compaction) were reverted in ABS-304 after ABS-303
     showed they were net-negative in production. The function no longer
@@ -246,6 +305,11 @@ async def run_tool_loop(
         if cumulative_token_budget is not None
         else default_cumulative_token_budget()
     )
+    wallet_ceiling = (
+        wallet_token_ceiling
+        if wallet_token_ceiling is not None
+        else default_wallet_token_ceiling()
+    )
     conversation = list(request.messages)
     tool_calls: list[ToolInvocation] = []
     total_usage: TokenUsage | None = None
@@ -260,6 +324,47 @@ async def run_tool_loop(
         # later appends (the assistant turn from this round, the next
         # tool_result turn) don't retroactively mutate the sent payload.
         current_request = request.model_copy(update={"messages": list(conversation)})
+
+        # ABS-404 wallet breaker. Checked FIRST and against *measured*
+        # usage: everything below is a pre-flight estimate of input
+        # tokens, while this is what the wallet has actually been
+        # charged for the turn so far. Cannot fire on iteration 1 —
+        # nothing has been measured yet — so a first-request blowout
+        # still reports as ``cost_circuit_trip``, which is correct: no
+        # wallet tokens were spent on a request that never shipped.
+        #
+        # Note the bound this delivers is ``ceiling + one synthesis
+        # request``, not ``ceiling``: the user is still owed an answer,
+        # and ``_force_synthesis`` makes one more (tools-stripped, so
+        # materially smaller) call whose usage also lands on the wallet.
+        # A bound with a known slack term, where there was none before.
+        measured_wallet_tokens = _measured_wallet_tokens(total_usage)
+        if wallet_ceiling > 0 and measured_wallet_tokens >= wallet_ceiling:
+            trip = CircuitTripInfo(
+                estimated_input_tokens=measured_wallet_tokens,
+                budget=wallet_ceiling,
+                iteration=iteration,
+            )
+            logger.warning(
+                "wallet cost breaker tripped: turn has burned %d measured "
+                "wallet tokens (input+output), at or above the per-turn "
+                "ceiling %d, on iteration %d; forcing synthesis turn",
+                measured_wallet_tokens,
+                wallet_ceiling,
+                iteration,
+            )
+            return await _force_synthesis(
+                gateway,
+                request=request,
+                conversation=conversation,
+                tool_calls=tool_calls,
+                total_usage=total_usage,
+                iterations=iteration - 1,
+                nudge=_WALLET_CAP_NUDGE,
+                terminated_reason="wallet_cap_trip",
+                circuit_trip=trip,
+                per_iteration=per_iteration,
+            )
 
         estimated = estimate_request_input_tokens(current_request)
         if estimated > budget:

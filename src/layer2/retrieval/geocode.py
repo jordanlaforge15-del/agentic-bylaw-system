@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature, GeocodeCache
@@ -393,6 +394,10 @@ def _resolved_from_cache_row(row: GeocodeCache) -> ResolvedLocation | None:
         confidence=row.confidence or 0.0,
         source=row.resolver,
         reference_text=row.raw_text,
+        # ABS-466: rows written before the type was persisted (and rows from
+        # in-database resolvers, which have no Google type) carry None here;
+        # ``classify_resolution`` falls back to the confidence for those.
+        location_type=(row.metadata_json or {}).get("location_type"),
     )
 
 
@@ -408,13 +413,7 @@ def _cache_put(
     source_dataset_id: int | None,
     source_feature_id: int | None,
 ) -> None:
-    existing = (
-        session.execute(
-            select(GeocodeCache).where(GeocodeCache.normalized_text == normalized_text)
-        )
-        .scalars()
-        .first()
-    )
+    existing = _cache_get_row(session, normalized_text)
     payload: dict[str, Any] = {
         "raw_text": ref.raw_text,
         "kind": ref.kind,
@@ -425,16 +424,50 @@ def _cache_put(
         "geometry_geojson": resolved.geometry if resolved else None,
         "confidence": resolved.confidence if resolved else None,
         "detail": detail or None,
-        "metadata_json": {"reference": ref.model_dump()},
+        "metadata_json": {
+            "reference": ref.model_dump(),
+            # ABS-466: persist Google's location_type so a cache hit can still
+            # tell an interpolated point from a rooftop one. Absent for
+            # in-database resolutions, which have no such enum.
+            **(
+                {"location_type": resolved.location_type}
+                if resolved is not None and resolved.location_type
+                else {}
+            ),
+        },
     }
     if existing is None:
-        existing = GeocodeCache(
-            normalized_text=normalized_text,
-            created_at=datetime.now(timezone.utc),
-            **payload,
-        )
-        session.add(existing)
-    else:
-        for key, value in payload.items():
-            setattr(existing, key, value)
+        try:
+            # Add + flush inside a SAVEPOINT so that a concurrent writer
+            # winning the race (and tripping uq_geocode_cache_normalized_text)
+            # rolls back only this nested unit — the outer request transaction
+            # stays usable. Without this, the UniqueViolation poisons the
+            # session and cascades into a PendingRollbackError 500 for
+            # unrelated work later in the same request (ABS-422). The add()
+            # must live inside the savepoint too, or its pending INSERT
+            # survives the rollback and re-fires on the next flush.
+            with session.begin_nested():
+                session.add(
+                    GeocodeCache(
+                        normalized_text=normalized_text,
+                        created_at=datetime.now(timezone.utc),
+                        **payload,
+                    )
+                )
+                session.flush()
+            return
+        except IntegrityError:
+            # Lost the race: another transaction committed the same
+            # normalized_text. Rolling back the savepoint already discards
+            # our now-orphaned INSERT, so we just re-read the winning row and
+            # fall through to the update path below to refresh its payload.
+            existing = _cache_get_row(session, normalized_text)
+            if existing is None:
+                # The conflicting row vanished (rolled back rather than
+                # committed) between the violation and our re-read — nothing
+                # to reconcile against, so surface the original error.
+                raise
+
+    for key, value in payload.items():
+        setattr(existing, key, value)
     session.flush()

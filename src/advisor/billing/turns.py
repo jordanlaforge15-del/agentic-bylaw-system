@@ -13,8 +13,118 @@ with a config flip and no process restart — the same convention
 ``_conversation_entry_enabled`` uses for ``ADVISOR_CONVERSATION_ENTRY_ENABLED``.
 The acceptance test "factor change effective without restart" pins this.
 
-Defaults come from the design spec's business-parameters table; they are
-placeholders pending the transcript-replay calibration recorded on ABS-380.
+Calibration (ABS-416, 2026-08-08)
+---------------------------------
+The original defaults came from the design spec's business-parameters
+table and were explicit placeholders. They were wrong by ~70x: a turn was
+assumed to cost 2,500 tokens, so the wallet advertised dozens-to-hundreds
+of questions where it actually covered a handful.
+
+Measured against production, queried 2026-08-08. In prod one
+``advisor_usage_event`` row of ``event_type='llm_call'`` is one assistant
+turn (the whole tool loop is aggregated into it) — verified by matching
+each row against its ``advisor_token_transaction`` burn, which agrees
+exactly (e.g. 243,820 in + 3,746 out == the -247,566 burn):
+
+===============================================  ======  ========  ========
+Sample                                                n    median      mean
+===============================================  ======  ========  ========
+Wallet burns (every burn ever recorded in prod)       3   103,014   120,022
+Turns on the current case flow (2026-06 onward)       4   110,610   119,568
+Full-research turns, all history (>= 50k)            12   192,724   271,650
+===============================================  ======  ========  ========
+
+Burn is strongly bimodal: intake / clarifying / short follow-up turns land
+in the 300–25k band, while a real grounded research question lands in the
+100k–250k band. The two full-research prod questions cited on ABS-416 are
+247,566 and 103,014 tokens; ``DEFAULT_TOKENS_PER_TURN`` is set to 175,000,
+their midpoint (175,290 rounded). That sits above the recent all-turn mean
+(~120k), so the count we advertise errs toward *under*-promising — the
+correct direction for a bug whose harm was over-promising.
+
+Every other token-denominated parameter here was sized against the 2,500
+assumption in units of turns, so all of them are rescaled by the same
+factor (70x) and the turn counts the product promises are unchanged:
+
+* signup grant       25,000 -> 1,750,000  (10 turns, as advertised)
+* low-balance warn    5,000 ->   350,000  (2 turns, as before)
+* chat floor              0 ->         0  (0 turns — unchanged)
+
+The paid top-up SKUs in ``advisor.billing.topups`` are rescaled by the
+same factor for the same reason.
+
+Grant sizing (ABS-404, 2026-08-08)
+----------------------------------
+ABS-416 left a cost note here putting a 175k turn at ~$0.96 and the
+10-turn signup grant at ~$9.60 of API spend per account, against a
+"~$0.55 USD / 100k wallet tokens" anchor. **That anchor was wrong by
+~5x**, and this is the ticket that owns the number, so it is corrected
+here rather than left to mislead the next person sizing the grant.
+
+``docs/COST_MODEL.md`` measured it directly against the real API
+(ABS-303, N=8, current prod config). The wallet counts
+``input + output`` only; cache writes and reads are 35% of the dollar
+cost and are invisible to it. So the honest denominator is cost per
+*wallet-counted* token, and that is **~$28.9 / MTok USD** —
+``$2.89 / 100k``, not ``$0.55 / 100k``.
+
+At that rate:
+
+===========================  ==================  ==================
+Item                          Was believed         Actually
+===========================  ==================  ==================
+One 175k turn                 $0.96                ~$5.05
+10-turn signup grant          $9.60                ~$50.50
+===========================  ==================  ==================
+
+Even the absolute floor — pretending every counted token is uncached
+input at $15/MTok and cache costs nothing — puts a turn at $2.63 and a
+10-turn grant at $26. There is no reading in which a free, no-card
+signup should carry that.
+
+``DEFAULT_SIGNUP_TOKEN_GRANT`` is therefore **3 turns** (525,000). Three
+is enough to evaluate the product — the harm this ticket was filed for
+was a new account locked out after *one* question — while cutting
+per-account exposure to ~$15 at the measured rate. It stays a
+no-restart env knob (``ADVISOR_SIGNUP_TOKEN_GRANT``), so trial-to-paid
+conversion data can move it either way without a deploy.
+
+The **top-up price ladder is deliberately NOT changed here**: at
+$28.9/MTok every SKU sells turns for roughly a quarter of what they
+cost, but list prices are a revenue decision, not an engineering one.
+Recorded as a blocking item on the beta-pivot decision doc's open
+questions instead — it must be settled before
+``ADVISOR_PAYMENTS_ENABLED`` goes true, since selling below cost is only
+harmless while nothing can actually be sold.
+
+Beta refill (ABS-405, 2026-08-27)
+---------------------------------
+While payments are off there is nothing a user can buy, so a wallet at the
+floor used to be a hard stop: the only way back into chat was an operator
+running ``grant_tokens`` by hand. Every exhausted beta tester therefore
+became a support touch, which is exactly the friction a private beta cannot
+afford.
+
+The **beta refill** is the self-serve way out: a small, capped, cooldown-gated
+grant the user claims themselves from the out-of-turns prompt. It is a
+stopgap for the payments-off posture only — once ``payments_enabled`` is true
+the top-up checkout is the path and the refill is not offered.
+
+Sizing is deliberately conservative because a turn is real money (~$5.05 at
+the measured $28.9/MTok, see above). One turn per claim, three claims for the
+lifetime of the account, six hours between claims:
+
+* ``ADVISOR_BETA_REFILL_ENABLED``        default true
+* ``ADVISOR_BETA_REFILL_TOKENS``         default 175,000  (1 turn)
+* ``ADVISOR_BETA_REFILL_COOLDOWN_HOURS`` default 6
+* ``ADVISOR_BETA_REFILL_MAX_GRANTS``     default 3
+
+Worst-case additional exposure is therefore 3 turns (~$15) per account on top
+of the 3-turn signup grant — a bounded, known number, unlike the unbounded
+"ask an operator" path it replaces. The lifetime cap is the cost control; the
+cooldown only stops a single bad session from burning the whole allowance in
+ten minutes. All four are no-restart env knobs like every parameter above, so
+the beta can be loosened or shut off from config alone.
 """
 from __future__ import annotations
 
@@ -23,11 +133,23 @@ import os
 
 logger = logging.getLogger(__name__)
 
-# Design-spec defaults (2026-07-beta-pivot-turn-wallet-gated-reports.md).
-DEFAULT_TOKENS_PER_TURN = 2_500
-DEFAULT_SIGNUP_TOKEN_GRANT = 25_000
+# Calibrated against measured prod burn — see the module docstring.
+DEFAULT_TOKENS_PER_TURN = 175_000
+# ABS-404: 3 turns, not 10 — see "Grant sizing" above. Sized against the
+# measured ~$28.9/MTok wallet-counted cost, not the ~$5.5/MTok anchor
+# ABS-416 assumed.
+DEFAULT_SIGNUP_TOKEN_GRANT = 3 * DEFAULT_TOKENS_PER_TURN  # 525,000
 DEFAULT_CHAT_MIN_BALANCE_TOKENS = 0
-DEFAULT_LOW_BALANCE_WARN_TOKENS = 5_000
+# ABS-404: 1 turn, not 2. The threshold was sized in turns against a
+# 10-turn grant, where 2 turns meant "20% left — time to act". Against
+# the 3-turn grant above, 2 turns is 67% left: the warning would fire on
+# every new user's first question and stop meaning anything. One turn
+# still leaves room to ask something and then top up.
+DEFAULT_LOW_BALANCE_WARN_TOKENS = 1 * DEFAULT_TOKENS_PER_TURN  # 175,000
+# ABS-405 beta refill — see "Beta refill" in the module docstring.
+DEFAULT_BETA_REFILL_TOKENS = 1 * DEFAULT_TOKENS_PER_TURN  # 175,000
+DEFAULT_BETA_REFILL_COOLDOWN_HOURS = 6
+DEFAULT_BETA_REFILL_MAX_GRANTS = 3
 
 
 def _read_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -93,6 +215,64 @@ def low_balance_warn_tokens() -> int:
     return _read_int(
         "ADVISOR_LOW_BALANCE_WARN_TOKENS",
         DEFAULT_LOW_BALANCE_WARN_TOKENS,
+        minimum=0,
+    )
+
+
+def _read_bool(name: str, default: bool) -> bool:
+    """Parse ``os.environ[name]`` as a boolean, falling back to ``default``.
+
+    Unset or empty means "use the default"; anything else is matched against
+    the same truthy vocabulary the rest of the codebase uses
+    (``1/true/yes/on``), so an unrecognised value reads as False rather than
+    silently re-enabling something an operator meant to turn off.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def beta_refill_enabled() -> bool:
+    """Is the payments-off self-serve beta refill offered at all (ABS-405)?
+
+    On by default: while ``payments_enabled`` is false an exhausted wallet
+    has no other way back into chat. Flip ``ADVISOR_BETA_REFILL_ENABLED``
+    false to close the tap without a redeploy.
+    """
+    return _read_bool("ADVISOR_BETA_REFILL_ENABLED", True)
+
+
+def beta_refill_tokens() -> int:
+    """Tokens granted by one beta refill claim (default 1 turn)."""
+    return _read_int(
+        "ADVISOR_BETA_REFILL_TOKENS", DEFAULT_BETA_REFILL_TOKENS, minimum=0
+    )
+
+
+def beta_refill_cooldown_hours() -> int:
+    """Hours a user must wait between beta refill claims (default 6).
+
+    Zero is a legitimate setting — it means "no cooldown", leaving the
+    lifetime cap as the only limit.
+    """
+    return _read_int(
+        "ADVISOR_BETA_REFILL_COOLDOWN_HOURS",
+        DEFAULT_BETA_REFILL_COOLDOWN_HOURS,
+        minimum=0,
+    )
+
+
+def beta_refill_max_grants() -> int:
+    """How many beta refills one account may ever claim (default 3).
+
+    This is the cost control: at the measured ~$5 per turn, the cap bounds
+    the additional per-account exposure the self-serve path creates. Zero
+    disables claiming just as effectively as the enabled flag.
+    """
+    return _read_int(
+        "ADVISOR_BETA_REFILL_MAX_GRANTS",
+        DEFAULT_BETA_REFILL_MAX_GRANTS,
         minimum=0,
     )
 

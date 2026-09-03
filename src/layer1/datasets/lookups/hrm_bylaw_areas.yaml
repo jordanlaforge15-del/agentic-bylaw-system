@@ -1,0 +1,50 @@
+# Shared lookup tables for HRM geo datasets.
+#
+# Included by a dataset config through ``lookups_from``. Kept out of
+# src/layer1/datasets/ proper because the coherence audit globs *.yaml there
+# and expects every hit to be a dataset config; this directory is data for
+# those configs, not a config itself.
+#
+# ABS-473: this table lives here rather than inline in one dataset because
+# more than one HRM layer stamps the same publisher-internal by-law-area id
+# on its features. It was inline in halifax_zoning.yaml (ABS-66/ABS-472)
+# while zoning was the only consumer; halifax_height_precincts carries the
+# same BYLAW_AREA codes, and two copies of a 24-row table drift — a code
+# added to one and not the other resolves to no name, which silently degrades
+# that layer back to its dataset-level by-law link. That degradation is the
+# exact mis-attribution ABS-472/473 exist to stop, so there is one table.
+
+# Subtype table for HRM's BYLAW_ID / BYLAW_AREA field. Integer keys are
+# HRM-internal subtype codes mirrored from the upstream BylawAreas layer
+#   https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/BylawAreas/FeatureServer/0
+# and the ZoningBoundaries subtypes definition. We namespace the short code
+# as ``hrm:<short>`` so a future Toronto or Vancouver ingest with its own
+# BYLAW_ID 9 can coexist without a global-namespace collision.
+# Codes 5 (Downtown Dartmouth) and 10 (Halifax Peninsula) are retained
+# because pre-RCLUB features may still carry them; codes that aren't present
+# in current data are still listed for legacy resolution.
+bylaw_area_subtypes:
+  1:  { code: "hrm:BED",   name: "Bedford Land Use By-law" }
+  2:  { code: "hrm:CHEB",  name: "Chebucto Peninsula (Planning District 5) Land Use By-law" }
+  3:  { code: "hrm:CHW",   name: "Cole Harbour / Westphal Land Use By-law" }
+  4:  { code: "hrm:DART",  name: "Dartmouth Land Use By-law" }
+  5:  { code: "hrm:DRTDO", name: "Downtown Dartmouth Land Use By-law" }
+  6:  { code: "hrm:EPCB",  name: "Eastern Passage / Cow Bay Land Use By-law" }
+  7:  { code: "hrm:ESE",   name: "Eastern Shore (East) Land Use By-law" }
+  8:  { code: "hrm:ESW",   name: "Eastern Shore (West) Land Use By-law" }
+  9:  { code: "hrm:HMAIN", name: "Halifax Mainland Land Use By-law" }
+  10: { code: "hrm:HPEN",  name: "Halifax Peninsula Land Use By-law" }
+  11: { code: "hrm:HPSBB", name: "Beaver Bank, Hammonds Plains and Upper Sackville Land Use By-law" }
+  12: { code: "hrm:LEPL",  name: "Porters Lake (Planning Districts 8 & 9) Land Use By-law" }
+  13: { code: "hrm:LTWN",  name: "Lawrencetown Land Use By-law" }
+  14: { code: "hrm:MVDS",  name: "Musquodoboit Valley / Dutch Settlement Land Use By-law" }
+  15: { code: "hrm:NPLM",  name: "North Preston / Lake Major Land Use By-law" }
+  16: { code: "hrm:PROS",  name: "Prospect Road (Planning District 4) Land Use By-law" }
+  17: { code: "hrm:SACK",  name: "Sackville Land Use By-law" }
+  18: { code: "hrm:SCKDR", name: "Sackville Drive Land Use By-law" }
+  19: { code: "hrm:SHUB",  name: "Shubenacadie Lakes (Planning Districts 14 & 17) Land Use By-law" }
+  20: { code: "hrm:SMB",   name: "St. Margaret's Bay (Planning Districts 1 & 3) Land Use By-law" }
+  21: { code: "hrm:TLB",   name: "Timberlea / Lakeside / Beechville Land Use By-law" }
+  22: { code: "hrm:DHFX",  name: "Downtown Halifax Land Use By-law" }
+  23: { code: "hrm:RC",    name: "Regional Centre Land Use By-law" }
+  24: { code: "hrm:SHA",   name: "Suburban Housing Accelerator Land Use By-law" }

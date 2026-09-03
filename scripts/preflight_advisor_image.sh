@@ -16,6 +16,21 @@
 #      filesystem outside /tmp during import or app construction will fail
 #      under --read-only (the v0.8.4/mkdir class of bug).
 #
+#   3. Missing package data: non-.py assets the installed wheel must carry
+#      (taxonomy.json, prompt assets, compliance taxonomy). These are only
+#      read when enrichment/eval code runs, so a bare import of
+#      advisor.api.main passes even when they're absent — the ABS-412 /
+#      ABS-409-heal class of bug. The smoke command loads each one
+#      explicitly.
+#
+#   4. A corpus-coherence audit that cannot read its declaration set. This
+#      one is worse than a crash: with the layer1 dataset configs missing,
+#      /v1/monitoring/corpus-coherence answered {"status":"ok"} while
+#      checking zero overlay roles, for the whole life of the endpoint
+#      (ABS-420). The smoke command loads the declarations and requires a
+#      non-empty set, so a packaging regression fails the deploy instead of
+#      quietly disarming the tripwire.
+#
 # Usage (run on the production server via SSH before container swap):
 #   ./scripts/preflight_advisor_image.sh <tag>
 #   e.g.:  ./scripts/preflight_advisor_image.sh v1.2.3
@@ -30,6 +45,8 @@
 #       --security-opt no-new-privileges:true \
 #       ghcr.io/jordanlaforge15-del/bylaw-advisor:<tag> \
 #       python -c 'import advisor.api.main'"
+#   (the manual one-liner above only covers check 1+2; prefer running the
+#   script itself, whose smoke command also exercises package data)
 #
 # Exit codes:
 #   0          — smoke passed; safe to proceed with docker compose up -d advisor
@@ -61,11 +78,28 @@ usage() {
 TAG="$1"
 FULL_IMAGE="${IMAGE}:${TAG}"
 
+# The smoke body: app construction + every module-relative data asset the
+# wheel must ship (kept in sync with tests/test_package_data.py).
+SMOKE_PY="
+import advisor.api.main
+from layer1.semantic.taxonomy import load_taxonomy as load_l1_taxonomy
+assert load_l1_taxonomy()['entity_types']
+from layer2.compliance.taxonomy import load_taxonomy as load_l2_taxonomy
+assert load_l2_taxonomy().attributes
+from layer2.prompts.builder import load_system_prompt
+assert load_system_prompt()
+from bylaw_retrieval.retrieval.coherence_audit import load_overlay_declarations
+declarations = load_overlay_declarations()
+assert declarations, 'corpus-coherence audit loaded zero overlay declarations'
+print('[preflight] overlay declarations:', len(declarations))
+print('[preflight] app import + package data OK')
+"
+
 echo "[preflight] Image:       ${FULL_IMAGE}"
 echo "[preflight] Env file:    ${ENV_FILE}"
 echo "[preflight] Network:     ${NETWORK}"
 echo "[preflight] Constraints: --read-only  --tmpfs /tmp  --cap-drop ALL  --no-new-privileges"
-echo "[preflight] Command:     python -c 'import advisor.api.main'"
+echo "[preflight] Command:     python -c '<app import + package-data smoke>'"
 echo
 
 set +e
@@ -77,7 +111,7 @@ docker run --rm \
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
     "${FULL_IMAGE}" \
-    python -c "import advisor.api.main"
+    python -c "${SMOKE_PY}"
 SMOKE_EXIT=$?
 set -e
 

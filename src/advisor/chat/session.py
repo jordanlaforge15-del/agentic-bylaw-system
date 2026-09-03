@@ -37,10 +37,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from advisor.billing.packs import TIERS as _BILLING_TIERS
+from advisor.chat.heading_consistency import apply_heading_consistency
 from advisor.chat.hedging import apply_hedge
+from advisor.chat.resolution_qualifier import apply_resolution_qualifier
 from advisor.chat.history_compaction import (
     compact_history_for_submission,
     resolve_keep_recent,
+)
+from advisor.chat.tool_payloads import (
+    bound_tool_input,
+    extract_result_citations,
+    render_tool_result,
 )
 from advisor.llm import (
     CompletionRequest,
@@ -60,9 +67,10 @@ from advisor.llm.budget import (
     CircuitTripInfo,
     default_cumulative_token_budget,
     default_token_budget,
+    default_wallet_token_ceiling,
 )
 from advisor.llm.mock import MockGateway
-from advisor.llm.tool_loop import ToolHandler, run_tool_loop
+from advisor.llm.tool_loop import ToolHandler, ToolInvocation, run_tool_loop
 
 # Anthropic supports up to 4 cache breakpoints per request. The chat
 # session spends two on the request-level shared prefix (system,
@@ -97,6 +105,25 @@ def _default_max_iterations() -> int:
     except ValueError:
         return _DEFAULT_MAX_ITERATIONS
     return value if value > 0 else _DEFAULT_MAX_ITERATIONS
+
+
+def _build_tool_call_metric(inv: ToolInvocation) -> ToolCallMetric:
+    """Project one loop invocation onto its ABS-266/ABS-517 metric.
+
+    Split out of ``send_user_message_blocking`` so the payload-bounding
+    behaviour is testable without driving a whole turn.
+    """
+    excerpt, chars, truncated = render_tool_result(inv.output, inv.error)
+    return ToolCallMetric(
+        name=inv.tool_name,
+        is_error=inv.error is not None,
+        latency_ms=inv.latency_ms,
+        input=bound_tool_input(inv.input),
+        result_excerpt=excerpt,
+        result_chars=chars,
+        result_truncated=truncated,
+        result_citations=extract_result_citations(inv.output),
+    )
 
 
 @dataclass
@@ -151,6 +178,17 @@ class ChatSession:
     # catalog.
     cumulative_token_budget: int = field(
         default_factory=default_cumulative_token_budget
+    )
+    # ABS-404: per-turn ceiling on MEASURED wallet tokens (input +
+    # output), enforced by the third breaker in ``run_tool_loop``. The
+    # two budgets above are pre-flight estimates of input tokens; this
+    # is the only one denominated in the unit ``_settle_token_burn``
+    # actually charges, so it is the only one that bounds how deep a
+    # single turn can drive a wallet negative. Default reads
+    # ``ADVISOR_TURN_MAX_WALLET_TOKENS``, falling back to two turns'
+    # worth of ``ADVISOR_TOKENS_PER_TURN``.
+    wallet_token_ceiling: int = field(
+        default_factory=default_wallet_token_ceiling
     )
     # Set by ``send_user_message_blocking`` when the cost-circuit
     # breaker fires on the most recent turn — ``None`` for turns that
@@ -278,6 +316,7 @@ class ChatSession:
             handlers=self.tool_handlers,
             token_budget=self.token_budget,
             cumulative_token_budget=self.cumulative_token_budget,
+            wallet_token_ceiling=self.wallet_token_ceiling,
             max_iterations=(
                 _tier_def.max_iterations
                 if _tier_def
@@ -293,7 +332,27 @@ class ChatSession:
         # questions stay lean. We patch BOTH the response we stream back and
         # the assistant turn we persist so the user sees, and we store, the
         # same text. See ``advisor.chat.hedging``.
-        hedged_content = apply_hedge(result.final_response.content)
+        # ABS-466: second deterministic safety net, on a different axis. The
+        # hedge above qualifies the NUMBERS; this one qualifies the LOCATION
+        # they were derived for. If the turn's address lookup resolved below
+        # rooftop quality (interpolated / centroid) or landed outside every
+        # mapped boundary, and the answer doesn't already say so, append the
+        # precision qualifier. Applied first so the two suffixes read in
+        # that order and ``apply_hedge`` sees the combined text.
+        # ABS-519: third deterministic safety net, on the axis the other two
+        # don't touch — the answer's own headings. A section heading that
+        # asserts permission over a body that denies it ("Townhouse Use —
+        # Permitted in ER-2" above a paragraph saying it is permitted in ER-3
+        # and not in ER-2) is the most scannable element on the page and the
+        # part a homeowner acts on. Applied innermost, to the model's own text,
+        # so the appended qualifiers below are never re-parsed as sections.
+        # See ``advisor.chat.heading_consistency``.
+        hedged_content = apply_hedge(
+            apply_resolution_qualifier(
+                apply_heading_consistency(result.final_response.content),
+                result.tool_calls,
+            )
+        )
         if hedged_content is not result.final_response.content:
             result.final_response = result.final_response.model_copy(
                 update={"content": hedged_content}
@@ -326,22 +385,26 @@ class ChatSession:
         # ABS-266: build the observability event once, here, so both
         # the blocking and streaming entry points emit identical
         # metrics. The flat ``tool_calls`` list mirrors loop dispatch
-        # order; we deliberately drop tool arguments and outputs from
-        # the event because they can be large and contain user data —
-        # the event is for cost/perf observability, not transcript
-        # capture (transcripts live in ``self.messages``).
+        # order.
+        #
+        # ABS-517: that list now carries each call's arguments and a
+        # bounded excerpt of its result. ABS-266 dropped both, reasoning
+        # that the event was for cost/perf and that the real transcript
+        # lives in ``self.messages`` — but ``self.messages`` is
+        # server-side state, so an out-of-band consumer (the eval
+        # runner, a dev console) saw a turn's tool activity only as a
+        # list of names. That is unusable for diagnosing a wrong answer:
+        # "the provision was never retrieved" and "the provision was
+        # retrieved and the answer dropped it" look identical, and they
+        # are fixed in different layers. ``advisor.chat.tool_payloads``
+        # applies the size bounds; see that module for what each is for.
         self.last_tool_loop_metrics = ToolLoopMetricsEvent(
             iterations=result.iterations,
             terminated_reason=result.terminated_reason,
             total_usage=result.total_usage,
             per_iteration=list(result.per_iteration),
             tool_calls=[
-                ToolCallMetric(
-                    name=inv.tool_name,
-                    is_error=inv.error is not None,
-                    latency_ms=inv.latency_ms,
-                )
-                for inv in result.tool_calls
+                _build_tool_call_metric(inv) for inv in result.tool_calls
             ],
         )
         self.updated_at = datetime.now(timezone.utc)

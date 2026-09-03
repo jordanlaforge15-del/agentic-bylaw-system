@@ -25,6 +25,10 @@ Usage::
 """
 from __future__ import annotations
 
+# ABS-428: must precede any advisor/layer1 import so the cached settings
+# resolve DATABASE_URL to the dedicated e2e Postgres instance, never dev.
+import e2e_db_default  # noqa: F401  isort: skip
+
 import json
 import sys
 import tempfile
@@ -34,6 +38,7 @@ from typing import Any
 import yaml
 from sqlalchemy import select, text
 
+from layer1.datasets.config import read_dataset_config_mapping
 from layer1.db.base import ExternalDataset, ExternalDatasetFeature
 from layer1.db.session import session_scope
 from layer1.pipeline.ingest_dataset import ingest_geo_dataset
@@ -88,8 +93,13 @@ def _derive_config(work_dir: Path) -> Path:
     The lookups block (and every canonical mapping) is preserved verbatim
     from production so the ingest path under test is exactly what runs
     when the live ArcGIS pull happens — only the source swaps.
+
+    Read through ``read_dataset_config_mapping`` rather than ``yaml.safe_load``
+    so the ABS-473 ``lookups_from`` include is resolved into an inline table
+    here. The copy lands in a temp directory with no ``lookups/`` sibling, so a
+    verbatim relative path would not resolve next to it.
     """
-    raw = yaml.safe_load(REAL_ZONING_YAML.read_text(encoding="utf-8"))
+    raw = read_dataset_config_mapping(REAL_ZONING_YAML)
     raw["name"] = FIXTURE_DATASET_NAME
     raw["publisher"] = "e2e_seed"
     raw.pop("source_url", None)

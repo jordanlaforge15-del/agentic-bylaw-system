@@ -3,7 +3,8 @@
 // Reconciled from the old ABS-314 free-question / CaseCredit trial grant to the
 // beta pivot (docs/decisions/2026-07-beta-pivot-turn-wallet-gated-reports.md,
 // D2): a brand-new user's wallet receives a one-time ADVISOR_SIGNUP_TOKEN_GRANT
-// (25,000 tokens ≈ ~10 turns) the first time they authenticate, applied lazily
+// (rate recalibrated on ABS-416, grant resized to ~3 turns on ABS-404 against
+// the measured cost anchor) the first time they authenticate, lazily
 // in resolve_or_create_user and idempotent on the `token_grant_issued` flag.
 //
 // This spec verifies:
@@ -22,11 +23,14 @@ import { expect, test } from "@playwright/test";
 
 import { E2E_API_URL } from "../fixtures/test-env";
 
-// Design-spec defaults (advisor.billing.turns / the e2e env). The stack does
-// not override these, so the documented defaults are authoritative.
-const SIGNUP_GRANT = 25_000;
-const TOKENS_PER_TURN = 2_500;
-const WARN = 5_000;
+// Calibrated defaults (advisor.billing.turns / the e2e env). The stack does
+// not override these, so the code defaults are authoritative.
+import {
+  LOW_BALANCE_WARN as WARN,
+  SIGNUP_GRANT,
+  SIGNUP_GRANT_TURNS,
+  TOKENS_PER_TURN,
+} from "../fixtures/wallet-params";
 
 function freshUser(tag: string): string {
   return `trialgrant-${tag}-${Date.now()}-${Math.random()
@@ -56,10 +60,10 @@ test("brand-new user is granted the signup token wallet on first request", async
   expect(body.balance_tokens, "signup grant funds the wallet").toBe(
     SIGNUP_GRANT,
   );
-  // Backend-owned turns conversion: floor(25000 / 2500) == 10.
+  // Backend-owned turns conversion: floor(525000 / 175000) == 3.
   expect(body.tokens_per_turn).toBe(TOKENS_PER_TURN);
-  expect(body.approx_turns_remaining).toBe(SIGNUP_GRANT / TOKENS_PER_TURN);
-  // 25k is well above the warn threshold, so the trial user starts healthy.
+  expect(body.approx_turns_remaining).toBe(SIGNUP_GRANT_TURNS);
+  // The grant is well above the warn threshold: the trial user starts healthy.
   expect(body.warn_threshold_tokens).toBe(WARN);
   expect(body.low_balance).toBe(false);
   expect(body.chat_enabled).toBe(true);

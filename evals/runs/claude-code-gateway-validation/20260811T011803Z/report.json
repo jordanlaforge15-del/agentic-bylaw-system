@@ -1,0 +1,104 @@
+{
+  "issue": "ABS-457",
+  "generated_at_utc": "2026-08-11T01:18:03.011727+00:00",
+  "model": "claude-opus-4-5",
+  "cli_path": "/Users/christopherrafuse/.local/bin/claude",
+  "cli_version": "2.1.226 (Claude Code)",
+  "all_passed": false,
+  "assumptions": [
+    {
+      "key": "model_alias_resolution",
+      "title": "1. Model alias resolution",
+      "passed": true,
+      "detail": "modelUsage['claude-opus-4-5'].canonicalModel == 'claude-opus-4-5'",
+      "model": "claude-opus-4-5",
+      "evidence": {
+        "modelUsage_canonicalModel": {
+          "claude-haiku-4-5-20251001": "claude-haiku-4-5",
+          "claude-opus-4-5": "claude-opus-4-5"
+        },
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 116,
+          "cache_creation_input_tokens": 12778,
+          "cache_read_input_tokens": 11691
+        }
+      }
+    },
+    {
+      "key": "token_attribution",
+      "title": "2. Token attribution (wallet breaker)",
+      "passed": false,
+      "detail": "a 5023-char system prompt moved input_tokens by only +0 (< 502); cache fields moved by +770. input_tokens did not move at all, so it is not a function of prompt size and the breaker's input term is inert \u2014 wallet_cap_trip will fire late or never.",
+      "model": "claude-opus-4-5",
+      "evidence": {
+        "baseline_usage": {
+          "input_tokens": 10,
+          "output_tokens": 116,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 24469
+        },
+        "probe_usage": {
+          "input_tokens": 10,
+          "output_tokens": 115,
+          "cache_creation_input_tokens": 13548,
+          "cache_read_input_tokens": 11691
+        },
+        "delta": {
+          "input_tokens": 0,
+          "output_tokens": -1,
+          "cache_creation_input_tokens": 13548,
+          "cache_read_input_tokens": -12778
+        },
+        "system_prompt_chars": 5023,
+        "input_tokens_delta_threshold": 502
+      }
+    },
+    {
+      "key": "autocompact_pinning",
+      "title": "3. Autocompact pinning",
+      "passed": true,
+      "detail": "a 200971-char conversation reported 62772 input tokens (>= 40194) with no compaction notice in the payload",
+      "model": "claude-opus-4-5",
+      "evidence": {
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 164,
+          "cache_creation_input_tokens": 51071,
+          "cache_read_input_tokens": 11691
+        },
+        "reported_input_tokens_total": 62772,
+        "conversation_chars": 200971,
+        "reported_input_threshold": 40194,
+        "compaction_markers": []
+      }
+    },
+    {
+      "key": "multi_iteration_round_trip",
+      "title": "4. Multi-iteration round trip",
+      "passed": true,
+      "detail": "turn 1 returned action='tool_calls' for 'lookup_zone_standard'; turn 2, fed the tool result, returned action='final_answer' with text",
+      "model": "claude-opus-4-5",
+      "evidence": {
+        "first_stop_reason": "tool_use",
+        "first_content_types": [
+          "tool_use"
+        ],
+        "second_stop_reason": "end_turn",
+        "second_content_types": [
+          "text"
+        ],
+        "first_tool_calls": [
+          {
+            "name": "lookup_zone_standard",
+            "input": {
+              "zone": "HR-2",
+              "standard": "max_height"
+            }
+          }
+        ],
+        "second_text": "The maximum building height in the HR-2 zone is **25 metres**."
+      }
+    }
+  ]
+}

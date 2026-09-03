@@ -1,0 +1,78 @@
+{
+  "evidence_tier": "human_validated",
+  "golden_file": "evals/golden/golden_cases.json",
+  "run_dir": "/Users/christopherrafuse/dev/agentic-bylaw-system/.claude/worktrees/nm-abs-468/evals/runs/20260811T113204Z",
+  "gate": {
+    "gates": "production_deploy",
+    "open": false,
+    "blockers": [
+      "unattested: TC-001, TC-002, TC-009, TC-012, TC-008, TC-014"
+    ],
+    "counts": {
+      "UNATTESTED": 6
+    },
+    "note": "Golden results are never summed with generated-case results. A generated pass rate is advisory and gates nothing."
+  },
+  "cases": [
+    {
+      "case_id": "TC-001",
+      "zone": "HR-1",
+      "liability": "low",
+      "answer_shape": "determinate",
+      "verdict": "UNATTESTED",
+      "reasons": [
+        "no qualified human has recorded the correct answer for this case; it cannot pass and it holds the deploy gate closed"
+      ]
+    },
+    {
+      "case_id": "TC-002",
+      "zone": "ER-2",
+      "liability": "low",
+      "answer_shape": "determinate",
+      "verdict": "UNATTESTED",
+      "reasons": [
+        "no qualified human has recorded the correct answer for this case; it cannot pass and it holds the deploy gate closed"
+      ]
+    },
+    {
+      "case_id": "TC-009",
+      "zone": "DD",
+      "liability": "medium",
+      "answer_shape": "determinate",
+      "verdict": "UNATTESTED",
+      "reasons": [
+        "no qualified human has recorded the correct answer for this case; it cannot pass and it holds the deploy gate closed"
+      ]
+    },
+    {
+      "case_id": "TC-012",
+      "zone": "RPK",
+      "liability": "medium",
+      "answer_shape": "refusal",
+      "verdict": "UNATTESTED",
+      "reasons": [
+        "no qualified human has recorded the correct answer for this case; it cannot pass and it holds the deploy gate closed"
+      ]
+    },
+    {
+      "case_id": "TC-008",
+      "zone": "DH",
+      "liability": "high",
+      "answer_shape": "depends",
+      "verdict": "UNATTESTED",
+      "reasons": [
+        "no qualified human has recorded the correct answer for this case; it cannot pass and it holds the deploy gate closed"
+      ]
+    },
+    {
+      "case_id": "TC-014",
+      "zone": "CEN-2",
+      "liability": "high",
+      "answer_shape": "depends",
+      "verdict": "UNATTESTED",
+      "reasons": [
+        "no qualified human has recorded the correct answer for this case; it cannot pass and it holds the deploy gate closed"
+      ]
+    }
+  ]
+}

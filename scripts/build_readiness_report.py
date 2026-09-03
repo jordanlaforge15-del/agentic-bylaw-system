@@ -6,12 +6,22 @@ Reads:
   evals/runs/<ts>/SUMMARY.json
   evals/runs/<ts>/verification/SUMMARY.json
   evals/runs/<ts>/verification/TC-*.verify.json
+  evals/runs/<ts>/verification/GOLDEN_SUMMARY.json  (optional, ABS-468)
 
 Writes:
   evals/runs/<ts>/REPORT.md
 
+Two tiers of evidence, reported separately and never summed (ABS-468). The
+ABS-260 threshold below is computed over generated cases, whose expected
+answers were authored by ``claude -p`` — a model of the family under test — so
+it measures agreement with a model's guess, not correctness under the by-law.
+It is advisory. The gating verdict comes from the golden subset, whose answers
+a qualified human recorded; if a run has no GOLDEN_SUMMARY.json the deploy gate
+is closed, because nothing in the run speaks to correctness at all.
+
 The report contains:
-  - Headline go/no-go vs the ABS-260 threshold.
+  - Headline go/no-go vs the ABS-260 threshold (advisory).
+  - The golden-subset gate state (blocking).
   - Per-case verdict table.
   - Hallucinated citation index (if any).
   - Top keyword-miss patterns (which expected facts the advisor
@@ -90,6 +100,63 @@ def threshold_verdict(summary: list[dict[str, Any]]) -> tuple[str, list[str]]:
     return ("GO", notes)
 
 
+GOLDEN_GLYPH = {
+    "GOLDEN_PASS": "✅",
+    "GOLDEN_PARTIAL": "⚠️",
+    "GOLDEN_FAIL": "❌",
+    "UNATTESTED": "⬜",
+    "NO_TRANSCRIPT": "⛔",
+}
+
+
+def golden_section(run_dir: Path) -> list[str]:
+    """Render the human-validated tier, or say plainly that there isn't one.
+
+    Deliberately its own block with its own counts. An earlier version of this
+    report had one headline number, and one number is exactly how a
+    generated-case pass rate gets read as a correctness measure (ABS-468).
+    """
+    path = run_dir / "verification" / "GOLDEN_SUMMARY.json"
+    lines = ["## Golden subset — human-validated (gating)", ""]
+    if not path.exists():
+        lines += [
+            (
+                "**Not graded for this run.** The deploy gate is CLOSED: nothing "
+                "in this run was checked against an answer a qualified human "
+                "recorded. Run `python scripts/verify_run.py <run_dir>`, which "
+                "grades both tiers."
+            ),
+            "",
+        ]
+        return lines
+
+    golden = load_json(path)
+    gate = golden.get("gate") or {}
+    cases = golden.get("cases") or []
+    lines.append(f"**Gate ({gate.get('gates', 'production_deploy')}):** "
+                 f"**{'OPEN' if gate.get('open') else 'CLOSED'}**")
+    for blocker in gate.get("blockers") or []:
+        lines.append(f"- {blocker}")
+    lines.append("")
+    lines.append("| Case | Verdict | Zone | Liability | Answer shape | Reasons |")
+    lines.append("|---|---|---|---|---|---|")
+    for c in cases:
+        glyph = GOLDEN_GLYPH.get(c["verdict"], "?")
+        lines.append(
+            f"| {c['case_id']} | {glyph} {c['verdict']} | {c.get('zone') or ''} | "
+            f"{c.get('liability') or ''} | {c.get('answer_shape') or ''} | "
+            f"{'; '.join(c.get('reasons') or [])} |"
+        )
+    lines.append("")
+    lines.append(
+        "These counts are never added to the generated-case counts above. A "
+        "golden case tests whether the advisor is right; a generated case tests "
+        "whether it agrees with a model."
+    )
+    lines.append("")
+    return lines
+
+
 def collect_keyword_misses(verify_files: list[Path]) -> Counter[str]:
     c: Counter[str] = Counter()
     for vf in verify_files:
@@ -154,14 +221,23 @@ def build_report(run_dir: Path) -> str:
     lines.append("# ABS-260 — Production-Readiness Sweep Report")
     lines.append("")
     lines.append(f"**Run directory:** `{run_dir}`")
-    lines.append(f"**Overall verdict:** **{overall}**")
+    lines.append(f"**Generated-case verdict (advisory):** **{overall}**")
     lines.append("")
-    lines.append("## Threshold check")
+    lines.append(
+        "> The verdict above is computed against `regional_centre_test_prompts.json`, "
+        "whose expected answers were authored by `claude -p` — a model of the family "
+        "under test. It measures agreement with a model's guess, not correctness "
+        "under the by-law, and it gates nothing. The blocking verdict is the golden "
+        "subset below (ABS-468)."
+    )
+    lines.append("")
+    lines.extend(golden_section(run_dir))
+    lines.append("## Threshold check (generated cases)")
     lines.append("")
     for note in notes:
         lines.append(f"- {note}")
     lines.append("")
-    lines.append("## Headline metrics")
+    lines.append("## Headline metrics (generated cases — advisory)")
     lines.append("")
     lines.append(f"- **Cases run:** {n}")
     lines.append(f"- **PASS:** {n_pass}   **PARTIAL:** {n_partial}   **FAIL:** {n_fail}")
@@ -170,7 +246,7 @@ def build_report(run_dir: Path) -> str:
     lines.append("")
 
     # Per-case table.
-    lines.append("## Per-case verdicts")
+    lines.append("## Per-case verdicts (generated cases — advisory)")
     lines.append("")
     lines.append("| ID | Verdict | Zone | Complexity | Liability | Kw rate | Cites (found/total) | Notes |")
     lines.append("|---|---|---|---|---|---|---|---|")

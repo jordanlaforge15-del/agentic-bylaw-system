@@ -56,6 +56,15 @@ Scenario keywords in the user message override the default rules:
   before the SSE stream is built, so tests can assert the hedge appears
   without depending on live-model phrasing.
 
+* ``"MOCK_CONTRADICTORY_HEADING"`` (ABS-519) — the final answer is a
+  correct refusal ("not permitted in ER-2") under two section headings
+  that assert the opposite: "Permitted in ER-2 (with conditions)" over
+  a "permitted in ER-3 ... but not in ER-2" body, and "Allowed in ER-2"
+  over an "is not an allowed use in ER-2" body. The ABS-519
+  heading-consistency guard in ``advisor.chat.session`` rewrites both
+  to agree with their bodies before the stream is built, so tests can
+  assert the repair without a live model.
+
 * ``"MOCK_ADJACENT_ZONING"`` (ABS-375) — round one calls the new
   ``get_adjacent_zoning`` tool (instead of ``search_bylaw_evidence``);
   round two answers with a DEFINITIVE side/rear setback verdict that
@@ -80,6 +89,17 @@ Scenario keywords in the user message override the default rules:
   ``run_tool_loop`` crosses its ceiling and forces synthesis with
   ``terminated_reason="cumulative_cost_trip"``. Use on a Complex-tier
   case (``max_iterations=55``) so the iteration cap can't fire first.
+
+* ``"MOCK_WALLET_CAP_TRIP"`` (ABS-404) — the inverse of the scenario
+  above: every round returns a TINY payload paired with a LARGE reported
+  usage (80k in + 20k out), so the turn's measured wallet burn climbs
+  while every pre-flight estimate stays small. Neither estimator breaker
+  can see this — the char heuristic under-counts tool_results and never
+  models output tokens — which is exactly how one prod turn burned
+  247,566 wallet tokens under a 165k cumulative ceiling. Only the
+  measured wallet breaker can end it, with
+  ``terminated_reason="wallet_cap_trip"``. Drives the ABS-404 e2e that
+  pins the per-turn burn bound on the wire.
 
 * ``"MOCK_FAN_OUT"`` — the first-turn response contains TWO
   ``search_bylaw_evidence`` ``tool_use`` blocks in a single assistant
@@ -152,6 +172,25 @@ _CUMULATIVE_TRIP_PREAMBLE_CHARS = 80_000
 # Hard stop so a regression that disables the breaker surfaces as a
 # normal answer (visible test failure) rather than an unbounded loop.
 _CUMULATIVE_TRIP_MAX_ROUNDS = 40
+
+# ABS-404 wallet-cap scenario. The inverse of the cumulative-trip shape
+# above: a TINY payload (so every estimator stays quiet) paired with a
+# LARGE reported usage. That is the production shape the estimators
+# cannot see — the char heuristic under-counts JSON tool_results and
+# never models output tokens at all — and it is what let one prod turn
+# burn 247,566 wallet tokens under a 165k cumulative ceiling.
+#
+# 100k measured per round against the default 350k ceiling (2 x 175k)
+# trips on the 5th iteration, comfortably inside the tier-less
+# iteration cap of 20. Split across input and output deliberately: an
+# input-only burn would leave the wallet breaker indistinguishable from
+# an input-token estimator that happened to be calibrated correctly.
+_WALLET_CAP_ROUND_INPUT_TOKENS = 80_000
+_WALLET_CAP_ROUND_OUTPUT_TOKENS = 20_000
+# Hard stop, same rationale as above — and sized so a regression that
+# removes the breaker burns ~1.2M tokens instead of ~450k, which the e2e
+# assertion on ``burned_tokens`` separates cleanly.
+_WALLET_CAP_MAX_ROUNDS = 12
 
 # ABS-372: retry-a-cost_ceiling-trip scenario (``MOCK_COST_CEILING_ONCE``).
 # The buy-an-answer engine retries a nondeterministic cost_ceiling trip on a
@@ -434,6 +473,27 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
             )
         return _final_answer_response(user_text)
 
+    if "MOCK_WALLET_CAP_TRIP" in user_text:
+        # ABS-404: keep issuing cheap-looking search rounds that each
+        # REPORT a large measured usage, so the turn's wallet burn climbs
+        # while every estimator stays quiet. Only the measured wallet
+        # breaker can end this turn; if it is broken the loop runs to the
+        # hard cap and answers, and the e2e assertions on
+        # terminated_reason and burned_tokens both fail loudly.
+        rounds_done = _count_search_rounds(request)
+        if rounds_done < _WALLET_CAP_MAX_ROUNDS:
+            return tool_use_response(
+                tool_id=f"t-walletcap-{rounds_done + 1}",
+                tool_name="search_bylaw_evidence",
+                tool_input={"query": f"wallet cap round {rounds_done + 1}"},
+                preamble=f"Expensive round {rounds_done + 1}.",
+                usage=TokenUsage(
+                    input_tokens=_WALLET_CAP_ROUND_INPUT_TOKENS,
+                    output_tokens=_WALLET_CAP_ROUND_OUTPUT_TOKENS,
+                ),
+            )
+        return _final_answer_response(user_text)
+
     if "MOCK_FAN_OUT" in user_text:
         if has_prior_tool_use:
             return _final_answer_response(user_text)
@@ -491,9 +551,20 @@ def _dispatch(request: CompletionRequest) -> CompletionResponse:
         # turn trips the pre-flight ``insufficient_tokens`` floor. Answers
         # directly (no grounding tool) with a usage large enough to overdraw
         # the signup grant. Used by the out-of-tokens e2e.
+        #
+        # Derived from the configured grant rather than hardcoded (ABS-416):
+        # the literal 30,000 here was sized against the old 25,000-token
+        # grant and silently stopped overdrawing anything when the grant was
+        # recalibrated to 1,750,000, turning the out-of-tokens e2e green for
+        # the wrong reason. Imported lazily: ``advisor.billing.__init__``
+        # pulls in the router, which reaches back into ``advisor.llm``.
+        from advisor.billing.turns import signup_token_grant
+
         return text_response(
             "Draining the wallet for the out-of-tokens scenario.",
-            usage=TokenUsage(input_tokens=30_000, output_tokens=0),
+            usage=TokenUsage(
+                input_tokens=signup_token_grant() + 5_000, output_tokens=0
+            ),
             stop_reason="end_turn",
         )
 
@@ -610,6 +681,35 @@ def _final_answer_response(user_text: str) -> CompletionResponse:
         return text_response(
             body,
             usage=TokenUsage(input_tokens=160, output_tokens=120),
+            stop_reason="end_turn",
+        )
+
+    if "MOCK_CONTRADICTORY_HEADING" in user_text:
+        # ABS-519: the TC-026 failure shape. The body is CORRECT (townhouse
+        # use is permitted in ER-3, not in ER-2) and so is the summary line;
+        # the heading asserts the opposite and is the most scannable element
+        # on the page. The ABS-519 guard in ``advisor.chat.session`` rewrites
+        # the heading to agree with the body before the SSE stream is built,
+        # so the e2e asserts product code rather than a mock string.
+        # Section 2 carries the OTHER shape a denial takes in by-law prose —
+        # "is not an allowed use in ER-2" — where the permission word
+        # qualifies a noun. Un-negated, that reads as a topic ("Permitted Uses
+        # in ER-2") and the guard leaves it alone; negated, it is a verdict.
+        # Both sections are repaired in one answer.
+        body = (
+            "**No** — townhouse dwelling use is not permitted in ER-2.\n\n"
+            "### 1. Townhouse Dwelling Use — Permitted in ER-2 (with conditions)\n\n"
+            "Table 1B confirms that **townhouse dwelling use is permitted in "
+            "the ER-3 zone** (marked with the conditional-use symbol), but "
+            "**not in ER-2**.\n\n"
+            "### 2. Four-Unit Dwelling — Allowed in ER-2\n\n"
+            "A four-unit dwelling is **not an allowed use** in ER-2 under "
+            "Table 1B.\n\n"
+            f"Source: {_DEFAULT_CITATION}"
+        )
+        return text_response(
+            body,
+            usage=TokenUsage(input_tokens=150, output_tokens=110),
             stop_reason="end_turn",
         )
 
