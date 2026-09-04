@@ -2181,6 +2181,51 @@ else:
     out["ok"] = True
     out["gateway_name"] = getattr(gateway, "name", None)
     out["gateway_class"] = type(gateway).__name__
+
+# ABS-531: does the *installed* SDK accept the kwargs the gateway sends?
+#
+# Runs unconditionally — it needs no API key and no network, only the
+# translation path and a signature. Reported separately from "ok" because a
+# gateway can build perfectly and still fail on the first request, which is
+# exactly what happened: anthropic 1.x dropped the sampling parameters, so the
+# `temperature` the gateway always sends became a TypeError at request time.
+try:
+    import inspect
+    from anthropic.resources.messages import AsyncMessages
+    from advisor.llm import CompletionRequest, LLMRole, Message, ToolDefinition
+    from advisor.llm.anthropic_backend import AnthropicGateway
+
+    probe_request = CompletionRequest(
+        model="claude-opus-4-5",
+        system="probe",
+        messages=[Message(role=LLMRole.USER, content="probe")],
+        tools=[
+            ToolDefinition(
+                name="probe", description="probe", input_schema={"type": "object"}
+            )
+        ],
+        max_tokens=16,
+        temperature=0.0,
+        stop_sequences=["STOP"],
+        metadata={"user_id": "probe"},
+    )
+    emitted = set(AnthropicGateway(api_key="unused")._to_anthropic_params(probe_request))
+
+    unsupported = {}
+    for label, method in (("create", AsyncMessages.create), ("stream", AsyncMessages.stream)):
+        signature = inspect.signature(method).parameters
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in signature.values()):
+            # **kwargs swallows anything; a signature check proves nothing.
+            unsupported[label] = []
+            continue
+        unsupported[label] = sorted(emitted - {n for n in signature if n != "self"})
+
+    out["anthropic_version"] = __import__("anthropic").__version__
+    out["sdk_unsupported_params"] = unsupported
+    out["sdk_params_compatible"] = not any(unsupported.values())
+except BaseException as exc:
+    out["sdk_params_compatible"] = None
+    out["sdk_probe_error"] = f"{type(exc).__name__}: {exc}"
 print(json.dumps(out))
 """
 
