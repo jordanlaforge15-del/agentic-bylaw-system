@@ -20,6 +20,12 @@
 - **Practical check:** `grep -ri` the old concept's terms and old route paths across `web/` (tier names, plan labels, old URLs) and confirm each hit is either updated or intentionally left. A pricing/product change is NOT done until the **primary user entry flow** reflects it, with e2e covering that flow — not just a secondary/marketing page.
 - **Lesson (2026-06-15):** the question-based pricing pivot updated the marketing `pricing` page + billing API but left the in-app case-open flow (`web/components/marketing/case-open-form.tsx`, `web/app/(marketing)/cases/new`) still selling the old quick/standard/complex tiers, so users *starting a case* never saw the new model. The ticket scoped "pricing page" and nobody traced the other surfaces that sold tiers.
 
+##Python dependencies (ABS-532)
+- **`pyproject.toml` is not what gets installed.** `requirements/{base,runtime,dev}.txt` are committed, hash-pinned locks, and every install site — the image build, `dev-setup.sh`, both CI Python jobs, the vulnerability audit, `make install` — installs from one of them with `pip install --require-hashes`, followed by `pip install . --no-deps`. Dropping that `--no-deps` lets pip re-resolve `pyproject.toml`'s floors straight past the pins and silently undoes the lock.
+- **Editing `pyproject.toml` dependencies means regenerating the locks in the same commit:** `./scripts/lock-python-deps.sh` (or `make lock`). CI's **Python lock drift** job recompiles and fails on any difference. It is not an upgrade check — pins are held, so a new PyPI release does not turn it red; only an unregenerated pyproject edit or a hand-edited lock does.
+- Never hand-edit `requirements/*.txt`. Deliberate version bumps are `./scripts/lock-python-deps.sh --upgrade`, in their own reviewed commit, with `make test` + `make e2e` as evidence. Full rationale and the upgrade procedure: [docs/PYTHON_DEPENDENCY_LOCKS.md](docs/PYTHON_DEPENDENCY_LOCKS.md).
+- Why this exists: `anthropic>=0.40` let the 1.x major into a production image build while the dev venv kept the 0.100.0 it installed months earlier, so every case-open threw behind a fully green suite (ABS-531).
+
 ##Testing
 - Python unit tests: `make test` (or `.venv/bin/pytest tests/advisor/` for a scoped run).
 - End-to-end browser tests (Playwright, full local stack — Next.js + FastAPI + Postgres + MockGateway): see [docs/E2E_TESTING.md](docs/E2E_TESTING.md) for the full guide. Quick start:

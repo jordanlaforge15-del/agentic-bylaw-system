@@ -1,6 +1,10 @@
 .env
 .venv
 .venv/
+# Cached throwaway venv holding the pinned uv that compiles requirements/*.txt
+# (scripts/lock-python-deps.sh). The locks it produces ARE committed; the
+# resolver that produced them is reinstalled on demand.
+.uv-lock-venv/
 backups/
 __pycache__/
 *.py[cod]
