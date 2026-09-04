@@ -28,7 +28,23 @@ dependencies = [
 
 [project.optional-dependencies]
 advisor = [
-  "anthropic>=0.40",
+  # EXACT pin, not a floor (ABS-531). `anthropic>=0.40` let the 1.x major in
+  # unannounced: `pip install ".[advisor]"` in Dockerfile.advisor runs against
+  # an empty venv and resolves whatever is newest that day, while the dev venv
+  # kept the 0.100.0 it installed months earlier and never revisited. anthropic
+  # 1.x removed the sampling parameters from messages.create(), so the
+  # `temperature` kwarg that AnthropicGateway._to_anthropic_params always sends
+  # became a TypeError — in prod only, on every case-open, with a fully green
+  # test suite behind it.
+  #
+  # 0.100.0 is the version the suite has actually been run against. Moving off
+  # it is the 1.x migration's job (httpx2, awaited async .with_raw_response,
+  # per-model sampling params — overlaps ABS-437), done deliberately with tests,
+  # never as a side effect of a rebuild.
+  #
+  # Every other dependency here still declares a floor and carries the same
+  # risk; ABS-532 replaces the lot with a lockfile.
+  "anthropic==0.100.0",
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "sse-starlette>=2.0",
