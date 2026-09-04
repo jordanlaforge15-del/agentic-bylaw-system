@@ -355,7 +355,11 @@ test.describe("ABS-485 the gate is wired into the paths that ship", () => {
       .split("\n")
       .filter((l) => !l.trim().startsWith("#"))
       .join("\n");
-    expect(commands).toContain('pip install -e "."');
+    // The invariant is "the project, with no extras". The shell quoting around
+    // the dot is not part of it: ABS-532 rewrote this line to add --no-deps and
+    // dropped the quotes, and asserting the old literal failed on punctuation
+    // while the constraint it names was still intact.
+    expect(commands).toMatch(/pip install (?:-e )?"?\."?(?:\s|$)/);
     for (const extra of ["[dev]", "[advisor]", "[dev,advisor]"]) {
       expect(commands).not.toContain(extra);
     }
