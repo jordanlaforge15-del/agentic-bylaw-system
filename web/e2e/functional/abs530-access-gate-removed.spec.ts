@@ -73,7 +73,11 @@ test.describe("ABS-530: the /access gate is removed", () => {
     const res = await page.goto(`${E2E_BASE_URL}/admin/invites`);
     expect(res?.status(), "allowlisted admin must not get a 404").toBe(200);
     await expect(page).toHaveURL(/\/admin\/invites/);
-    await expect(page.getByText(/INVITE REQUESTS/i)).toBeVisible();
+    // The h1 specifically — "invite requests" also appears in the
+    // ADMIN · … breadcrumb, and a bare text match hits both.
+    await expect(
+      page.getByRole("heading", { name: /Invite requests/i }),
+    ).toBeVisible();
   });
 });
 
