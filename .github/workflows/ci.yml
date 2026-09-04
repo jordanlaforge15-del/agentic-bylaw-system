@@ -33,6 +33,38 @@ jobs:
         run: ruff check src tests
 
   # ---------------------------------------------------------------------------
+  # lock-drift — the committed Python locks must match pyproject.toml (ABS-532)
+  #
+  # A lockfile that nothing checks is a lockfile that goes stale, and a stale
+  # lock is worse than none: it looks authoritative while the thing it claims to
+  # describe has moved. This job recompiles requirements/*.txt from
+  # pyproject.toml with the pinned resolver and fails on any difference.
+  #
+  # It is NOT an upgrade check. lock-python-deps.sh holds every version the
+  # committed lock already names that is still satisfiable, so a new release on
+  # PyPI does not turn this job red — only an edit to pyproject.toml that was
+  # not followed by a regeneration, or a hand-edited lock, does. Deliberate
+  # upgrades are `./scripts/lock-python-deps.sh --upgrade`, run by a human, and
+  # land as their own reviewable diff (docs/PYTHON_DEPENDENCY_LOCKS.md).
+  # ---------------------------------------------------------------------------
+  lock-drift:
+    name: Python lock drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The locks are compiled against the deploy target's interpreter.
+          # Universal resolution makes the *output* platform-independent, but
+          # keep the input honest.
+          python-version: "3.11"
+          cache: pip
+
+      - name: Recompile the locks and diff against the committed ones
+        run: ./scripts/lock-python-deps.sh --check
+
+  # ---------------------------------------------------------------------------
   # typecheck — TypeScript / Next.js
   # ---------------------------------------------------------------------------
   typecheck:
@@ -91,8 +123,16 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      # ABS-532: installs the committed hash-pinned lock, not a fresh resolution
+      # of pyproject.toml's floors. The point is that this job and the image
+      # build are no longer two independent answers to "what version?" — the
+      # tests below now run against exactly what Dockerfile.advisor ships.
+      # --no-deps on the project install keeps pip from re-resolving past the
+      # pins it just honoured. Regenerate with ./scripts/lock-python-deps.sh.
       - name: Install dependencies
-        run: pip install -e ".[dev,advisor]"
+        run: |
+          pip install --require-hashes -r requirements/dev.txt
+          pip install -e . --no-deps
 
       - name: Run Alembic migrations
         run: alembic upgrade head
@@ -149,8 +189,16 @@ jobs:
       # from "gate HELD". A gate that reports a hold it never evaluated is
       # worse than no gate. If this step ever needs a bigger install to pass,
       # that is the bug; fix the import, not this line.
+      #
+      # ABS-532: requirements/base.txt is the no-extras lock — it is the machine
+      # -readable form of the paragraph above, and swapping it for runtime.txt
+      # or dev.txt would hand the gate FastAPI and quietly delete the
+      # constraint. --no-deps on the project install is what keeps that true;
+      # without it pip re-resolves pyproject.toml and the pins go out the window.
       - name: Install dependencies
-        run: pip install -e "."
+        run: |
+          pip install --require-hashes -r requirements/base.txt
+          pip install -e . --no-deps
 
       - name: Check the golden-case deploy gate
         # Refs go through `env`, not `${{ }}` interpolated into the script body:
@@ -181,16 +229,16 @@ jobs:
   # Runs only on push to main, gated on all CI jobs passing.
   #
   # Test gate: to prevent merge of failing code, enable branch protection on
-  # main/dev in GitHub Settings › Branches and mark the Lint, TypeScript
-  # typecheck, Python tests, and Golden-case deploy gate jobs as required
-  # status checks. `needs` already blocks the build when the gate is held; the
+  # main/dev in GitHub Settings › Branches and mark the Lint, Python lock drift,
+  # TypeScript typecheck, Python tests, and Golden-case deploy gate jobs as
+  # required status checks. `needs` already blocks the build when the gate is held; the
   # branch-protection entry is what additionally blocks the dev → main merge
   # that would trigger it.
   # ---------------------------------------------------------------------------
   build-advisor:
     name: Build advisor image
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test, golden-gate]
+    needs: [lint, lock-drift, typecheck, test, golden-gate]
     # `success() &&` is load-bearing, not decorative. Actions applies the
     # implicit success()-on-needs check only to jobs with NO `if:` of their own;
     # writing a custom condition replaces it outright. Without it this job runs
@@ -244,7 +292,7 @@ jobs:
   build-web:
     name: Build web image
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test, golden-gate]
+    needs: [lint, lock-drift, typecheck, test, golden-gate]
     # See build-advisor: a custom `if:` drops the implicit success()-on-needs,
     # so this must restate it or a held gate will not stop the prod web image.
     if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name == 'push' }}

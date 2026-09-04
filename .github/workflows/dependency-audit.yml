@@ -5,12 +5,17 @@ on:
     branches: [main, dev]
     paths:
       - "pyproject.toml"
+      # ABS-532: the lock, not just the declaration, is what determines the
+      # audited version set. A regenerated lock can pull in a vulnerable
+      # transitive dep without pyproject.toml changing a character.
+      - "requirements/**"
       - "web/package.json"
       - "web/package-lock.json"
   pull_request:
     branches: [main, dev]
     paths:
       - "pyproject.toml"
+      - "requirements/**"
       - "web/package.json"
       - "web/package-lock.json"
   schedule:
@@ -27,14 +32,29 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install package with dev extras
-        run: pip install ".[dev]"
+      # pip-audit is installed on its own, into the job's bare interpreter, and
+      # the audit reads the lock file directly (ABS-532). Two changes from the
+      # old `pip install ".[dev]"` + bare `pip-audit`:
+      #
+      #   * The audited set is now the exact pinned set, hashes and all, rather
+      #     than whatever pip resolved on the runner that morning. An audit of a
+      #     resolution nobody else shares reports on software nobody ships.
+      #   * It audits requirements/dev.txt, which is [dev,advisor] — a superset
+      #     of the old [dev]. The advisor extras are the ones that actually
+      #     reach production, and they were previously never scanned here at
+      #     all; only Dockerfile.advisor's in-build pip-audit saw them, and only
+      #     on an image build.
+      - name: Install pip-audit
+        run: pip install pip-audit
 
-      - name: Run pip-audit
+      - name: Run pip-audit against the dependency lock
         # No --strict: the project's own package (layer1-bylaw-ingest) is
         # local-only, so its "not found on PyPI" skip must not be fatal.
         # pip-audit still exits non-zero on any real vulnerability finding.
-        run: pip-audit --desc on
+        #
+        # --no-deps is safe precisely because the file is a complete lock: there
+        # is no unpinned edge left for a resolver to discover.
+        run: pip-audit --desc on --no-deps -r requirements/dev.txt
 
   npm-audit:
     name: npm dependency audit
