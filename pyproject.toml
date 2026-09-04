@@ -7,7 +7,7 @@ name = "layer1-bylaw-ingest"
 version = "0.1.0"
 description = "Layer 1 source normalization for municipal land-use bylaws"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 # ... keep name, version, description, readme, requires-python as-is ...
 dependencies = [
   "alembic>=1.13",
@@ -159,4 +159,4 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"

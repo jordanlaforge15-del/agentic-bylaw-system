@@ -10,7 +10,8 @@ using a ``Path(__file__).parents[3] / "docs" / ...`` resolver:
 
 Under an editable install the resolver lands at the repo root; under
 the production non-editable install in ``Dockerfile.advisor`` it
-lands at ``/opt/venv/lib/python3.11/docs/...`` instead. Two things
+lands at ``/opt/venv/lib/python<X.Y>/docs/...`` instead, where ``X.Y`` is
+whatever interpreter the base image ships. Two things
 have to be true for the file to actually arrive in the runtime image:
 
 1. ``Dockerfile.advisor`` has a ``COPY --chown=advisor:advisor
@@ -32,35 +33,54 @@ updated.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_DOCKERFILE = _REPO_ROOT / "Dockerfile.advisor"
+
+
+def _advisor_venv_lib_dir() -> str:
+    """``/opt/venv/lib/python<X.Y>`` for the interpreter the image actually ships.
+
+    Derived from the base image rather than written down, because writing it
+    down is precisely the bug this guards. The COPY destinations below only work
+    because ``Path(__file__).parents[3]`` from
+    ``/opt/venv/lib/pythonX.Y/site-packages/advisor/chat/persona.py`` is
+    ``/opt/venv/lib/pythonX.Y`` — so the paths move with the base image, and a
+    ``FROM python:3.13`` bump that forgets them puts the docs in a directory no
+    install creates. Nothing fails at build time; the first request to read a
+    persona 500s in production instead (ABS-533; same shape as ABS-67).
+    """
+    match = re.search(
+        r"^FROM python:(\d+)\.(\d+)\.\d+-slim-bookworm", _DOCKERFILE.read_text(), re.MULTILINE
+    )
+    assert match is not None, (
+        "Dockerfile.advisor's base image is not an exactly-pinned "
+        "python:X.Y.Z-slim-bookworm. The runtime-doc COPY destinations are "
+        "derived from it, and an unpinned or reshaped tag means they cannot be."
+    )
+    return f"/opt/venv/lib/python{match[1]}.{match[2]}"
+
 
 # (source-relative-path-in-repo, container-destination-path).
 # The destination must match ``Path(__file__).parents[3] / <relpath>``
-# under the non-editable install in Dockerfile.advisor — i.e. rooted
-# at ``/opt/venv/lib/python3.11``.
+# under the non-editable install in Dockerfile.advisor.
 _RUNTIME_DOCS = [
-    (
+    (relpath, f"{_advisor_venv_lib_dir()}/{relpath}")
+    for relpath in (
         "docs/agent/persona.md",
-        "/opt/venv/lib/python3.11/docs/agent/persona.md",
-    ),
-    (
         "docs/agent/classifier-persona.md",
-        "/opt/venv/lib/python3.11/docs/agent/classifier-persona.md",
-    ),
-    (
         "docs/TERMS_AND_CONDITIONS.md",
-        "/opt/venv/lib/python3.11/docs/TERMS_AND_CONDITIONS.md",
-    ),
+    )
 ]
 
 
 @pytest.fixture(scope="module")
 def dockerfile_text() -> str:
-    return (_REPO_ROOT / "Dockerfile.advisor").read_text(encoding="utf-8")
+    return _DOCKERFILE.read_text(encoding="utf-8")
 
 
 @pytest.fixture(scope="module")

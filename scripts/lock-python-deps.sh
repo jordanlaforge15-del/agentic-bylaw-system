@@ -11,9 +11,9 @@
 # earlier (ABS-531). The lock files this script writes are the single answer all
 # five sites now install from.
 #
-# WHY uv, AND WHY --universal. The deploy target is linux / CPython 3.11
+# WHY uv, AND WHY --universal. The deploy target is linux / CPython 3.13
 # (Dockerfile.advisor, CI's python-version). The dev venv is macOS / CPython
-# 3.12. A hash-pinned lock compiled by `pip-compile` against one of those does
+# 3.13 or newer. A hash-pinned lock compiled by `pip-compile` against one of those does
 # not reliably install on the other — the resolution is baked to the compiling
 # interpreter and platform, so the macOS dev path would need a second,
 # separately-resolved file and the two would drift apart, which is the bug this
@@ -21,10 +21,9 @@
 #
 # `uv pip compile --universal` resolves for *all* platforms and all Python
 # versions >= the project's requires-python in one pass, forking a requirement
-# into marker-guarded lines when it genuinely must differ (see the two `numpy`
-# entries in the emitted files: one for < 3.12, one for >= 3.12). Every wheel
-# hash for every supported platform is emitted, so one committed file installs
-# byte-identically on linux/3.11 and macOS/3.12.
+# into marker-guarded lines when it genuinely must differ. Every wheel hash for
+# every supported platform is emitted, so one committed file installs
+# byte-identically on linux/3.13 and macOS/3.14.
 #
 # uv is used ONLY here, to compile. Nothing installs with it: the five sites all
 # run `pip install --require-hashes -r requirements/<lock>.txt`, so no install
@@ -48,8 +47,12 @@ set -euo pipefail
 UV_VERSION="0.9.28"
 
 # Locked against the deploy target's interpreter, not the dev box's. Universal
-# resolution still covers 3.12+, but the floor is what the image runs.
-LOCK_PYTHON_VERSION="3.11"
+# resolution still covers newer interpreters, but the floor is what the image
+# runs. Keep this equal to the minor version in Dockerfile.advisor's FROM and to
+# `requires-python` — tests/test_python_runtime_version.py asserts all three
+# agree, because a lock compiled for one interpreter and installed on another is
+# the dev/prod split this ticket (ABS-533) closed.
+LOCK_PYTHON_VERSION="3.13"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
