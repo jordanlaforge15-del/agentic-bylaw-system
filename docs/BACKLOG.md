@@ -110,7 +110,10 @@ Fixed by two changes shipped together in `web:0.6.1`:
 - **`web/Dockerfile` build-arg is now documented as required** in
   `docs/DEPLOYMENT.md` so future builds don't hit the same footgun.
 
-The `/access` page and `abs_demo` / `abs_admin` cookie gate remain
-in the codebase as the fallback for unconfigured-Clerk deployments
-(local dev, future Clerk outages). Production no longer reaches them
-when Clerk is configured.
+At the time this landed, the `/access` page and `abs_demo` /
+`abs_admin` cookie gate stayed in the codebase as the fallback for
+unconfigured-Clerk deployments. **They were deleted in ABS-530
+(2026-09-04)** — the fallback was never reached once Clerk was
+configured, and a shared password can't tell two admins apart. With
+no Clerk keys, `proxy.ts` now leaves protected routes open in a dev
+build and 503s them in a production build.

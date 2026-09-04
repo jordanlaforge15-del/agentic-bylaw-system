@@ -19,12 +19,17 @@
 //                                       (used by the e2e backend's
 //                                       invite-redemption code path)
 //   * Cookie ``abs_test_sub_full_name`` → ``X-Test-User-Full-Name``
-//   * Cookie ``abs_demo`` (existing) → proxy.ts password gate
+//   * Cookie ``abs_test_clerk_jwt``     → ``Authorization: Bearer``
+//                                       (read by the Clerk mock in
+//                                       web/lib/clerk-test-mock.ts)
 //
-// "Logout" clears all four cookies; the next /app navigation now
-// redirects to /access (the password-gate page), matching the user-
-// visible behavior of Clerk's sign-out from the user's perspective.
-// "Login" re-mints abs_demo + the identity cookies, so the next
+// ``abs_test_sub_user_id`` is also what the Clerk mock's
+// clerkMiddleware treats as "signed in", so clearing it is a real
+// sign-out as far as proxy.ts is concerned.
+//
+// "Logout" clears all four cookies; the next /app navigation then
+// redirects to /sign-in, matching what real Clerk does after
+// sign-out. "Login" re-mints the identity cookies, so the next
 // request lands as the same advisor_user row (or a fresh one if the
 // caller minted a new identity in between).
 
@@ -41,11 +46,7 @@ export const E2E_BASE_URL =
 export const E2E_API_URL =
   process.env.E2E_API_URL || "http://127.0.0.1:8001";
 
-const E2E_DEMO_PASSWORD =
-  process.env.E2E_DEMO_PASSWORD || "e2e-demo-pw";
-
 const COOKIE_NAMES = [
-  "abs_demo",
   "abs_test_sub_user_id",
   "abs_test_sub_email",
   "abs_test_sub_full_name",
@@ -80,22 +81,6 @@ export function mintTestIdentity(prefix = "auth"): TestIdentity {
     email: `${prefix}-${slug}@e2e.test`,
     fullName: `Auth Test ${slug}`,
   };
-}
-
-/** Mint the password-gate cookie that ``web/proxy.ts`` checks before
- * letting requests through to /app and /admin. Equivalent to the
- * authedContext fixture in the legacy test-env file, but invokable
- * on demand here so a spec can mint/clear/mint again to simulate
- * sign-out → sign-in. */
-async function mintAbsDemoCookie(context: BrowserContext): Promise<void> {
-  const res = await context.request.post(`${E2E_BASE_URL}/api/access`, {
-    data: { gate: "demo", password: E2E_DEMO_PASSWORD },
-  });
-  if (!res.ok()) {
-    throw new Error(
-      `failed to mint abs_demo cookie: HTTP ${res.status()} ${await res.text()}`,
-    );
-  }
 }
 
 /** Mint a test JWT for the given identity via the FastAPI test server.
@@ -175,9 +160,8 @@ async function setIdentityCookies(
 }
 
 /** "Sign in" the supplied identity into the current browser context.
- * Mints a test JWT (for the Clerk mock auth path), the password gate
- * cookie (fallback for /api/access), and the identity cookies. The
- * next request from this context reaches the backend with either
+ * Mints a test JWT and sets the identity cookies. The next request
+ * from this context reaches the backend with either
  * ``Authorization: Bearer <jwt>`` (via the Next.js proxy Clerk mock)
  * or ``X-Test-User-Id`` (direct FastAPI calls). */
 export async function signInAs(
@@ -185,16 +169,14 @@ export async function signInAs(
   identity: TestIdentity,
 ): Promise<void> {
   const jwt = await mintTestJwt(context, identity);
-  await mintAbsDemoCookie(context);
   await setIdentityCookies(context, identity, jwt);
 }
 
-/** "Sign out" the current browser context. Clears the password-gate
- * cookie and the identity cookies, leaving the context in the same
- * shape as a fresh browser. The next navigation to /app will
- * redirect through /access (the password gate's login page), and
- * subsequent API calls fall back to the default ``demo-user-1``
- * identity until signInAs is called again. */
+/** "Sign out" the current browser context. Clears the identity
+ * cookies, leaving the context in the same shape as a fresh browser.
+ * The next navigation to /app will redirect to /sign-in, and
+ * subsequent direct API calls fall back to the default
+ * ``demo-user-1`` identity until signInAs is called again. */
 export async function signOut(context: BrowserContext): Promise<void> {
   for (const name of COOKIE_NAMES) {
     await context.clearCookies({ name });
