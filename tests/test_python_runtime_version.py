@@ -189,3 +189,95 @@ def test_setup_scripts_refuse_an_interpreter_older_than_the_target(script: str) 
     assert f"sys.version_info < ({major}, {minor})" in _read(script), (
         f"{script} does not require Python {EXPECTED_MINOR}+"
     )
+
+
+# ---------------------------------------------------------------------------
+# Interpreter-shaped paths — the surfaces a version bump silently invalidates
+# ---------------------------------------------------------------------------
+
+# Where the venv's interpreter minor shows up inside a path. Under the image's
+# non-editable install this directory *is* what ``Path(__file__).parents[3]``
+# resolves to, so the string is load-bearing in the Dockerfile and quotable in
+# any runbook that reaches into the container.
+_VENV_INTERPRETER_PATH = re.compile(r"/opt/venv/lib/python(\d+\.\d+)")
+
+# Where the scan looks, and where it deliberately does not.
+#
+# Only *operative* occurrences count — a string something builds, copies to, or
+# pastes at a container. Prose does not: `mcp/.../coherence_audit.py` and
+# `tests/test_package_data.py` both describe, in past tense, a 3.11-era bug
+# whose whole point is the interpreter it happened under. Rewriting those to
+# 3.13 would make them false. So: every hit in a Dockerfile, every hit inside a
+# fenced code block in a doc, and non-comment lines in shell/YAML. Python is
+# skipped entirely — it constructs no such path today, and if it ever does, the
+# image test above is what catches it.
+#
+# Deliberately not `git ls-files`: this suite also runs inside the advisor
+# image, which ships no git — that is what made three tests fail with
+# FileNotFoundError during this ticket.
+_SCANNED_SUFFIXES = frozenset({".md", ".sh", ".yml", ".yaml"})
+_SCANNED_STEMS = frozenset({"Dockerfile"})
+_SKIPPED_DIRS = frozenset(
+    {".git", ".venv", "node_modules", ".next", ".next-e2e", "__pycache__",
+     "build", "dist", "playwright-report", "test-results", "examples"}
+)
+
+
+def _scannable_files() -> list[Path]:
+    return [
+        p for p in REPO_ROOT.rglob("*")
+        if p.is_file()
+        and not _SKIPPED_DIRS & set(p.relative_to(REPO_ROOT).parts)
+        and (p.suffix in _SCANNED_SUFFIXES or p.name.split(".")[0] in _SCANNED_STEMS)
+    ]
+
+
+def _operative_lines(path: Path, text: str):
+    """Yield ``(lineno, line)`` for lines where a venv path would be executed."""
+    is_dockerfile = path.name.split(".")[0] in _SCANNED_STEMS
+    in_fence = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if path.suffix == ".md":
+            if line.lstrip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if not in_fence:
+                continue
+        elif not is_dockerfile and line.lstrip().startswith("#"):
+            continue
+        yield lineno, line
+
+
+def test_no_operative_path_names_a_stale_venv_interpreter() -> None:
+    """Nothing executable may name ``/opt/venv/lib/pythonX.Y`` for a stale Y.
+
+    A runtime bump invalidates every hard-coded venv path at once, and the two
+    kinds of hit fail very differently. In ``Dockerfile.advisor`` the three
+    ``COPY``\\ s that place ``persona.md``, ``classifier-persona.md`` and the
+    terms document put them where ``Path(__file__).parents[3]`` looks; miss one
+    and the build still succeeds, then the first request that reads a persona
+    500s in production (ABS-67). In a runbook the same string is a command an
+    operator pastes at a production container, where it fails as a
+    file-not-found in the middle of a rollout — which is how
+    ``docs/ABS-420-RETRIEVAL-ENABLED-ROLLOUT.md`` was left pointing at
+    ``python3.11`` by this very ticket, caught in review rather than by a test.
+
+    Both are the same drift, and neither surface is one a reviewer thinks to
+    grep. This is the grep.
+    """
+    stale: list[str] = []
+    for path in _scannable_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for lineno, line in _operative_lines(path, text):
+            for found in _VENV_INTERPRETER_PATH.findall(line):
+                if found != EXPECTED_MINOR:
+                    rel = path.relative_to(REPO_ROOT)
+                    stale.append(f"{rel}:{lineno} names python{found}")
+
+    assert not stale, (
+        f"the deploy interpreter is {EXPECTED_MINOR}, but these paths still name "
+        "another one:\n  " + "\n  ".join(stale)
+    )
