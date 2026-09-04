@@ -6,6 +6,8 @@ directly. The verification script at ``scripts/verify_prompt_cache.py``
 exercises end-to-end against the live API."""
 from __future__ import annotations
 
+import inspect
+
 from advisor.llm import (
     CompletionRequest,
     LLMRole,
@@ -199,15 +201,15 @@ def _maximal_request() -> CompletionRequest:
     )
 
 
-def _accepted_kwargs(method) -> set[str]:
-    import inspect
+def _accepted_kwargs(method: object) -> set[str] | None:
+    """The kwarg names ``method`` accepts, or ``None`` if it accepts anything.
 
-    params = inspect.signature(method).parameters
+    ``None`` means the signature carries ``**kwargs`` and so proves nothing —
+    the caller must treat that as "cannot tell", not as "accepts none".
+    """
+    params = inspect.signature(method).parameters  # type: ignore[arg-type]
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
-        # The method swallows **kwargs, so a signature check proves nothing.
-        # Treat that as "accepts everything" and let the assertion pass rather
-        # than reporting a false failure.
-        return None  # type: ignore[return-value]
+        return None
     return {name for name in params if name != "self"}
 
 
