@@ -26,6 +26,11 @@
 - Never hand-edit `requirements/*.txt`. Deliberate version bumps are `./scripts/lock-python-deps.sh --upgrade`, in their own reviewed commit, with `make test` + `make e2e` as evidence. Full rationale and the upgrade procedure: [docs/PYTHON_DEPENDENCY_LOCKS.md](docs/PYTHON_DEPENDENCY_LOCKS.md).
 - Why this exists: `anthropic>=0.40` let the 1.x major into a production image build while the dev venv kept the 0.100.0 it installed months earlier, so every case-open threw behind a fully green suite (ABS-531).
 
+##Python runtime version (ABS-533)
+- **The interpreter is 3.13 everywhere, and "everywhere" is eight files.** Both `Dockerfile.advisor` stages (exact patch, `python:3.13.15-slim-bookworm`), `Dockerfile.layer`, all four `ci.yml` jobs, `dependency-audit.yml`, `LOCK_PYTHON_VERSION` in `scripts/lock-python-deps.sh`, `requires-python`, and `[tool.ruff] target-version`. `tests/test_python_runtime_version.py` fails if any one of them lags; `web/e2e/functional/abs533-python-runtime-version.spec.ts` fails if the *running* stack's interpreter is not the one `Dockerfile.advisor` ships, which is the case a file check cannot make (a venv provisioned months ago on an older Python).
+- **Bumping `FROM python:X.Y.Z` means moving the three `/opt/venv/lib/python3.13/docs/...` COPY destinations with it.** `advisor.chat.persona` and `advisor.legal` resolve those with `Path(__file__).parents[3]`, which under the non-editable install *is* `/opt/venv/lib/pythonX.Y`. Miss them and the build still succeeds — the first request that reads a persona 500s in production instead (ABS-67).
+- Moving the runtime forward is its own ticket with its own test run, and the target is picked on wheel availability for the compiled deps (`ifcopenshell`, `pyproj`, `shapely`, `psycopg[binary]`, and the unlocked `paddleocr`/`camelot-py` chain), verified by installing the lock in a real linux container — not on which release is newest. Regenerate the locks in the same commit.
+
 ##Testing
 - Python unit tests: `make test` (or `.venv/bin/pytest tests/advisor/` for a scoped run).
 - End-to-end browser tests (Playwright, full local stack — Next.js + FastAPI + Postgres + MockGateway): see [docs/E2E_TESTING.md](docs/E2E_TESTING.md) for the full guide. Quick start:

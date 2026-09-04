@@ -61,10 +61,15 @@ def _read_lock(path: Path) -> dict[str, set[str]]:
 
     Usually one version per name. It is legitimately more than one when
     universal resolution had to fork a requirement across Python versions or
-    platforms — ``numpy`` is pinned twice, once under
-    ``python_full_version < '3.12'`` and once under ``>= '3.12'`` — which is
-    exactly the mechanism that lets a single file serve linux/3.11 and
-    macOS/3.12. Hence a set, not a scalar.
+    platforms — the mechanism that lets a single file serve the linux/3.13
+    deploy target and a macOS dev venv on 3.13 or newer. Hence a set, not a
+    scalar.
+
+    No entry is currently forked: ``numpy`` used to be pinned twice, under
+    ``python_full_version < '3.12'`` and ``>= '3.12'``, and that fork existed
+    only because ``requires-python`` was ``>=3.11``. Raising the floor to 3.13
+    (ABS-533) collapsed it. The set stays because the next dependency that must
+    differ across platforms will re-create one, not because nothing does today.
     """
     pins: dict[str, set[str]] = {}
     for line in path.read_text().splitlines():

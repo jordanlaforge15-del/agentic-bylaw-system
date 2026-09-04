@@ -709,7 +709,7 @@ curl -N -X POST https://api.agenticbylawsystems.com/v1/chat \
 
 ### 1. `docs/agent/persona.md` packaging
 
-The advisor's chat persona loader reads the file from `Path(__file__).parents[3] / "docs/agent/persona.md"`, which only works under an editable install. The production Dockerfile.advisor has a workaround `COPY` that puts the file at `/opt/venv/lib/python3.11/docs/agent/persona.md` so the resolver finds it. Tracked: should be refactored to `importlib.resources`. Spawned as a separate session task.
+The advisor's chat persona loader reads the file from `Path(__file__).parents[3] / "docs/agent/persona.md"`, which only works under an editable install. The production Dockerfile.advisor has a workaround `COPY` that puts the file at `/opt/venv/lib/python3.13/docs/agent/persona.md` so the resolver finds it. Tracked: should be refactored to `importlib.resources`. Spawned as a separate session task.
 
 ### 2. Alembic `version_num` column width
 
