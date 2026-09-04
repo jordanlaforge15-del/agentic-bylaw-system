@@ -26,8 +26,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install ruff
-        run: pip install ruff
+      # ABS-532: the exact ruff the locks pin, not whatever is newest today. An
+      # unpinned linter is a job whose verdict depends on the morning it ran —
+      # a ruff release that widens the default rule set turns this red with no
+      # commit behind it, which is the same drift the dependency locks remove.
+      #
+      # Installed by name rather than with `--require-hashes -r
+      # requirements/dev.txt`: the full dev tree is numpy, pyproj and
+      # ifcopenshell for a job that reads Python source. The version still comes
+      # from the lock, so it moves only when the lock does.
+      - name: Install ruff at the locked version
+        # -o trims the line-continuation backslash the lock uses before its
+        # --hash lines; without it pip is handed `ruff==0.16.6 \`.
+        run: pip install "$(grep -m1 -oE '^ruff==[^ \\]+' requirements/dev.txt)"
 
       - name: Ruff check
         run: ruff check src tests

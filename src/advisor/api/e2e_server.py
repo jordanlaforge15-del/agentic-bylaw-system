@@ -2323,6 +2323,54 @@ def _mount_llm_registry_probe_endpoint(app: FastAPI) -> None:
         }
 
 
+def _mount_installed_versions_endpoint(app: FastAPI) -> None:
+    """ABS-532: report every distribution version this interpreter actually has.
+
+    The lock files answer "what should be installed". Nothing answered "what IS
+    installed", and that gap is the whole outage: ``pyproject.toml`` said
+    ``anthropic>=0.40``, the dev venv held 0.100.0, the image held 1.3.0, and no
+    surface anywhere reported either number. The version in production was known
+    to nobody until it threw.
+
+    Deliberately in-process — ``importlib.metadata`` reads the metadata of the
+    venv this server is running out of, which is the exact thing under test. The
+    sibling registry probe spawns a subprocess because it needs a clean
+    environment; here a subprocess would answer a question about a different
+    interpreter and be strictly worse.
+
+    Free: no key, no network, no database, no model call. Names are normalised
+    per PEP 503 so the spec can compare them to the lock without a second
+    normalisation table.
+    """
+
+    @app.post("/v1/_test/installed-versions")
+    async def installed_versions() -> dict[str, object]:
+        import platform  # noqa: PLC0415
+        import re  # noqa: PLC0415
+        from importlib import metadata  # noqa: PLC0415
+
+        distributions: dict[str, str] = {}
+        for distribution in metadata.distributions():
+            name = distribution.metadata["Name"]
+            if not name:
+                # A malformed .dist-info with no Name; nothing to compare it to.
+                continue
+            normalised = re.sub(r"[-_.]+", "-", name).lower()
+            # Duplicate .dist-info directories for one package happen after a
+            # botched upgrade. Keep the first and report the collision rather
+            # than picking a winner silently — a venv holding two versions of a
+            # package is itself the finding.
+            distributions.setdefault(normalised, distribution.version)
+
+        return {
+            "python_version": platform.python_version(),
+            "python_implementation": platform.python_implementation(),
+            "platform": sys.platform,
+            "executable": sys.executable,
+            "distributions": distributions,
+        }
+
+
 class _BuyAnswerCheckoutBody(BaseModel):
     user_id: str = Field(default="demo-user-1", min_length=1, max_length=255)
     question_slug: str = Field(min_length=1, max_length=64)
@@ -2897,6 +2945,7 @@ _mount_openai_tool_search_endpoint(app)
 _mount_advisor_search_include_flags_endpoint(app)
 _mount_advisor_search_attribute_tag_filter_endpoint(app)
 _mount_llm_registry_probe_endpoint(app)
+_mount_installed_versions_endpoint(app)
 _mount_buy_answer_test_router(app)
 
 
