@@ -595,6 +595,9 @@ start_web() {
     return 0
   fi
   log "Starting Next.js dev server on :${E2E_WEB_PORT}"
+  # DEMO_PASSWORD must be set so the proxy.ts fallback gate has a
+  # known shared password. Playwright fixtures POST to /api/access
+  # with this value to mint the abs_demo cookie before each test.
   # See start_fastapi for why the subshell redirection matters.
   #
   # ABS-19: Clerk mock mode. CLERK_SECRET_KEY is set to a test key that
@@ -603,8 +606,8 @@ start_web() {
   # next.config.ts that swaps @clerk/nextjs/server with our mock module
   # (web/lib/clerk-test-mock.ts). The mock reads test cookies for auth
   # state and forwards JWTs minted by /v1/_test/mint-jwt to FastAPI.
-  # Since ABS-530 removed the shared-password gate, this is the only
-  # auth path the suite has — there is nothing to fall back to.
+  # DEMO_PASSWORD is still set as a fallback for the /api/access endpoint
+  # used by some legacy fixtures.
   ( cd "${REPO_ROOT}/web" && \
     NEXT_DIST_DIR=.next-e2e \
     ADVISOR_API_URL="http://127.0.0.1:${E2E_FASTAPI_PORT}" \
@@ -613,6 +616,8 @@ start_web() {
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="" \
     ADVISOR_ADMIN_CLERK_USER_IDS="${E2E_USER_ID}" \
     E2E_CLERK_MOCK=1 \
+    DEMO_PASSWORD="${E2E_DEMO_PASSWORD:-e2e-demo-pw}" \
+    ADMIN_PASSWORD="${E2E_ADMIN_PASSWORD:-e2e-admin-pw}" \
     DATABASE_URL="$DATABASE_URL_E2E_PG" \
     NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true \
     SITE_URL="http://localhost:${E2E_WEB_PORT}" \

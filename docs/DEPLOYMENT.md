@@ -247,10 +247,8 @@ ADVISOR_TURN_MAX_WALLET_TOKENS=350000   # per-turn ceiling on MEASURED burn (2 t
 # Per-report gate (ABS-384): which of the five report SKUs are on sale
 ADVISOR_ENABLED_QUESTIONS   # csv slugs; `*` = all; unset/empty = NONE (deny-by-default)
 
-# Operator allowlist for /admin/* — the ONLY way in since ABS-530
-# removed the shared-password gate. Needed by BOTH the advisor and the
-# web container. Unset = nobody is an admin (fail closed).
-ADVISOR_ADMIN_CLERK_USER_IDS=user_xxx,user_yyy
+# Shared-password gate
+DEMO_PASSWORD=$$<password>    # NB: literal $ in value must be escaped as $$ for compose
 ```
 
 > **Signup-grant cost note (resized on ABS-404).** The `~$0.55 USD per 100k
@@ -520,28 +518,26 @@ Scripts inherit the same database connection and environment variables (`.env` k
 
 The advisor + web together support two auth modes, switched by env var presence:
 
-### Clerk mode (the only production mode)
+### Clerk mode (production target, not active yet)
 
 - `CLERK_JWKS_URL`, `CLERK_AUDIENCE`, `CLERK_ISSUER` set in advisor's env.
 - `CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` set in web's env.
-- `ADVISOR_ADMIN_CLERK_USER_IDS` set in BOTH — it is what lets a signed-in user reach `/admin/*` at all.
 - Web's `proxy.ts` middleware enforces Clerk on `/app/*` and `/admin/*`.
 - Advisor verifies real JWTs from the Clerk JWKS.
 
-### No-Clerk behaviour (ABS-530)
+### Shared-password fallback (current production state)
 
-There used to be a second mode here: a shared-password cookie gate (`abs_demo` / `abs_admin`, the `/access` page, `DEMO_PASSWORD` / `ADMIN_PASSWORD`) that `proxy.ts` fell back to whenever the Clerk keys were absent. ABS-530 deleted it — one password for every user can't distinguish between people and leaves no audit trail, and by then Clerk had been live for months.
+- Clerk env vars unset.
+- Web's `proxy.ts` falls back to the legacy `abs_demo` / `abs_admin` cookie gate, redirecting unauth users to `/access`.
+- `/api/access` validates against `DEMO_PASSWORD` (and optionally `ADMIN_PASSWORD`) env vars.
+- Advisor accepts the `X-Test-User-Id` header in place of a Clerk JWT.
+- Web proxy injects `X-Test-User-Id: <ADVISOR_DEMO_USER_ID>` on every advisor call (defaults to `demo-user-1`; we point it at `smoke-test-1` which has an `advisor_user` row).
 
-What the no-Clerk path does now:
-
-- **Local dev** (`npm run dev`, no Clerk keys): `/app` and `/admin` are simply open. `advisor-auth.ts` forwards a synthetic `X-Test-User-Id` so the app is usable.
-- **A production build with no Clerk secret**: protected routes return **503**. That is a misconfigured deploy, not a mode, and serving `/app` unauthenticated would be worse than being down.
-
-So there is nothing to fall back to during a Clerk outage. That is deliberate.
+Switching from fallback to Clerk is "set the Clerk env vars and restart." No code change.
 
 ### Enabling real Clerk auth (operator runbook)
 
-This is the checklist for standing up Clerk from scratch. Kept for reference — production has been on Clerk since well before ABS-530 removed the alternative. Do it once, in this order:
+This is the checklist for going from the shared-password fallback (current state) to real Clerk auth. Do it once, in this order:
 
 #### 1. Create the Clerk instance
 
@@ -554,7 +550,7 @@ This is the checklist for standing up Clerk from scratch. Kept for reference —
 In Clerk dashboard → **User & Authentication → Restrictions**:
 
 - Turn **"Restrict sign-ups to allowlist"** ON.
-- Add the email addresses of your intended early users to the allowlist. Existing users (if any) are migrated as you add them.
+- Add the email addresses you've already shared `DEMO_PASSWORD` with to the allowlist. Existing users (if any) are migrated as you add them.
 - Anyone hitting `/sign-up` without an allowlisted email gets a Clerk-side error; they have no way around it. The marketing site already routes unauthenticated visitors to `/signup` (invite request) instead of `/sign-up`, so this is belt-and-suspenders.
 
 You can flip this off later when you're ready for public signups — no code change required.
@@ -630,29 +626,32 @@ ssh bylaw-prod "curl -s -o /dev/null -w '%{http_code}\n' \
 # Expect: 400 (missing signature). 404 means the route didn't mount —
 # usually because CLERK_WEBHOOK_SECRET was empty.
 
-# Verify the frontend treats /app as gated by Clerk
+# Verify the frontend treats /app as gated by Clerk (not the cookie gate)
 curl -sI https://agenticbylawsystems.com/app | grep -i location
 # Expect: location: https://clerk.agenticbylawsystems.com/sign-in?... or
-# location: /sign-in. A 503 means CLERK_SECRET_KEY didn't reach the web
-# container — proxy.ts fails closed rather than serving /app open.
+# location: /sign-in. NOT /access — that's the cookie-gate fallback.
 ```
 
 Trigger a test delivery in Clerk dashboard → **Webhooks → your endpoint → Testing**: pick `user.created` and send. The advisor logs should show `clerk webhook: ignoring unhandled event type ...` or `created` depending on the payload.
 
-#### 8. Populate the admin allowlist
+#### 8. Remove the password gate (optional, after Clerk is healthy)
 
-Set `ADVISOR_ADMIN_CLERK_USER_IDS` (comma-separated Clerk user ids) on **both** the advisor and the web container, then recreate them. `proxy.ts` reads it once at module load, so a restart is required to add an admin. With the `abs_admin` cookie gone (ABS-530), an empty list means `/admin/*` 404s for everyone — including you.
+The shared-password gate stays compiled in as a fallback. Once Clerk is verified working end-to-end you can:
+
+- Leave it in place (zero-cost insurance; the `isClerkConfigured()` check skips it when Clerk keys are real).
+- OR remove the `DEMO_PASSWORD` / `ADMIN_PASSWORD` env vars and let `/api/access` return 503 to anyone who hits it. The `/access` page becomes unreachable through normal nav.
+
+Either is fine. We've been recommending "leave it in" so a Clerk outage isn't a full site outage — flip `CLERK_JWKS_URL` back off and the fallback resumes.
 
 ## Rate limiting
 
-Production Caddy is built with the [caddy-ratelimit plugin](https://github.com/mholt/caddy-ratelimit) compiled in. Two zones in production today:
+Production Caddy is built with the [caddy-ratelimit plugin](https://github.com/mholt/caddy-ratelimit) compiled in. Three zones in production today:
 
 | Zone | Match | Limit | Purpose |
 |---|---|---|---|
 | `global` | Any request to `agenticbylawsystems.com` | 120 req/min per IP | DoS shield on the public site |
+| `access_attempts` | POST to `/api/access*` | 5 req/min per IP | Brute-force protection on the gate |
 | `chat` | POST to `/v1/chat*` on the api subdomain | 10 req/min per IP | Per-IP cap on the expensive endpoint |
-
-(There used to be a third zone, `access_attempts`, rate-limiting `POST /api/access*`. ABS-530 removed the gate it protected; sign-in is Clerk-hosted, so credential brute-force never reaches this origin.)
 
 Plus the advisor's per-user monthly quota (100 queries/mo on the free tier) as a server-side ceiling.
 
@@ -715,9 +714,9 @@ The advisor's chat persona loader reads the file from `Path(__file__).parents[3]
 
 Alembic's default `alembic_version.version_num` column is `VARCHAR(32)`. Several migration revision strings in the repo exceed 32 chars (e.g. `0008_advisor_billing_subscription` = 33). On a fresh database, `alembic upgrade head` fails partway, rolls back, and leaves the DB empty. Workaround during initial deploy: `alembic upgrade 0001` → `ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255);` → `alembic upgrade head`. Tracked as a separate session task — proper fix renames long revisions and enables `transaction_per_migration=True` in `alembic/env.py`.
 
-### 3. Local dev `proxy.ts` gate — RESOLVED (ABS-530)
+### 3. Local dev `proxy.ts` gate
 
-Local devs used to hit `localhost:3000/app`, get bounced to `/access`, and need a `DEMO_PASSWORD` in their env just to iterate. Removing the shared-password gate removed the friction with it: with no Clerk keys, `proxy.ts` now leaves protected routes open in a dev build. Configure local Clerk keys only when you actually want to exercise the auth path.
+The shared-password gate is enabled whenever Clerk isn't configured — including in local dev. After the gate landed in `web/proxy.ts`, local devs hitting `localhost:3000/app` get redirected to `/access` and need a `DEMO_PASSWORD` in their local env. To bypass for short iteration: either set a local `DEMO_PASSWORD` and enter it once (cookie persists 30 days), or configure local Clerk keys.
 
 ## Open follow-ups
 

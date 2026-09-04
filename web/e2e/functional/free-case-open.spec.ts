@@ -23,7 +23,11 @@ import * as path from "node:path";
 
 import { expect, test, type BrowserContext } from "@playwright/test";
 
-import { E2E_API_URL, E2E_BASE_URL } from "../fixtures/test-env";
+import {
+  E2E_API_URL,
+  E2E_BASE_URL,
+  E2E_DEMO_PASSWORD,
+} from "../fixtures/test-env";
 import { resolveDatabaseUrl } from "../helpers/database-url";
 
 const NO_PURCHASE_USER = `free-open-${Date.now()}-${Math.random()
@@ -50,13 +54,18 @@ test.beforeAll(() => {
   );
 });
 
-// Mint a test JWT + identity cookies so requests through the Next
-// proxy resolve to NO_PURCHASE_USER (mirrors the shared fixture, but
-// for our dedicated user rather than the demo user).
+// Mint the password-gate cookie + a test JWT so requests through the
+// Next proxy resolve to NO_PURCHASE_USER (mirrors the shared fixture,
+// but for our dedicated user rather than the demo user).
 async function authAsNoPurchaseUser(
   context: BrowserContext,
 ): Promise<void> {
   const target = E2E_BASE_URL;
+  const accessRes = await context.request.post(`${target}/api/access`, {
+    data: { gate: "demo", password: E2E_DEMO_PASSWORD },
+  });
+  expect(accessRes.ok(), await accessRes.text()).toBeTruthy();
+
   const jwtRes = await context.request.post(
     `${E2E_API_URL}/v1/_test/mint-jwt`,
     { data: { sub: NO_PURCHASE_USER, email: `${NO_PURCHASE_USER}@e2e.test` } },

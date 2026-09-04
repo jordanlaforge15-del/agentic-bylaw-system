@@ -42,7 +42,7 @@ The test stack runs on `:3001/:8001` so it never clashes with `make dev` (which 
 
 Defense-in-depth behind the instance split (ABS-430): every `scripts/seed_e2e_*.py` (via the `scripts/e2e_db_default.py` bootstrap) and the `advisor.api.e2e_server` entrypoint run a hard preflight — `layer1.seed_guard.require_test_database()` — before touching the database. If the effective `DATABASE_URL` names a database that does not end in `_test`, the process aborts with `E2E SEED REFUSED …` (exit 1) before opening a single connection. Pointing a seed at an arbitrary URL therefore cannot write outside a test database. The escape hatch for the rare legitimate case is `E2E_SEED_ALLOW_DB=<exact-db-name>`, which whitelists exactly that name for the current invocation (sqlite URLs used by unit-test harnesses are exempt).
 
-The web dev server runs in **Clerk mock mode**: `CLERK_SECRET_KEY` is set to a test key that passes `isClerkConfigured()`, so `web/proxy.ts` takes the real `clerkMiddleware` branch, and `E2E_CLERK_MOCK=1` swaps `@clerk/nextjs/server` for `web/lib/clerk-test-mock.ts` via a Turbopack `resolveAlias`. The mock treats the `abs_test_sub_user_id` cookie as the session; the Playwright fixture sets it (plus a JWT cookie) before each test. Since ABS-530 removed the shared-password gate, this is the only auth path the suite has.
+The web dev server runs with `CLERK_SECRET_KEY=""`, which trips the `isClerkConfigured() === false` branch in `web/proxy.ts` — `/app` and `/admin` are then gated by a shared-password cookie (`abs_demo`). The Playwright fixture mints that cookie before each test by POSTing to `/api/access` with `DEMO_PASSWORD=e2e-demo-pw`.
 
 The FastAPI test server runs with no Clerk verifier, so its routes accept an `X-Test-User-Id` header. The Next.js proxy (`web/lib/advisor-auth.ts`) forwards that header automatically when Clerk isn't configured.
 
@@ -109,7 +109,7 @@ web/e2e/
 ├── global-setup.ts            # re-seed credits + verify FastAPI healthz
 ├── fixtures/
 │   └── test-env.ts            # base `test`, `openCaseViaApi` helper,
-│                              #   Clerk-mock identity auto-mint fixture
+│                              #   abs_demo cookie auto-mint fixture
 ├── smoke/                     # critical-path coverage, all viewports
 ├── functional/                # deeper flows, desktop-chrome only
 ├── a11y/                      # axe-core sweeps
@@ -183,10 +183,10 @@ Conventions:
 
 ## Auth and credits
 
-There is no real Clerk in the e2e stack — a mock stands in for it. Every test runs as `clerk_user_id="demo-user-1"`:
+There is no real Clerk in the e2e stack. Every test runs as `clerk_user_id="demo-user-1"`:
 
-1. The web proxy sees the test `CLERK_SECRET_KEY` and takes the `clerkMiddleware` branch, backed by the mock in `web/lib/clerk-test-mock.ts`.
-2. Playwright's `authedContext` fixture mints a JWT from `/v1/_test/mint-jwt` and sets `abs_test_sub_user_id` + `abs_test_clerk_jwt` cookies. The mock reads the first as the session.
+1. The web proxy sees `CLERK_SECRET_KEY=""` and falls into the password-gate branch.
+2. Playwright's `authedContext` fixture POSTs `{gate:"demo", password:"e2e-demo-pw"}` to `/api/access`, which sets the `abs_demo=1` cookie.
 3. Subsequent requests from the browser reach `/app` and `/admin` without redirect.
 4. When the browser hits `/api/chat` etc., the Next.js proxy forwards `X-Test-User-Id: demo-user-1`.
 5. The FastAPI test server's user dependency (`verifier=None` path) accepts that header and resolves the seeded `advisor_user` row.
@@ -202,7 +202,7 @@ The seed (`scripts/seed_e2e_user.py`) provisions:
 
 1. **JIT user resolution in the test backend.** `advisor.api.e2e_server` mounts a header-auth user-dependency that — when a `db_session_factory` is wired (which the e2e entrypoint always does) — creates an `advisor_user` row on first sight of an unknown `X-Test-User-Id`, matches any approved `InviteRequest` by `X-Test-User-Email`, and gifts the row's `granted_starter_credits`. This mirrors `advisor.api.auth.resolve_or_create_user` so the post-Clerk invite-redemption code path is actually exercised.
 2. **Test-only invite endpoint.** `POST /v1/_test/invite-approve` writes a row directly into `invite_request` in the `approved` state, bypassing the Clerk allowlist API that the production `/api/admin/invites/{id}/approve` route calls. Companion endpoint `POST /v1/_test/reset-user` deletes a test user (FK cascades clean up cases, credits, chat sessions).
-3. **Per-context identity cookies.** `web/lib/advisor-auth.ts` honours three cookies on its no-Clerk path (the identity also travels as JWT claims on the Clerk-mock path, which is what the e2e stack actually exercises):
+3. **Per-context identity cookies.** `web/lib/advisor-auth.ts` honours three cookies in fallback mode:
 
    | Cookie | Forwarded as | Used by |
    |---|---|---|
@@ -210,12 +210,12 @@ The seed (`scripts/seed_e2e_user.py`) provisions:
    | `abs_test_sub_email` | `X-Test-User-Email` | invite redemption match |
    | `abs_test_sub_full_name` | `X-Test-User-Full-Name` | `advisor_user.full_name` |
 
-   The `signInAs` fixture mints these alongside `abs_test_clerk_jwt`; `signOut` clears all four. Because `abs_test_sub_user_id` is also what the Clerk mock reads as the session, clearing it is a real sign-out: a navigation to `/app` then redirects to `/sign-in`, matching real Clerk.
+   The `signInAs` fixture mints these alongside `abs_demo`; `signOut` clears all four. After sign-out a navigation to `/app` redirects through `/access`, matching the user-visible behaviour of Clerk's sign-out under the password-gate fallback.
 
 Spec layout:
 
 - `auth/01-signup-approve-login-case-chat.spec.ts` — flow 1 from the issue: invite via the `/signup` form, approve via the test endpoint, sign in as a fresh identity, open a case from `/cases/new`, get a streamed SSE reply. Exercises the JIT-create + redemption path end-to-end.
-- `auth/02-logout-resume-same-case.spec.ts` — flow 2: same identity, first turn, sign out, navigate to `/app` (asserts the `/sign-in` redirect), sign back in, open the existing case URL, send a second turn. Guards the `user_id`-mismatch class of bugs called out in `functional/multi-turn.spec.ts`.
+- `auth/02-logout-resume-same-case.spec.ts` — flow 2: same identity, first turn, sign out, navigate to `/app` (asserts the `/access` redirect), sign back in, open the existing case URL, send a second turn. Guards the `user_id`-mismatch class of bugs called out in `functional/multi-turn.spec.ts`.
 - `auth/03-logout-resume-new-case.spec.ts` — flow 3: after logout/login, opening a *second* case must surface both rows on `/cases` for the same user.
 
 Run them in isolation:

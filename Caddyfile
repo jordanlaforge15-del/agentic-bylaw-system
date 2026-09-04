@@ -28,11 +28,18 @@ agenticbylawsystems.com {
             events 120
             window 1m
         }
-        # ABS-530 removed the shared-password gate, and with it the
-        # `access_attempts` zone that rate-limited POSTs to
-        # /api/access. Sign-in is Clerk-hosted now, so credential
-        # brute-force never reaches this origin; the global zone above
-        # still covers every other unauthenticated POST we serve.
+        # Tight gate brute-force protection: 5 password attempts
+        # per IP per minute. POSTs to /api/access also count
+        # toward the global zone above, but this is the bottleneck.
+        zone access_attempts {
+            match {
+                method POST
+                path /api/access*
+            }
+            key {remote_host}
+            events 5
+            window 1m
+        }
     }
 
     reverse_proxy web:3000

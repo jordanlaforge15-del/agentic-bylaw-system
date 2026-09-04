@@ -1,20 +1,18 @@
 // Auth gate. Protects /app/* and /admin/*; everything else
-// (marketing, /sign-in, /sign-up) is left open.
+// (marketing, /sign-in, /sign-up, /access) is left open.
 //
 // Two modes, picked at request time by isClerkConfigured():
 //
 //   * Clerk configured → clerkMiddleware enforces auth on protected
-//     routes. Unauth requests redirect to /sign-in. This is the only
-//     mode production ever runs in.
+//     routes. Unauth requests redirect to /sign-in.
 //
-//   * Clerk NOT configured → local-dev convenience: protected routes
-//     are open so `npm run dev` works without Clerk keys, but ONLY
-//     when NODE_ENV is not "production". A production build with no
-//     Clerk secret is a misconfiguration, not a mode, so it fails
-//     closed with a 503 rather than serving the app unauthenticated.
-//     (ABS-530 removed the shared-password fallback that used to sit
-//     here — a single password handed to friends, no per-user
-//     identity, no audit trail.)
+//   * Clerk NOT configured → falls back to the legacy shared-password
+//     gate (cookie abs_demo / abs_admin, /access page, /api/access
+//     route). This is the "trial deployment" mode: a single shared
+//     password per gate, handed out to friends. Set DEMO_PASSWORD
+//     (and optionally ADMIN_PASSWORD) on the web container. Once
+//     real Clerk keys are wired the fallback becomes unreachable
+//     automatically — no code change to flip back.
 //
 // Why a route matcher rather than `auth.protect()` everywhere:
 //   1. Clerk's `auth.protect()` 404s on unauth API requests but
@@ -93,26 +91,23 @@ const handler = isClerkConfigured()
         }
       }
     })
-  : // Clerk-not-configured path. There is no second auth scheme to fall
-    // back to any more, so this splits on where we're running:
-    //
-    //   * dev (`npm run dev` with no Clerk keys) — protected routes are
-    //     open. advisor-auth.ts already forwards a synthetic
-    //     X-Test-User-Id in this mode, so the app is usable; the dev
-    //     server is on localhost and has no real users to protect.
-    //
-    //   * production build — this is a misconfigured deploy. Serving
-    //     /app and /admin unauthenticated would be worse than being
-    //     down, so protected routes 503 until Clerk is wired.
+  : // Clerk-not-configured fallback: reuse the legacy shared-password
+    // gate for local dev. Production must run Clerk-on; the fallback
+    // is here so `npm run dev` against the dev backend keeps working
+    // without Clerk keys. /admin/* uses the abs_admin cookie path
+    // here too — there's no Clerk-based admin check without Clerk.
     (req: NextRequest) => {
       if (!isProtectedRoute(req)) return NextResponse.next();
-      if (process.env.NODE_ENV === "production") {
-        return new NextResponse(
-          "Authentication is not configured on this deployment.",
-          { status: 503 },
-        );
+      const path = req.nextUrl.pathname;
+      const isAdmin = path.startsWith("/admin");
+      const cookieName = isAdmin ? "abs_admin" : "abs_demo";
+      if (req.cookies.get(cookieName)?.value === "1") {
+        return NextResponse.next();
       }
-      return NextResponse.next();
+      const url = new URL("/access", req.url);
+      url.searchParams.set("from", path);
+      if (isAdmin) url.searchParams.set("gate", "admin");
+      return NextResponse.redirect(url);
     };
 
 export default handler;

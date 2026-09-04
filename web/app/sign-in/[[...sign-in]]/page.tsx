@@ -2,8 +2,8 @@
 // segment so Clerk's internal multi-step flows (verify-email,
 // reset-password, OAuth callbacks) all resolve back to this page.
 //
-// The wrapper keeps the house auth shell — ABS logo at top, mono
-// kicker, sharp corners — so the auth surface feels of
+// The wrapper mirrors the original /access shell — ABS logo at
+// top, mono kicker, sharp corners — so the auth surface feels of
 // a piece with the marketing site rather than dropping the user
 // into Clerk's default Tailwind look.
 

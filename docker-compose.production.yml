@@ -36,10 +36,8 @@ services:
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
       ADVISOR_API_URL: http://advisor:8000
       ADVISOR_DEMO_USER_ID: ${ADVISOR_DEMO_USER_ID:-demo-user-1}
-      # ABS-530: the only way into /admin/*. proxy.ts reads this at
-      # module load and 404s any signed-in user who isn't on the list;
-      # an unset value means nobody is admin (fail closed).
-      ADVISOR_ADMIN_CLERK_USER_IDS: ${ADVISOR_ADMIN_CLERK_USER_IDS:-}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # ABS-507: absolute origin used by /robots.txt and /sitemap.xml.
       # Falls back to the production hostname inside site-url.ts, so an
       # unset value is safe here.

@@ -12,7 +12,7 @@
 //
 //   * Approve → first sign-in → open a case → first turn streams.
 //   * Sign out (clear all auth cookies). Confirm /app now redirects
-//     to /sign-in.
+//     through /access.
 //   * Sign in again as the same identity, navigate to the case URL,
 //     send a follow-up question. The follow-up runs as a fresh chat
 //     session under the same case (the /app page doesn't auto-resume
@@ -84,9 +84,9 @@ test("logout / login keeps the same case usable for a new turn", async ({
     timeout: 15_000,
   });
 
-  // Sign out — the identity cookies drop, so clerkMiddleware sees an
-  // anonymous request. A bare navigation to /app should now redirect
-  // to /sign-in, matching real Clerk's post-sign-out behaviour.
+  // Sign out — proxy gate + identity cookies both drop. A bare
+  // navigation to /app should now redirect through the access gate,
+  // matching Clerk's sign-out under the password-gate fallback.
   await signOut(context);
   await page.goto("/app");
   await page.waitForURL(/\/sign-in/);

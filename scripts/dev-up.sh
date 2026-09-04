@@ -14,15 +14,14 @@
 #   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
 #   CLERK_SECRET_KEY   — optional; when present (in shell env or
 #                        web/.env.local), enables real Clerk sign-in.
-#                        When absent, proxy.ts leaves /app and /admin
-#                        open (dev-only; a production build fails
-#                        closed instead).
+#                        When absent, the legacy /access shared-password
+#                        gate is used.
 #
 # This is the MANUAL-TESTING companion to scripts/e2e-up.sh. Key
 # differences: dev DB (layer1), canonical ports (3000/8000), no
-# demo-user seed, no Clerk mock. For automated Playwright runs, use
-# e2e-up.sh — it targets layer1_test and runs Clerk in mock mode
-# (E2E_CLERK_MOCK=1) so the fixtures' sign-in path is deterministic.
+# demo-user seed, no Clerk blanking. For automated Playwright runs,
+# use e2e-up.sh — it targets layer1_test and disables Clerk so the
+# test fixtures' /access gate path is deterministic.
 
 set -euo pipefail
 
@@ -194,9 +193,8 @@ API_PID=$!
 log "Starting Next.js dev server on :${DEV_WEB_PORT}"
 # Clerk keys are NOT forced to empty here (unlike e2e-up.sh). They
 # come from your shell env if exported, or from web/.env.local
-# (which next dev loads natively). When unset, proxy.ts takes its
-# no-Clerk dev branch and leaves /app and /admin open — convenient
-# locally, and safe because that branch 503s in a production build.
+# (which next dev loads natively). When unset, Clerk runs in
+# fallback mode and the legacy /access password gate takes over.
 (
   cd "${REPO_ROOT}/web" && \
   ADVISOR_API_URL="http://127.0.0.1:${DEV_FASTAPI_PORT}" \

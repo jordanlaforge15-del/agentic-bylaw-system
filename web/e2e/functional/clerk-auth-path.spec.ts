@@ -3,8 +3,7 @@
 // Verifies that requests through the Next.js proxy exercise the Clerk
 // JWT authentication pipeline end-to-end:
 //
-//   1. proxy.ts runs the clerkMiddleware branch (the only auth path
-//      left since ABS-530 deleted the shared-password fallback)
+//   1. proxy.ts runs the clerkMiddleware branch (not the fallback gate)
 //   2. buildAdvisorAuthHeaders() returns Authorization: Bearer <jwt>
 //   3. FastAPI's ClerkVerifier validates the JWT signature + claims
 //   4. resolve_or_create_user creates the advisor_user from JWT claims
@@ -61,7 +60,7 @@ test.describe("Clerk auth path", () => {
     await page.goto(`${E2E_BASE_URL}/app`);
 
     // If the Clerk mock + JWT auth path works, we should land on /app
-    // (not redirected to /sign-in).
+    // (not redirected to /sign-in or /access).
     await expect(page).toHaveURL(/\/app/);
   });
 
