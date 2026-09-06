@@ -499,7 +499,14 @@ function ProductAppPageInner() {
     cleaned.delete("first_message");
     const nextUrl =
       cleaned.size > 0 ? `${pathname}?${cleaned.toString()}` : pathname;
-    router.replace(nextUrl, { scroll: false });
+    // history.replaceState, not router.replace: /app is force-dynamic, so
+    // router.replace costs an RSC round-trip, and the render work kicked off
+    // by send() below can supersede it before it lands — leaving
+    // ?first_message= in the URL and a refresh replaying the send. The strip
+    // has to be synchronous and unraceable, which is what this is. It was
+    // always a race; it only became deterministic when the backend got fast
+    // enough (ABS-533) to reliably win it.
+    window.history.replaceState(null, "", nextUrl);
     void send(firstMessage);
   }, [caseIdFromUrl, searchParams, pathname, router]);  // eslint-disable-line react-hooks/exhaustive-deps
 
