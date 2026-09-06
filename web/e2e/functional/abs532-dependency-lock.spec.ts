@@ -78,12 +78,13 @@ type Lock = {
  * `--universal`.
  *
  * A pin can be *forked*: `uv pip compile --universal` emits a requirement more
- * than once when it genuinely must differ across environments — `numpy` is
- * pinned twice, once under `python_full_version < '3.12'` and once under
- * `>= '3.12'`. That fork is the mechanism that lets ONE committed file install
- * on both the linux/CPython 3.11 deploy target and the macOS/CPython 3.12 dev
- * venv, which is why uv was chosen over pip-compile
- * (docs/PYTHON_DEPENDENCY_LOCKS.md). So a name maps to a *set* of versions.
+ * than once when it genuinely must differ across environments. That fork is the
+ * mechanism that lets ONE committed file install on both the linux/CPython
+ * deploy target and a macOS dev venv, which is why uv was chosen over
+ * pip-compile (docs/PYTHON_DEPENDENCY_LOCKS.md). So a name maps to a *set* of
+ * versions. `numpy` was the standing example, pinned under
+ * `python_full_version < '3.12'` and `>= '3.12'`; ABS-533 raised the
+ * requires-python floor past 3.12 and that fork collapsed to a single pin.
  *
  * A pin can also be *conditional* without being forked: `colorama` and `tzdata`
  * carry `sys_platform == 'win32'`, and `greenlet` a platform_machine list that
@@ -275,20 +276,39 @@ test.describe("ABS-532 Python dependency lock", () => {
   });
 
   test("the stack runs an interpreter the project supports", async ({ request }) => {
-    // The lock is compiled against linux/CPython 3.11 (the deploy target) but
-    // resolved universally so it also installs on the macOS/3.12 dev venv. That
-    // only holds while the interpreter stays inside the project's declared
+    // The lock is compiled against the linux/CPython deploy target but resolved
+    // universally so it also installs on a newer dev venv. That only holds
+    // while the interpreter stays inside the project's declared
     // requires-python; outside it, the marker-guarded forks in the lock stop
     // covering the environment and the file quietly under-installs.
+    //
+    // The floor is read out of pyproject.toml rather than written here. A
+    // literal would be a second declaration of it, and this suite's own subject
+    // is what happens when two declarations of the same version drift (ABS-533
+    // raised this floor from 3.11 to 3.13 and this assertion would not have
+    // noticed). Which exact minor the stack must run is
+    // abs533-python-runtime-version.spec.ts; this one only checks the lock's
+    // own precondition.
+    const requiresPython = /^requires-python\s*=\s*"(>=)(\d+)\.(\d+)"/m.exec(
+      readFileSync(path.join(REPO_ROOT, "pyproject.toml"), "utf8"),
+    );
+    expect(
+      requiresPython,
+      "pyproject.toml has no `requires-python = \">=X.Y\"`; the lock's universal " +
+        "resolution is compiled from that floor, so this spec cannot check it.",
+    ).not.toBeNull();
+    const [floorMajor, floorMinor] = [Number(requiresPython![2]), Number(requiresPython![3])];
+
     const installed = await fetchInstalled(request);
 
     expect(installed.python_implementation).toBe("CPython");
 
     const [major, minor] = installed.python_version.split(".").map(Number);
     expect(
-      major > 3 || (major === 3 && minor >= 11),
+      major > floorMajor || (major === floorMajor && minor >= floorMinor),
       `the stack is on Python ${installed.python_version}; pyproject.toml declares ` +
-        `requires-python = ">=3.11" and the locks are compiled against 3.11.`,
+        `requires-python = ">=${floorMajor}.${floorMinor}" and the locks are ` +
+        `compiled against that floor.`,
     ).toBe(true);
   });
 });

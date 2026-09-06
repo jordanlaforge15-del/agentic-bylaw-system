@@ -181,7 +181,8 @@ that comments, docstrings, blank lines and JSON formatting cannot move it:
 The retrieval package is watched by glob, so a channel added tomorrow is watched
 the day it lands. `queries.json` is watched by its `queries` key only, so a human
 spot-check flipping `review_status` does not fire the gate. The fingerprint is
-interpreter-independent — 3.11 (CI), 3.12 and 3.14 agree byte-for-byte.
+interpreter-independent — 3.13 (CI and the advisor image) and 3.14 agree
+byte-for-byte.
 
 Being content-based rather than commit-based buys three things a commit
 comparison cannot: prose-only edits never fire, *uncommitted* edits do (so the

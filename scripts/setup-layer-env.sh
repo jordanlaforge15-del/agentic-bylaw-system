@@ -96,8 +96,8 @@ import sys
 
 if sys.prefix == sys.base_prefix:
     raise SystemExit("Active python is not running inside a virtualenv")
-if sys.version_info < (3, 11):
-    raise SystemExit(f"Python 3.11+ is required; found {sys.version.split()[0]}")
+if sys.version_info < (3, 13):
+    raise SystemExit(f"Python 3.13+ is required; found {sys.version.split()[0]}")
 print(f"Using {sys.executable}")
 print(f"Virtualenv: {os.environ.get('VIRTUAL_ENV')}")
 PY

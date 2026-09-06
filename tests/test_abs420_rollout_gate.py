@@ -293,10 +293,23 @@ def test_the_migration_module_still_runs_through_alembics_operations(tmp_path: P
         context = MigrationContext.configure(connection)
         with Operations.context(context):
             # add_column and the backfill run for real here; alter_column
-            # cannot, because SQLite has no ALTER COLUMN ... SET DEFAULT.
-            # Reaching that error is what proves the first two ops went
-            # through real alembic Operations rather than the recorder above.
-            with pytest.raises(OperationalError, match="DEFAULT"):
+            # cannot, because SQLite implements no form of ALTER COLUMN this
+            # migration needs. Reaching that error is what proves the first two
+            # ops went through real alembic Operations rather than the recorder
+            # above — and the SELECT after this block, which reads a column only
+            # add_column could have created, is the other half of that proof.
+            #
+            # Deliberately not matched on message text (ABS-533). Which
+            # *statement* SQLite rejects first depends on the SQLite the
+            # interpreter bundles, and that moves when the interpreter does:
+            # 3.53 (homebrew's 3.12 build) accepts `SET NOT NULL` and fails on
+            # the server_default, giving a message containing "DEFAULT", while
+            # 3.40 (python:3.13-slim) and 3.50 reject the statement outright
+            # with `near "ALTER": syntax error`. A match= on either wording
+            # turns a routine runtime bump into a red suite about nothing. The
+            # assertion that matters is that alter_column does not silently
+            # succeed.
+            with pytest.raises(OperationalError):
                 module.upgrade()
         enabled = {
             row[0]

@@ -22,7 +22,7 @@ Examples:
   ./scripts/dev-setup.sh
   ./scripts/dev-setup.sh --with-advisor
   ./scripts/dev-setup.sh --with-parsers
-  ./scripts/dev-setup.sh --python python3.12
+  ./scripts/dev-setup.sh --python python3.13
 EOF
 }
 
@@ -80,14 +80,19 @@ find_python() {
     return
   fi
 
-  for candidate in python3.12 python3.11 python3; do
+  # python3.13 first, and deliberately: it is the interpreter the advisor image
+  # ships (Dockerfile.advisor) and the one the locks are compiled against. A
+  # bare `python3` that happens to be newer still works — the check below only
+  # warns — but the default has to be the deploy target, or dev drifts off prod
+  # again by nothing more than whatever the box had installed (ABS-533).
+  for candidate in python3.13 python3; do
     if command -v "$candidate" >/dev/null 2>&1; then
       command -v "$candidate"
       return
     fi
   done
 
-  echo "error: no Python 3.11+ executable found. Install Python 3.12 or pass --python PATH." >&2
+  echo "error: no Python 3.13+ executable found. Install Python 3.13 or pass --python PATH." >&2
   exit 1
 }
 
@@ -108,11 +113,20 @@ log "Checking Python"
 "$PYTHON_PATH" - <<'PY'
 import sys
 
-if sys.version_info < (3, 11):
-    raise SystemExit(f"Python 3.11+ is required; found {sys.version.split()[0]}")
+if sys.version_info < (3, 13):
+    raise SystemExit(f"Python 3.13+ is required; found {sys.version.split()[0]}")
 print(f"Using Python {sys.version.split()[0]}")
-if sys.version_info >= (3, 14):
-    print("warning: Python 3.14+ may have dependency friction; Python 3.12 is preferred.")
+if sys.version_info[:2] != (3, 13):
+    # Not fatal: requirements/dev.txt is a universal resolution and installs on
+    # newer interpreters. But the advisor image runs 3.13, so anything else is a
+    # dev/prod split — a small one, and the small one is how ABS-531 started.
+    print(
+        f"warning: the deploy target is Python 3.13 (Dockerfile.advisor); this venv is "
+        f"{sys.version_info[0]}.{sys.version_info[1]}. Tests here do not run on the "
+        f"interpreter that ships."
+    )
+    # 3.14 additionally lacks a manylinux wheel for the pyyaml the unlocked
+    # [parsers] extra resolves to, so --with-parsers compiles from source there.
 PY
 
 if [[ ! -f .env ]]; then

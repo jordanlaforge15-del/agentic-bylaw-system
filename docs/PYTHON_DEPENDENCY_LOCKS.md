@@ -46,24 +46,40 @@ pip-readable requirements files that every install site reads with
 
 ### Why `uv`, and why universal
 
-The deploy target is linux / CPython 3.11 (`Dockerfile.advisor`, CI's
-`python-version`). The local dev venv is macOS / CPython 3.12. A hash-pinned
-lock produced by `pip-compile` is baked to the interpreter and platform that
-compiled it and will not reliably install on the other one. That leaves three
-options, and the ticket named all three:
+The deploy target is linux / CPython 3.13 (`Dockerfile.advisor`, CI's
+`python-version`). The local dev venv is macOS, on the same minor or newer. A
+hash-pinned lock produced by `pip-compile` is baked to the interpreter and
+platform that compiled it and will not reliably install on the other one. That
+leaves three options, and the ticket named all three:
 
 | Option | Rejected because |
 | -- | -- |
-| Compile for linux/3.11, give dev a separate constraints-without-hashes file | Two files resolved independently → the dev venv and the image drift apart again. That is the original bug, one level down. |
-| Move the dev venv to 3.11 | Fixes the symptom by shrinking the supported surface, and does nothing for a future contributor on a different platform. |
+| Compile for the linux target, give dev a separate constraints-without-hashes file | Two files resolved independently → the dev venv and the image drift apart again. That is the original bug, one level down. |
+| Pin the dev venv to the exact deploy interpreter | Fixes the symptom by shrinking the supported surface, and does nothing for a future contributor on a different platform. |
 | **A universal resolver (`uv`)** | **Chosen.** |
 
 `uv pip compile --universal` resolves for *every* platform and *every* Python
 version at or above the project's `requires-python`, in one pass. Where a
-requirement genuinely must differ it forks into marker-guarded lines — see the
-two `numpy` entries in each lock, one for `python_full_version < '3.12'` and one
-for `>= '3.12'`. Every platform's wheel hash is emitted, so a single committed
-file installs identically on linux/3.11 and macOS/3.12.
+requirement genuinely must differ it forks into marker-guarded lines. Every
+platform's wheel hash is emitted, so a single committed file installs
+identically on the linux deploy target and on a macOS dev box.
+
+No entry is forked today. `numpy` was, under `python_full_version < '3.12'` and
+`>= '3.12'`, and that fork existed only because `requires-python` was `>=3.11`;
+ABS-533 raised the floor to `>=3.13` and it collapsed to one pin. Universal
+resolution is still what makes the file cross-platform — the macOS and linux
+wheel hashes for every package are all in there — the *version* axis just has
+nothing left to disagree about.
+
+### Which interpreter the locks are compiled against
+
+`LOCK_PYTHON_VERSION` in `scripts/lock-python-deps.sh` must equal the minor
+version in `Dockerfile.advisor`'s `FROM` and the `requires-python` floor.
+`tests/test_python_runtime_version.py` asserts all three agree, along with the
+CI jobs, `Dockerfile.layer`, ruff's `target-version` and the setup scripts'
+version gates. Moving the interpreter is its own ticket (ABS-533 was the move
+from 3.11 to 3.13) and regenerating the locks against the new target is part of
+it — see that commit for the wheel-availability procedure that picks a target.
 
 ### `uv` is a compile-time tool only
 

@@ -2,7 +2,7 @@
 
 Local-only source normalization and retrieval-first answering for municipal land-use bylaws. Layer 1 ingests official source files into auditable source tables. Layer 2 retrieves from those Layer 1 artifacts, builds grounded prompts, generates answers plus reusable claims, and persists feedback and trace logs.
 
-Repo specifics: this is a Python 3.11+ package using SQLAlchemy, Alembic, Pydantic, Typer, Docling as the primary PDF parser, and PyMuPDF/pdfplumber fallbacks with optional Camelot/PaddleOCR integrations.
+Repo specifics: this is a Python 3.13+ package using SQLAlchemy, Alembic, Pydantic, Typer, Docling as the primary PDF parser, and PyMuPDF/pdfplumber fallbacks with optional Camelot/PaddleOCR integrations.
 
 Layer 1 integration paths used by Layer 2:
 

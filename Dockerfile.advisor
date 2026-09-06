@@ -4,7 +4,7 @@
 # Stage 1 — builder
 # Has compilers + dev headers. Builds the venv. Discarded after build.
 # ============================================================================
-FROM python:3.11.10-slim-bookworm AS builder
+FROM python:3.13.15-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -43,7 +43,7 @@ COPY requirements/runtime.txt ./requirements/runtime.txt
 # pkg_resources module in setuptools 82; the [advisor] dependency tree was
 # audited for runtime pkg_resources importers and the only hit is
 # sentry-sdk, which imports it solely in a guarded Python <3.8 fallback
-# branch (importlib.metadata is used on 3.11) — so >=83 is safe here.
+# branch (importlib.metadata is used on 3.13) — so >=83 is safe here.
 # It is a build-time backend, not a runtime import, so it stays out of the lock.
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip "setuptools>=83" wheel \
@@ -82,7 +82,7 @@ RUN python -m venv /opt/audit-venv \
 # Stage 2 — runtime
 # Slim, no compilers, runs as non-root.
 # ============================================================================
-FROM python:3.11.10-slim-bookworm AS runtime
+FROM python:3.13.15-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -120,16 +120,16 @@ COPY --chown=advisor:advisor scripts ./scripts
 # this file, which only resolves correctly under an editable install. We copy
 # the file to where the resolver looks under a regular install. Tracked as
 # follow-up: replace with importlib.resources packaging.
-COPY --chown=advisor:advisor docs/agent/persona.md /opt/venv/lib/python3.11/docs/agent/persona.md
+COPY --chown=advisor:advisor docs/agent/persona.md /opt/venv/lib/python3.13/docs/agent/persona.md
 # Same packaging workaround for the Layer-2 pre-screen classifier
 # persona; advisor/chat/persona.py:load_classifier_persona reads it
 # via the same Path(__file__).parents[3] resolver.
-COPY --chown=advisor:advisor docs/agent/classifier-persona.md /opt/venv/lib/python3.11/docs/agent/classifier-persona.md
+COPY --chown=advisor:advisor docs/agent/classifier-persona.md /opt/venv/lib/python3.13/docs/agent/classifier-persona.md
 # Same packaging workaround for the Terms & Conditions document;
 # advisor/legal/__init__.py:_load_terms reads it via the same
 # Path(__file__).parents[3] resolver. Missing this file 500s every
 # first-login on /v1/terms/current (ABS-67).
-COPY --chown=advisor:advisor docs/TERMS_AND_CONDITIONS.md /opt/venv/lib/python3.11/docs/TERMS_AND_CONDITIONS.md
+COPY --chown=advisor:advisor docs/TERMS_AND_CONDITIONS.md /opt/venv/lib/python3.13/docs/TERMS_AND_CONDITIONS.md
 
 USER advisor
 
