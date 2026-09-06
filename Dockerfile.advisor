@@ -4,7 +4,7 @@
 # Stage 1 — builder
 # Has compilers + dev headers. Builds the venv. Discarded after build.
 # ============================================================================
-FROM python:3.11.10-slim-bookworm AS builder
+FROM python:3.13.15-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -20,6 +20,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
+# The dependency lock, copied on its own and BEFORE the source tree so the
+# expensive install layer below caches on requirements/runtime.txt alone — a
+# source edit no longer re-downloads 67 packages.
+COPY requirements/runtime.txt ./requirements/runtime.txt
+
+# Install third-party dependencies from the committed, hash-pinned lock
+# (ABS-532). This line used to read `pip install ".[advisor]"`, which resolved
+# pyproject.toml's floors against PyPI-on-the-day, into an EMPTY venv, on every
+# image build. That is how anthropic 1.x shipped to prod while the test suite
+# ran against the 0.100.0 the dev venv had installed months earlier (ABS-531).
+#
+# --require-hashes is the load-bearing flag, not --no-deps: it makes pip refuse
+# any requirement that is not pinned to an exact version with a matching hash,
+# so a transitive dep cannot slip in unrecorded and a compromised artifact
+# cannot be substituted for a recorded one. Regenerate the lock with
+# ./scripts/lock-python-deps.sh; see docs/PYTHON_DEPENDENCY_LOCKS.md.
+#
+# setuptools>=83 (ABS-401): closes PYSEC-2026-3447 (sdist MANIFEST.in
+# exclusion bypass, fixed in 83) without needing an audit exception. The
+# old "setuptools<82" pin predated the removal of the deprecated
+# pkg_resources module in setuptools 82; the [advisor] dependency tree was
+# audited for runtime pkg_resources importers and the only hit is
+# sentry-sdk, which imports it solely in a guarded Python <3.8 fallback
+# branch (importlib.metadata is used on 3.13) — so >=83 is safe here.
+# It is a build-time backend, not a runtime import, so it stays out of the lock.
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip "setuptools>=83" wheel \
+    && /opt/venv/bin/pip install --require-hashes -r requirements/runtime.txt
+
 # Copy only the install metadata + source needed by `pip install .`
 # The `mcp/` directory must be present because pyproject.toml declares
 # packages in both src/ and mcp/.
@@ -27,28 +56,33 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY mcp ./mcp
 
-# Install into a venv so the runtime stage gets one self-contained directory.
-# No -e (editable) — production should be a normal install.
-# No [dev], no [parsers], no [mcp] extras.
-# setuptools>=83 (ABS-401): closes PYSEC-2026-3447 (sdist MANIFEST.in
-# exclusion bypass, fixed in 83) without needing an audit exception. The
-# old "setuptools<82" pin predated the removal of the deprecated
-# pkg_resources module in setuptools 82; the [advisor] dependency tree was
-# audited for runtime pkg_resources importers and the only hit is
-# sentry-sdk, which imports it solely in a guarded Python <3.8 fallback
-# branch (importlib.metadata is used on 3.11) — so >=83 is safe here.
-RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --upgrade pip "setuptools>=83" wheel \
-    && /opt/venv/bin/pip install ".[advisor]" \
-    && /opt/venv/bin/pip install pip-audit \
-    && /opt/venv/bin/pip-audit --desc on \
-    && /opt/venv/bin/pip uninstall -y pip-audit
+# Install the project itself. No -e (editable) — production should be a normal
+# install. --no-deps because the dependency set is already installed, exactly,
+# from the lock; without it pip would re-resolve pyproject.toml's floors and
+# could upgrade straight past the versions that were just pinned, which would
+# make the lock decorative.
+RUN /opt/venv/bin/pip install --no-deps .
+
+# Audit the locked set for known vulnerabilities. Runs from a throwaway venv,
+# not /opt/venv: pip-audit drags in requests, cryptography and friends, and
+# installing it into the runtime venv (as this stage used to) upgrades locked
+# packages, while the `pip uninstall pip-audit` that followed removed only
+# pip-audit and left those upgrades behind. The audited artifact would not have
+# been the shipped one.
+#
+# `-r … --no-deps` audits the pinned set literally — the lock is complete, so
+# there is nothing for a resolver to add.
+RUN python -m venv /opt/audit-venv \
+    && /opt/audit-venv/bin/pip install --quiet --upgrade pip \
+    && /opt/audit-venv/bin/pip install --quiet pip-audit \
+    && /opt/audit-venv/bin/pip-audit --desc on --no-deps -r requirements/runtime.txt \
+    && rm -rf /opt/audit-venv
 
 # ============================================================================
 # Stage 2 — runtime
 # Slim, no compilers, runs as non-root.
 # ============================================================================
-FROM python:3.11.10-slim-bookworm AS runtime
+FROM python:3.13.15-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -86,16 +120,16 @@ COPY --chown=advisor:advisor scripts ./scripts
 # this file, which only resolves correctly under an editable install. We copy
 # the file to where the resolver looks under a regular install. Tracked as
 # follow-up: replace with importlib.resources packaging.
-COPY --chown=advisor:advisor docs/agent/persona.md /opt/venv/lib/python3.11/docs/agent/persona.md
+COPY --chown=advisor:advisor docs/agent/persona.md /opt/venv/lib/python3.13/docs/agent/persona.md
 # Same packaging workaround for the Layer-2 pre-screen classifier
 # persona; advisor/chat/persona.py:load_classifier_persona reads it
 # via the same Path(__file__).parents[3] resolver.
-COPY --chown=advisor:advisor docs/agent/classifier-persona.md /opt/venv/lib/python3.11/docs/agent/classifier-persona.md
+COPY --chown=advisor:advisor docs/agent/classifier-persona.md /opt/venv/lib/python3.13/docs/agent/classifier-persona.md
 # Same packaging workaround for the Terms & Conditions document;
 # advisor/legal/__init__.py:_load_terms reads it via the same
 # Path(__file__).parents[3] resolver. Missing this file 500s every
 # first-login on /v1/terms/current (ABS-67).
-COPY --chown=advisor:advisor docs/TERMS_AND_CONDITIONS.md /opt/venv/lib/python3.11/docs/TERMS_AND_CONDITIONS.md
+COPY --chown=advisor:advisor docs/TERMS_AND_CONDITIONS.md /opt/venv/lib/python3.13/docs/TERMS_AND_CONDITIONS.md
 
 USER advisor
 

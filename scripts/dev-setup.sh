@@ -9,8 +9,10 @@ Creates a local Python virtual environment, installs the project, starts the
 Postgres/pgvector container, waits for it, and runs Alembic migrations.
 
 Options:
-  --with-advisor      Install advisor extras (FastAPI, uvicorn, pyproj, ifcopenshell …).
-                      Required when running the advisor API or the e2e test suite.
+  --with-advisor      Accepted for compatibility; advisor extras (FastAPI, uvicorn,
+                      pyproj, ifcopenshell …) are always installed. They are required
+                      by the advisor API and the e2e suite, and requirements/dev.txt
+                      — the lock this script installs — covers [dev,advisor].
   --with-parsers      Install heavy parser extras such as Docling, Camelot, and PaddleOCR.
   --skip-db          Do not start Postgres or run Alembic.
   --python PATH      Python executable to use for the virtual environment.
@@ -20,11 +22,13 @@ Examples:
   ./scripts/dev-setup.sh
   ./scripts/dev-setup.sh --with-advisor
   ./scripts/dev-setup.sh --with-parsers
-  ./scripts/dev-setup.sh --python python3.12
+  ./scripts/dev-setup.sh --python python3.13
 EOF
 }
 
-WITH_ADVISOR=1
+# Kept as an accepted no-op flag: the lock this script installs
+# (requirements/dev.txt) is compiled with [dev,advisor], so there is no
+# advisor-less install path to select any more.
 WITH_PARSERS=0
 SKIP_DB=0
 PYTHON_BIN=""
@@ -32,7 +36,6 @@ PYTHON_BIN=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-advisor)
-      WITH_ADVISOR=1
       shift
       ;;
     --with-parsers)
@@ -77,14 +80,19 @@ find_python() {
     return
   fi
 
-  for candidate in python3.12 python3.11 python3; do
+  # python3.13 first, and deliberately: it is the interpreter the advisor image
+  # ships (Dockerfile.advisor) and the one the locks are compiled against. A
+  # bare `python3` that happens to be newer still works — the check below only
+  # warns — but the default has to be the deploy target, or dev drifts off prod
+  # again by nothing more than whatever the box had installed (ABS-533).
+  for candidate in python3.13 python3; do
     if command -v "$candidate" >/dev/null 2>&1; then
       command -v "$candidate"
       return
     fi
   done
 
-  echo "error: no Python 3.11+ executable found. Install Python 3.12 or pass --python PATH." >&2
+  echo "error: no Python 3.13+ executable found. Install Python 3.13 or pass --python PATH." >&2
   exit 1
 }
 
@@ -105,11 +113,20 @@ log "Checking Python"
 "$PYTHON_PATH" - <<'PY'
 import sys
 
-if sys.version_info < (3, 11):
-    raise SystemExit(f"Python 3.11+ is required; found {sys.version.split()[0]}")
+if sys.version_info < (3, 13):
+    raise SystemExit(f"Python 3.13+ is required; found {sys.version.split()[0]}")
 print(f"Using Python {sys.version.split()[0]}")
-if sys.version_info >= (3, 14):
-    print("warning: Python 3.14+ may have dependency friction; Python 3.12 is preferred.")
+if sys.version_info[:2] != (3, 13):
+    # Not fatal: requirements/dev.txt is a universal resolution and installs on
+    # newer interpreters. But the advisor image runs 3.13, so anything else is a
+    # dev/prod split — a small one, and the small one is how ABS-531 started.
+    print(
+        f"warning: the deploy target is Python 3.13 (Dockerfile.advisor); this venv is "
+        f"{sys.version_info[0]}.{sys.version_info[1]}. Tests here do not run on the "
+        f"interpreter that ships."
+    )
+    # 3.14 additionally lacks a manylinux wheel for the pyyaml the unlocked
+    # [parsers] extra resolves to, so --with-parsers compiles from source there.
 PY
 
 if [[ ! -f .env ]]; then
@@ -136,17 +153,49 @@ fi
 
 log "Installing Python package"
 "$VENV_PYTHON" -m pip install --upgrade pip "setuptools<82" wheel
-EXTRAS="dev"
-if [[ "$WITH_ADVISOR" -eq 1 ]]; then
-  EXTRAS="${EXTRAS},advisor"
+
+# ABS-532: dependencies come from the committed, hash-pinned lock, never from a
+# fresh resolution of pyproject.toml's floors. This is the same file the image
+# build and both CI jobs install, so the venv you test in and the venv that
+# ships hold identical versions. That was not true before: the dev venv kept
+# whatever pip resolved the day it was created, while the image resolved anew on
+# every build (ABS-531).
+#
+# requirements/dev.txt covers [dev,advisor] — the advisor extras were already
+# on by default and the e2e suite requires them, so there is no lock for the
+# advisor-less variant. --require-hashes makes an unpinned or unhashed
+# requirement a hard error rather than a quiet re-resolution.
+LOCK_FILE="$REPO_ROOT/requirements/dev.txt"
+if [[ ! -f "$LOCK_FILE" ]]; then
+  echo "error: $LOCK_FILE is missing. Generate it with ./scripts/lock-python-deps.sh" >&2
+  exit 1
 fi
+"$VENV_PYTHON" -m pip install --require-hashes -r "$LOCK_FILE"
+
+# The project itself, editable, with --no-deps: the dependency set is already
+# installed exactly. Without --no-deps pip re-reads pyproject.toml and is free
+# to upgrade straight past the versions just pinned.
+"$VENV_PYTHON" -m pip install -e . --no-deps
+
 if [[ "$WITH_PARSERS" -eq 1 ]]; then
-  EXTRAS="${EXTRAS},parsers"
-  "$VENV_PYTHON" -m pip install -e ".[${EXTRAS}]"
+  # [parsers] (Camelot, PaddleOCR, Docling) is deliberately NOT locked: it is an
+  # opt-in local-ingest toolchain, it is on no deploy path, and its universal
+  # resolution is heavy and platform-fragile enough that locking it would stall
+  # every regeneration of the files that do ship.
+  #
+  # It still must not be allowed to drag the locked versions with it, so the
+  # lock is passed as a constraints file — versions with the hashes and line
+  # continuations stripped, which is what `pip -c` accepts (and why the lock is
+  # generated without extras markers, which pip rejects in constraints). A
+  # parsers dependency that genuinely conflicts now fails loudly here instead of
+  # silently upgrading a package the image ships.
+  log "Installing parser extras (unlocked, constrained by requirements/dev.txt)"
+  CONSTRAINTS="$(mktemp -t bylaw-lock-constraints)"
+  trap 'rm -f "$CONSTRAINTS"' EXIT
+  grep -E '^[A-Za-z0-9]' "$LOCK_FILE" | sed -E 's/[[:space:]]*\\$//' > "$CONSTRAINTS"
+  "$VENV_PYTHON" -m pip install -c "$CONSTRAINTS" ".[parsers]"
   "$VENV_PYTHON" -m pip uninstall -y opencv-python opencv_python >/dev/null 2>&1 || true
-  "$VENV_PYTHON" -m pip install --force-reinstall opencv-python-headless
-else
-  "$VENV_PYTHON" -m pip install -e ".[${EXTRAS}]"
+  "$VENV_PYTHON" -m pip install -c "$CONSTRAINTS" --force-reinstall opencv-python-headless
 fi
 
 if [[ "$SKIP_DB" -eq 0 ]]; then

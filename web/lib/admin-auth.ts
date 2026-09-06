@@ -8,11 +8,11 @@
 // Returns the admin's email when the caller is an admin, or null
 // otherwise. Callers should treat null as a 401/redirect signal.
 //
-// Why not use the abs_admin cookie that the legacy fallback used:
-// the cookie is a single shared password, can't distinguish between
-// admins, and leaves no audit trail of who approved what. Clerk
-// gives us a per-user identity that we can stamp on
-// invite_request.decided_by.
+// This is the only way into /admin. The shared-password cookie that
+// used to gate it was removed in ABS-530: one password for every
+// operator can't distinguish between admins and leaves no audit trail
+// of who approved what. Clerk gives us a per-user identity that we can
+// stamp on invite_request.decided_by.
 
 import { auth, currentUser } from "@clerk/nextjs/server";
 

@@ -33,7 +33,6 @@ const GATED_PATHS = [
   "/cases/new",
   "/sign-in",
   "/sign-up",
-  "/access",
   "/api",
 ];
 
@@ -66,7 +65,7 @@ test.describe("robots.txt + sitemap.xml (ABS-507)", () => {
     // Crawl-everything for all agents, minus the gated surfaces.
     expect(body).toMatch(/User-Agent:\s*\*/i);
     expect(body).toMatch(/^Allow:\s*\/$/im);
-    for (const path of ["/app", "/admin", "/api", "/sign-in", "/sign-up", "/access"]) {
+    for (const path of ["/app", "/admin", "/api", "/sign-in", "/sign-up"]) {
       expect(
         body,
         `robots.txt must disallow ${path}`,

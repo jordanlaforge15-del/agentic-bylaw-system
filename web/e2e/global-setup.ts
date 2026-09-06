@@ -100,25 +100,15 @@ export default async function globalSetup() {
 // it just means the first test pays what it used to.
 async function warmRoutes(): Promise<void> {
   const baseUrl = process.env.E2E_BASE_URL || "http://localhost:3001";
-  const demoPassword = process.env.E2E_DEMO_PASSWORD || "e2e-demo-pw";
+  const userId = process.env.E2E_USER_ID || "demo-user-1";
 
-  // /app and /cases/new sit behind proxy.ts's password gate; without the
-  // cookie the warm-up would compile /access instead of the routes we care
-  // about.
-  let cookie = "";
-  try {
-    const gate = await fetch(`${baseUrl}/api/access`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ gate: "demo", password: demoPassword }),
-    });
-    cookie = gate.headers
-      .getSetCookie()
-      .map((c) => c.split(";")[0])
-      .join("; ");
-  } catch {
-    // No gate cookie — the gated routes below will only warm the redirect.
-  }
+  // /app and /cases/new sit behind proxy.ts's Clerk gate; without a
+  // signed-in cookie the warm-up would compile /sign-in instead of the
+  // routes we care about. The Clerk mock (web/lib/clerk-test-mock.ts)
+  // treats abs_test_sub_user_id as the session, so setting it by hand
+  // here is enough — no JWT needed, since we only want the render, not
+  // a successful backend call.
+  const cookie = `abs_test_sub_user_id=${userId}`;
 
   const routes = ["/", "/pricing", "/cases/new", "/cases", "/app", "/billing"];
   const started = Date.now();

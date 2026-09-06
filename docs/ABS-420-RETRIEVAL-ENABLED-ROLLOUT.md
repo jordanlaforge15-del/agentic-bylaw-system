@@ -131,7 +131,7 @@ ssh bylaw-prod '
   docker cp /tmp/pedestrian_oriented_commercial_streets_schedule7.geojson \
     bylaw-advisor:/app/data/geo-datasets/ &&
   docker exec -w /app bylaw-advisor layer1 ingest-dataset \
-    /opt/venv/lib/python3.11/site-packages/layer1/datasets/halifax_pedestrian_oriented_commercial_streets.yaml
+    /opt/venv/lib/python3.13/site-packages/layer1/datasets/halifax_pedestrian_oriented_commercial_streets.yaml
 '
 ```
 

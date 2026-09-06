@@ -16,7 +16,7 @@
 //   * /app, /admin, /cases/new — 307 for anonymous visitors (see
 //     isProtectedRoute in proxy.ts). Listing a redirect in a sitemap is
 //     a Search Console error, not just noise.
-//   * /sign-in, /sign-up, /access — credential gates. Reachable, but
+//   * /sign-in, /sign-up — credential gates. Reachable, but
 //     worthless as a search result. Note /sign-up (the Clerk gate) is a
 //     different route from /signup (the invite-request marketing page)
 //     — see the comment on DISALLOWED_PATHS in app/robots.ts.

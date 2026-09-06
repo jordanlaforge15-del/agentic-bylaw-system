@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -514,7 +515,13 @@ def test_the_gate_job_installs_no_extras() -> None:
     commands = "\n".join(
         line for line in job.splitlines() if not line.lstrip().startswith("#")
     )
-    assert 'pip install -e "."' in commands
+    # The invariant is "the project, with no extras" — the shell quoting around
+    # the dot is not part of it. ABS-532 rewrote this line to add --no-deps and
+    # dropped the quotes; asserting the old literal failed on punctuation while
+    # the constraint it names was still intact.
+    assert re.search(r"pip install (?:-e )?\"?\.\"?(?:\s|$)", commands), (
+        f"golden-gate does not install the project:\n{commands}"
+    )
     for extra in ("[dev]", "[advisor]", "[dev,advisor]"):
         assert extra not in commands, f"golden-gate must not install {extra}"
 

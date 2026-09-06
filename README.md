@@ -2,7 +2,7 @@
 
 Local-only source normalization and retrieval-first answering for municipal land-use bylaws. Layer 1 ingests official source files into auditable source tables. Layer 2 retrieves from those Layer 1 artifacts, builds grounded prompts, generates answers plus reusable claims, and persists feedback and trace logs.
 
-Repo specifics: this is a Python 3.11+ package using SQLAlchemy, Alembic, Pydantic, Typer, Docling as the primary PDF parser, and PyMuPDF/pdfplumber fallbacks with optional Camelot/PaddleOCR integrations.
+Repo specifics: this is a Python 3.13+ package using SQLAlchemy, Alembic, Pydantic, Typer, Docling as the primary PDF parser, and PyMuPDF/pdfplumber fallbacks with optional Camelot/PaddleOCR integrations.
 
 Layer 1 integration paths used by Layer 2:
 
@@ -427,10 +427,16 @@ Mixing modes (e.g. real Clerk on the web side, dev backend) will
 header it doesn't know how to verify, and the prod backend rejects
 the `X-Test-User-Id` header when a verifier is wired.
 
-The legacy shared-password gate (cookie `abs_demo` / `abs_admin`,
-route `/access`, env vars `DEMO_PASSWORD` / `ADMIN_PASSWORD`) is
-still in the tree as dead code so a one-file revert of `proxy.ts`
-restores it. It is no longer wired into routing.
+There is no shared-password fallback. ABS-530 deleted the one that
+used to sit here (the `/access` page, `/api/access`, cookies
+`abs_demo` / `abs_admin`, env vars `DEMO_PASSWORD` /
+`ADMIN_PASSWORD`) — a single password handed to everyone, with no
+per-user identity and no audit trail. Without Clerk keys, a dev
+build leaves `/app` and `/admin` open and a production build returns
+503 on them.
+
+`/admin/*` additionally requires the signed-in Clerk user id to
+appear in `ADVISOR_ADMIN_CLERK_USER_IDS`; anyone else gets a 404.
 
 ## Known Limitations
 

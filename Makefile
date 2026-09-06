@@ -1,9 +1,24 @@
-.PHONY: install test lint audit audit-npm audit-all db-up db-down migrate check-migration-drift init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland eval-retrieval-baseline check-retrieval-baseline advisor-eval
+.PHONY: install lock check-lock test lint audit audit-npm audit-all db-up db-down migrate check-migration-drift init-db sample-ingest sample-export sample-audit e2e e2e-smoke e2e-up e2e-down e2e-install learn-city-help learn-city-hrm-mainland eval-retrieval-baseline check-retrieval-baseline advisor-eval
 
 DB_URL ?= postgresql+psycopg://layer1:layer1@localhost:5432/layer1
 
+# Installs the committed hash-pinned lock, then the project without letting pip
+# re-resolve past it (ABS-532). requirements/dev.txt is [dev,advisor]; the old
+# `pip install -e ".[dev]"` here resolved pyproject.toml's floors afresh, which
+# is one of the five independent resolution points the lock replaced.
 install:
-	python -m pip install -e ".[dev]"
+	python -m pip install --require-hashes -r requirements/dev.txt
+	python -m pip install -e . --no-deps
+
+# Regenerate requirements/*.txt from pyproject.toml. Holds existing pins; use
+# `./scripts/lock-python-deps.sh --upgrade` to move versions forward on purpose.
+lock:
+	./scripts/lock-python-deps.sh
+
+# What CI's lock-drift job runs. Exits 1 when the committed locks no longer
+# match pyproject.toml.
+check-lock:
+	./scripts/lock-python-deps.sh --check
 
 test:
 	pytest
@@ -11,8 +26,10 @@ test:
 lint:
 	ruff check src tests
 
+# Audits the pinned set rather than the local venv's resolution, so the result
+# describes what actually ships. Matches the dependency-audit workflow.
 audit:
-	pip-audit
+	pip-audit --desc on --no-deps -r requirements/dev.txt
 
 audit-npm:
 	cd web && npm audit --omit=dev

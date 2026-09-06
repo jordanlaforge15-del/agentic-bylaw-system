@@ -47,8 +47,11 @@ tree now. That is strictly sharper than a commit comparison in three ways:
 The normalisation is deliberately interpreter-independent: it deletes comment
 and docstring *source spans* and drops blank lines, rather than serialising
 tokens, because ``tokenize`` splits f-strings into several tokens on 3.12+ and
-one token on 3.11 — a fingerprint that disagreed with itself between the local
-venv (3.12) and CI (3.11) would fail every run for a reason no one could act on.
+one token before that — a fingerprint that disagreed with itself between the
+local venv and CI would fail every run for a reason no one could act on. That
+particular split no longer bites now the floor is 3.13 (ABS-533), but the
+property still has to hold: a dev box may run 3.14 while the image runs 3.13,
+and the next tokenizer change is not announced to this file.
 
 Usage
 -----

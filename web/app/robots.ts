@@ -4,7 +4,7 @@
 //   1. Keep crawlers out of the auth-gated and operational surfaces.
 //      None of these are useful search results: /app and /admin
 //      redirect anonymous visitors, /api is machine-only, and the
-//      sign-in / sign-up / legacy /access gates are dead ends.
+//      sign-in / sign-up gates are dead ends.
 //   2. Advertise the sitemap. This is the whole point of the ticket —
 //      with no inbound links, the `Sitemap:` line is the only thing
 //      that hands Google a seed list of URLs.
@@ -12,8 +12,8 @@
 // Note on middleware: web/proxy.ts's matcher excludes `_next` and a
 // static-extension list that does NOT include `.txt`, so this request
 // does run through the proxy. That is harmless — /robots.txt is not in
-// isProtectedRoute, so both the Clerk and the legacy-cookie branch
-// fall straight through to NextResponse.next().
+// isProtectedRoute, so both the Clerk and the no-Clerk branch fall
+// straight through to NextResponse.next().
 
 import type { MetadataRoute } from "next";
 import { absoluteUrl } from "../lib/site-url";
@@ -36,7 +36,6 @@ const DISALLOWED_PATHS = [
   "/api",
   "/sign-in",
   "/sign-up",
-  "/access",
 ];
 
 // Evaluated per request rather than baked at build time, so SITE_URL

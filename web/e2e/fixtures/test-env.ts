@@ -188,20 +188,17 @@ export async function waitForAssistantText(
 }
 
 /**
- * Demo password matching DEMO_PASSWORD on the Next.js dev process
- * (see scripts/e2e-up.sh). Tests need this to mint the abs_demo
- * cookie so `/app` and `/admin` are reachable behind proxy.ts's
- * password-gate fallback.
- */
-export const E2E_DEMO_PASSWORD =
-  process.env.E2E_DEMO_PASSWORD || "e2e-demo-pw";
-
-/**
  * Test fixture that auto-mints auth cookies on every browser context
- * before the first navigation. Sets both the legacy abs_demo cookie
- * (fallback for /api/access) AND a Clerk mock JWT for the demo user
- * so the Clerk middleware branch in proxy.ts and the JWT verification
- * path in FastAPI are exercised on every test.
+ * before the first navigation. The stack runs Clerk-mock mode
+ * (E2E_CLERK_MOCK=1 + a test CLERK_SECRET_KEY, see scripts/e2e-up.sh),
+ * so proxy.ts always takes the clerkMiddleware branch: the
+ * abs_test_sub_user_id cookie is what makes a request "signed in", and
+ * abs_test_clerk_jwt is forwarded to FastAPI as a Bearer token.
+ *
+ * ABS-530 removed the shared-password gate this fixture used to mint
+ * an abs_demo cookie against. The cookies below are now the ONLY thing
+ * standing between a spec and a /sign-in redirect, so a failure to mint
+ * them is fatal rather than best-effort.
  */
 async function postWithRetry(
   context: any,
@@ -241,19 +238,10 @@ export const test = base.extend<{ authedContext: void }>({
   authedContext: [
     async ({ context, baseURL }, use) => {
       const target = baseURL ?? E2E_BASE_URL;
-      // Mint the legacy password-gate cookie.
-      const res = await postWithRetry(
-        context,
-        `${target}/api/access`,
-        { gate: "demo", password: E2E_DEMO_PASSWORD },
-      );
-      if (!res.ok()) {
-        throw new Error(
-          `failed to mint abs_demo cookie: HTTP ${res.status()} ${await res.text()}`,
-        );
-      }
-      // Mint a test JWT for the demo user so requests through the
-      // Next.js proxy exercise the Clerk JWT auth path end-to-end.
+      // Mint a test JWT for the demo user. This is the whole of the
+      // auth setup: the sub cookie satisfies clerkMiddleware in
+      // proxy.ts and the JWT cookie is forwarded to FastAPI as a
+      // Bearer token, so the Clerk path is exercised end-to-end.
       const jwtRes = await postWithRetry(
         context,
         `${E2E_API_URL}/v1/_test/mint-jwt`,
@@ -262,30 +250,28 @@ export const test = base.extend<{ authedContext: void }>({
           email: `${DEMO_USER_ID}@e2e.test`,
         },
       );
-      if (jwtRes.ok()) {
-        const { token } = (await jwtRes.json()) as { token: string };
-        const url = new URL(target);
-        await context.addCookies([
-          {
-            name: "abs_test_sub_user_id",
-            value: DEMO_USER_ID,
-            domain: url.hostname,
-            path: "/",
-            httpOnly: false,
-            secure: false,
-            sameSite: "Lax",
-          },
-          {
-            name: "abs_test_clerk_jwt",
-            value: token,
-            domain: url.hostname,
-            path: "/",
-            httpOnly: false,
-            secure: false,
-            sameSite: "Lax",
-          },
-        ]);
-      }
+      const { token } = (await jwtRes.json()) as { token: string };
+      const url = new URL(target);
+      await context.addCookies([
+        {
+          name: "abs_test_sub_user_id",
+          value: DEMO_USER_ID,
+          domain: url.hostname,
+          path: "/",
+          httpOnly: false,
+          secure: false,
+          sameSite: "Lax",
+        },
+        {
+          name: "abs_test_clerk_jwt",
+          value: token,
+          domain: url.hostname,
+          path: "/",
+          httpOnly: false,
+          secure: false,
+          sameSite: "Lax",
+        },
+      ]);
       await use();
     },
     { auto: true },

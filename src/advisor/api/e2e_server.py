@@ -2181,6 +2181,51 @@ else:
     out["ok"] = True
     out["gateway_name"] = getattr(gateway, "name", None)
     out["gateway_class"] = type(gateway).__name__
+
+# ABS-531: does the *installed* SDK accept the kwargs the gateway sends?
+#
+# Runs unconditionally — it needs no API key and no network, only the
+# translation path and a signature. Reported separately from "ok" because a
+# gateway can build perfectly and still fail on the first request, which is
+# exactly what happened: anthropic 1.x dropped the sampling parameters, so the
+# `temperature` the gateway always sends became a TypeError at request time.
+try:
+    import inspect
+    from anthropic.resources.messages import AsyncMessages
+    from advisor.llm import CompletionRequest, LLMRole, Message, ToolDefinition
+    from advisor.llm.anthropic_backend import AnthropicGateway
+
+    probe_request = CompletionRequest(
+        model="claude-opus-4-5",
+        system="probe",
+        messages=[Message(role=LLMRole.USER, content="probe")],
+        tools=[
+            ToolDefinition(
+                name="probe", description="probe", input_schema={"type": "object"}
+            )
+        ],
+        max_tokens=16,
+        temperature=0.0,
+        stop_sequences=["STOP"],
+        metadata={"user_id": "probe"},
+    )
+    emitted = set(AnthropicGateway(api_key="unused")._to_anthropic_params(probe_request))
+
+    unsupported = {}
+    for label, method in (("create", AsyncMessages.create), ("stream", AsyncMessages.stream)):
+        signature = inspect.signature(method).parameters
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in signature.values()):
+            # **kwargs swallows anything; a signature check proves nothing.
+            unsupported[label] = []
+            continue
+        unsupported[label] = sorted(emitted - {n for n in signature if n != "self"})
+
+    out["anthropic_version"] = __import__("anthropic").__version__
+    out["sdk_unsupported_params"] = unsupported
+    out["sdk_params_compatible"] = not any(unsupported.values())
+except BaseException as exc:
+    out["sdk_params_compatible"] = None
+    out["sdk_probe_error"] = f"{type(exc).__name__}: {exc}"
 print(json.dumps(out))
 """
 
@@ -2275,6 +2320,54 @@ def _mount_llm_registry_probe_endpoint(app: FastAPI) -> None:
             "returncode": process.returncode,
             "stderr_tail": stderr.decode(errors="replace")[-2000:],
             **payload,
+        }
+
+
+def _mount_installed_versions_endpoint(app: FastAPI) -> None:
+    """ABS-532: report every distribution version this interpreter actually has.
+
+    The lock files answer "what should be installed". Nothing answered "what IS
+    installed", and that gap is the whole outage: ``pyproject.toml`` said
+    ``anthropic>=0.40``, the dev venv held 0.100.0, the image held 1.3.0, and no
+    surface anywhere reported either number. The version in production was known
+    to nobody until it threw.
+
+    Deliberately in-process — ``importlib.metadata`` reads the metadata of the
+    venv this server is running out of, which is the exact thing under test. The
+    sibling registry probe spawns a subprocess because it needs a clean
+    environment; here a subprocess would answer a question about a different
+    interpreter and be strictly worse.
+
+    Free: no key, no network, no database, no model call. Names are normalised
+    per PEP 503 so the spec can compare them to the lock without a second
+    normalisation table.
+    """
+
+    @app.post("/v1/_test/installed-versions")
+    async def installed_versions() -> dict[str, object]:
+        import platform  # noqa: PLC0415
+        import re  # noqa: PLC0415
+        from importlib import metadata  # noqa: PLC0415
+
+        distributions: dict[str, str] = {}
+        for distribution in metadata.distributions():
+            name = distribution.metadata["Name"]
+            if not name:
+                # A malformed .dist-info with no Name; nothing to compare it to.
+                continue
+            normalised = re.sub(r"[-_.]+", "-", name).lower()
+            # Duplicate .dist-info directories for one package happen after a
+            # botched upgrade. Keep the first and report the collision rather
+            # than picking a winner silently — a venv holding two versions of a
+            # package is itself the finding.
+            distributions.setdefault(normalised, distribution.version)
+
+        return {
+            "python_version": platform.python_version(),
+            "python_implementation": platform.python_implementation(),
+            "platform": sys.platform,
+            "executable": sys.executable,
+            "distributions": distributions,
         }
 
 
@@ -2852,6 +2945,7 @@ _mount_openai_tool_search_endpoint(app)
 _mount_advisor_search_include_flags_endpoint(app)
 _mount_advisor_search_attribute_tag_filter_endpoint(app)
 _mount_llm_registry_probe_endpoint(app)
+_mount_installed_versions_endpoint(app)
 _mount_buy_answer_test_router(app)
 
 
