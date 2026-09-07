@@ -15,11 +15,36 @@
 // Once the beta gate is removed, drop the invite-only notice block
 // and the H1 reverts to plain "Get started."
 
+import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { SignUp } from "@clerk/nextjs";
 import { ABSLogo } from "@/components/abs-logo";
 import { Btn } from "@/components/btn";
 import { Mono } from "@/components/mono";
+
+// Credential gate, not a landing page (ABS-536).
+//
+// `noindex` and a self-referencing canonical. Without its own
+// `alternates`, this page inherits the root layout's `canonical: "/"`
+// and tells Google it is a duplicate of the home page — Next merges
+// `metadata` one key at a time, so an absent key is an inherited key,
+// not an empty one. That is what production was serving: /sign-in and
+// /sign-up both naming the home page as their canonical.
+//
+// robots.txt disallows this path too, so Googlebot should not fetch it
+// at all. The `noindex` is here for the case where it already has the
+// URL from somewhere else — a disallowed URL can still be indexed
+// URL-only, and a `Disallow` guarantees Google never sees a `noindex`
+// it could act on.
+export const metadata: Metadata = pageMetadata({
+  path: "/sign-up",
+  title: "Create Account — ABS°",
+  description:
+    "Account creation for ABS° is invite-only during the private beta. Request an invite, or sign in if you already have an account.",
+  noindex: true,
+});
+
 
 export default function SignUpPage() {
   return (

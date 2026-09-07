@@ -7,10 +7,35 @@
 // a piece with the marketing site rather than dropping the user
 // into Clerk's default Tailwind look.
 
+import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { SignIn } from "@clerk/nextjs";
 import { ABSLogo } from "@/components/abs-logo";
 import { Mono } from "@/components/mono";
+
+// Credential gate, not a landing page (ABS-536).
+//
+// `noindex` and a self-referencing canonical. Without its own
+// `alternates`, this page inherits the root layout's `canonical: "/"`
+// and tells Google it is a duplicate of the home page — Next merges
+// `metadata` one key at a time, so an absent key is an inherited key,
+// not an empty one. That is what production was serving: /sign-in and
+// /sign-up both naming the home page as their canonical.
+//
+// robots.txt disallows this path too, so Googlebot should not fetch it
+// at all. The `noindex` is here for the case where it already has the
+// URL from somewhere else — a disallowed URL can still be indexed
+// URL-only, and a `Disallow` guarantees Google never sees a `noindex`
+// it could act on.
+export const metadata: Metadata = pageMetadata({
+  path: "/sign-in",
+  title: "Sign In — ABS°",
+  description:
+    "Sign in to ABS° to continue a research case and read the Halifax Regional Centre Land Use By-law cited to the clause.",
+  noindex: true,
+});
+
 
 export default function SignInPage() {
   return (
