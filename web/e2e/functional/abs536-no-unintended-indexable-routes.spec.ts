@@ -90,9 +90,9 @@ function appRoutes(): string[] {
 }
 
 /** The `Disallow:` prefixes the live /robots.txt actually publishes. */
-async function disallowedPrefixes(request: {
-  get: (url: string) => Promise<{ status(): number; text(): Promise<string> }>;
-}): Promise<string[]> {
+async function disallowedPrefixes(
+  request: import("@playwright/test").APIRequestContext,
+): Promise<string[]> {
   const res = await request.get("/robots.txt");
   expect(res.status(), "/robots.txt must be served").toBe(200);
   return (await res.text())

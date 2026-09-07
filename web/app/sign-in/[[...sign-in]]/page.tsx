@@ -36,7 +36,6 @@ export const metadata: Metadata = pageMetadata({
   noindex: true,
 });
 
-
 export default function SignInPage() {
   return (
     <main className="min-h-screen flex items-center justify-center bg-surface text-text px-6 py-10">

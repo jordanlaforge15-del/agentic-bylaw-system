@@ -7,7 +7,15 @@
 // when the page below it goes to the error boundary.
 //
 // robots.txt disallows /e2e-throw as well. Belt and braces, same
-// reasoning as the /submissions layout.
+// reasoning as the /submissions layout — and here the Disallow is the
+// load-bearing half, because this `noindex` is the one thing in
+// ABS-536 the e2e suite cannot verify. The stack runs `next dev`,
+// where the page throws by design so the error-boundary spec has
+// something to catch; the meta tag a test sees on this route is Next's
+// own error-page one, not necessarily this layout's. The layout only
+// takes effect in production, where the page renders "Not available".
+// abs536-no-unintended-indexable-routes.spec.ts therefore asserts the
+// robots.txt entry for this route and not the tag.
 
 import type { Metadata } from "next";
 
