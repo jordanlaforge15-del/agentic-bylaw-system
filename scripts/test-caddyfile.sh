@@ -164,6 +164,55 @@ sys.exit(1 if bad else 0)
 PY
 
 # ---------------------------------------------------------------------------
+# 4. Rate limiting (ABS-511).
+#
+# Every request below comes from one IP (the Docker bridge), so the zones
+# are exercised exactly as a single crawler IP would hit them. Order
+# matters: the browser burst deliberately exhausts `global` so that the
+# robots.txt and POST checks after it run against an empty bucket.
+# ---------------------------------------------------------------------------
+echo "==> Rate limiting (ABS-511)"
+
+GOOGLEBOT_UA="Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+BROWSER_UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+
+count429() {  # count429 <n> <path> [extra curl args...] -> number of 429s out of n
+  local n="$1" path="$2"; shift 2
+  seq "$n" | xargs -P 25 -I{} curl -s -o /dev/null -w '%{http_code}\n' \
+      -H "Host: agenticbylawsystems.com" "$@" "http://127.0.0.1:${PORT}${path}" \
+    | grep -c '^429$' || true
+}
+
+n=$(count429 150 /pricing -A "$GOOGLEBOT_UA")
+[ "$n" -eq 0 ] && pass "150 Googlebot GETs in a burst: none limited" \
+               || fail "150 Googlebot GETs in a burst: $n got 429"
+
+n=$(count429 150 /pricing -A "$BROWSER_UA")
+[ "$n" -gt 0 ] && pass "150 browser GETs in a burst: $n limited (global zone still bites)" \
+               || fail "150 browser GETs in a burst: none limited — global zone is not applied"
+
+# The measured production defect: with this IP's page bucket empty,
+# robots.txt must still answer. A 429 here reads to Google as "whole
+# host disallowed".
+s=$(req agenticbylawsystems.com /robots.txt -A "$BROWSER_UA")
+[ "$s" = "200" ] && pass "robots.txt still 200 after the page bucket is exhausted" \
+                 || fail "robots.txt returned $s after the page bucket was exhausted"
+s=$(req agenticbylawsystems.com /sitemap.xml -A "$BROWSER_UA")
+[ "$s" = "200" ] && pass "sitemap.xml still 200 after the page bucket is exhausted" \
+                 || fail "sitemap.xml returned $s after the page bucket was exhausted"
+
+# The crawler exemption is GET/HEAD only; a Googlebot user-agent on a
+# POST lands in the exhausted global bucket.
+s=$(req agenticbylawsystems.com /pricing -X POST -A "$GOOGLEBOT_UA")
+[ "$s" = "429" ] && pass "Googlebot POST is not exempt (429)" \
+                 || fail "Googlebot POST returned $s — the exemption covers more than GET/HEAD"
+
+# Isolation, not immunity: a flood on robots.txt is still bounded.
+n=$(count429 80 /robots.txt -A "$BROWSER_UA")
+[ "$n" -gt 0 ] && pass "80 robots.txt requests in a burst: $n limited (own bucket, still bounded)" \
+               || fail "80 robots.txt requests in a burst: none limited — crawl_meta zone missing"
+
+# ---------------------------------------------------------------------------
 echo
 if [ "$FAILURES" -eq 0 ]; then
   echo "==> Caddyfile behaves as intended."

@@ -61,13 +61,64 @@ agenticbylawsystems.com {
     }
 
     rate_limit {
-        # Defense-in-depth: cap any single IP at 120 requests/min
-        # across the whole site (including static assets). Stops
-        # volumetric floods from a single source while leaving real
-        # users plenty of headroom — a Next.js page load is roughly
-        # 10–20 requests, so 120/min covers ~6–12 fresh page loads
-        # per minute per IP, which is faster than humans browse.
+        # Three zones with mutually exclusive matchers, so every request
+        # counts against exactly one bucket (ABS-511).
+        #
+        # This used to be one `global` zone covering everything, and that
+        # shared bucket was a measured production defect: a burst of 150
+        # requests from one IP got 50 x 429 — on /robots.txt. Google does
+        # not read a 429 on robots.txt as "no rules"; it reads it as "the
+        # whole host is temporarily disallowed" and backs off from every
+        # URL. A crawler that spent its 120 on pages could therefore get
+        # itself locked out of the entire site, on a domain whose one
+        # problem was that Google would not come back to re-crawl it.
+
+        # robots.txt and sitemap.xml get their own bucket, for every
+        # user-agent. The fix is the isolation, not the absence of a
+        # limit: page traffic can no longer starve these two paths.
+        # 60/min per IP is roughly a thousand times what any real
+        # crawler asks for, and it keeps a flood from reaching the
+        # force-dynamic Next handlers behind them unthrottled.
+        zone crawl_meta {
+            match {
+                path /robots.txt /sitemap.xml
+            }
+            key {remote_host}
+            events 60
+            window 1m
+        }
+
+        # Search crawlers get a much higher ceiling on read traffic. A
+        # user-agent string is trivially spoofed, so the exemption is
+        # GET/HEAD only — worthless for anything state-changing — and it
+        # is a higher cap, not no cap, so a scraper wearing a Googlebot
+        # user-agent is still bounded. google-inspectiontool is Search
+        # Console's URL Inspection / live-test fetcher.
+        zone crawlers {
+            match {
+                method GET HEAD
+                header_regexp User-Agent (?i)(googlebot|google-inspectiontool|bingbot|duckduckbot|applebot)
+                not path /robots.txt /sitemap.xml
+            }
+            key {remote_host}
+            events 1200
+            window 1m
+        }
+
+        # Everything else. Defense-in-depth: cap any single IP at 120
+        # requests/min, static assets included. Stops volumetric floods
+        # from a single source while leaving real users plenty of
+        # headroom — a Next.js page load is roughly 10–20 requests, so
+        # 120/min covers ~6–12 fresh page loads per minute per IP,
+        # which is faster than humans browse.
         zone global {
+            match {
+                not path /robots.txt /sitemap.xml
+                not {
+                    method GET HEAD
+                    header_regexp User-Agent (?i)(googlebot|google-inspectiontool|bingbot|duckduckbot|applebot)
+                }
+            }
             key {remote_host}
             events 120
             window 1m
