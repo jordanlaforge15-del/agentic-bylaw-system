@@ -111,6 +111,15 @@ e2e: e2e-up
 	cd web && NEXT_PUBLIC_GENERAL_FEEDBACK_ENABLED=true npx playwright test
 	./scripts/e2e-down.sh
 
+# --- Caddyfile behaviour (ABS-537) ---------------------------------------
+# Caddy is outside the Playwright stack, so `make e2e` never loads the
+# production Caddyfile. `make caddy-test` runs it in the real custom Caddy
+# build (Dockerfile.caddy) and asserts on logging and rate-limit behaviour.
+# Needs Docker. Run it before any Caddyfile change goes to production.
+
+caddy-test:
+	./scripts/test-caddyfile.sh
+
 # --- Retrieval eval baseline (ABS-502) -----------------------------------
 # `make eval-retrieval-baseline` is THE documented way to re-record
 # evals/retrieval/BASELINE.json. It needs the dev corpus, so it takes an
