@@ -7,7 +7,51 @@
     order rate_limit before basic_auth
 }
 
+# Access logging (ABS-537), imported into every site block below.
+#
+# Until this existed Caddy wrote no access log at all — v2 only logs
+# requests for site blocks that contain a `log` directive, and none did.
+# The server's log held proxy errors and nothing else, so questions like
+# "has Googlebot crawled us?" or "is the rate limit 429-ing crawlers?"
+# had no answer. That gap is what kept ABS-511 a guess.
+#
+# stdout rather than a file: the container's filesystem is not the place
+# for logs, and the host's Docker daemon already rotates container
+# output (json-file, max-size 10m, max-file 3 in /etc/docker/daemon.json),
+# so retention is bounded without a new volume or a container recreate.
+# Read them with `docker logs bylaw-caddy | grep http.log.access`.
+#
+# What is deliberately NOT recorded:
+#   * Cookie / Authorization / Set-Cookie / Proxy-Authorization values.
+#     Caddy blanks these by default (the `log_credentials` global
+#     option, off unless set). Do not turn it on.
+#   * Query strings. /app?first_message=... carries the text of a user's
+#     first question (ABS-449), so a full URI in an access log would be a
+#     log of what people asked. Queries are replaced with `?[redacted]` in
+#     both the request URI and the Referer header, which is where the
+#     same URL turns up on the next request. Paths — all SEO diagnosis
+#     needs — are kept intact.
+#   * Request and response bodies. Caddy never logs these.
+#
+# Client IPs are kept: they are what ties a request to a crawler's
+# published address range. They are personal data, and the Docker
+# rotation above is their retention limit.
+(access_log) {
+    log {
+        output stdout
+        format filter {
+            wrap json
+            fields {
+                request>uri regexp [?].*$ ?[redacted]
+                request>headers>Referer regexp [?].*$ ?[redacted]
+            }
+        }
+    }
+}
+
 agenticbylawsystems.com {
+    import access_log
+
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
         X-Content-Type-Options "nosniff"
@@ -17,13 +61,70 @@ agenticbylawsystems.com {
     }
 
     rate_limit {
-        # Defense-in-depth: cap any single IP at 120 requests/min
-        # across the whole site (including static assets). Stops
-        # volumetric floods from a single source while leaving real
-        # users plenty of headroom — a Next.js page load is roughly
-        # 10–20 requests, so 120/min covers ~6–12 fresh page loads
-        # per minute per IP, which is faster than humans browse.
+        # Three zones with mutually exclusive matchers, so every request
+        # counts against exactly one bucket (ABS-511).
+        #
+        # This used to be one `global` zone covering everything, and that
+        # shared bucket was a measured production defect: a burst of 150
+        # requests from one IP got 50 x 429 — on /robots.txt. Google does
+        # not read a 429 on robots.txt as "no rules"; it reads it as "the
+        # whole host is temporarily disallowed" and backs off from every
+        # URL. A crawler that spent its 120 on pages could therefore get
+        # itself locked out of the entire site, on a domain whose one
+        # problem was that Google would not come back to re-crawl it.
+
+        # robots.txt and sitemap.xml get their own bucket, for every
+        # user-agent. The fix is the isolation, not the absence of a
+        # limit: page traffic can no longer starve these two paths.
+        # 60/min per IP is roughly a thousand times what any real
+        # crawler asks for, and it keeps a flood from reaching the
+        # force-dynamic Next handlers behind them unthrottled.
+        zone crawl_meta {
+            match {
+                path /robots.txt /sitemap.xml
+            }
+            key {remote_host}
+            events 60
+            window 1m
+        }
+
+        # Search crawlers get a much higher ceiling on read traffic. A
+        # user-agent string is trivially spoofed, so the exemption is
+        # GET/HEAD only — worthless for anything state-changing — and it
+        # is a higher cap, not no cap, so a scraper wearing a Googlebot
+        # user-agent is still bounded. google-inspectiontool is Search
+        # Console's URL Inspection / live-test fetcher.
+        #
+        # The user-agent pattern is written twice — here and in the
+        # `global` zone's `not` block — and the two MUST stay identical.
+        # A bot exempted from `global` but missing here would match no
+        # zone at all and be unlimited. scripts/test-caddyfile.sh fails
+        # if they differ.
+        zone crawlers {
+            match {
+                method GET HEAD
+                header_regexp User-Agent (?i)(googlebot|google-inspectiontool|bingbot|duckduckbot|applebot)
+                not path /robots.txt /sitemap.xml
+            }
+            key {remote_host}
+            events 1200
+            window 1m
+        }
+
+        # Everything else. Defense-in-depth: cap any single IP at 120
+        # requests/min, static assets included. Stops volumetric floods
+        # from a single source while leaving real users plenty of
+        # headroom — a Next.js page load is roughly 10–20 requests, so
+        # 120/min covers ~6–12 fresh page loads per minute per IP,
+        # which is faster than humans browse.
         zone global {
+            match {
+                not path /robots.txt /sitemap.xml
+                not {
+                    method GET HEAD
+                    header_regexp User-Agent (?i)(googlebot|google-inspectiontool|bingbot|duckduckbot|applebot)
+                }
+            }
             key {remote_host}
             events 120
             window 1m
@@ -44,6 +145,10 @@ agenticbylawsystems.com {
 # Caddy provisions the www certificate automatically via ACME — this block
 # must not be deployed before the www DNS record resolves, or issuance fails.
 www.agenticbylawsystems.com {
+    # Logged too: a crawler following an old www link shows up here as a
+    # 301, which is the evidence that the redirect is doing its job.
+    import access_log
+
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
         X-Content-Type-Options "nosniff"
@@ -57,6 +162,8 @@ www.agenticbylawsystems.com {
 }
 
 api.agenticbylawsystems.com {
+    import access_log
+
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
         X-Content-Type-Options "nosniff"
