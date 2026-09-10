@@ -173,6 +173,19 @@ PY
 # ---------------------------------------------------------------------------
 echo "==> Rate limiting (ABS-511)"
 
+# The crawler user-agent pattern appears in two zones (`crawlers`, and
+# `global`'s `not` block). If they drift, a bot exempted from `global` but
+# absent from `crawlers` matches no zone and is unlimited — and no burst
+# test using Googlebot would notice. Checked statically, from the file.
+ua_total=$(grep -cE '^[[:space:]]*header_regexp User-Agent ' "$ROOT/Caddyfile" || true)
+ua_distinct=$(grep -E '^[[:space:]]*header_regexp User-Agent ' "$ROOT/Caddyfile" \
+  | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | sort -u | wc -l | tr -d ' ')
+if [ "$ua_total" -ge 2 ] && [ "$ua_distinct" -eq 1 ]; then
+  pass "crawler user-agent pattern identical in both zones ($ua_total copies)"
+else
+  fail "crawler user-agent pattern differs between zones ($ua_total copies, $ua_distinct distinct)"
+fi
+
 GOOGLEBOT_UA="Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 BROWSER_UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
 

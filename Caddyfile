@@ -94,6 +94,12 @@ agenticbylawsystems.com {
         # is a higher cap, not no cap, so a scraper wearing a Googlebot
         # user-agent is still bounded. google-inspectiontool is Search
         # Console's URL Inspection / live-test fetcher.
+        #
+        # The user-agent pattern is written twice — here and in the
+        # `global` zone's `not` block — and the two MUST stay identical.
+        # A bot exempted from `global` but missing here would match no
+        # zone at all and be unlimited. scripts/test-caddyfile.sh fails
+        # if they differ.
         zone crawlers {
             match {
                 method GET HEAD
