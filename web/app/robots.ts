@@ -36,6 +36,22 @@ const DISALLOWED_PATHS = [
   "/api",
   "/sign-in",
   "/sign-up",
+  // ABS-536. /submissions/<anything> returns 200 for every string —
+  // `new`, a real id, a bogus uuid, junk — so a crawler can walk an
+  // unbounded set of near-identical thin pages. On a domain with no
+  // crawl history that is how a tiny crawl allowance gets spent on
+  // nothing while /pricing sits at "Discovered - currently not
+  // indexed". The subtree also carries `noindex` via its own layout;
+  // this line stops the fetch, that one stops the indexing.
+  "/submissions",
+  // Test-only route: it throws during render so the error-boundary
+  // spec can assert the fallback UI. Guarded to render "Not
+  // available" when NODE_ENV is production, but it still answers 200
+  // there, which is a thin page with the root title. It cannot simply
+  // be deleted from the production build — e2e runs `next dev`
+  // against this same tree and error-boundaries.spec.ts navigates to
+  // it — so it is kept and excluded from crawling instead.
+  "/e2e-throw",
 ];
 
 // Evaluated per request rather than baked at build time, so SITE_URL
