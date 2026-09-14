@@ -37,7 +37,7 @@ export interface ResolvedDatabaseUrl {
  * environments.
  */
 export function reconcileDatabaseUrl(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Partial<NodeJS.ProcessEnv> = process.env,
 ): ResolvedDatabaseUrl {
   const pgPort = env.PG_PORT || E2E_PG_PORT_DEFAULT;
   const derived = `postgresql+psycopg://layer1:layer1@localhost:${pgPort}/layer1_test`;
@@ -73,7 +73,7 @@ export function reconcileDatabaseUrl(
  * This is what globalSetup and the seeding specs call.
  */
 export function resolveDatabaseUrl(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Partial<NodeJS.ProcessEnv> = process.env,
 ): string {
   const { url, warning } = reconcileDatabaseUrl(env);
   if (warning) console.warn(`e2e env preflight: ${warning}`);

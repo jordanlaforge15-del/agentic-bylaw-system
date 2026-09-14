@@ -36,7 +36,7 @@ const databaseUrl = resolveDatabaseUrl();
 
 function runPython(
   args: string[],
-  env: NodeJS.ProcessEnv = {},
+  env: Partial<NodeJS.ProcessEnv> = {},
 ): { stdout: string; stderr: string; status: number } {
   const result = spawnSync(VENV_PYTHON, args, {
     cwd: REPO_ROOT,
