@@ -120,6 +120,18 @@ e2e: e2e-up
 caddy-test:
 	./scripts/test-caddyfile.sh
 
+# --- What a search crawler receives (ABS-541) ------------------------------
+# Fetches every public route the way Googlebot requests HTML and fails on
+# anything but a 200. The e2e stack runs a Clerk mock and cannot see a real
+# instance's handshake redirect, so this runs against a real deployment.
+# Run after every web deploy. `make crawler-check CRAWLER_BASE=http://…`
+# points it at a locally-run production image instead.
+
+CRAWLER_BASE ?= https://agenticbylawsystems.com
+
+crawler-check:
+	./scripts/check-crawler-access.sh $(CRAWLER_BASE)
+
 # --- Retrieval eval baseline (ABS-502) -----------------------------------
 # `make eval-retrieval-baseline` is THE documented way to re-record
 # evals/retrieval/BASELINE.json. It needs the dev corpus, so it takes an
