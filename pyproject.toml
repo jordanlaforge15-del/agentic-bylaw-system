@@ -44,7 +44,7 @@ advisor = [
   #
   # Every other dependency here still declares a floor and carries the same
   # risk; ABS-532 replaces the lot with a lockfile.
-  "anthropic==0.100.0",
+  "anthropic==1.5.0",
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "sse-starlette>=2.0",
