@@ -18,6 +18,7 @@
 // keyword so the mock dispatcher returns the appropriate guardrail response
 // for that second turn.
 
+import type { Page } from "@playwright/test";
 import { expect, openCaseViaApi, test } from "../fixtures/test-env";
 
 const THREAD = "[data-testid='chat-thread']";
@@ -26,7 +27,7 @@ const SEND_BTN = "button:has-text('Send')";
 
 /** Send a message and wait for the thread to contain the expected text. */
 async function sendAndWait(
-  page: Parameters<typeof test>[1]["page"],
+  page: Page,
   message: string,
   expected: string | RegExp,
   timeout = 20_000,
@@ -44,7 +45,7 @@ async function sendAndWait(
  * so it cannot be used as an idle signal.
  */
 async function waitForIdle(
-  page: Parameters<typeof test>[1]["page"],
+  page: Page,
   timeout = 15_000,
 ) {
   await expect(page.locator(TEXTAREA)).toBeEnabled({ timeout });
