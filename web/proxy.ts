@@ -29,9 +29,10 @@
 // `clerkMiddleware` because it predates the rename — the import is
 // correct, only the host file is named per the new convention.
 
-import type { NextRequest } from "next/server";
+import type { NextProxy, NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { bypassesClerk } from "./lib/clerk-bypass";
 
 const isProtectedRoute = createRouteMatcher([
   "/app(.*)",
@@ -74,25 +75,37 @@ function isClerkConfigured(): boolean {
   return /^sk_(test|live)_/.test(k) && k.length > 40;
 }
 
+// Public pages never reach Clerk (ABS-541). A development instance 307s
+// any cookieless browser-style request to its handshake on
+// clerk.accounts.dev *before* the callback below runs, which sent
+// Googlebot off-site from every marketing page. See lib/clerk-bypass.ts
+// for what skips Clerk and why the rest can't.
+function skipClerkOnPublicPages(clerk: NextProxy): NextProxy {
+  return (req, event) =>
+    bypassesClerk(req.nextUrl.pathname) ? NextResponse.next() : clerk(req, event);
+}
+
 const handler = isClerkConfigured()
-  ? clerkMiddleware(async (auth, req) => {
-      if (!isProtectedRoute(req)) return;
-      // All protected routes require an authenticated Clerk session.
-      // auth.protect() redirects to /sign-in for HTML requests and
-      // returns 404 for API requests — exactly what we want here.
-      await auth.protect();
-      // /admin/* additionally requires the signed-in user to be on
-      // the operator allowlist. We re-check userId AFTER protect()
-      // so we know the session is valid. Non-admins get a 404 — same
-      // shape an unprotected URL miss would have, so this doesn't
-      // leak the existence of /admin to random signed-in users.
-      if (isAdminRoute(req)) {
-        const { userId } = await auth();
-        if (!userId || !ADMIN_USER_IDS.has(userId)) {
-          return new NextResponse("Not found", { status: 404 });
+  ? skipClerkOnPublicPages(
+      clerkMiddleware(async (auth, req) => {
+        if (!isProtectedRoute(req)) return;
+        // All protected routes require an authenticated Clerk session.
+        // auth.protect() redirects to /sign-in for HTML requests and
+        // returns 404 for API requests — exactly what we want here.
+        await auth.protect();
+        // /admin/* additionally requires the signed-in user to be on
+        // the operator allowlist. We re-check userId AFTER protect()
+        // so we know the session is valid. Non-admins get a 404 — same
+        // shape an unprotected URL miss would have, so this doesn't
+        // leak the existence of /admin to random signed-in users.
+        if (isAdminRoute(req)) {
+          const { userId } = await auth();
+          if (!userId || !ADMIN_USER_IDS.has(userId)) {
+            return new NextResponse("Not found", { status: 404 });
+          }
         }
-      }
-    })
+      }),
+    )
   : // Clerk-not-configured path. There is no second auth scheme to fall
     // back to any more, so this splits on where we're running:
     //
