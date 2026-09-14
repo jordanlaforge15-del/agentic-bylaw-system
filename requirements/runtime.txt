@@ -1421,9 +1421,9 @@ sqlalchemy==2.0.52 \
     # via
     #   layer1-bylaw-ingest (pyproject.toml)
     #   alembic
-sse-starlette==3.4.10 \
-    --hash=sha256:710f5f5b0527409903a22a91699db02f76f4c2eb9204e882e4ee7cada76bdf75 \
-    --hash=sha256:c6c87280d8feb4e55a8d79633782766b9cac6a26da5c79a145d00aa404117a86
+sse-starlette==3.4.11 \
+    --hash=sha256:1bae716c02f3e6f294be41ff333220692dae7c3cbab077c900f159676719dade \
+    --hash=sha256:c7b2244bdff016fe7f64e10075e89a3e6bbf899649cc89b0fe884b5545042453
     # via layer1-bylaw-ingest (pyproject.toml)
 standardwebhooks==1.1.0 \
     --hash=sha256:9a88d48a1f198be61517fc7ad328cf58ba02b73f0fbd8941d4213e9c0b6c2a61 \
