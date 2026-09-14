@@ -29,7 +29,7 @@
     "@axe-core/playwright": "^4.10.1",
     "@playwright/test": "^1.50.0",
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^26",
     "@types/nodemailer": "^6.4.17",
     "@types/pg": "^8.11.10",
     "@types/react": "^19",
