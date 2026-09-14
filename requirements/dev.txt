@@ -1918,9 +1918,9 @@ stripe==15.6.1 \
     --hash=sha256:9f3986aa960419041aba9c76191746bdf2c342c95892acfbf6edb500ab006d31 \
     --hash=sha256:b33e1ea76462d7289e5fe755a1132b82099151bfb31e961021655471e6d216bf
     # via layer1-bylaw-ingest (pyproject.toml)
-svix==2.3.0 \
-    --hash=sha256:0c13d3397f83759bdcd0aeca8534da6529330c5fe2c6ceb806c4098712ed86da \
-    --hash=sha256:9555de4899c3bf6c27f2be5b8c1dd7a352e445713f4d619fad0f833955b1aa6b
+svix==2.4.0 \
+    --hash=sha256:cb58c1b6316edcbc0f318001c9606e10bb325a02694c1cade367bff0345b80db \
+    --hash=sha256:d8247cd8428ca31f553ea6f1eced9b0343a45cb842443e15e9783b22d91d5bbc
     # via layer1-bylaw-ingest (pyproject.toml)
 tenacity==9.1.4 \
     --hash=sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55 \
